@@ -1,0 +1,6 @@
+/target
+Cargo.lock
+**/*.rs.bk
+.rara/sessions/*.json
+.rara/config.json
+data/lancedb
