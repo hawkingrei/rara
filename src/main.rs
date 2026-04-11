@@ -1,7 +1,7 @@
 mod acp;
 mod agent;
 mod config;
-mod gemma4_backend;
+mod local_backend;
 mod llm;
 mod oauth;
 mod sandbox;
@@ -16,8 +16,8 @@ mod workspace;
 use crate::acp::{run_acp_stdio, RaraAcpAgent};
 use crate::agent::Agent;
 use crate::config::{ConfigManager, RaraConfig};
-use crate::gemma4_backend::Gemma4Backend;
 use crate::llm::{CodexBackend, GeminiBackend, LlmBackend, MockLlm, OpenAiCompatibleBackend};
+use crate::local_backend::LocalLlmBackend;
 use crate::oauth::OAuthManager;
 use crate::sandbox::SandboxManager;
 use crate::session::SessionManager;
@@ -214,7 +214,9 @@ async fn build_backend(config: &RaraConfig) -> Result<Box<dyn LlmBackend>> {
                 .clone()
                 .unwrap_or_else(|| "gemini-1.5-pro".to_string()),
         })),
-        "gemma4" => Ok(Box::new(Gemma4Backend::from_config(config)?)),
+        "gemma4" | "qwen3" | "local" | "local-candle" => {
+            Ok(Box::new(LocalLlmBackend::from_config(config)?))
+        }
         "mock" => Ok(Box::new(MockLlm)),
         _ => Ok(Box::new(MockLlm)),
     }
