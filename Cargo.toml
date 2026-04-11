@@ -33,9 +33,9 @@ futures = "0.3"
 agent-client-protocol = { version = "0.10", features = ["unstable"] }
 hf-hub = "0.4"
 tokenizers = { version = "0.22", default-features = false, features = ["onig"] }
-candle = { git = "https://github.com/huggingface/candle", package = "candle-core" }
-candle-nn = { git = "https://github.com/huggingface/candle", package = "candle-nn" }
-candle-transformers = { git = "https://github.com/huggingface/candle", package = "candle-transformers" }
+candle = { git = "https://github.com/huggingface/candle", rev = "34625ab6d1567a0bc132ac6bc8dc2cce0e16d86d", package = "candle-core" }
+candle-nn = { git = "https://github.com/huggingface/candle", rev = "34625ab6d1567a0bc132ac6bc8dc2cce0e16d86d", package = "candle-nn" }
+candle-transformers = { git = "https://github.com/huggingface/candle", rev = "34625ab6d1567a0bc132ac6bc8dc2cce0e16d86d", package = "candle-transformers" }
 
 [features]
 default = []

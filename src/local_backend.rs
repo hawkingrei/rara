@@ -1,5 +1,5 @@
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
@@ -21,7 +21,7 @@ use crate::config::RaraConfig;
 use crate::llm::LlmBackend;
 
 pub struct LocalLlmBackend {
-    runtime: Mutex<LocalRuntime>,
+    runtime: Arc<Mutex<LocalRuntime>>,
     max_new_tokens: usize,
 }
 
@@ -57,6 +57,12 @@ struct ToolCall {
     name: String,
     #[serde(default)]
     input: Value,
+}
+
+struct GenerationResult {
+    text: String,
+    input_tokens: u32,
+    output_tokens: u32,
 }
 
 impl LocalLlmBackend {
@@ -102,13 +108,13 @@ impl LocalLlmBackend {
         let eos_token_ids = spec.eos_token_ids(&tokenizer)?;
 
         Ok(Self {
-            runtime: Mutex::new(LocalRuntime {
+            runtime: Arc::new(Mutex::new(LocalRuntime {
                 spec,
                 model,
                 tokenizer,
                 device,
                 eos_token_ids,
-            }),
+            })),
             max_new_tokens: 1024,
         })
     }
@@ -117,11 +123,19 @@ impl LocalLlmBackend {
 #[async_trait]
 impl LlmBackend for LocalLlmBackend {
     async fn ask(&self, messages: &[Message], tools: &[Value]) -> Result<AnthropicResponse> {
-        let raw = self
-            .runtime
-            .lock()
-            .map_err(|_| anyhow!("local model runtime mutex poisoned"))?
-            .generate(messages, tools, self.max_new_tokens)?;
+        let runtime = Arc::clone(&self.runtime);
+        let messages = messages.to_vec();
+        let tools = tools.to_vec();
+        let max_new_tokens = self.max_new_tokens;
+        let result = tokio::task::spawn_blocking(move || {
+            runtime
+                .lock()
+                .map_err(|_| anyhow!("local model runtime mutex poisoned"))?
+                .generate(&messages, &tools, max_new_tokens)
+        })
+        .await
+        .context("local model worker task join failed")??;
+        let raw = result.text;
 
         let content = match parse_tool_aware_reply(&raw) {
             Ok(parsed) => {
@@ -155,8 +169,8 @@ impl LlmBackend for LocalLlmBackend {
             stop_reason: Some("end_turn".to_string()),
             content,
             usage: Some(TokenUsage {
-                input_tokens: approximate_token_count(&raw),
-                output_tokens: approximate_token_count(&raw),
+                input_tokens: result.input_tokens,
+                output_tokens: result.output_tokens,
             }),
         })
     }
@@ -166,15 +180,26 @@ impl LlmBackend for LocalLlmBackend {
     }
 
     async fn summarize(&self, messages: &[Message]) -> Result<String> {
-        self.runtime
-            .lock()
-            .map_err(|_| anyhow!("local model runtime mutex poisoned"))?
-            .summarize(messages)
+        let runtime = Arc::clone(&self.runtime);
+        let messages = messages.to_vec();
+        tokio::task::spawn_blocking(move || {
+            runtime
+                .lock()
+                .map_err(|_| anyhow!("local model runtime mutex poisoned"))?
+                .summarize(&messages)
+        })
+        .await
+        .context("local model summary task join failed")?
     }
 }
 
 impl LocalRuntime {
-    fn generate(&mut self, messages: &[Message], tools: &[Value], max_new_tokens: usize) -> Result<String> {
+    fn generate(
+        &mut self,
+        messages: &[Message],
+        tools: &[Value],
+        max_new_tokens: usize,
+    ) -> Result<GenerationResult> {
         let base_prompt = build_agent_prompt(messages, tools);
         let prompt = self.spec.format_prompt(&base_prompt);
         self.model.clear_kv_cache();
@@ -186,12 +211,16 @@ impl LocalRuntime {
             .get_ids()
             .to_vec();
         if prompt_tokens.is_empty() {
-            return Ok(String::new());
+            return Ok(GenerationResult {
+                text: String::new(),
+                input_tokens: 0,
+                output_tokens: 0,
+            });
         }
 
         let mut tokens = prompt_tokens.clone();
         let mut generated = Vec::new();
-        let mut processor = LogitsProcessor::from_sampling(299_792_458, Sampling::ArgMax);
+        let mut processor = LogitsProcessor::from_sampling(rand::random(), Sampling::ArgMax);
 
         for index in 0..max_new_tokens {
             let context_size = if index == 0 { tokens.len() } else { 1 };
@@ -211,9 +240,15 @@ impl LocalRuntime {
             generated.push(next_token);
         }
 
-        self.tokenizer
+        let text = self
+            .tokenizer
             .decode(&generated, true)
-            .map_err(|e| anyhow!("decode output: {e}"))
+            .map_err(|e| anyhow!("decode output: {e}"))?;
+        Ok(GenerationResult {
+            text,
+            input_tokens: prompt_tokens.len() as u32,
+            output_tokens: generated.len() as u32,
+        })
     }
 
     fn summarize(&mut self, messages: &[Message]) -> Result<String> {
@@ -238,7 +273,7 @@ impl LocalRuntime {
 
         let mut tokens = prompt_tokens.clone();
         let mut generated = Vec::new();
-        let mut processor = LogitsProcessor::from_sampling(299_792_458, Sampling::ArgMax);
+        let mut processor = LogitsProcessor::from_sampling(rand::random(), Sampling::ArgMax);
 
         for index in 0..256 {
             let context_size = if index == 0 { tokens.len() } else { 1 };
@@ -577,10 +612,6 @@ fn extract_json_object(raw: &str) -> Option<&str> {
     }
 
     None
-}
-
-fn approximate_token_count(text: &str) -> u32 {
-    text.split_whitespace().count().max(1) as u32
 }
 
 fn hashed_embedding(text: &str, dim: usize) -> Vec<f32> {
