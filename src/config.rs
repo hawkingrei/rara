@@ -1,7 +1,7 @@
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
-use anyhow::{Result};
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct RaraConfig {
@@ -9,6 +9,7 @@ pub struct RaraConfig {
     pub api_key: Option<String>,
     pub base_url: Option<String>,
     pub model: Option<String>,
+    pub revision: Option<String>,
 }
 
 pub struct ConfigManager {
@@ -21,7 +22,9 @@ impl ConfigManager {
         if !rara_dir.exists() {
             fs::create_dir_all(&rara_dir)?;
         }
-        Ok(Self { path: rara_dir.join("config.json") })
+        Ok(Self {
+            path: rara_dir.join("config.json"),
+        })
     }
 
     pub fn load(&self) -> RaraConfig {
