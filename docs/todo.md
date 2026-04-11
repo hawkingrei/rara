@@ -7,6 +7,11 @@ Active backlog only. Keep this file small and current.
 - [ ] Add a richer runtime status line to the TUI so provider, model, revision, workspace, download/inference state, and token usage remain visible during the session.
 - [ ] Harden local model prompting contracts for Gemma 4 and Qwen3: chat template handling, stop sequences, and tool-call JSON framing should be explicit and regression-tested.
 - [ ] Replace the current hash-based local embedding fallback with a real embedding backend so project memory retrieval quality is good enough for normal coding sessions.
+- [ ] Implement the ACP runtime path end to end: `RaraAcpAgent::prompt` and `run_acp_stdio` should execute the real tool/backend loop instead of returning placeholder responses.
+- [ ] Implement the Gemini backend instead of keeping the current `Gemini pending` stub so the configured provider is a real option.
+- [ ] Implement session context retrieval on top of the existing session storage and vector/session managers instead of returning `no_context_found`.
+- [ ] Implement the vector memory tools against the real backend and LanceDB path instead of using placeholder save/retrieve responses.
+- [ ] Implement real parallel `team_create` execution instead of the current mocked result payload.
 
 ## Maintenance Rules
 
