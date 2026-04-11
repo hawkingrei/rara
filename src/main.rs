@@ -222,10 +222,13 @@ pub(crate) async fn build_backend_with_progress(
                 .unwrap_or_else(|| "gemini-1.5-pro".to_string()),
         })),
         "gemma4" | "qwen3" | "qwn3" | "local" | "local-candle" => {
-            Ok(Box::new(LocalLlmBackend::from_config_with_progress(
-                config,
-                progress,
-            )?))
+            let config = config.clone();
+            let progress = progress.clone();
+            let backend = tokio::task::spawn_blocking(move || {
+                LocalLlmBackend::from_config_with_progress(&config, progress)
+            })
+            .await??;
+            Ok(Box::new(backend))
         }
         "mock" => Ok(Box::new(MockLlm)),
         _ => Ok(Box::new(MockLlm)),
