@@ -1,0 +1,58 @@
+# RARA Project Charter
+
+This document records RARA goals, scope, architecture constraints, and documentation rules.
+It is the baseline index for future implementation and evolution.
+
+## 1. Project Goals
+
+RARA is a local-first coding agent runtime with:
+
+- a terminal chat and TUI surface;
+- pluggable LLM backends;
+- an agent loop that can call tools and continue after tool results;
+- durable local memory and workspace context;
+- room for both hosted providers and local model execution.
+
+The current product direction is to make local inference a first-class path instead of a fallback.
+
+## 2. Scope
+
+- Interactive TUI chat flow.
+- Tool-calling agent loop.
+- Local workspace and project memory.
+- Hosted-provider integration where useful.
+- Local model execution through Candle-backed runtimes.
+
+## 3. Architecture Constraints
+
+- Backend/runtime language: Rust.
+- The primary execution surface is a local CLI/TUI binary.
+- The agent loop should continue to depend on a stable backend trait instead of model-specific code paths.
+- Local models should plug into the same `LlmBackend` contract used by hosted providers.
+- TUI interaction should converge toward one unified prompt surface instead of growing separate setup-only flows for common actions.
+- Non-trivial behavior changes should add or update focused tests when practical.
+
+## 4. Current Key Decisions
+
+1. Local model support uses Hugging Face `candle` from the upstream `main` branch.
+2. Local model loading is provider-agnostic at the CLI level and resolved through model presets and aliases.
+3. Agent/tool integration for local models currently uses a constrained JSON tool-calling shim instead of model-native function-calling.
+4. Model downloads use a persistent cache directory under the user cache root, overrideable by environment variable.
+5. The existing TUI setup screen is transitional; model/config changes should move toward inline command-driven interactions.
+
+## 5. Documentation Rules
+
+- `docs/features/` stores stable engineering specs and contracts.
+- `docs/journal/` stores dated implementation notes and checkpoints.
+- `docs/todo.md` stores active follow-up work only.
+- Non-trivial changes should update:
+  - the relevant feature spec when a contract or behavior changed;
+  - a dated journal note for the implementation checkpoint;
+  - `docs/todo.md` only when open follow-up work remains.
+
+## 6. Near-Term Focus
+
+- Inline TUI command surfaces such as `/help`, `/model`, and `/status`.
+- Better onboarding and runtime status transparency.
+- Stronger local-model prompt formatting and stop-sequence handling.
+- A real embedding backend for local memory retrieval quality.
