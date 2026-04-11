@@ -286,7 +286,7 @@ impl LocalModelSpec {
         let provider = config.provider.trim();
         let model = config.model.as_deref().unwrap_or_default().trim();
 
-        if provider == "qwen3" {
+        if provider == "qwen3" || provider == "qwn3" {
             return Ok(Self::Qwen3_8B);
         }
         if provider == "gemma4" {
@@ -307,9 +307,11 @@ impl LocalModelSpec {
         match normalized.as_str() {
             "" | "gemma4-e4b" | "gemma-4-e4b" | "google/gemma-4-e4b-it" => Ok(Self::Gemma4E4B),
             "gemma4-e2b" | "gemma-4-e2b" | "google/gemma-4-e2b-it" => Ok(Self::Gemma4E2B),
-            "qwen3-8b" | "qwen-3-8b" | "qwen/qwen3-8b" => Ok(Self::Qwen3_8B),
+            "qwen3-8b" | "qwen-3-8b" | "qwen/qwen3-8b" | "qwn3-8b" | "qwn3 8b" => {
+                Ok(Self::Qwen3_8B)
+            }
             _ => Err(anyhow!(
-                "unsupported local model '{value}', expected one of: gemma4-e4b, gemma4-e2b, qwen3-8b"
+                "unsupported local model '{value}', expected one of: gemma4-e4b, gemma4-e2b, qwen3-8b, qwn3-8b"
             )),
         }
     }
@@ -614,6 +616,10 @@ mod tests {
         );
         assert_eq!(
             LocalModelSpec::from_alias_or_model_id("qwen3-8b").unwrap().model_id(),
+            "Qwen/Qwen3-8B"
+        );
+        assert_eq!(
+            LocalModelSpec::from_alias_or_model_id("qwn3-8b").unwrap().model_id(),
             "Qwen/Qwen3-8B"
         );
     }

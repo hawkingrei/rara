@@ -214,7 +214,7 @@ async fn build_backend(config: &RaraConfig) -> Result<Box<dyn LlmBackend>> {
                 .clone()
                 .unwrap_or_else(|| "gemini-1.5-pro".to_string()),
         })),
-        "gemma4" | "qwen3" | "local" | "local-candle" => {
+        "gemma4" | "qwen3" | "qwn3" | "local" | "local-candle" => {
             Ok(Box::new(LocalLlmBackend::from_config(config)?))
         }
         "mock" => Ok(Box::new(MockLlm)),
