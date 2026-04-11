@@ -6,8 +6,6 @@ use crate::workspace::WorkspaceMemory;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use anyhow::{Result};
-use owo_colors::OwoColorize;
-use indicatif::ProgressBar;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -40,6 +38,24 @@ pub enum ContentBlock {
         id: String,
         name: String,
         input: Value,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AgentOutputMode {
+    Terminal,
+    Silent,
+}
+
+#[derive(Debug, Clone)]
+pub enum AgentEvent {
+    Status(String),
+    AssistantText(String),
+    ToolUse { name: String, input: Value },
+    ToolResult {
+        name: String,
+        content: String,
+        is_error: bool,
     },
 }
 
@@ -97,12 +113,22 @@ impl Agent {
     }
 
     pub async fn compact_if_needed(&mut self) -> Result<()> {
+        self.compact_if_needed_with_reporter(|_| {}).await
+    }
+
+    pub async fn compact_if_needed_with_reporter<F>(&mut self, mut report: F) -> Result<()>
+    where
+        F: FnMut(AgentEvent),
+    {
         let bpe = tiktoken_rs::cl100k_base().unwrap();
         let current_tokens: usize = self.history.iter().map(|m| {
             bpe.encode_with_special_tokens(&m.content.to_string()).len()
         }).sum();
 
         if current_tokens > 10000 {
+            report(AgentEvent::Status(
+                "Compacting long conversation history.".to_string(),
+            ));
             let split_idx = (self.history.len() as f64 * 0.8) as usize;
             let summary = self.llm_backend.summarize(&self.history[..split_idx]).await?;
             let mut new_history = vec![Message {
@@ -116,8 +142,24 @@ impl Agent {
     }
 
     pub async fn query(&mut self, prompt: String) -> Result<()> {
+        self.query_with_mode(prompt, AgentOutputMode::Terminal).await
+    }
+
+    pub async fn query_with_mode(&mut self, prompt: String, output_mode: AgentOutputMode) -> Result<()> {
+        self.query_with_mode_and_events(prompt, output_mode, |_| {}).await
+    }
+
+    pub async fn query_with_mode_and_events<F>(
+        &mut self,
+        prompt: String,
+        output_mode: AgentOutputMode,
+        mut report: F,
+    ) -> Result<()>
+    where
+        F: FnMut(AgentEvent),
+    {
         let turn_start_idx = self.history.len();
-        self.compact_if_needed().await?;
+        self.compact_if_needed_with_reporter(&mut report).await?;
         
         self.history.push(Message {
             role: "user".to_string(),
@@ -125,15 +167,11 @@ impl Agent {
         });
 
         loop {
-            let pb = ProgressBar::new_spinner();
-            pb.set_message("RARA is working...");
-            pb.enable_steady_tick(std::time::Duration::from_millis(100));
-
+            report(AgentEvent::Status("Sending prompt to model.".to_string()));
             let mut messages = self.history.clone();
             messages.insert(0, Message { role: "system".to_string(), content: json!(self.build_system_prompt()) });
 
             let response = self.llm_backend.ask(&messages, &self.tool_manager.get_schemas()).await?;
-            pb.finish_and_clear();
 
             if let Some(usage) = &response.usage {
                 self.total_input_tokens += usage.input_tokens;
@@ -143,8 +181,19 @@ impl Agent {
             let mut tool_calls = Vec::new();
             for block in &response.content {
                 match block {
-                    ContentBlock::Text { text } => { println!("{}: {}", "Agent".green().bold(), text); }
-                    ContentBlock::ToolUse { id, name, input } => { tool_calls.push((id.clone(), name.clone(), input.clone())); }
+                    ContentBlock::Text { text } => {
+                        report(AgentEvent::AssistantText(text.clone()));
+                        if matches!(output_mode, AgentOutputMode::Terminal) {
+                            println!("Agent: {}", text);
+                        }
+                    }
+                    ContentBlock::ToolUse { id, name, input } => {
+                        report(AgentEvent::ToolUse {
+                            name: name.clone(),
+                            input: input.clone(),
+                        });
+                        tool_calls.push((id.clone(), name.clone(), input.clone()));
+                    }
                 }
             }
 
@@ -157,17 +206,30 @@ impl Agent {
 
             for (id, name, input) in tool_calls {
                 if let Some(tool) = self.tool_manager.get_tool(&name) {
+                    report(AgentEvent::Status(format!("Running tool {name}.")));
                     match tool.call(input).await {
                         Ok(result) => {
+                            let result_text = result.to_string();
+                            report(AgentEvent::ToolResult {
+                                name: name.clone(),
+                                content: result_text.clone(),
+                                is_error: false,
+                            });
                             self.history.push(Message {
                                 role: "user".to_string(),
-                                content: json!([{"type": "tool_result", "tool_use_id": id, "content": result.to_string()}]),
+                                content: json!([{"type": "tool_result", "tool_use_id": id, "content": result_text}]),
                             });
                         }
                         Err(e) => {
+                            let error_text = format!("Error: {}", e);
+                            report(AgentEvent::ToolResult {
+                                name: name.clone(),
+                                content: error_text.clone(),
+                                is_error: true,
+                            });
                             self.history.push(Message {
                                 role: "user".to_string(),
-                                content: json!([{"type": "tool_result", "tool_use_id": id, "content": format!("Error: {}", e), "is_error": true}]),
+                                content: json!([{"type": "tool_result", "tool_use_id": id, "content": error_text, "is_error": true}]),
                             });
                         }
                     }

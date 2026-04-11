@@ -20,6 +20,8 @@ use crate::agent::{AnthropicResponse, ContentBlock, Message, TokenUsage};
 use crate::config::RaraConfig;
 use crate::llm::LlmBackend;
 
+pub type LocalProgressReporter = Arc<dyn Fn(String) + Send + Sync>;
+
 pub struct LocalLlmBackend {
     runtime: Arc<Mutex<LocalRuntime>>,
     max_new_tokens: usize,
@@ -67,12 +69,27 @@ struct GenerationResult {
 
 impl LocalLlmBackend {
     pub fn from_config(config: &RaraConfig) -> Result<Self> {
+        Self::from_config_with_progress(config, None)
+    }
+
+    pub fn from_config_with_progress(
+        config: &RaraConfig,
+        progress: Option<LocalProgressReporter>,
+    ) -> Result<Self> {
         let spec = LocalModelSpec::from_config(config)?;
         let revision = config
             .revision
             .clone()
             .unwrap_or_else(|| "main".to_string());
-        let cache_dir = local_model_cache_dir();
+        let cache_dir = default_local_model_cache_dir();
+        report_progress(
+            &progress,
+            format!("Preparing local model '{}' ({revision}).", spec.alias()),
+        );
+        report_progress(
+            &progress,
+            format!("Using model cache at {}.", cache_dir.display()),
+        );
         let api = build_hf_api(config, &cache_dir)?;
         let repo = api.repo(Repo::with_revision(
             spec.model_id().to_string(),
@@ -80,20 +97,23 @@ impl LocalLlmBackend {
             revision,
         ));
 
-        println!(
-            "Loading local model preset '{}' from {}",
-            spec.alias(),
-            spec.model_id()
+        report_progress(
+            &progress,
+            format!("Resolving artifacts from {}.", spec.model_id()),
         );
-        println!("Model cache directory: {}", cache_dir.display());
 
         let tokenizer_path = repo
             .get("tokenizer.json")
             .context("download tokenizer.json")?;
+        report_progress(&progress, "Tokenizer is ready.".to_string());
         let config_path = repo.get("config.json").context("download config.json")?;
         let weight_paths = load_safetensors(&repo)
             .or_else(|_| repo.get("model.safetensors").map(|p| vec![p]))
             .context("download model weights")?;
+        report_progress(
+            &progress,
+            format!("Resolved {} weight file(s).", weight_paths.len()),
+        );
 
         let raw_config: Value =
             serde_json::from_slice(&std::fs::read(&config_path).context("read config.json")?)
@@ -103,9 +123,17 @@ impl LocalLlmBackend {
 
         let device = select_device()?;
         let dtype = preferred_dtype(&device);
+        report_progress(
+            &progress,
+            format!("Initializing runtime on {:?} with {:?}.", device, dtype),
+        );
         let vb = unsafe { VarBuilder::from_mmaped_safetensors(&weight_paths, dtype, &device)? };
         let model = spec.build_model(&raw_config, vb)?;
         let eos_token_ids = spec.eos_token_ids(&tokenizer)?;
+        report_progress(
+            &progress,
+            format!("Local model '{}' is ready.", spec.alias()),
+        );
 
         Ok(Self {
             runtime: Arc::new(Mutex::new(LocalRuntime {
@@ -117,6 +145,12 @@ impl LocalLlmBackend {
             })),
             max_new_tokens: 1024,
         })
+    }
+}
+
+fn report_progress(progress: &Option<LocalProgressReporter>, message: String) {
+    if let Some(callback) = progress {
+        callback(message);
     }
 }
 
@@ -437,7 +471,7 @@ fn build_hf_api(config: &RaraConfig, cache_dir: &PathBuf) -> Result<hf_hub::api:
     builder.build().context("build Hugging Face API client")
 }
 
-fn local_model_cache_dir() -> PathBuf {
+pub fn default_local_model_cache_dir() -> PathBuf {
     if let Ok(path) = std::env::var("RARA_MODEL_CACHE") {
         return PathBuf::from(path);
     }
@@ -636,7 +670,7 @@ fn hashed_embedding(text: &str, dim: usize) -> Vec<f32> {
 
 #[cfg(test)]
 mod tests {
-    use super::{extract_json_object, local_model_cache_dir, parse_tool_aware_reply, render_content, LocalModelSpec};
+    use super::{default_local_model_cache_dir, extract_json_object, parse_tool_aware_reply, render_content, LocalModelSpec};
     use serde_json::json;
 
     #[test]
@@ -657,7 +691,7 @@ mod tests {
 
     #[test]
     fn builds_global_cache_path() {
-        let path = local_model_cache_dir();
+        let path = default_local_model_cache_dir();
         assert!(path.to_string_lossy().contains("rara"));
         assert!(path.to_string_lossy().contains("huggingface"));
     }

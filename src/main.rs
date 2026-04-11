@@ -17,7 +17,7 @@ use crate::acp::{run_acp_stdio, RaraAcpAgent};
 use crate::agent::Agent;
 use crate::config::{ConfigManager, RaraConfig};
 use crate::llm::{CodexBackend, GeminiBackend, LlmBackend, MockLlm, OpenAiCompatibleBackend};
-use crate::local_backend::LocalLlmBackend;
+use crate::local_backend::{LocalLlmBackend, LocalProgressReporter};
 use crate::oauth::OAuthManager;
 use crate::sandbox::SandboxManager;
 use crate::session::SessionManager;
@@ -189,7 +189,14 @@ fn create_full_tool_manager(
     tm
 }
 
-async fn build_backend(config: &RaraConfig) -> Result<Box<dyn LlmBackend>> {
+pub(crate) async fn build_backend(config: &RaraConfig) -> Result<Box<dyn LlmBackend>> {
+    build_backend_with_progress(config, None).await
+}
+
+pub(crate) async fn build_backend_with_progress(
+    config: &RaraConfig,
+    progress: Option<LocalProgressReporter>,
+) -> Result<Box<dyn LlmBackend>> {
     match config.provider.as_str() {
         "kimi" => Ok(Box::new(OpenAiCompatibleBackend {
             api_key: config.api_key.clone().expect("API key required for Kimi"),
@@ -215,7 +222,10 @@ async fn build_backend(config: &RaraConfig) -> Result<Box<dyn LlmBackend>> {
                 .unwrap_or_else(|| "gemini-1.5-pro".to_string()),
         })),
         "gemma4" | "qwen3" | "qwn3" | "local" | "local-candle" => {
-            Ok(Box::new(LocalLlmBackend::from_config(config)?))
+            Ok(Box::new(LocalLlmBackend::from_config_with_progress(
+                config,
+                progress,
+            )?))
         }
         "mock" => Ok(Box::new(MockLlm)),
         _ => Ok(Box::new(MockLlm)),
