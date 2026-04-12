@@ -470,7 +470,8 @@ fn is_multimodal_gemma4_checkpoint(raw_config: &Value) -> bool {
 }
 
 fn build_gemma4_model(raw_config: &Value, vb: VarBuilder) -> Result<LocalTextModel> {
-    if is_multimodal_gemma4_checkpoint(raw_config) {
+    let is_multimodal_layout = is_multimodal_gemma4_checkpoint(raw_config);
+    if is_multimodal_layout {
         let config: Gemma4Config =
             serde_json::from_value(raw_config.clone()).context("parse Gemma4Config")?;
         match Gemma4Model::new(&config, vb.clone()) {
@@ -486,8 +487,13 @@ fn build_gemma4_model(raw_config: &Value, vb: VarBuilder) -> Result<LocalTextMod
         serde_json::from_value(raw_config.clone()).context("parse Gemma4TextConfig")?
     };
     text_config.use_flash_attn = false;
+    let text_vb = if is_multimodal_layout {
+        vb.pp("model").pp("language_model")
+    } else {
+        vb
+    };
     Ok(LocalTextModel::Gemma4(
-        Gemma4TextModel::new(&text_config, vb).context("build Gemma4 text model")?,
+        Gemma4TextModel::new(&text_config, text_vb).context("build Gemma4 text model")?,
     ))
 }
 
