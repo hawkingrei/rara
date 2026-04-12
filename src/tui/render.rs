@@ -60,16 +60,34 @@ fn render_transcript(f: &mut Frame, app: &TuiApp, area: Rect) {
             ListItem::new(Line::from("  Find the main agent loop and summarize it.")),
         ]
     } else {
-        app.transcript
-            .iter()
-            .map(|(role, message)| {
-                ListItem::new(vec![
-                    role_badge(role),
-                    Line::from(message.as_str()),
-                    Line::from(""),
-                ])
-            })
-            .collect::<Vec<_>>()
+        let max_visible_entries = area.height.saturating_sub(3).max(6) as usize / 4;
+        let max_visible_entries = max_visible_entries.max(3);
+        let start = app.transcript.len().saturating_sub(max_visible_entries);
+        let mut items = Vec::new();
+        if start > 0 {
+            items.push(ListItem::new(Line::from(vec![
+                Span::styled(
+                    "Earlier entries hidden ",
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::raw(format!(
+                    "showing latest {} of {} transcript events",
+                    app.transcript.len() - start,
+                    app.transcript.len()
+                )),
+            ])));
+            items.push(ListItem::new(Line::from("")));
+        }
+        items.extend(
+            app.transcript
+                .iter()
+                .skip(start)
+                .enumerate()
+                .map(|(idx, (role, message))| transcript_item(idx + start, role, message)),
+        );
+        items
     };
 
     f.render_widget(
@@ -572,7 +590,34 @@ fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
     horizontal[1]
 }
 
-fn role_badge(role: &str) -> Line<'static> {
+fn transcript_item(index: usize, role: &str, message: &str) -> ListItem<'static> {
+    let mut lines = vec![Line::from(vec![
+        role_badge_span(role),
+        Span::raw(" "),
+        Span::styled(
+            format!("#{}", index + 1),
+            Style::default().fg(Color::DarkGray),
+        ),
+    ])];
+    let message_lines = message.lines().collect::<Vec<_>>();
+    if message_lines.is_empty() {
+        lines.push(Line::from("  "));
+    } else {
+        for line in message_lines {
+            lines.push(Line::from(vec![
+                Span::styled("  ", Style::default().fg(Color::DarkGray)),
+                Span::raw(line.to_string()),
+            ]));
+        }
+    }
+    lines.push(Line::from(Span::styled(
+        "  ",
+        Style::default().fg(Color::DarkGray),
+    )));
+    ListItem::new(lines)
+}
+
+fn role_badge_span(role: &str) -> Span<'static> {
     let (fg, bg) = match role {
         "You" => (Color::Black, Color::Green),
         "Agent" => (Color::Black, Color::Cyan),
@@ -584,10 +629,10 @@ fn role_badge(role: &str) -> Line<'static> {
         "System" => (Color::Black, Color::Magenta),
         _ => (Color::White, Color::DarkGray),
     };
-    Line::from(Span::styled(
+    Span::styled(
         format!(" {} ", role),
         Style::default().fg(fg).bg(bg).add_modifier(Modifier::BOLD),
-    ))
+    )
 }
 
 fn badge<'a>(label: &'a str, value: &'a str, color: Color) -> Span<'a> {
