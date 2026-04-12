@@ -45,6 +45,28 @@ pub struct CommandSpec {
     pub detail: &'static str,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum RuntimePhase {
+    Idle,
+    LocalCommand,
+    SendingPrompt,
+    ProcessingResponse,
+    RunningTool,
+    RebuildingBackend,
+    BackendReady,
+    OAuthStarting,
+    OAuthWaitingCallback,
+    OAuthExchangingToken,
+    OAuthSaved,
+    Failed,
+}
+
+impl Default for RuntimePhase {
+    fn default() -> Self {
+        Self::Idle
+    }
+}
+
 #[derive(Default, Clone)]
 pub struct RuntimeSnapshot {
     pub cwd: String,
@@ -116,11 +138,13 @@ pub struct TuiApp {
     pub config_manager: ConfigManager,
     pub setup_status: Option<String>,
     pub notice: Option<String>,
-    pub runtime_phase: Option<String>,
+    pub runtime_phase: RuntimePhase,
+    pub runtime_phase_detail: Option<String>,
     pub snapshot: RuntimeSnapshot,
     pub model_picker_idx: usize,
     pub model_guide_idx: usize,
     pub command_palette_idx: usize,
+    pub recent_commands: Vec<String>,
     pub running_task: Option<RunningTask>,
 }
 
@@ -141,11 +165,13 @@ impl TuiApp {
             config_manager: cm,
             setup_status: None,
             notice: None,
-            runtime_phase: None,
+            runtime_phase: RuntimePhase::Idle,
+            runtime_phase_detail: None,
             snapshot: RuntimeSnapshot::default(),
             model_picker_idx,
             model_guide_idx: 0,
             command_palette_idx: 0,
+            recent_commands: Vec::new(),
             running_task: None,
         }
     }
@@ -202,8 +228,32 @@ impl TuiApp {
         self.notice = Some("Cleared local transcript view.".into());
     }
 
-    pub fn set_runtime_phase(&mut self, phase: impl Into<String>) {
-        self.runtime_phase = Some(phase.into());
+    pub fn set_runtime_phase(&mut self, phase: RuntimePhase, detail: Option<String>) {
+        self.runtime_phase = phase;
+        self.runtime_phase_detail = detail;
+    }
+
+    pub fn runtime_phase_label(&self) -> &'static str {
+        match self.runtime_phase {
+            RuntimePhase::Idle => "idle",
+            RuntimePhase::LocalCommand => "local-command",
+            RuntimePhase::SendingPrompt => "sending-prompt",
+            RuntimePhase::ProcessingResponse => "processing-response",
+            RuntimePhase::RunningTool => "running-tool",
+            RuntimePhase::RebuildingBackend => "rebuilding-backend",
+            RuntimePhase::BackendReady => "backend-ready",
+            RuntimePhase::OAuthStarting => "oauth-starting",
+            RuntimePhase::OAuthWaitingCallback => "oauth-waiting-callback",
+            RuntimePhase::OAuthExchangingToken => "oauth-exchanging-token",
+            RuntimePhase::OAuthSaved => "oauth-saved",
+            RuntimePhase::Failed => "failed",
+        }
+    }
+
+    pub fn remember_command(&mut self, command_name: &str) {
+        self.recent_commands.retain(|value| value != command_name);
+        self.recent_commands.insert(0, command_name.to_string());
+        self.recent_commands.truncate(5);
     }
 
     pub fn open_overlay(&mut self, overlay: Overlay) {

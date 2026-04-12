@@ -21,7 +21,7 @@ use crate::agent::Agent;
 use crate::oauth::OAuthManager;
 
 use self::app_event::AppEvent;
-use self::command::{command_spec_by_index, matching_commands, parse_local_command};
+use self::command::{palette_command_by_index, palette_commands, parse_local_command};
 use self::render::render;
 use self::runtime::{
     execute_local_command, finish_running_task_if_ready, start_oauth_task, start_query_task,
@@ -46,6 +46,7 @@ pub async fn run_tui(agent: Agent, oauth_manager: OAuthManager) -> anyhow::Resul
 
     let result = loop {
         finish_running_task_if_ready(&mut app, &mut agent_slot).await?;
+        clamp_command_palette_selection(&mut app);
         terminal.draw(|f| render(f, &app))?;
 
         tokio::select! {
@@ -170,7 +171,7 @@ async fn dispatch_event(
             }
         }
         AppEvent::MoveCommandSelection(delta) => {
-            let len = matching_commands(app.input.trim_start().trim_start_matches('/')).len();
+            let len = palette_commands(app, app.input.trim_start().trim_start_matches('/')).len();
             if len > 0 {
                 let next = (app.command_palette_idx as i32 + delta).clamp(0, len as i32 - 1);
                 app.command_palette_idx = next as usize;
@@ -216,7 +217,7 @@ async fn dispatch_event(
         AppEvent::ApplyOverlaySelection => match app.overlay {
             Some(Overlay::CommandPalette) => {
                 let query = app.input.trim_start().trim_start_matches('/');
-                if let Some(spec) = command_spec_by_index(query, app.command_palette_idx) {
+                if let Some(spec) = palette_command_by_index(app, query, app.command_palette_idx) {
                     app.input = spec.usage.to_string();
                     app.close_overlay();
                     handle_submit(app, agent_slot, oauth_manager).await?;
@@ -267,7 +268,7 @@ async fn handle_submit(
 ) -> anyhow::Result<()> {
     if matches!(app.overlay, Some(Overlay::CommandPalette)) {
         let query = app.input.trim_start().trim_start_matches('/');
-        if let Some(spec) = command_spec_by_index(query, app.command_palette_idx) {
+        if let Some(spec) = palette_command_by_index(app, query, app.command_palette_idx) {
             app.input = spec.usage.to_string();
         }
         app.close_overlay();
@@ -290,6 +291,15 @@ async fn handle_submit(
         start_query_task(app, input.trim().to_string(), agent);
     }
     Ok(())
+}
+
+fn clamp_command_palette_selection(app: &mut TuiApp) {
+    let len = palette_commands(app, app.input.trim_start().trim_start_matches('/')).len();
+    if len == 0 {
+        app.command_palette_idx = 0;
+    } else if app.command_palette_idx >= len {
+        app.command_palette_idx = len - 1;
+    }
 }
 
 fn teardown_terminal(

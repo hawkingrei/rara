@@ -88,6 +88,55 @@ pub fn command_spec_by_index(query: &str, index: usize) -> Option<&'static Comma
     matching_commands(query).get(index).copied()
 }
 
+pub fn command_spec_by_name(name: &str) -> Option<&'static CommandSpec> {
+    COMMAND_SPECS.iter().find(|spec| spec.name == name)
+}
+
+pub fn recommended_commands(app: &TuiApp) -> Vec<&'static CommandSpec> {
+    let names: &[&str] = if app.is_busy() {
+        &["status", "help", "clear"]
+    } else {
+        &["model", "status", "help", "clear", "setup"]
+    };
+    names
+        .iter()
+        .filter_map(|name| command_spec_by_name(name))
+        .collect()
+}
+
+pub fn recent_command_specs(app: &TuiApp) -> Vec<&'static CommandSpec> {
+    app.recent_commands
+        .iter()
+        .filter_map(|name| command_spec_by_name(name))
+        .collect()
+}
+
+pub fn palette_commands(app: &TuiApp, query: &str) -> Vec<&'static CommandSpec> {
+    if !query.trim().is_empty() {
+        return matching_commands(query);
+    }
+
+    let mut commands = recommended_commands(app);
+    for spec in recent_command_specs(app) {
+        if !commands.iter().any(|existing| existing.name == spec.name) {
+            commands.push(spec);
+        }
+    }
+    if commands.is_empty() {
+        COMMAND_SPECS.iter().collect()
+    } else {
+        commands
+    }
+}
+
+pub fn palette_command_by_index(
+    app: &TuiApp,
+    query: &str,
+    index: usize,
+) -> Option<&'static CommandSpec> {
+    palette_commands(app, query).get(index).copied()
+}
+
 pub fn command_detail_text(spec: &CommandSpec) -> String {
     format!("{}\n\n{}\n\n{}", spec.usage, spec.summary, spec.detail)
 }
@@ -150,15 +199,17 @@ pub fn status_runtime_text(app: &TuiApp) -> String {
     } else {
         "local"
     };
-    let phase = app.runtime_phase.as_deref().unwrap_or("idle");
+    let phase = app.runtime_phase_label();
+    let detail = app.runtime_phase_detail.as_deref().unwrap_or("-");
     format!(
-        "provider={}\nmodel={}\nrevision={}\nmode={}\napi_key={}\nphase={}",
+        "provider={}\nmodel={}\nrevision={}\nmode={}\napi_key={}\nphase={}\ndetail={}",
         app.config.provider,
         app.current_model_label(),
         app.config.revision.as_deref().unwrap_or("main"),
         mode,
         api_key_status(&app.config),
         phase,
+        detail,
     )
 }
 

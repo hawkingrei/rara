@@ -25,8 +25,8 @@ use crate::workspace::WorkspaceMemory;
 
 use super::command::{model_help_text, resolve_model_selection};
 use super::state::{
-    HelpTab, LocalCommand, LocalCommandKind, Overlay, RunningTask, TaskCompletion, TaskKind,
-    TuiApp, TuiEvent,
+    HelpTab, LocalCommand, LocalCommandKind, Overlay, RunningTask, RuntimePhase, TaskCompletion,
+    TaskKind, TuiApp, TuiEvent,
 };
 
 pub async fn execute_local_command(
@@ -35,11 +35,31 @@ pub async fn execute_local_command(
     agent_slot: &mut Option<Agent>,
     oauth_manager: &Arc<OAuthManager>,
 ) -> anyhow::Result<()> {
+    app.remember_command(match command.kind {
+        LocalCommandKind::Help => "help",
+        LocalCommandKind::Status => "status",
+        LocalCommandKind::Clear => "clear",
+        LocalCommandKind::Setup => "setup",
+        LocalCommandKind::Model => "model",
+        LocalCommandKind::Login => "login",
+    });
     match command.kind {
-        LocalCommandKind::Help => app.open_overlay(Overlay::Help(HelpTab::General)),
-        LocalCommandKind::Status => app.open_overlay(Overlay::Status),
-        LocalCommandKind::Clear => app.reset_transcript(),
-        LocalCommandKind::Setup => app.open_overlay(Overlay::Setup),
+        LocalCommandKind::Help => {
+            app.set_runtime_phase(RuntimePhase::LocalCommand, Some("opening help".into()));
+            app.open_overlay(Overlay::Help(HelpTab::General));
+        }
+        LocalCommandKind::Status => {
+            app.set_runtime_phase(RuntimePhase::LocalCommand, Some("opening status".into()));
+            app.open_overlay(Overlay::Status);
+        }
+        LocalCommandKind::Clear => {
+            app.set_runtime_phase(RuntimePhase::LocalCommand, Some("clearing transcript".into()));
+            app.reset_transcript();
+        }
+        LocalCommandKind::Setup => {
+            app.set_runtime_phase(RuntimePhase::LocalCommand, Some("opening setup".into()));
+            app.open_overlay(Overlay::Setup);
+        }
         LocalCommandKind::Model => handle_model_command(command.arg.as_deref(), app)?,
         LocalCommandKind::Login => {
             if app.is_busy() {
@@ -58,7 +78,7 @@ pub async fn execute_local_command(
 pub fn start_query_task(app: &mut TuiApp, prompt: String, mut agent: Agent) {
     let (sender, receiver) = mpsc::unbounded_channel();
     app.notice = Some("Running prompt.".into());
-    app.set_runtime_phase("sending prompt");
+    app.set_runtime_phase(RuntimePhase::SendingPrompt, Some("sending prompt".into()));
     app.push_entry("You", prompt.clone());
 
     let handle = tokio::spawn(async move {
@@ -84,7 +104,10 @@ pub fn start_rebuild_task(app: &mut TuiApp) {
     let provider = config.provider.clone();
     let model = config.model.clone().unwrap_or_else(|| "-".to_string());
     app.notice = Some(format!("Rebuilding backend for {provider} / {model}."));
-    app.set_runtime_phase(format!("rebuilding backend for {provider}"));
+    app.set_runtime_phase(
+        RuntimePhase::RebuildingBackend,
+        Some(format!("rebuilding backend for {provider}")),
+    );
     app.push_entry("Runtime", format!("Reloading backend for {provider} / {model}."));
 
     let handle = tokio::spawn(async move {
@@ -109,7 +132,7 @@ pub fn start_rebuild_task(app: &mut TuiApp) {
 pub fn start_oauth_task(app: &mut TuiApp, oauth_manager: Arc<OAuthManager>) {
     let (sender, receiver) = mpsc::unbounded_channel();
     app.notice = Some("Starting OAuth login.".into());
-    app.set_runtime_phase("starting oauth");
+    app.set_runtime_phase(RuntimePhase::OAuthStarting, Some("starting oauth".into()));
     app.push_entry("Runtime", "Starting OAuth login flow.");
 
     let handle = tokio::spawn(async move {
@@ -161,10 +184,13 @@ pub async fn finish_running_task_if_ready(
             match result {
                 Ok(_) => {
                     app.notice = Some("Prompt finished.".into());
-                    app.set_runtime_phase("prompt finished");
+                    app.set_runtime_phase(
+                        RuntimePhase::ProcessingResponse,
+                        Some("prompt finished".into()),
+                    );
                 }
                 Err(err) => {
-                    app.set_runtime_phase("query failed");
+                    app.set_runtime_phase(RuntimePhase::Failed, Some("query failed".into()));
                     app.push_notice(format!("Query failed: {err}"));
                 }
             }
@@ -184,11 +210,14 @@ pub async fn finish_running_task_if_ready(
                     app.sync_snapshot(agent);
                 }
                 app.close_overlay();
-                app.set_runtime_phase("backend ready");
+                app.set_runtime_phase(RuntimePhase::BackendReady, Some("backend ready".into()));
                 app.push_entry("Runtime", app.setup_status.clone().unwrap_or_default());
             }
             Err(err) => {
-                app.set_runtime_phase("backend rebuild failed");
+                app.set_runtime_phase(
+                    RuntimePhase::Failed,
+                    Some("backend rebuild failed".into()),
+                );
                 let message = format!("Failed to apply config:\n{}", format_error_chain(&err));
                 app.setup_status = Some(message.clone());
                 app.push_notice(message);
@@ -201,12 +230,12 @@ pub async fn finish_running_task_if_ready(
                 app.config_manager.save(&app.config)?;
                 app.setup_status = Some("Saved OAuth token.".into());
                 app.notice = app.setup_status.clone();
-                app.set_runtime_phase("oauth token saved");
+                app.set_runtime_phase(RuntimePhase::OAuthSaved, Some("oauth token saved".into()));
                 app.close_overlay();
                 app.push_entry("Runtime", "Saved OAuth token.");
             }
             Err(err) => {
-                app.set_runtime_phase("oauth failed");
+                app.set_runtime_phase(RuntimePhase::Failed, Some("oauth failed".into()));
                 app.push_notice(format!("OAuth failed:\n{}", format_error_chain(&err)));
             }
         },
@@ -240,8 +269,30 @@ fn handle_model_command(arg: Option<&str>, app: &mut TuiApp) -> anyhow::Result<(
 fn apply_tui_event(app: &mut TuiApp, event: TuiEvent) {
     match event {
         TuiEvent::Transcript { role, message } => {
-            if matches!(role, "Runtime" | "Status") {
-                app.set_runtime_phase(message.lines().next().unwrap_or(role).trim().to_string());
+            if role == "Status" {
+                app.set_runtime_phase(
+                    RuntimePhase::ProcessingResponse,
+                    Some(message.lines().next().unwrap_or(role).trim().to_string()),
+                );
+            } else if role == "Tool" || role == "Tool Result" || role == "Tool Error" {
+                app.set_runtime_phase(
+                    RuntimePhase::RunningTool,
+                    Some(message.lines().next().unwrap_or(role).trim().to_string()),
+                );
+            } else if role == "Agent" {
+                app.set_runtime_phase(
+                    RuntimePhase::ProcessingResponse,
+                    Some("receiving model output".into()),
+                );
+            } else if role == "Runtime" {
+                let detail = message.lines().next().unwrap_or(role).trim().to_string();
+                if detail.contains("OAuth flow") {
+                    app.set_runtime_phase(RuntimePhase::OAuthWaitingCallback, Some(detail));
+                } else if detail.contains("exchanging token") {
+                    app.set_runtime_phase(RuntimePhase::OAuthExchangingToken, Some(detail));
+                } else {
+                    app.set_runtime_phase(RuntimePhase::RebuildingBackend, Some(detail));
+                }
             }
             app.push_entry(role, message)
         }

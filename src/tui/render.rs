@@ -8,8 +8,9 @@ use ratatui::{
 
 use super::command::{
     api_key_status, command_detail_text, command_spec_by_index, general_help_text, help_text,
-    matching_commands, model_help_text, quick_actions_text, recent_transcript_preview,
-    status_resources_text, status_runtime_text, status_workspace_text,
+    matching_commands, model_help_text, palette_command_by_index, palette_commands,
+    quick_actions_text, recent_transcript_preview, status_resources_text, status_runtime_text,
+    status_workspace_text,
 };
 use super::state::{
     HelpTab, Overlay, TaskKind, TuiApp, LOCAL_MODEL_PRESETS, MODEL_GUIDE_OPTIONS,
@@ -164,7 +165,7 @@ fn render_footer(f: &mut Frame, app: &TuiApp, area: Rect) {
         activity,
         mode,
         api_key_status(&app.config),
-        app.runtime_phase.as_deref().unwrap_or("idle"),
+        app.runtime_phase_label(),
         app.snapshot.history_len,
         app.transcript.len(),
         app.snapshot.total_input_tokens,
@@ -219,7 +220,7 @@ fn render_header(f: &mut Frame, app: &TuiApp, area: Rect) {
         ]),
         Line::from(format!(
             " phase={} ",
-            app.runtime_phase.as_deref().unwrap_or("idle")
+            app.runtime_phase_label()
         )),
         Line::from(vec![
             Span::raw(format!(
@@ -403,7 +404,51 @@ fn render_command_palette(f: &mut Frame, app: &TuiApp, area: Rect) {
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
         .split(chunks[1]);
-    let items = matching_commands(query)
+    let items = if query.is_empty() {
+        palette_items_for_empty_query(app)
+    } else {
+        palette_items_for_matches(app, query)
+    };
+    let intro = if query.is_empty() {
+        "Recommended and recent commands are listed first. Enter runs the highlighted command immediately."
+    } else {
+        "Use Up/Down to inspect matches. Enter runs the highlighted command immediately."
+    };
+    f.render_widget(
+        Paragraph::new(intro)
+            .block(Block::default().borders(Borders::ALL).title(format!(" Commands matching /{} ", query))),
+        chunks[0],
+    );
+    f.render_widget(
+        List::new(items).block(Block::default().borders(Borders::LEFT | Borders::RIGHT).title(" Matches ")),
+        body[0],
+    );
+    let detail = palette_command_by_index(app, query, app.command_palette_idx)
+        .map(command_detail_text)
+        .unwrap_or_else(help_text);
+    f.render_widget(
+        Paragraph::new(detail)
+            .block(Block::default().borders(Borders::RIGHT).title(" Detail "))
+            .wrap(Wrap { trim: false }),
+        body[1],
+    );
+    f.render_widget(
+        Paragraph::new("Esc close  Enter run highlighted command  Keep typing to refine")
+            .alignment(Alignment::Center),
+        chunks[2],
+    );
+}
+
+fn palette_items_for_empty_query(app: &TuiApp) -> Vec<ListItem<'static>> {
+    palette_commands(app, "")
+        .into_iter()
+        .enumerate()
+        .map(|(idx, spec)| command_palette_item(idx, app.command_palette_idx, spec))
+        .collect()
+}
+
+fn palette_items_for_matches(app: &TuiApp, query: &str) -> Vec<ListItem<'static>> {
+    matching_commands(query)
         .into_iter()
         .enumerate()
         .scan(None::<&'static str>, |last_category, (idx, spec)| {
@@ -426,35 +471,24 @@ fn render_command_palette(f: &mut Frame, app: &TuiApp, area: Rect) {
             lines.push(Line::from(""));
             Some(ListItem::new(lines).style(style))
         })
-        .collect::<Vec<_>>();
-    let intro = if query.is_empty() {
-        "Start typing after / to narrow commands. Enter runs the highlighted command immediately."
+        .collect()
+}
+
+fn command_palette_item(
+    index: usize,
+    selected_index: usize,
+    spec: &super::state::CommandSpec,
+) -> ListItem<'static> {
+    let style = if index == selected_index {
+        Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
     } else {
-        "Use Up/Down to inspect matches. Enter runs the highlighted command immediately."
+        Style::default()
     };
-    f.render_widget(
-        Paragraph::new(intro)
-            .block(Block::default().borders(Borders::ALL).title(format!(" Commands matching /{} ", query))),
-        chunks[0],
-    );
-    f.render_widget(
-        List::new(items).block(Block::default().borders(Borders::LEFT | Borders::RIGHT).title(" Matches ")),
-        body[0],
-    );
-    let detail = command_spec_by_index(query, app.command_palette_idx)
-        .map(command_detail_text)
-        .unwrap_or_else(help_text);
-    f.render_widget(
-        Paragraph::new(detail)
-            .block(Block::default().borders(Borders::RIGHT).title(" Detail "))
-            .wrap(Wrap { trim: false }),
-        body[1],
-    );
-    f.render_widget(
-        Paragraph::new("Esc close  Enter run highlighted command  Keep typing to refine")
-            .alignment(Alignment::Center),
-        chunks[2],
-    );
+    ListItem::new(vec![
+        Line::from(format!("{}  {}", spec.usage, spec.summary)),
+        Line::from(""),
+    ])
+    .style(style)
 }
 
 fn render_status_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
