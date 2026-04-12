@@ -88,15 +88,23 @@ pub struct RunningTask {
 }
 
 pub const LOCAL_MODEL_PRESETS: [(&str, &str, &str); 3] = [
-    ("Gemma 4 E4B", "gemma4", "gemma4-e4b"),
-    ("Gemma 4 E2B", "gemma4", "gemma4-e2b"),
+    ("Gemma 4 E4B (Experimental)", "gemma4", "gemma4-e4b"),
+    ("Gemma 4 E2B (Experimental)", "gemma4", "gemma4-e2b"),
     ("Qwn3 8B", "qwn3", "qwn3-8b"),
 ];
 
 pub const MODEL_GUIDE_OPTIONS: [(&str, &str, Option<usize>); 4] = [
     ("Fast", "Switch to Qwn3 8B for faster local responses.", Some(2)),
-    ("Balanced", "Switch to Gemma 4 E2B for a middle ground.", Some(1)),
-    ("Strongest", "Switch to Gemma 4 E4B for best local reasoning.", Some(0)),
+    (
+        "Balanced",
+        "Switch to Gemma 4 E2B. This path is experimental.",
+        Some(1),
+    ),
+    (
+        "Strongest",
+        "Switch to Gemma 4 E4B. This path is experimental.",
+        Some(0),
+    ),
     ("Manual", "Open the full model list and choose explicitly.", None),
 ];
 

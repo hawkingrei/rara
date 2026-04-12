@@ -139,7 +139,7 @@ pub fn help_text() -> String {
         .collect::<Vec<_>>()
         .join("\n");
     format!(
-        "Built-in commands:\n{}\n\nKeyboard:\n  Enter submit\n  Esc quit or leave current panel\n  S open setup\n\nModel switching examples:\n  /model\n  /model list\n  /model 2\n  /model qwen3-8b\n  /model next",
+        "Built-in commands:\n{}\n\nKeyboard:\n  Enter submit\n  Esc quit or leave current panel\n  S open setup\n\nModel switching examples:\n  /model\n  /model list\n  /model 2\n  /model qwen3-8b\n  /model gemma4-e2b\n  /model next",
         commands
     )
 }
@@ -186,7 +186,7 @@ pub fn model_help_text(app: &TuiApp) -> String {
         .collect::<Vec<_>>()
         .join("\n");
     format!(
-        "Current model: {} / {}\n\nAvailable presets:\n{}\n\nUse /model to open the guide, or /model <name>, /model <1|2|3>, /model list, /model next.",
+        "Current model: {} / {}\n\nAvailable presets:\n{}\n\nGemma 4 presets are marked experimental.\n\nUse /model to open the guide, or /model <name>, /model <1|2|3>, /model list, /model next.",
         app.config.provider,
         app.current_model_label(),
         lines
