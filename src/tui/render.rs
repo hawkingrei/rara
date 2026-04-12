@@ -8,9 +8,9 @@ use ratatui::{
 
 use super::command::{
     api_key_status, command_detail_text, command_spec_by_index, general_help_text, help_text,
-    matching_commands, model_help_text, palette_command_by_index, palette_commands,
-    quick_actions_text, recent_transcript_preview, status_resources_text, status_runtime_text,
-    status_workspace_text,
+    download_status_text, matching_commands, model_help_text, palette_command_by_index,
+    palette_commands, quick_actions_text, recent_transcript_preview, status_resources_text,
+    status_runtime_text, status_workspace_text,
 };
 use super::state::{
     HelpTab, Overlay, TaskKind, TuiApp, LOCAL_MODEL_PRESETS, MODEL_GUIDE_OPTIONS,
@@ -110,7 +110,9 @@ fn render_transcript(f: &mut Frame, app: &TuiApp, area: Rect) {
 }
 
 fn render_activity_bar(f: &mut Frame, app: &TuiApp, area: Rect) {
-    let (label, color) = if app.is_busy() {
+    let (label, color) = if matches!(app.runtime_phase, super::state::RuntimePhase::RebuildingBackend) {
+        ("Downloading", Color::LightBlue)
+    } else if app.is_busy() {
         ("Working", Color::Yellow)
     } else {
         ("Ready", Color::Green)
@@ -536,6 +538,12 @@ fn render_status_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
             .wrap(Wrap { trim: false }),
         top[2],
     );
+    let right_panel = download_status_text(app).unwrap_or_else(|| quick_actions_text().to_string());
+    let right_title = if matches!(app.runtime_phase, super::state::RuntimePhase::RebuildingBackend | super::state::RuntimePhase::BackendReady) {
+        " Download "
+    } else {
+        " Quick Actions "
+    };
     f.render_widget(
         Paragraph::new(model_help_text(app))
             .block(Block::default().borders(Borders::ALL).title(" Models "))
@@ -543,8 +551,8 @@ fn render_status_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
         middle[0],
     );
     f.render_widget(
-        Paragraph::new(quick_actions_text())
-            .block(Block::default().borders(Borders::ALL).title(" Quick Actions "))
+        Paragraph::new(right_panel)
+            .block(Block::default().borders(Borders::ALL).title(right_title))
             .wrap(Wrap { trim: false }),
         middle[1],
     );
@@ -766,6 +774,7 @@ fn role_badge_span(role: &str) -> Span<'static> {
         "Tool" => (Color::Black, Color::Yellow),
         "Tool Result" => (Color::Black, Color::LightGreen),
         "Tool Error" => (Color::White, Color::Red),
+        "Download" => (Color::Black, Color::LightBlue),
         "Runtime" => (Color::Black, Color::LightBlue),
         "Status" => (Color::Black, Color::Gray),
         "System" => (Color::Black, Color::Magenta),

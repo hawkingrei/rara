@@ -89,11 +89,11 @@ impl LocalLlmBackend {
         let cache_dir = default_local_model_cache_dir();
         report_progress(
             &progress,
-            format!("Preparing local model '{}' ({revision}).", spec.alias()),
+            format!("Download setup · {} ({revision})", spec.alias()),
         );
         report_progress(
             &progress,
-            format!("Using model cache at {}.", cache_dir.display()),
+            format!("Cache · {}", cache_dir.display()),
         );
         let api = build_hf_api(config, &cache_dir)?;
         let repo = api.repo(Repo::with_revision(
@@ -104,20 +104,22 @@ impl LocalLlmBackend {
 
         report_progress(
             &progress,
-            format!("Resolving artifacts from {}.", spec.model_id()),
+            format!("Manifest · resolving {}", spec.model_id()),
         );
 
+        report_progress(&progress, "Artifact · tokenizer.json".to_string());
         let tokenizer_path = repo
             .get("tokenizer.json")
             .context("download tokenizer.json")?;
-        report_progress(&progress, "Tokenizer is ready.".to_string());
+        report_progress(&progress, "Artifact · config.json".to_string());
         let config_path = repo.get("config.json").context("download config.json")?;
+        report_progress(&progress, "Weights · downloading model weights".to_string());
         let weight_paths = load_safetensors(&repo)
             .or_else(|_| repo.get("model.safetensors").map(|p| vec![p]))
             .context("download model weights")?;
         report_progress(
             &progress,
-            format!("Resolved {} weight file(s).", weight_paths.len()),
+            format!("Weights · {} file(s) ready", weight_paths.len()),
         );
 
         let raw_config: Value =
@@ -130,14 +132,14 @@ impl LocalLlmBackend {
         let dtype = preferred_dtype(&device);
         report_progress(
             &progress,
-            format!("Initializing runtime on {:?} with {:?}.", device, dtype),
+            format!("Runtime · initializing on {:?} with {:?}", device, dtype),
         );
         let vb = unsafe { VarBuilder::from_mmaped_safetensors(&weight_paths, dtype, &device)? };
         let model = spec.build_model(&raw_config, vb)?;
         let eos_token_ids = spec.eos_token_ids(&tokenizer)?;
         report_progress(
             &progress,
-            format!("Local model '{}' is ready.", spec.alias()),
+            format!("Ready · {} loaded", spec.alias()),
         );
 
         Ok(Self {

@@ -106,15 +106,15 @@ pub fn start_rebuild_task(app: &mut TuiApp) {
     app.notice = Some(format!("Rebuilding backend for {provider} / {model}."));
     app.set_runtime_phase(
         RuntimePhase::RebuildingBackend,
-        Some(format!("rebuilding backend for {provider}")),
+        Some(format!("preparing {provider} / {model}")),
     );
-    app.push_entry("Runtime", format!("Reloading backend for {provider} / {model}."));
+    app.push_entry("Download", format!("Preparing {} / {}", provider, model));
 
     let handle = tokio::spawn(async move {
         let tx = sender.clone();
         let progress: crate::local_backend::LocalProgressReporter = Arc::new(move |message| {
             let _ = tx.send(TuiEvent::Transcript {
-                role: "Runtime",
+                role: "Download",
                 message,
             });
         });
@@ -284,6 +284,13 @@ fn apply_tui_event(app: &mut TuiApp, event: TuiEvent) {
                     RuntimePhase::ProcessingResponse,
                     Some("receiving model output".into()),
                 );
+            } else if role == "Download" {
+                let detail = message.lines().next().unwrap_or(role).trim().to_string();
+                if detail.starts_with("Ready ·") {
+                    app.set_runtime_phase(RuntimePhase::BackendReady, Some(detail));
+                } else {
+                    app.set_runtime_phase(RuntimePhase::RebuildingBackend, Some(detail));
+                }
             } else if role == "Runtime" {
                 let detail = message.lines().next().unwrap_or(role).trim().to_string();
                 if detail.contains("OAuth flow") {

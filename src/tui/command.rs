@@ -240,6 +240,30 @@ pub fn status_resources_text(app: &TuiApp) -> String {
     )
 }
 
+pub fn download_status_text(app: &TuiApp) -> Option<String> {
+    if !matches!(
+        app.runtime_phase,
+        super::state::RuntimePhase::RebuildingBackend | super::state::RuntimePhase::BackendReady
+    ) {
+        return None;
+    }
+
+    let cache = if is_local_provider(&app.config.provider) {
+        crate::local_backend::default_local_model_cache_dir()
+            .display()
+            .to_string()
+    } else {
+        "-".to_string()
+    };
+    let stage = app.runtime_phase_detail.as_deref().unwrap_or("waiting");
+    Some(format!(
+        "model={}\nstage={}\ncache={}",
+        app.current_model_label(),
+        stage,
+        cache,
+    ))
+}
+
 pub fn quick_actions_text() -> &'static str {
     "/help      browse commands and keyboard hints\n\
      /model     open guided model switching\n\
