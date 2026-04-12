@@ -182,7 +182,7 @@ pub async fn finish_running_task_if_ready(
                 app.push_entry("Runtime", app.setup_status.clone().unwrap_or_default());
             }
             Err(err) => {
-                let message = format!("Failed to apply config: {err}");
+                let message = format!("Failed to apply config:\n{}", format_error_chain(&err));
                 app.setup_status = Some(message.clone());
                 app.push_notice(message);
             }
@@ -198,7 +198,7 @@ pub async fn finish_running_task_if_ready(
                 app.push_entry("Runtime", "Saved OAuth token.");
             }
             Err(err) => {
-                app.push_notice(format!("OAuth failed: {err}"));
+                app.push_notice(format!("OAuth failed:\n{}", format_error_chain(&err)));
             }
         },
     }
@@ -257,6 +257,18 @@ fn convert_agent_event(event: AgentEvent) -> TuiEvent {
             message: format!("{name}: {content}"),
         },
     }
+}
+
+fn format_error_chain(err: &anyhow::Error) -> String {
+    let mut lines = Vec::new();
+    for (idx, cause) in err.chain().enumerate() {
+        if idx == 0 {
+            lines.push(cause.to_string());
+        } else {
+            lines.push(format!("caused by: {cause}"));
+        }
+    }
+    lines.join("\n")
 }
 
 async fn run_oauth_login(

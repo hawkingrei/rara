@@ -6,7 +6,11 @@ use async_trait::async_trait;
 use candle::{DType, Device, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::generation::{LogitsProcessor, Sampling};
-use candle_transformers::models::gemma4::{config::Gemma4TextConfig, text::TextModel as Gemma4TextModel};
+use candle_transformers::models::gemma4::{
+    config::{Gemma4Config, Gemma4TextConfig},
+    text::TextModel as Gemma4TextModel,
+    Model as Gemma4Model,
+};
 use candle_transformers::models::qwen3::{Config as Qwen3Config, ModelForCausalLM as Qwen3Model};
 use hf_hub::{
     api::sync::{ApiBuilder, ApiRepo},
@@ -37,6 +41,7 @@ struct LocalRuntime {
 
 enum LocalTextModel {
     Gemma4(Gemma4TextModel),
+    Gemma4Multimodal(Gemma4Model),
     Qwen3(Qwen3Model),
 }
 
@@ -338,6 +343,7 @@ impl LocalTextModel {
     fn forward(&mut self, input: &Tensor, offset: usize) -> candle::Result<Tensor> {
         match self {
             Self::Gemma4(model) => model.forward(input, offset),
+            Self::Gemma4Multimodal(model) => model.forward(input, offset),
             Self::Qwen3(model) => model.forward(input, offset),
         }
     }
@@ -345,6 +351,7 @@ impl LocalTextModel {
     fn clear_kv_cache(&mut self) {
         match self {
             Self::Gemma4(model) => model.clear_kv_cache(),
+            Self::Gemma4Multimodal(model) => model.clear_kv_cache(),
             Self::Qwen3(model) => model.clear_kv_cache(),
         }
     }
@@ -434,16 +441,26 @@ impl LocalModelSpec {
     fn build_model(self, raw_config: &Value, vb: VarBuilder) -> Result<LocalTextModel> {
         match self {
             Self::Gemma4E2B | Self::Gemma4E4B => {
-                let mut text_config: Gemma4TextConfig =
-                    if let Some(text_cfg) = raw_config.get("text_config") {
-                        serde_json::from_value(text_cfg.clone()).context("parse text_config")?
-                    } else {
-                        serde_json::from_value(raw_config.clone()).context("parse Gemma4TextConfig")?
-                    };
-                text_config.use_flash_attn = false;
-                Ok(LocalTextModel::Gemma4(
-                    Gemma4TextModel::new(&text_config, vb).context("build Gemma4 text model")?,
-                ))
+                if is_multimodal_gemma4_checkpoint(raw_config) {
+                    let config: Gemma4Config =
+                        serde_json::from_value(raw_config.clone()).context("parse Gemma4Config")?;
+                    Ok(LocalTextModel::Gemma4Multimodal(
+                        Gemma4Model::new(&config, vb).context("build Gemma4 multimodal model")?,
+                    ))
+                } else {
+                    let mut text_config: Gemma4TextConfig =
+                        if let Some(text_cfg) = raw_config.get("text_config") {
+                            serde_json::from_value(text_cfg.clone()).context("parse text_config")?
+                        } else {
+                            serde_json::from_value(raw_config.clone())
+                                .context("parse Gemma4TextConfig")?
+                        };
+                    text_config.use_flash_attn = false;
+                    Ok(LocalTextModel::Gemma4(
+                        Gemma4TextModel::new(&text_config, vb)
+                            .context("build Gemma4 text model")?,
+                    ))
+                }
             }
             Self::Qwen3_8B => {
                 let config: Qwen3Config =
@@ -454,6 +471,23 @@ impl LocalModelSpec {
             }
         }
     }
+}
+
+fn is_multimodal_gemma4_checkpoint(raw_config: &Value) -> bool {
+    raw_config
+        .get("architectures")
+        .and_then(Value::as_array)
+        .map(|architectures| {
+            architectures.iter().any(|value| {
+                value
+                    .as_str()
+                    .map(|name| name == "Gemma4ForConditionalGeneration")
+                    .unwrap_or(false)
+            })
+        })
+        .unwrap_or(false)
+        || raw_config.get("vision_config").is_some()
+        || raw_config.get("audio_config").is_some()
 }
 
 fn build_hf_api(config: &RaraConfig, cache_dir: &PathBuf) -> Result<hf_hub::api::sync::Api> {
