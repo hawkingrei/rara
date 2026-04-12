@@ -22,15 +22,17 @@ pub fn render(f: &mut Frame, app: &TuiApp) {
         .constraints([
             Constraint::Length(3),
             Constraint::Min(8),
+            Constraint::Length(1),
             Constraint::Length(4),
-            Constraint::Length(2),
+            Constraint::Length(1),
         ])
         .split(f.area());
 
     render_header(f, app, layout[0]);
     render_transcript(f, app, layout[1]);
-    render_composer(f, app, layout[2]);
-    render_footer(f, app, layout[3]);
+    render_activity_bar(f, app, layout[2]);
+    render_composer(f, app, layout[3]);
+    render_footer(f, app, layout[4]);
 
     if let Some(overlay) = app.overlay {
         render_overlay(f, app, overlay);
@@ -87,7 +89,12 @@ fn render_transcript(f: &mut Frame, app: &TuiApp, area: Rect) {
                 .iter()
                 .skip(start)
                 .enumerate()
-                .map(|(idx, (role, message))| transcript_item(idx + start, role, message)),
+                .map(|(idx, (role, message))| {
+                    let absolute_idx = idx + start;
+                    let is_active_tail = app.is_busy()
+                        && absolute_idx + 2 >= app.transcript.len();
+                    transcript_item(absolute_idx, role, message, is_active_tail)
+                }),
         );
         items
     };
@@ -100,6 +107,33 @@ fn render_transcript(f: &mut Frame, app: &TuiApp, area: Rect) {
         ),
         area,
     );
+}
+
+fn render_activity_bar(f: &mut Frame, app: &TuiApp, area: Rect) {
+    let (label, color) = if app.is_busy() {
+        ("Working", Color::Yellow)
+    } else {
+        ("Ready", Color::Green)
+    };
+    let detail = app
+        .runtime_phase_detail
+        .as_deref()
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| app.notice.as_deref().unwrap_or("waiting for input"));
+    let line = Line::from(vec![
+        Span::styled(
+            format!(" {} ", label),
+            Style::default().fg(Color::Black).bg(color).add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(" "),
+        Span::styled(
+            app.runtime_phase_label(),
+            Style::default().add_modifier(Modifier::BOLD),
+        ),
+        Span::raw("  "),
+        Span::raw(detail),
+    ]);
+    f.render_widget(Paragraph::new(line), area);
 }
 
 fn render_composer(f: &mut Frame, app: &TuiApp, area: Rect) {
@@ -149,45 +183,25 @@ fn render_composer(f: &mut Frame, app: &TuiApp, area: Rect) {
 }
 
 fn render_footer(f: &mut Frame, app: &TuiApp, area: Rect) {
-    let mode = if super::provider_requires_api_key(&app.config.provider) {
-        "hosted"
-    } else {
-        "local"
-    };
-    let activity = match app.running_task.as_ref().map(|task| &task.kind) {
-        Some(TaskKind::Query) => "query",
-        Some(TaskKind::Rebuild) => "reload",
-        Some(TaskKind::OAuth) => "oauth",
-        None => "idle",
-    };
     let summary = format!(
-        "state={}  mode={}  key={}  phase={}  messages={}  transcript={}  tokens={} in / {} out",
-        activity,
-        mode,
+        "key={}  messages={}  transcript={}  tokens={} in / {} out",
         api_key_status(&app.config),
-        app.runtime_phase_label(),
         app.snapshot.history_len,
         app.transcript.len(),
         app.snapshot.total_input_tokens,
         app.snapshot.total_output_tokens,
     );
-    let notice = if let Some(notice) = app.notice.as_ref() {
-        Line::from(vec![
-            Span::styled("notice ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-            Span::raw(notice.as_str()),
-        ])
+    let hint = if app.input.trim_start().starts_with('/') {
+        "Enter run highlighted command  Esc close overlay"
     } else if app.is_busy() {
-        Line::from(vec![
-            Span::styled("hint ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-            Span::raw("the UI stays responsive while the current task runs in background"),
-        ])
+        "Esc quit app  background task keeps UI responsive"
     } else {
-        Line::from(vec![
-            Span::styled("hint ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-            Span::raw("use /model to switch presets or /status to inspect the current runtime"),
-        ])
+        "Enter submit prompt  /help commands  /model switch models"
     };
-    f.render_widget(Paragraph::new(vec![Line::from(summary), notice]), area);
+    f.render_widget(
+        Paragraph::new(Line::from(vec![Span::raw(summary), Span::raw("  "), Span::raw(hint)])),
+        area,
+    );
 }
 
 fn render_header(f: &mut Frame, app: &TuiApp, area: Rect) {
@@ -424,7 +438,7 @@ fn render_command_palette(f: &mut Frame, app: &TuiApp, area: Rect) {
         body[0],
     );
     let detail = palette_command_by_index(app, query, app.command_palette_idx)
-        .map(command_detail_text)
+        .map(command_preview_text)
         .unwrap_or_else(help_text);
     f.render_widget(
         Paragraph::new(detail)
@@ -707,8 +721,15 @@ fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
     horizontal[1]
 }
 
-fn transcript_item(index: usize, role: &str, message: &str) -> ListItem<'static> {
+fn transcript_item(index: usize, role: &str, message: &str, is_active_tail: bool) -> ListItem<'static> {
     let mut lines = vec![Line::from(vec![
+        Span::styled(
+            if is_active_tail { ">" } else { " " },
+            Style::default()
+                .fg(if is_active_tail { Color::Yellow } else { Color::DarkGray })
+                .add_modifier(if is_active_tail { Modifier::BOLD } else { Modifier::empty() }),
+        ),
+        Span::raw(" "),
         role_badge_span(role),
         Span::raw(" "),
         Span::styled(
@@ -732,6 +753,10 @@ fn transcript_item(index: usize, role: &str, message: &str) -> ListItem<'static>
         Style::default().fg(Color::DarkGray),
     )));
     ListItem::new(lines)
+}
+
+fn command_preview_text(spec: &super::state::CommandSpec) -> String {
+    format!("{}\n\n{}", spec.usage, spec.summary)
 }
 
 fn role_badge_span(role: &str) -> Span<'static> {
