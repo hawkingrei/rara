@@ -208,8 +208,8 @@ pub async fn finish_running_task_if_ready(
 
 fn handle_model_command(arg: Option<&str>, app: &mut TuiApp) -> anyhow::Result<()> {
     let Some(raw_arg) = arg.map(str::trim).filter(|arg| !arg.is_empty()) else {
-        app.open_overlay(Overlay::ModelPicker);
-        app.notice = Some("Opened model picker.".into());
+        app.open_overlay(Overlay::ModelGuide);
+        app.notice = Some("Opened model guide.".into());
         return Ok(());
     };
 

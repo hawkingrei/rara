@@ -18,6 +18,7 @@ pub enum Overlay {
     CommandPalette,
     Status,
     Setup,
+    ModelGuide,
     ModelPicker,
 }
 
@@ -92,6 +93,13 @@ pub const LOCAL_MODEL_PRESETS: [(&str, &str, &str); 3] = [
     ("Qwn3 8B", "qwn3", "qwn3-8b"),
 ];
 
+pub const MODEL_GUIDE_OPTIONS: [(&str, &str, Option<usize>); 4] = [
+    ("Fast", "Switch to Qwn3 8B for faster local responses.", Some(2)),
+    ("Balanced", "Switch to Gemma 4 E2B for a middle ground.", Some(1)),
+    ("Strongest", "Switch to Gemma 4 E4B for best local reasoning.", Some(0)),
+    ("Manual", "Open the full model list and choose explicitly.", None),
+];
+
 pub struct TuiApp {
     pub input: String,
     pub transcript: Vec<(String, String)>,
@@ -102,6 +110,7 @@ pub struct TuiApp {
     pub notice: Option<String>,
     pub snapshot: RuntimeSnapshot,
     pub model_picker_idx: usize,
+    pub model_guide_idx: usize,
     pub command_palette_idx: usize,
     pub running_task: Option<RunningTask>,
 }
@@ -125,6 +134,7 @@ impl TuiApp {
             notice: None,
             snapshot: RuntimeSnapshot::default(),
             model_picker_idx,
+            model_guide_idx: 0,
             command_palette_idx: 0,
             running_task: None,
         }
@@ -185,6 +195,9 @@ impl TuiApp {
     pub fn open_overlay(&mut self, overlay: Overlay) {
         if matches!(overlay, Overlay::CommandPalette) {
             self.command_palette_idx = 0;
+        }
+        if matches!(overlay, Overlay::ModelGuide) {
+            self.model_guide_idx = 0;
         }
         if matches!(overlay, Overlay::ModelPicker) {
             self.model_picker_idx = self.selected_preset_idx();

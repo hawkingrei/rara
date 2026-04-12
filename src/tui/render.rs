@@ -10,7 +10,9 @@ use super::command::{
     api_key_status, command_detail_text, command_spec_by_index, general_help_text, help_text,
     matching_commands, model_help_text,
 };
-use super::state::{HelpTab, Overlay, TaskKind, TuiApp, LOCAL_MODEL_PRESETS};
+use super::state::{
+    HelpTab, Overlay, TaskKind, TuiApp, LOCAL_MODEL_PRESETS, MODEL_GUIDE_OPTIONS,
+};
 
 pub fn render(f: &mut Frame, app: &TuiApp) {
     let layout = Layout::default()
@@ -146,6 +148,7 @@ fn render_overlay(f: &mut Frame, app: &TuiApp, overlay: Overlay) {
         Overlay::CommandPalette => render_command_palette(f, app, popup),
         Overlay::Status => render_status_modal(f, app, popup),
         Overlay::Setup => render_setup_modal(f, app, popup),
+        Overlay::ModelGuide => render_model_guide_modal(f, app, popup),
         Overlay::ModelPicker => render_model_picker_modal(f, app, popup),
     }
 }
@@ -394,7 +397,50 @@ fn render_model_picker_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
         chunks[1],
     );
     f.render_widget(
-        Paragraph::new("Esc close  Up/Down move  Enter apply")
+        Paragraph::new("1/2/3 apply directly  Up/Down move  Enter apply  Esc close")
+            .alignment(Alignment::Center),
+        chunks[2],
+    );
+}
+
+fn render_model_guide_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(4), Constraint::Min(8), Constraint::Length(2)])
+        .split(area);
+    f.render_widget(
+        Paragraph::new(
+            "Model guide\n\nWhat do you want to optimize for right now?",
+        )
+        .block(Block::default().borders(Borders::ALL).title(" Model Guide ")),
+        chunks[0],
+    );
+    let items = MODEL_GUIDE_OPTIONS
+        .iter()
+        .enumerate()
+        .map(|(idx, (label, detail, preset_idx))| {
+            let style = if idx == app.model_guide_idx {
+                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
+            let target = preset_idx
+                .map(|preset| format!(" -> {}", LOCAL_MODEL_PRESETS[preset].0))
+                .unwrap_or_else(|| " -> open picker".to_string());
+            ListItem::new(vec![
+                Line::from(format!("[{}] {}{}", idx + 1, label, target)),
+                Line::from(*detail),
+                Line::from(""),
+            ])
+            .style(style)
+        })
+        .collect::<Vec<_>>();
+    f.render_widget(
+        List::new(items).block(Block::default().borders(Borders::LEFT | Borders::RIGHT)),
+        chunks[1],
+    );
+    f.render_widget(
+        Paragraph::new("1 fast  2 balanced  3 strongest  4 manual  Enter apply  Esc close")
             .alignment(Alignment::Center),
         chunks[2],
     );

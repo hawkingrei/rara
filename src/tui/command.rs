@@ -35,8 +35,8 @@ pub const COMMAND_SPECS: [CommandSpec; 6] = [
         category: "Models",
         name: "model",
         usage: "/model [name|1|2|3|next|list]",
-        summary: "Open the picker or switch local model presets in place.",
-        detail: "Use without args to open the model picker. Use an explicit preset name or index to switch immediately and rebuild the backend in background.",
+        summary: "Open the model guide or switch local model presets in place.",
+        detail: "Use without args to open the guided model flow. Use an explicit preset name or index to switch immediately and rebuild the backend in background.",
     },
     CommandSpec {
         category: "Setup",
@@ -93,7 +93,7 @@ pub fn command_detail_text(spec: &CommandSpec) -> String {
 }
 
 pub fn general_help_text() -> &'static str {
-    "RARA uses a single composer as the control surface.\n\nNormal input goes to the current agent.\nSlash commands stay local and open overlays or update runtime state.\n\nKeyboard:\n  Enter submit current composer input\n  Esc close overlay or quit the app\n  Up/Down or j/k move inside lists\n  1/2/3 switch help tabs or choose model presets"
+    "RARA uses a single composer as the control surface.\n\nNormal input goes to the current agent.\nSlash commands stay local and open overlays or update runtime state.\n\nKeyboard:\n  Enter submit current composer input\n  Esc close overlay or quit the app\n  Up/Down or j/k move inside lists\n  1/2/3 switch help tabs or choose guided model options"
 }
 
 fn command_score(spec: &CommandSpec, query: &str) -> Option<u8> {
@@ -186,7 +186,7 @@ pub fn model_help_text(app: &TuiApp) -> String {
         .collect::<Vec<_>>()
         .join("\n");
     format!(
-        "Current model: {} / {}\n\nAvailable presets:\n{}\n\nUse /model to open the picker, or /model <name>, /model <1|2|3>, /model list, /model next.",
+        "Current model: {} / {}\n\nAvailable presets:\n{}\n\nUse /model to open the guide, or /model <name>, /model <1|2|3>, /model list, /model next.",
         app.config.provider,
         app.current_model_label(),
         lines
