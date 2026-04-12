@@ -8,7 +8,8 @@ use ratatui::{
 
 use super::command::{
     api_key_status, command_detail_text, command_spec_by_index, general_help_text, help_text,
-    matching_commands, model_help_text,
+    matching_commands, model_help_text, quick_actions_text, recent_transcript_preview,
+    status_resources_text, status_runtime_text, status_workspace_text,
 };
 use super::state::{
     HelpTab, Overlay, TaskKind, TuiApp, LOCAL_MODEL_PRESETS, MODEL_GUIDE_OPTIONS,
@@ -338,15 +339,45 @@ fn render_help_modal(f: &mut Frame, app: &TuiApp, area: Rect, tab: HelpTab) {
             );
         }
         HelpTab::Runtime => {
+            let inner = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+                .split(chunks[1]);
+            let left = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Length(8), Constraint::Min(6)])
+                .split(inner[0]);
+            let right = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Length(6), Constraint::Min(8)])
+                .split(inner[1]);
+            f.render_widget(
+                Paragraph::new(status_runtime_text(app))
+                .block(Block::default().borders(Borders::LEFT | Borders::RIGHT).title(" Runtime "))
+                .wrap(Wrap { trim: false }),
+                left[0],
+            );
+            f.render_widget(
+                Paragraph::new(status_workspace_text(app))
+                .block(Block::default().borders(Borders::LEFT | Borders::RIGHT).title(" Workspace "))
+                .wrap(Wrap { trim: false }),
+                left[1],
+            );
+            f.render_widget(
+                Paragraph::new(status_resources_text(app))
+                .block(Block::default().borders(Borders::RIGHT).title(" Resources "))
+                .wrap(Wrap { trim: false }),
+                right[0],
+            );
             f.render_widget(
                 Paragraph::new(format!(
                     "{}\n\n{}",
-                    super::command::status_text(app),
-                    model_help_text(app)
+                    model_help_text(app),
+                    recent_transcript_preview(app, 4)
                 ))
-                .block(Block::default().borders(Borders::LEFT | Borders::RIGHT))
+                .block(Block::default().borders(Borders::RIGHT).title(" Models / Recent "))
                 .wrap(Wrap { trim: false }),
-                chunks[1],
+                right[1],
             );
         }
     }
@@ -422,11 +453,58 @@ fn render_command_palette(f: &mut Frame, app: &TuiApp, area: Rect) {
 }
 
 fn render_status_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(8), Constraint::Length(6), Constraint::Min(8), Constraint::Length(2)])
+        .split(area);
+    let top = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(34), Constraint::Percentage(33), Constraint::Percentage(33)])
+        .split(chunks[0]);
+    let middle = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .split(chunks[1]);
     f.render_widget(
-        Paragraph::new(super::command::status_text(app))
-            .block(Block::default().borders(Borders::ALL).title(" Status "))
+        Paragraph::new(status_runtime_text(app))
+            .block(Block::default().borders(Borders::ALL).title(" Runtime "))
             .wrap(Wrap { trim: false }),
-        area,
+        top[0],
+    );
+    f.render_widget(
+        Paragraph::new(status_workspace_text(app))
+            .block(Block::default().borders(Borders::ALL).title(" Workspace "))
+            .wrap(Wrap { trim: false }),
+        top[1],
+    );
+    f.render_widget(
+        Paragraph::new(status_resources_text(app))
+            .block(Block::default().borders(Borders::ALL).title(" Resources "))
+            .wrap(Wrap { trim: false }),
+        top[2],
+    );
+    f.render_widget(
+        Paragraph::new(model_help_text(app))
+            .block(Block::default().borders(Borders::ALL).title(" Models "))
+            .wrap(Wrap { trim: false }),
+        middle[0],
+    );
+    f.render_widget(
+        Paragraph::new(quick_actions_text())
+            .block(Block::default().borders(Borders::ALL).title(" Quick Actions "))
+            .wrap(Wrap { trim: false }),
+        middle[1],
+    );
+    f.render_widget(
+        Paragraph::new(recent_transcript_preview(app, 8))
+            .block(Block::default().borders(Borders::ALL).title(" Recent Activity "))
+            .wrap(Wrap { trim: false }),
+        chunks[2],
+    );
+    f.render_widget(
+        Paragraph::new("Esc close  Enter close  /help commands  /model switch runtime")
+            .alignment(Alignment::Center),
+        chunks[3],
     );
 }
 

@@ -144,30 +144,79 @@ pub fn help_text() -> String {
     )
 }
 
-pub fn status_text(app: &TuiApp) -> String {
-    let local_cache = if is_local_provider(&app.config.provider) {
-        format!(
-            "\ncache={}",
-            crate::local_backend::default_local_model_cache_dir().display()
-        )
+pub fn status_runtime_text(app: &TuiApp) -> String {
+    let mode = if super::provider_requires_api_key(&app.config.provider) {
+        "hosted"
     } else {
-        String::new()
+        "local"
     };
     format!(
-        "provider={}\nmodel={}\nrevision={}\nworkspace={}\nbranch={}\nsession={}\nmessages={}\ntranscript={}\napi_key={}\ntokens={} in / {} out{}",
+        "provider={}\nmodel={}\nrevision={}\nmode={}\napi_key={}",
         app.config.provider,
         app.current_model_label(),
         app.config.revision.as_deref().unwrap_or("main"),
+        mode,
+        api_key_status(&app.config),
+    )
+}
+
+pub fn status_workspace_text(app: &TuiApp) -> String {
+    format!(
+        "workspace={}\nbranch={}\nsession={}\nmessages={}\ntranscript={}",
         app.snapshot.cwd,
         app.snapshot.branch,
         app.snapshot.session_id,
         app.snapshot.history_len,
         app.transcript.len(),
-        api_key_status(&app.config),
+    )
+}
+
+pub fn status_resources_text(app: &TuiApp) -> String {
+    let cache = if is_local_provider(&app.config.provider) {
+        crate::local_backend::default_local_model_cache_dir()
+            .display()
+            .to_string()
+    } else {
+        "-".to_string()
+    };
+    format!(
+        "tokens={} in / {} out\ncache={}",
         app.snapshot.total_input_tokens,
         app.snapshot.total_output_tokens,
-        local_cache,
+        cache,
     )
+}
+
+pub fn quick_actions_text() -> &'static str {
+    "/help      browse commands and keyboard hints\n\
+     /model     open guided model switching\n\
+     /status    inspect runtime and workspace\n\
+     /clear     reset the visible transcript\n\
+     /setup     open fallback setup"
+}
+
+pub fn recent_transcript_preview(app: &TuiApp, limit: usize) -> String {
+    if app.transcript.is_empty() {
+        return "No transcript entries yet.".to_string();
+    }
+    app.transcript
+        .iter()
+        .rev()
+        .take(limit)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .map(|(role, message)| {
+            let first_line = message.lines().next().unwrap_or("").trim();
+            let preview = if first_line.is_empty() {
+                "(empty)"
+            } else {
+                first_line
+            };
+            format!("{role}: {preview}")
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 pub fn model_help_text(app: &TuiApp) -> String {
