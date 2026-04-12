@@ -256,12 +256,68 @@ pub fn download_status_text(app: &TuiApp) -> Option<String> {
         "-".to_string()
     };
     let stage = app.runtime_phase_detail.as_deref().unwrap_or("waiting");
+    let current_stage = infer_download_stage(stage);
+    let steps = [
+        ("setup", "Prepare request"),
+        ("cache", "Resolve cache"),
+        ("manifest", "Resolve manifest"),
+        ("artifact", "Fetch tokenizer/config"),
+        ("weights", "Fetch weights"),
+        ("runtime", "Initialize runtime"),
+        ("ready", "Model ready"),
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(idx, (key, label))| {
+        let marker = if key == current_stage {
+            ">"
+        } else if download_stage_index(key) < download_stage_index(current_stage) {
+            "x"
+        } else {
+            " "
+        };
+        format!("[{marker}] {}. {label}", idx + 1)
+    })
+    .collect::<Vec<_>>()
+    .join("\n");
     Some(format!(
-        "model={}\nstage={}\ncache={}",
+        "model={}\ncurrent={}\ncache={}\n\nsteps:\n{}",
         app.current_model_label(),
         stage,
         cache,
+        steps,
     ))
+}
+
+fn infer_download_stage(detail: &str) -> &'static str {
+    if detail.starts_with("Ready") {
+        "ready"
+    } else if detail.starts_with("Runtime") {
+        "runtime"
+    } else if detail.starts_with("Weights") {
+        "weights"
+    } else if detail.starts_with("Artifact") {
+        "artifact"
+    } else if detail.starts_with("Manifest") {
+        "manifest"
+    } else if detail.starts_with("Cache") {
+        "cache"
+    } else {
+        "setup"
+    }
+}
+
+fn download_stage_index(stage: &str) -> usize {
+    match stage {
+        "setup" => 0,
+        "cache" => 1,
+        "manifest" => 2,
+        "artifact" => 3,
+        "weights" => 4,
+        "runtime" => 5,
+        "ready" => 6,
+        _ => 0,
+    }
 }
 
 pub fn quick_actions_text() -> &'static str {
