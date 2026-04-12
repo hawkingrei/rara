@@ -219,6 +219,7 @@ async fn dispatch_event(
                 if let Some(spec) = command_spec_by_index(query, app.command_palette_idx) {
                     app.input = spec.usage.to_string();
                     app.close_overlay();
+                    handle_submit(app, agent_slot, oauth_manager).await?;
                 }
             }
             Some(Overlay::ModelGuide) => {

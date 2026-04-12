@@ -58,6 +58,7 @@ pub async fn execute_local_command(
 pub fn start_query_task(app: &mut TuiApp, prompt: String, mut agent: Agent) {
     let (sender, receiver) = mpsc::unbounded_channel();
     app.notice = Some("Running prompt.".into());
+    app.set_runtime_phase("sending prompt");
     app.push_entry("You", prompt.clone());
 
     let handle = tokio::spawn(async move {
@@ -83,6 +84,7 @@ pub fn start_rebuild_task(app: &mut TuiApp) {
     let provider = config.provider.clone();
     let model = config.model.clone().unwrap_or_else(|| "-".to_string());
     app.notice = Some(format!("Rebuilding backend for {provider} / {model}."));
+    app.set_runtime_phase(format!("rebuilding backend for {provider}"));
     app.push_entry("Runtime", format!("Reloading backend for {provider} / {model}."));
 
     let handle = tokio::spawn(async move {
@@ -107,6 +109,7 @@ pub fn start_rebuild_task(app: &mut TuiApp) {
 pub fn start_oauth_task(app: &mut TuiApp, oauth_manager: Arc<OAuthManager>) {
     let (sender, receiver) = mpsc::unbounded_channel();
     app.notice = Some("Starting OAuth login.".into());
+    app.set_runtime_phase("starting oauth");
     app.push_entry("Runtime", "Starting OAuth login flow.");
 
     let handle = tokio::spawn(async move {
@@ -158,8 +161,10 @@ pub async fn finish_running_task_if_ready(
             match result {
                 Ok(_) => {
                     app.notice = Some("Prompt finished.".into());
+                    app.set_runtime_phase("prompt finished");
                 }
                 Err(err) => {
+                    app.set_runtime_phase("query failed");
                     app.push_notice(format!("Query failed: {err}"));
                 }
             }
@@ -179,9 +184,11 @@ pub async fn finish_running_task_if_ready(
                     app.sync_snapshot(agent);
                 }
                 app.close_overlay();
+                app.set_runtime_phase("backend ready");
                 app.push_entry("Runtime", app.setup_status.clone().unwrap_or_default());
             }
             Err(err) => {
+                app.set_runtime_phase("backend rebuild failed");
                 let message = format!("Failed to apply config:\n{}", format_error_chain(&err));
                 app.setup_status = Some(message.clone());
                 app.push_notice(message);
@@ -194,10 +201,12 @@ pub async fn finish_running_task_if_ready(
                 app.config_manager.save(&app.config)?;
                 app.setup_status = Some("Saved OAuth token.".into());
                 app.notice = app.setup_status.clone();
+                app.set_runtime_phase("oauth token saved");
                 app.close_overlay();
                 app.push_entry("Runtime", "Saved OAuth token.");
             }
             Err(err) => {
+                app.set_runtime_phase("oauth failed");
                 app.push_notice(format!("OAuth failed:\n{}", format_error_chain(&err)));
             }
         },
@@ -230,7 +239,12 @@ fn handle_model_command(arg: Option<&str>, app: &mut TuiApp) -> anyhow::Result<(
 
 fn apply_tui_event(app: &mut TuiApp, event: TuiEvent) {
     match event {
-        TuiEvent::Transcript { role, message } => app.push_entry(role, message),
+        TuiEvent::Transcript { role, message } => {
+            if matches!(role, "Runtime" | "Status") {
+                app.set_runtime_phase(message.lines().next().unwrap_or(role).trim().to_string());
+            }
+            app.push_entry(role, message)
+        }
     }
 }
 

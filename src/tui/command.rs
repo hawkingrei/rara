@@ -150,13 +150,15 @@ pub fn status_runtime_text(app: &TuiApp) -> String {
     } else {
         "local"
     };
+    let phase = app.runtime_phase.as_deref().unwrap_or("idle");
     format!(
-        "provider={}\nmodel={}\nrevision={}\nmode={}\napi_key={}",
+        "provider={}\nmodel={}\nrevision={}\nmode={}\napi_key={}\nphase={}",
         app.config.provider,
         app.current_model_label(),
         app.config.revision.as_deref().unwrap_or("main"),
         mode,
         api_key_status(&app.config),
+        phase,
     )
 }
 

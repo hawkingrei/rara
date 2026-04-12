@@ -135,7 +135,7 @@ fn render_composer(f: &mut Frame, app: &TuiApp, area: Rect) {
         chunks[0],
     );
     let hint = if app.input.trim_start().starts_with('/') {
-        "slash command mode  Enter run  Esc close overlay"
+        "slash command mode  Enter run highlighted command  Esc close overlay"
     } else if app.is_busy() {
         "runtime busy  wait for current task to finish"
     } else {
@@ -160,10 +160,11 @@ fn render_footer(f: &mut Frame, app: &TuiApp, area: Rect) {
         None => "idle",
     };
     let summary = format!(
-        "state={}  mode={}  key={}  messages={}  transcript={}  tokens={} in / {} out",
+        "state={}  mode={}  key={}  phase={}  messages={}  transcript={}  tokens={} in / {} out",
         activity,
         mode,
         api_key_status(&app.config),
+        app.runtime_phase.as_deref().unwrap_or("idle"),
         app.snapshot.history_len,
         app.transcript.len(),
         app.snapshot.total_input_tokens,
@@ -216,6 +217,10 @@ fn render_header(f: &mut Frame, app: &TuiApp, area: Rect) {
             Span::raw(" "),
             badge("key", api_key_status(&app.config), Color::DarkGray),
         ]),
+        Line::from(format!(
+            " phase={} ",
+            app.runtime_phase.as_deref().unwrap_or("idle")
+        )),
         Line::from(vec![
             Span::raw(format!(
                 " model={}  revision={}  workspace={} ",
@@ -423,9 +428,9 @@ fn render_command_palette(f: &mut Frame, app: &TuiApp, area: Rect) {
         })
         .collect::<Vec<_>>();
     let intro = if query.is_empty() {
-        "Start typing after / to narrow commands. Exact commands like /model or /status can be submitted directly."
+        "Start typing after / to narrow commands. Enter runs the highlighted command immediately."
     } else {
-        "Use Up/Down to inspect matches. Enter accepts the highlighted command into the composer."
+        "Use Up/Down to inspect matches. Enter runs the highlighted command immediately."
     };
     f.render_widget(
         Paragraph::new(intro)
@@ -446,7 +451,7 @@ fn render_command_palette(f: &mut Frame, app: &TuiApp, area: Rect) {
         body[1],
     );
     f.render_widget(
-        Paragraph::new("Esc close  Enter accept highlighted command  Keep typing to refine")
+        Paragraph::new("Esc close  Enter run highlighted command  Keep typing to refine")
             .alignment(Alignment::Center),
         chunks[2],
     );

@@ -116,6 +116,7 @@ pub struct TuiApp {
     pub config_manager: ConfigManager,
     pub setup_status: Option<String>,
     pub notice: Option<String>,
+    pub runtime_phase: Option<String>,
     pub snapshot: RuntimeSnapshot,
     pub model_picker_idx: usize,
     pub model_guide_idx: usize,
@@ -140,6 +141,7 @@ impl TuiApp {
             config_manager: cm,
             setup_status: None,
             notice: None,
+            runtime_phase: None,
             snapshot: RuntimeSnapshot::default(),
             model_picker_idx,
             model_guide_idx: 0,
@@ -198,6 +200,10 @@ impl TuiApp {
     pub fn reset_transcript(&mut self) {
         self.transcript.clear();
         self.notice = Some("Cleared local transcript view.".into());
+    }
+
+    pub fn set_runtime_phase(&mut self, phase: impl Into<String>) {
+        self.runtime_phase = Some(phase.into());
     }
 
     pub fn open_overlay(&mut self, overlay: Overlay) {
