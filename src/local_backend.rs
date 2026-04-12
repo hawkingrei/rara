@@ -440,28 +440,7 @@ impl LocalModelSpec {
 
     fn build_model(self, raw_config: &Value, vb: VarBuilder) -> Result<LocalTextModel> {
         match self {
-            Self::Gemma4E2B | Self::Gemma4E4B => {
-                if is_multimodal_gemma4_checkpoint(raw_config) {
-                    let config: Gemma4Config =
-                        serde_json::from_value(raw_config.clone()).context("parse Gemma4Config")?;
-                    Ok(LocalTextModel::Gemma4Multimodal(
-                        Gemma4Model::new(&config, vb).context("build Gemma4 multimodal model")?,
-                    ))
-                } else {
-                    let mut text_config: Gemma4TextConfig =
-                        if let Some(text_cfg) = raw_config.get("text_config") {
-                            serde_json::from_value(text_cfg.clone()).context("parse text_config")?
-                        } else {
-                            serde_json::from_value(raw_config.clone())
-                                .context("parse Gemma4TextConfig")?
-                        };
-                    text_config.use_flash_attn = false;
-                    Ok(LocalTextModel::Gemma4(
-                        Gemma4TextModel::new(&text_config, vb)
-                            .context("build Gemma4 text model")?,
-                    ))
-                }
-            }
+            Self::Gemma4E2B | Self::Gemma4E4B => build_gemma4_model(raw_config, vb),
             Self::Qwen3_8B => {
                 let config: Qwen3Config =
                     serde_json::from_value(raw_config.clone()).context("parse Qwen3Config")?;
@@ -488,6 +467,36 @@ fn is_multimodal_gemma4_checkpoint(raw_config: &Value) -> bool {
         .unwrap_or(false)
         || raw_config.get("vision_config").is_some()
         || raw_config.get("audio_config").is_some()
+}
+
+fn build_gemma4_model(raw_config: &Value, vb: VarBuilder) -> Result<LocalTextModel> {
+    if is_multimodal_gemma4_checkpoint(raw_config) {
+        let config: Gemma4Config =
+            serde_json::from_value(raw_config.clone()).context("parse Gemma4Config")?;
+        match Gemma4Model::new(&config, vb.clone()) {
+            Ok(model) => return Ok(LocalTextModel::Gemma4Multimodal(model)),
+            Err(err) if should_fallback_to_text_only(&err) => {}
+            Err(err) => return Err(err).context("build Gemma4 multimodal model"),
+        }
+    }
+
+    let mut text_config: Gemma4TextConfig = if let Some(text_cfg) = raw_config.get("text_config") {
+        serde_json::from_value(text_cfg.clone()).context("parse text_config")?
+    } else {
+        serde_json::from_value(raw_config.clone()).context("parse Gemma4TextConfig")?
+    };
+    text_config.use_flash_attn = false;
+    Ok(LocalTextModel::Gemma4(
+        Gemma4TextModel::new(&text_config, vb).context("build Gemma4 text model")?,
+    ))
+}
+
+fn should_fallback_to_text_only(err: &candle::Error) -> bool {
+    let message = err.to_string();
+    message.contains("cannot find tensor model.vision_tower")
+        || message.contains("cannot find tensor model.audio_tower")
+        || message.contains("cannot find tensor model.vision_encoder")
+        || message.contains("cannot find tensor model.audio_encoder")
 }
 
 fn build_hf_api(config: &RaraConfig, cache_dir: &PathBuf) -> Result<hf_hub::api::sync::Api> {
