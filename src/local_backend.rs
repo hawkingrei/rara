@@ -488,7 +488,7 @@ fn build_gemma4_model(raw_config: &Value, vb: VarBuilder) -> Result<LocalTextMod
     };
     text_config.use_flash_attn = false;
     let text_vb = if is_multimodal_layout {
-        vb.pp("model").pp("language_model")
+        vb.rename_f(|name| remap_multimodal_gemma4_text_tensor(name))
     } else {
         vb
     };
@@ -503,6 +503,16 @@ fn should_fallback_to_text_only(err: &candle::Error) -> bool {
         || message.contains("cannot find tensor model.audio_tower")
         || message.contains("cannot find tensor model.vision_encoder")
         || message.contains("cannot find tensor model.audio_encoder")
+}
+
+fn remap_multimodal_gemma4_text_tensor(name: &str) -> String {
+    if let Some(suffix) = name.strip_prefix("model.") {
+        format!("model.language_model.{suffix}")
+    } else if let Some(suffix) = name.strip_prefix("lm_head.") {
+        format!("model.language_model.lm_head.{suffix}")
+    } else {
+        name.to_string()
+    }
 }
 
 fn build_hf_api(config: &RaraConfig, cache_dir: &PathBuf) -> Result<hf_hub::api::sync::Api> {
