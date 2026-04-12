@@ -18,9 +18,9 @@ pub fn render(f: &mut Frame, app: &TuiApp) {
     let layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(2),
-            Constraint::Min(8),
             Constraint::Length(3),
+            Constraint::Min(8),
+            Constraint::Length(4),
             Constraint::Length(2),
         ])
         .split(f.area());
@@ -38,24 +38,33 @@ pub fn render(f: &mut Frame, app: &TuiApp) {
 fn render_transcript(f: &mut Frame, app: &TuiApp, area: Rect) {
     let items = if app.transcript.is_empty() {
         vec![
-            ListItem::new(Line::from("No messages yet. Use the composer below.")),
+            ListItem::new(Line::from(Span::styled(
+                "No messages yet.",
+                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            ))),
+            ListItem::new(Line::from("Use the composer below to start a task or open a local command.")),
             ListItem::new(Line::from("")),
-            ListItem::new(Line::from("Try:")),
-            ListItem::new(Line::from("  /help")),
-            ListItem::new(Line::from("  /model")),
+            ListItem::new(Line::from(Span::styled(
+                "Start with:",
+                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+            ))),
+            ListItem::new(Line::from("  /help    browse built-in commands and runtime hints")),
+            ListItem::new(Line::from("  /model   switch between Qwn3 and Gemma presets")),
+            ListItem::new(Line::from("  /status  inspect runtime, tokens, cache, and session")),
+            ListItem::new(Line::from("")),
+            ListItem::new(Line::from(Span::styled(
+                "Prompt ideas:",
+                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+            ))),
             ListItem::new(Line::from("  Explain this repository structure.")),
+            ListItem::new(Line::from("  Find the main agent loop and summarize it.")),
         ]
     } else {
         app.transcript
             .iter()
             .map(|(role, message)| {
                 ListItem::new(vec![
-                    Line::from(Span::styled(
-                        role.as_str(),
-                        Style::default()
-                            .fg(Color::Cyan)
-                            .add_modifier(Modifier::BOLD),
-                    )),
+                    role_badge(role),
                     Line::from(message.as_str()),
                     Line::from(""),
                 ])
@@ -64,7 +73,11 @@ fn render_transcript(f: &mut Frame, app: &TuiApp, area: Rect) {
     };
 
     f.render_widget(
-        List::new(items).block(Block::default().borders(Borders::LEFT | Borders::RIGHT)),
+        List::new(items).block(
+            Block::default()
+                .borders(Borders::LEFT | Borders::RIGHT)
+                .title(" Transcript "),
+        ),
         area,
     );
 }
@@ -75,11 +88,43 @@ fn render_composer(f: &mut Frame, app: &TuiApp, area: Rect) {
     } else {
         " Composer "
     };
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(1), Constraint::Length(1)])
+        .split(area);
+    let composer_text = if app.input.is_empty() {
+        Line::from(vec![
+            Span::styled(
+                "Ask about the repo, request a code change, or type ",
+                Style::default().fg(Color::DarkGray),
+            ),
+            Span::styled(
+                "/help",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" to browse commands.", Style::default().fg(Color::DarkGray)),
+        ])
+    } else {
+        Line::from(app.input.as_str())
+    };
     f.render_widget(
-        Paragraph::new(app.input.as_str())
+        Paragraph::new(composer_text)
             .block(Block::default().borders(Borders::ALL).title(title))
             .wrap(Wrap { trim: false }),
-        area,
+        chunks[0],
+    );
+    let hint = if app.input.trim_start().starts_with('/') {
+        "slash command mode  Enter run  Esc close overlay"
+    } else if app.is_busy() {
+        "runtime busy  wait for current task to finish"
+    } else {
+        "plain prompt mode  /help commands  /model switch models"
+    };
+    f.render_widget(
+        Paragraph::new(hint).alignment(Alignment::Right),
+        chunks[1],
     );
 }
 
@@ -95,25 +140,47 @@ fn render_footer(f: &mut Frame, app: &TuiApp, area: Rect) {
         Some(TaskKind::OAuth) => "oauth",
         None => "idle",
     };
-    let notice = app
-        .notice
-        .as_ref()
-        .map(|value| format!("  notice={value}"))
-        .unwrap_or_default();
-    let text = format!(
-        "state={}  mode={}  key={}  messages={}  tokens={} in / {} out{}",
+    let summary = format!(
+        "state={}  mode={}  key={}  messages={}  transcript={}  tokens={} in / {} out",
         activity,
         mode,
         api_key_status(&app.config),
         app.snapshot.history_len,
+        app.transcript.len(),
         app.snapshot.total_input_tokens,
         app.snapshot.total_output_tokens,
-        notice,
     );
-    f.render_widget(Paragraph::new(text), area);
+    let notice = if let Some(notice) = app.notice.as_ref() {
+        Line::from(vec![
+            Span::styled("notice ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::raw(notice.as_str()),
+        ])
+    } else if app.is_busy() {
+        Line::from(vec![
+            Span::styled("hint ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::raw("the UI stays responsive while the current task runs in background"),
+        ])
+    } else {
+        Line::from(vec![
+            Span::styled("hint ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::raw("use /model to switch presets or /status to inspect the current runtime"),
+        ])
+    };
+    f.render_widget(Paragraph::new(vec![Line::from(summary), notice]), area);
 }
 
 fn render_header(f: &mut Frame, app: &TuiApp, area: Rect) {
+    let activity = match app.running_task.as_ref().map(|task| &task.kind) {
+        Some(TaskKind::Query) => ("query", Color::Yellow),
+        Some(TaskKind::Rebuild) => ("reload", Color::LightBlue),
+        Some(TaskKind::OAuth) => ("oauth", Color::LightGreen),
+        None => ("idle", Color::DarkGray),
+    };
+    let provider_color = if super::provider_requires_api_key(&app.config.provider) {
+        Color::Magenta
+    } else {
+        Color::Green
+    };
     let lines = vec![
         Line::from(vec![
             Span::styled(
@@ -123,17 +190,24 @@ fn render_header(f: &mut Frame, app: &TuiApp, area: Rect) {
                     .fg(Color::Black)
                     .add_modifier(Modifier::BOLD),
             ),
+            Span::raw(" "),
+            badge("provider", &app.config.provider, provider_color),
+            Span::raw(" "),
+            badge("state", activity.0, activity.1),
+            Span::raw(" "),
+            badge("key", api_key_status(&app.config), Color::DarkGray),
+        ]),
+        Line::from(vec![
             Span::raw(format!(
-                "  provider={}  model={}  revision={}  key={}",
-                app.config.provider,
+                " model={}  revision={}  workspace={} ",
                 app.current_model_label(),
                 app.config.revision.as_deref().unwrap_or("main"),
-                api_key_status(&app.config),
+                app.snapshot.cwd,
             )),
         ]),
         Line::from(format!(
-            " workspace={}  branch={}  session={} ",
-            app.snapshot.cwd, app.snapshot.branch, app.snapshot.session_id
+            " branch={}  session={} ",
+            app.snapshot.branch, app.snapshot.session_id
         )),
     ];
     f.render_widget(Paragraph::new(lines), area);
@@ -268,9 +342,13 @@ fn render_help_modal(f: &mut Frame, app: &TuiApp, area: Rect, tab: HelpTab) {
 fn render_command_palette(f: &mut Frame, app: &TuiApp, area: Rect) {
     let query = app.input.trim_start().trim_start_matches('/');
     let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(3), Constraint::Min(8), Constraint::Length(2)])
+        .split(area);
+    let body = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
-        .split(area);
+        .split(chunks[1]);
     let items = matching_commands(query)
         .into_iter()
         .enumerate()
@@ -295,22 +373,33 @@ fn render_command_palette(f: &mut Frame, app: &TuiApp, area: Rect) {
             Some(ListItem::new(lines).style(style))
         })
         .collect::<Vec<_>>();
+    let intro = if query.is_empty() {
+        "Start typing after / to narrow commands. Exact commands like /model or /status can be submitted directly."
+    } else {
+        "Use Up/Down to inspect matches. Enter accepts the highlighted command into the composer."
+    };
     f.render_widget(
-        List::new(items).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(format!(" Commands matching /{} ", query)),
-        ),
+        Paragraph::new(intro)
+            .block(Block::default().borders(Borders::ALL).title(format!(" Commands matching /{} ", query))),
         chunks[0],
+    );
+    f.render_widget(
+        List::new(items).block(Block::default().borders(Borders::LEFT | Borders::RIGHT).title(" Matches ")),
+        body[0],
     );
     let detail = command_spec_by_index(query, app.command_palette_idx)
         .map(command_detail_text)
         .unwrap_or_else(help_text);
     f.render_widget(
         Paragraph::new(detail)
-            .block(Block::default().borders(Borders::ALL).title(" Detail "))
+            .block(Block::default().borders(Borders::RIGHT).title(" Detail "))
             .wrap(Wrap { trim: false }),
-        chunks[1],
+        body[1],
+    );
+    f.render_widget(
+        Paragraph::new("Esc close  Enter accept highlighted command  Keep typing to refine")
+            .alignment(Alignment::Center),
+        chunks[2],
     );
 }
 
@@ -341,7 +430,9 @@ fn render_setup_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
     let text = format!(
         "Provider: {}\nModel: {}\nAPI key: {}\nRevision: {}\n\n\
          Presets:\n{}\n\n\
-         [1/2/3] Select preset\n[M] Cycle preset\n[Enter] Apply and rebuild\n[L] OAuth login\n[Esc] Close",
+         [1/2/3] Select preset\n[M] Cycle preset\n[Enter] Apply and rebuild\n[L] OAuth login\n[Esc] Close\n\n\
+         Recommended: Qwn3 8B for stable local use.\n\
+         Gemma 4 presets are marked experimental.",
         app.config.provider,
         app.current_model_label(),
         api_key_status(&app.config),
@@ -372,13 +463,19 @@ fn render_model_picker_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
                 } else {
                     ""
                 };
+            let recommendation = if idx == 2 {
+                " recommended"
+            } else {
+                ""
+            };
             ListItem::new(format!(
-                "[{}] {} ({}/{}){}",
+                "[{}] {} ({}/{}){}{}",
                 idx + 1,
                 label,
                 provider,
                 model,
-                current
+                current,
+                recommendation,
             ))
             .style(style)
         })
@@ -388,7 +485,7 @@ fn render_model_picker_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
         .constraints([Constraint::Length(3), Constraint::Min(6), Constraint::Length(2)])
         .split(area);
     f.render_widget(
-        Paragraph::new("Select a local model preset. Enter applies it immediately.")
+        Paragraph::new("Select a local model preset. Qwn3 is the stable default; Gemma 4 presets are experimental. Enter applies immediately.")
             .block(Block::default().borders(Borders::ALL).title(" Model Picker ")),
         chunks[0],
     );
@@ -410,7 +507,7 @@ fn render_model_guide_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
         .split(area);
     f.render_widget(
         Paragraph::new(
-            "Model guide\n\nWhat do you want to optimize for right now?",
+            "Model guide\n\nWhat do you want to optimize for right now?\nGemma 4 paths are marked experimental.",
         )
         .block(Block::default().borders(Borders::ALL).title(" Model Guide ")),
         chunks[0],
@@ -424,11 +521,19 @@ fn render_model_guide_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
             } else {
                 Style::default()
             };
+            let selected_marker = MODEL_GUIDE_OPTIONS[idx]
+                .2
+                .and_then(|preset_idx| {
+                    let (_, provider, model) = LOCAL_MODEL_PRESETS[preset_idx];
+                    (app.config.provider == provider && app.config.model.as_deref() == Some(model))
+                        .then_some(" current")
+                })
+                .unwrap_or("");
             let target = preset_idx
                 .map(|preset| format!(" -> {}", LOCAL_MODEL_PRESETS[preset].0))
                 .unwrap_or_else(|| " -> open picker".to_string());
             ListItem::new(vec![
-                Line::from(format!("[{}] {}{}", idx + 1, label, target)),
+                Line::from(format!("[{}] {}{}{}", idx + 1, label, target, selected_marker)),
                 Line::from(*detail),
                 Line::from(""),
             ])
@@ -465,4 +570,32 @@ fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
         .flex(Flex::Center)
         .split(vertical[1]);
     horizontal[1]
+}
+
+fn role_badge(role: &str) -> Line<'static> {
+    let (fg, bg) = match role {
+        "You" => (Color::Black, Color::Green),
+        "Agent" => (Color::Black, Color::Cyan),
+        "Tool" => (Color::Black, Color::Yellow),
+        "Tool Result" => (Color::Black, Color::LightGreen),
+        "Tool Error" => (Color::White, Color::Red),
+        "Runtime" => (Color::Black, Color::LightBlue),
+        "Status" => (Color::Black, Color::Gray),
+        "System" => (Color::Black, Color::Magenta),
+        _ => (Color::White, Color::DarkGray),
+    };
+    Line::from(Span::styled(
+        format!(" {} ", role),
+        Style::default().fg(fg).bg(bg).add_modifier(Modifier::BOLD),
+    ))
+}
+
+fn badge<'a>(label: &'a str, value: &'a str, color: Color) -> Span<'a> {
+    Span::styled(
+        format!(" {}={} ", label, value),
+        Style::default()
+            .fg(Color::Black)
+            .bg(color)
+            .add_modifier(Modifier::BOLD),
+    )
 }
