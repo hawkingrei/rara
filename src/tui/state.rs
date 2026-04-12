@@ -4,9 +4,19 @@ use tokio::task::JoinHandle;
 use crate::agent::Agent;
 use crate::config::{ConfigManager, RaraConfig};
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum Screen {
-    Chat,
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum HelpTab {
+    General,
+    Commands,
+    Runtime,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Overlay {
+    Welcome,
+    Help(HelpTab),
+    CommandPalette,
+    Status,
     Setup,
     ModelPicker,
 }
@@ -27,9 +37,11 @@ pub struct LocalCommand {
 }
 
 pub struct CommandSpec {
+    pub category: &'static str,
     pub name: &'static str,
     pub usage: &'static str,
     pub summary: &'static str,
+    pub detail: &'static str,
 }
 
 #[derive(Default, Clone)]
@@ -83,35 +95,37 @@ pub const LOCAL_MODEL_PRESETS: [(&str, &str, &str); 3] = [
 pub struct TuiApp {
     pub input: String,
     pub transcript: Vec<(String, String)>,
-    pub screen: Screen,
+    pub overlay: Option<Overlay>,
     pub config: RaraConfig,
     pub config_manager: ConfigManager,
     pub setup_status: Option<String>,
     pub notice: Option<String>,
     pub snapshot: RuntimeSnapshot,
     pub model_picker_idx: usize,
+    pub command_palette_idx: usize,
     pub running_task: Option<RunningTask>,
 }
 
 impl TuiApp {
     pub fn new(cm: ConfigManager) -> Self {
         let cfg = cm.load();
-        let screen = if cfg.api_key.is_none() && super::provider_requires_api_key(&cfg.provider) {
-            Screen::Setup
+        let overlay = if cfg.api_key.is_none() && super::provider_requires_api_key(&cfg.provider) {
+            Some(Overlay::Setup)
         } else {
-            Screen::Chat
+            Some(Overlay::Welcome)
         };
         let model_picker_idx = selected_preset_idx_for_config(&cfg);
         Self {
             input: String::new(),
             transcript: Vec::new(),
-            screen,
+            overlay,
             config: cfg,
             config_manager: cm,
             setup_status: None,
             notice: None,
             snapshot: RuntimeSnapshot::default(),
             model_picker_idx,
+            command_palette_idx: 0,
             running_task: None,
         }
     }
@@ -166,6 +180,20 @@ impl TuiApp {
     pub fn reset_transcript(&mut self) {
         self.transcript.clear();
         self.notice = Some("Cleared local transcript view.".into());
+    }
+
+    pub fn open_overlay(&mut self, overlay: Overlay) {
+        if matches!(overlay, Overlay::CommandPalette) {
+            self.command_palette_idx = 0;
+        }
+        if matches!(overlay, Overlay::ModelPicker) {
+            self.model_picker_idx = self.selected_preset_idx();
+        }
+        self.overlay = Some(overlay);
+    }
+
+    pub fn close_overlay(&mut self) {
+        self.overlay = None;
     }
 }
 

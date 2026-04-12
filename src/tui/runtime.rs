@@ -23,9 +23,10 @@ use crate::tools::workspace::UpdateProjectMemoryTool;
 use crate::vectordb::VectorDB;
 use crate::workspace::WorkspaceMemory;
 
-use super::command::{help_text, model_help_text, resolve_model_selection, status_text};
+use super::command::{model_help_text, resolve_model_selection};
 use super::state::{
-    LocalCommand, LocalCommandKind, RunningTask, TaskCompletion, TaskKind, TuiApp, TuiEvent,
+    HelpTab, LocalCommand, LocalCommandKind, Overlay, RunningTask, TaskCompletion, TaskKind,
+    TuiApp, TuiEvent,
 };
 
 pub async fn execute_local_command(
@@ -35,10 +36,10 @@ pub async fn execute_local_command(
     oauth_manager: &Arc<OAuthManager>,
 ) -> anyhow::Result<()> {
     match command.kind {
-        LocalCommandKind::Help => app.push_notice(help_text()),
-        LocalCommandKind::Status => app.push_notice(status_text(app)),
+        LocalCommandKind::Help => app.open_overlay(Overlay::Help(HelpTab::General)),
+        LocalCommandKind::Status => app.open_overlay(Overlay::Status),
         LocalCommandKind::Clear => app.reset_transcript(),
-        LocalCommandKind::Setup => app.screen = super::state::Screen::Setup,
+        LocalCommandKind::Setup => app.open_overlay(Overlay::Setup),
         LocalCommandKind::Model => handle_model_command(command.arg.as_deref(), app)?,
         LocalCommandKind::Login => {
             if app.is_busy() {
@@ -177,6 +178,7 @@ pub async fn finish_running_task_if_ready(
                 if let Some(agent) = agent_slot.as_ref() {
                     app.sync_snapshot(agent);
                 }
+                app.close_overlay();
                 app.push_entry("Runtime", app.setup_status.clone().unwrap_or_default());
             }
             Err(err) => {
@@ -192,7 +194,7 @@ pub async fn finish_running_task_if_ready(
                 app.config_manager.save(&app.config)?;
                 app.setup_status = Some("Saved OAuth token.".into());
                 app.notice = app.setup_status.clone();
-                app.screen = super::state::Screen::Chat;
+                app.close_overlay();
                 app.push_entry("Runtime", "Saved OAuth token.");
             }
             Err(err) => {
@@ -206,8 +208,7 @@ pub async fn finish_running_task_if_ready(
 
 fn handle_model_command(arg: Option<&str>, app: &mut TuiApp) -> anyhow::Result<()> {
     let Some(raw_arg) = arg.map(str::trim).filter(|arg| !arg.is_empty()) else {
-        app.model_picker_idx = app.selected_preset_idx();
-        app.screen = super::state::Screen::ModelPicker;
+        app.open_overlay(Overlay::ModelPicker);
         app.notice = Some("Opened model picker.".into());
         return Ok(());
     };

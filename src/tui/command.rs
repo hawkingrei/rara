@@ -4,34 +4,46 @@ use super::state::{CommandSpec, LocalCommand, LocalCommandKind, TuiApp, LOCAL_MO
 
 pub const COMMAND_SPECS: [CommandSpec; 6] = [
     CommandSpec {
+        category: "Session",
         name: "help",
         usage: "/help",
         summary: "Show built-in commands and keyboard hints.",
+        detail: "Open the help modal with general guidance, command references, and runtime details.",
     },
     CommandSpec {
+        category: "Session",
         name: "status",
         usage: "/status",
         summary: "Show current provider, model, revision, workspace, and runtime counters.",
+        detail: "Open a runtime status modal with provider, model, revision, workspace, session, token counters, and cache location.",
     },
     CommandSpec {
+        category: "Session",
         name: "clear",
         usage: "/clear",
         summary: "Clear the visible transcript and keep the current backend.",
+        detail: "Reset only the local transcript view. The current backend, session id, and active runtime remain unchanged.",
     },
     CommandSpec {
+        category: "Setup",
         name: "setup",
         usage: "/setup",
         summary: "Open the fallback setup screen.",
+        detail: "Open the setup overlay for local model presets and OAuth. This is the fallback config surface, not the primary interaction flow.",
     },
     CommandSpec {
+        category: "Models",
         name: "model",
         usage: "/model [name|1|2|3|next|list]",
         summary: "Open the picker or switch local model presets in place.",
+        detail: "Use without args to open the model picker. Use an explicit preset name or index to switch immediately and rebuild the backend in background.",
     },
     CommandSpec {
+        category: "Setup",
         name: "login",
         usage: "/login",
         summary: "Start OAuth login in the background.",
+        detail: "Start OAuth without blocking the TUI. Progress and completion are written back into the transcript and notice line.",
     },
 ];
 
@@ -63,12 +75,61 @@ pub fn matching_commands(query: &str) -> Vec<&'static CommandSpec> {
     let query = query.trim();
     let mut matches = COMMAND_SPECS
         .iter()
-        .filter(|spec| query.is_empty() || spec.name.starts_with(query))
+        .filter_map(|spec| command_score(spec, query).map(|score| (score, spec)))
         .collect::<Vec<_>>();
     if matches.is_empty() {
-        matches = COMMAND_SPECS.iter().collect();
+        return COMMAND_SPECS.iter().collect();
     }
-    matches
+    matches.sort_by_key(|(score, spec)| (*score, spec.name));
+    matches.into_iter().map(|(_, spec)| spec).collect()
+}
+
+pub fn command_spec_by_index(query: &str, index: usize) -> Option<&'static CommandSpec> {
+    matching_commands(query).get(index).copied()
+}
+
+pub fn command_detail_text(spec: &CommandSpec) -> String {
+    format!("{}\n\n{}\n\n{}", spec.usage, spec.summary, spec.detail)
+}
+
+pub fn general_help_text() -> &'static str {
+    "RARA uses a single composer as the control surface.\n\nNormal input goes to the current agent.\nSlash commands stay local and open overlays or update runtime state.\n\nKeyboard:\n  Enter submit current composer input\n  Esc close overlay or quit the app\n  Up/Down or j/k move inside lists\n  1/2/3 switch help tabs or choose model presets"
+}
+
+fn command_score(spec: &CommandSpec, query: &str) -> Option<u8> {
+    if query.is_empty() {
+        return Some(0);
+    }
+    let query = query.to_ascii_lowercase();
+    let name = spec.name.to_ascii_lowercase();
+    let usage = spec.usage.to_ascii_lowercase();
+    let summary = spec.summary.to_ascii_lowercase();
+
+    if name == query {
+        Some(0)
+    } else if name.starts_with(&query) {
+        Some(1)
+    } else if usage.contains(&query) {
+        Some(2)
+    } else if summary.contains(&query) {
+        Some(3)
+    } else {
+        subsequence_match(&name, &query).then_some(4)
+    }
+}
+
+fn subsequence_match(haystack: &str, needle: &str) -> bool {
+    let mut chars = needle.chars();
+    let mut current = chars.next();
+    for ch in haystack.chars() {
+        if Some(ch) == current {
+            current = chars.next();
+            if current.is_none() {
+                return true;
+            }
+        }
+    }
+    current.is_none()
 }
 
 pub fn help_text() -> String {
@@ -195,12 +256,22 @@ mod tests {
             .into_iter()
             .map(|spec| spec.name)
             .collect::<Vec<_>>();
-        assert_eq!(names, vec!["status"]);
+        assert_eq!(names.first().copied(), Some("status"));
+        assert!(names.contains(&"setup"));
     }
 
     #[test]
     fn normalizes_model_labels_for_command_matching() {
         assert_eq!(normalize_command_token("Gemma 4 E4B"), "gemma4e4b");
         assert_eq!(normalize_command_token("Qwn3 8B"), "qwn38b");
+    }
+
+    #[test]
+    fn exact_and_prefix_matches_rank_ahead_of_fuzzy_matches() {
+        let names = matching_commands("model")
+            .into_iter()
+            .map(|spec| spec.name)
+            .collect::<Vec<_>>();
+        assert_eq!(names.first().copied(), Some("model"));
     }
 }
