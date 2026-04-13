@@ -22,7 +22,7 @@ pub fn render(f: &mut Frame, app: &TuiApp) {
         .constraints([
             Constraint::Length(2),
             Constraint::Min(8),
-            Constraint::Length(6),
+            Constraint::Length(5),
         ])
         .split(f.area());
 
@@ -38,7 +38,7 @@ pub fn render(f: &mut Frame, app: &TuiApp) {
 fn render_bottom_pane(f: &mut Frame, app: &TuiApp, area: Rect) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Min(4), Constraint::Length(1)])
+        .constraints([Constraint::Length(1), Constraint::Min(3), Constraint::Length(1)])
         .split(area);
     render_activity_bar(f, app, chunks[0]);
     render_composer(f, app, chunks[1]);
@@ -77,7 +77,12 @@ fn render_transcript(f: &mut Frame, app: &TuiApp, area: Rect) {
 
     let mut lines = vec![Line::from(section_span("Current Turn", Color::LightBlue)), Line::from("")];
     lines.extend(current_turn_lines(app));
-    f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), area);
+    f.render_widget(
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .scroll((app.transcript_scroll as u16, 0)),
+        area,
+    );
 }
 
 pub fn committed_turn_lines(entries: &[TranscriptEntry]) -> Vec<Line<'static>> {

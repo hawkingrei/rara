@@ -322,6 +322,7 @@ impl TuiApp {
             role: role.to_string(),
             message: message.into(),
         });
+        self.transcript_scroll = 0;
     }
 
     pub fn push_notice(&mut self, message: impl Into<String>) {

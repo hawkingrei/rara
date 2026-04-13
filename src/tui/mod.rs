@@ -40,7 +40,7 @@ pub async fn run_tui(agent: Agent, oauth_manager: OAuthManager) -> anyhow::Resul
     let mut stdout = io::stdout();
     execute!(stdout, Hide)?;
     let (_, rows) = terminal_size()?;
-    let viewport_height = rows.saturating_sub(2).max(12);
+    let viewport_height = rows.saturating_sub(1).max(14);
     let mut terminal = Terminal::with_options(
         CrosstermBackend::new(stdout),
         TerminalOptions {
