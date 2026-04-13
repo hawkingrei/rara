@@ -1,4 +1,6 @@
 use crate::config::RaraConfig;
+use std::fs;
+use std::path::PathBuf;
 
 use super::state::{
     current_model_presets, CommandSpec, LocalCommand, LocalCommandKind, ProviderFamily, TuiApp,
@@ -276,6 +278,41 @@ pub fn status_resources_text(app: &TuiApp) -> String {
         app.snapshot.total_output_tokens,
         cache,
     )
+}
+
+pub fn status_prompt_sources_text() -> String {
+    let root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let mut sources = Vec::new();
+
+    for name in ["AGENTS.md", "GEMINI.md", "CLAUDE.md"] {
+        let path = root.join(name);
+        if fs::metadata(&path).map(|meta| meta.is_file()).unwrap_or(false) {
+            sources.push(format!("project instruction: {}", name));
+        }
+    }
+
+    let rara_dir = root.join(".rara");
+    let local_instructions = rara_dir.join("instructions.md");
+    if fs::metadata(&local_instructions)
+        .map(|meta| meta.is_file())
+        .unwrap_or(false)
+    {
+        sources.push("local instruction: .rara/instructions.md".to_string());
+    }
+
+    let memory = rara_dir.join("memory.md");
+    if fs::metadata(&memory)
+        .map(|meta| meta.is_file())
+        .unwrap_or(false)
+    {
+        sources.push("local memory: .rara/memory.md".to_string());
+    }
+
+    if sources.is_empty() {
+        "No prompt sources discovered.".to_string()
+    } else {
+        sources.join("\n")
+    }
 }
 
 pub fn download_status_text(app: &TuiApp) -> Option<String> {

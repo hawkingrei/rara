@@ -9,8 +9,8 @@ use ratatui::{
 use super::command::{
     api_key_status, command_detail_text, command_spec_by_index, general_help_text, help_text,
     download_status_text, matching_commands, model_help_text, palette_command_by_index,
-    palette_commands, quick_actions_text, recent_transcript_preview, status_resources_text,
-    status_runtime_text, status_workspace_text,
+    palette_commands, quick_actions_text, recent_transcript_preview, status_prompt_sources_text,
+    status_resources_text, status_runtime_text, status_workspace_text,
 };
 use super::state::{
     current_model_presets, HelpTab, Overlay, PROVIDER_FAMILIES, TaskKind, TuiApp,
@@ -394,7 +394,7 @@ fn render_help_modal(f: &mut Frame, app: &TuiApp, area: Rect, tab: HelpTab) {
                 .split(chunks[1]);
             let left = Layout::default()
                 .direction(Direction::Vertical)
-                .constraints([Constraint::Length(8), Constraint::Min(6)])
+                .constraints([Constraint::Length(8), Constraint::Length(6), Constraint::Min(5)])
                 .split(inner[0]);
             let right = Layout::default()
                 .direction(Direction::Vertical)
@@ -411,6 +411,12 @@ fn render_help_modal(f: &mut Frame, app: &TuiApp, area: Rect, tab: HelpTab) {
                 .block(Block::default().borders(Borders::LEFT | Borders::RIGHT).title(" Workspace "))
                 .wrap(Wrap { trim: false }),
                 left[1],
+            );
+            f.render_widget(
+                Paragraph::new(status_prompt_sources_text())
+                .block(Block::default().borders(Borders::LEFT | Borders::RIGHT).title(" Prompt Sources "))
+                .wrap(Wrap { trim: false }),
+                left[2],
             );
             f.render_widget(
                 Paragraph::new(status_resources_text(app))
@@ -537,7 +543,7 @@ fn command_palette_item(
 fn render_status_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(8), Constraint::Length(6), Constraint::Min(8), Constraint::Length(2)])
+        .constraints([Constraint::Length(8), Constraint::Length(6), Constraint::Length(6), Constraint::Min(6), Constraint::Length(2)])
         .split(area);
     let top = Layout::default()
         .direction(Direction::Horizontal)
@@ -565,6 +571,12 @@ fn render_status_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
             .wrap(Wrap { trim: false }),
         top[2],
     );
+    f.render_widget(
+        Paragraph::new(status_prompt_sources_text())
+            .block(Block::default().borders(Borders::ALL).title(" Prompt Sources "))
+            .wrap(Wrap { trim: false }),
+        chunks[1],
+    );
     let right_panel = download_status_text(app).unwrap_or_else(|| quick_actions_text().to_string());
     let right_title = if matches!(app.runtime_phase, super::state::RuntimePhase::RebuildingBackend | super::state::RuntimePhase::BackendReady) {
         " Download "
@@ -587,12 +599,12 @@ fn render_status_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
         Paragraph::new(recent_transcript_preview(app, 8))
             .block(Block::default().borders(Borders::ALL).title(" Recent Activity "))
             .wrap(Wrap { trim: false }),
-        chunks[2],
+        chunks[3],
     );
     f.render_widget(
         Paragraph::new("Esc close  Enter close  /help commands  /model switch runtime")
             .alignment(Alignment::Center),
-        chunks[3],
+        chunks[4],
     );
 }
 

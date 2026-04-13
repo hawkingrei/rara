@@ -64,6 +64,19 @@ pub enum AgentEvent {
     },
 }
 
+#[derive(Debug)]
+struct ToolCall {
+    id: String,
+    name: String,
+    input: Value,
+}
+
+#[derive(Debug)]
+struct TurnOutput {
+    assistant_message: Message,
+    tool_calls: Vec<ToolCall>,
+}
+
 pub struct Agent {
     pub tool_manager: ToolManager,
     pub llm_backend: Arc<dyn LlmBackend>,
@@ -118,6 +131,11 @@ impl Agent {
             - Use 'update_project_memory' to record facts into memory.md.\n\
             - Use 'retrieve_session_context' to recall past conversations.\n\
             - Use 'spawn_agent' or 'team_create' for complex parallel tasks.\n\
+            - All text outside tool calls is shown directly to the user, so keep it short and useful.\n\
+            - When a tool is needed, emit the tool call directly.\n\
+            - Do not announce a future tool call in prose.\n\
+            - Do not say that you will use a tool such as 'list_files' or 'read_file'; actually call the tool instead.\n\
+            - Before the first tool call, a single short sentence of intent is enough. Do not narrate every step.\n\
             - After every tool result, decide the next step immediately: either call another tool or provide the final answer.\n\
             - Do not stop at an intermediate status update once tool results are available.");
         prompt
@@ -180,42 +198,14 @@ impl Agent {
         });
 
         loop {
-            report(AgentEvent::Status("Sending prompt to model.".to_string()));
-            let mut messages = self.history.clone();
-            messages.insert(0, Message { role: "system".to_string(), content: json!(self.build_system_prompt()) });
+            let turn_output = self
+                .run_model_turn(output_mode, &mut report)
+                .await?;
+            self.history.push(turn_output.assistant_message);
 
-            let response = self.llm_backend.ask(&messages, &self.tool_manager.get_schemas()).await?;
-
-            if let Some(usage) = &response.usage {
-                self.total_input_tokens += usage.input_tokens;
-                self.total_output_tokens += usage.output_tokens;
+            if turn_output.tool_calls.is_empty() {
+                break;
             }
-
-            let mut tool_calls = Vec::new();
-            for block in &response.content {
-                match block {
-                    ContentBlock::Text { text } => {
-                        report(AgentEvent::AssistantText(text.clone()));
-                        if matches!(output_mode, AgentOutputMode::Terminal) {
-                            println!("Agent: {}", text);
-                        }
-                    }
-                    ContentBlock::ToolUse { id, name, input } => {
-                        report(AgentEvent::ToolUse {
-                            name: name.clone(),
-                            input: input.clone(),
-                        });
-                        tool_calls.push((id.clone(), name.clone(), input.clone()));
-                    }
-                }
-            }
-
-            self.history.push(Message {
-                role: "assistant".to_string(),
-                content: serde_json::to_value(&response.content)?,
-            });
-
-            if tool_calls.is_empty() { break; }
             tool_rounds += 1;
             if tool_rounds > MAX_TOOL_ROUNDS_PER_TURN {
                 return Err(anyhow::anyhow!(
@@ -224,47 +214,10 @@ impl Agent {
                 ));
             }
 
-            for (id, name, input) in tool_calls {
-                if let Some(tool) = self.tool_manager.get_tool(&name) {
-                    report(AgentEvent::Status(format!("Running tool {name}.")));
-                    match tool.call(input.clone()).await {
-                        Ok(result) => {
-                            let result_text = self.tool_result_store.compact_result(
-                                &name,
-                                &id,
-                                &input,
-                                &result,
-                            )?;
-                            report(AgentEvent::ToolResult {
-                                name: name.clone(),
-                                content: result_text.clone(),
-                                is_error: false,
-                            });
-                            self.history.push(Message {
-                                role: "user".to_string(),
-                                content: json!([{"type": "tool_result", "tool_use_id": id, "content": result_text}]),
-                            });
-                        }
-                        Err(e) => {
-                            let error_text = format!("Error: {}", e);
-                            report(AgentEvent::ToolResult {
-                                name: name.clone(),
-                                content: error_text.clone(),
-                                is_error: true,
-                            });
-                            self.history.push(Message {
-                                role: "user".to_string(),
-                                content: json!([{"type": "tool_result", "tool_use_id": id, "content": error_text, "is_error": true}]),
-                            });
-                        }
-                    }
-                }
-            }
-
-            report(AgentEvent::Status(
-                "Tool results recorded. Continuing agent reasoning.".to_string(),
-            ));
-            self.history.push(tool_continuation_message());
+            let tool_results = self
+                .execute_tool_calls(turn_output.tool_calls, &mut report)
+                .await?;
+            self.extend_history_for_next_turn(tool_results, &mut report);
         }
 
         self.session_manager.save_session(&self.session_id, &self.history)?;
@@ -278,12 +231,151 @@ impl Agent {
         }
         Ok(())
     }
+
+    async fn run_model_turn<F>(
+        &mut self,
+        output_mode: AgentOutputMode,
+        report: &mut F,
+    ) -> Result<TurnOutput>
+    where
+        F: FnMut(AgentEvent),
+    {
+        report(AgentEvent::Status("Sending prompt to model.".to_string()));
+        let mut messages = self.history.clone();
+        messages.insert(
+            0,
+            Message {
+                role: "system".to_string(),
+                content: json!(self.build_system_prompt()),
+            },
+        );
+
+        let response = self
+            .llm_backend
+            .ask(&messages, &self.tool_manager.get_schemas())
+            .await?;
+
+        if let Some(usage) = &response.usage {
+            self.total_input_tokens += usage.input_tokens;
+            self.total_output_tokens += usage.output_tokens;
+        }
+
+        let mut tool_calls = Vec::new();
+        for block in &response.content {
+            match block {
+                ContentBlock::Text { text } => {
+                    report(AgentEvent::AssistantText(text.clone()));
+                    if matches!(output_mode, AgentOutputMode::Terminal) {
+                        println!("Agent: {}", text);
+                    }
+                }
+                ContentBlock::ToolUse { id, name, input } => {
+                    report(AgentEvent::ToolUse {
+                        name: name.clone(),
+                        input: input.clone(),
+                    });
+                    tool_calls.push(ToolCall {
+                        id: id.clone(),
+                        name: name.clone(),
+                        input: input.clone(),
+                    });
+                }
+            }
+        }
+
+        Ok(TurnOutput {
+            assistant_message: Message {
+                role: "assistant".to_string(),
+                content: serde_json::to_value(&response.content)?,
+            },
+            tool_calls,
+        })
+    }
+
+    async fn execute_tool_calls<F>(
+        &mut self,
+        tool_calls: Vec<ToolCall>,
+        report: &mut F,
+    ) -> Result<Vec<Message>>
+    where
+        F: FnMut(AgentEvent),
+    {
+        let mut tool_results = Vec::new();
+        for tool_call in tool_calls {
+            if let Some(tool) = self.tool_manager.get_tool(&tool_call.name) {
+                report(AgentEvent::Status(format!(
+                    "Running tool {}.",
+                    tool_call.name
+                )));
+                match tool.call(tool_call.input.clone()).await {
+                    Ok(result) => {
+                        let result_text = self.tool_result_store.compact_result(
+                            &tool_call.name,
+                            &tool_call.id,
+                            &tool_call.input,
+                            &result,
+                        )?;
+                        report(AgentEvent::ToolResult {
+                            name: tool_call.name.clone(),
+                            content: result_text.clone(),
+                            is_error: false,
+                        });
+                        tool_results.push(tool_result_message(
+                            &tool_call.id,
+                            result_text,
+                            false,
+                        ));
+                    }
+                    Err(e) => {
+                        let error_text = format!("Error: {}", e);
+                        report(AgentEvent::ToolResult {
+                            name: tool_call.name.clone(),
+                            content: error_text.clone(),
+                            is_error: true,
+                        });
+                        tool_results.push(tool_result_message(
+                            &tool_call.id,
+                            error_text,
+                            true,
+                        ));
+                    }
+                }
+            }
+        }
+        Ok(tool_results)
+    }
+
+    fn extend_history_for_next_turn<F>(&mut self, tool_results: Vec<Message>, report: &mut F)
+    where
+        F: FnMut(AgentEvent),
+    {
+        self.history.extend(tool_results);
+        report(AgentEvent::Status(
+            "Tool results recorded. Continuing agent reasoning.".to_string(),
+        ));
+        self.history.push(tool_continuation_message());
+    }
 }
 
 fn tool_continuation_message() -> Message {
     Message {
         role: "user".to_string(),
         content: json!([{"type": "text", "text": TOOL_CONTINUATION_PROMPT}]),
+    }
+}
+
+fn tool_result_message(tool_use_id: &str, content: String, is_error: bool) -> Message {
+    let mut block = json!({
+        "type": "tool_result",
+        "tool_use_id": tool_use_id,
+        "content": content,
+    });
+    if is_error {
+        block["is_error"] = json!(true);
+    }
+    Message {
+        role: "user".to_string(),
+        content: json!([block]),
     }
 }
 
