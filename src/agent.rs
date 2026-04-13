@@ -20,6 +20,12 @@ pub enum AgentExecutionMode {
     Plan,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BashApprovalMode {
+    Always,
+    Suggestion,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PlanStepStatus {
     Pending,
@@ -31,6 +37,13 @@ pub enum PlanStepStatus {
 pub struct PlanStep {
     pub step: String,
     pub status: PlanStepStatus,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingUserInput {
+    pub question: String,
+    pub options: Vec<(String, String)>,
+    pub note: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -108,8 +121,10 @@ pub struct Agent {
     pub total_output_tokens: u32,
     pub tool_result_store: ToolResultStore,
     pub execution_mode: AgentExecutionMode,
+    pub bash_approval_mode: BashApprovalMode,
     pub current_plan: Vec<PlanStep>,
     pub plan_explanation: Option<String>,
+    pub pending_user_input: Option<PendingUserInput>,
 }
 
 impl Agent {
@@ -133,8 +148,10 @@ impl Agent {
             tool_result_store: ToolResultStore::new(default_tool_result_store_dir())
                 .expect("tool result store"),
             execution_mode: AgentExecutionMode::Execute,
+            bash_approval_mode: BashApprovalMode::Always,
             current_plan: Vec::new(),
             plan_explanation: None,
+            pending_user_input: None,
         }
     }
 
@@ -162,6 +179,11 @@ impl Agent {
                 "- Start your response with a <plan> block.\n\
                 - Inside the block, emit one step per line in the form '- [pending] Step' or '- [in_progress] Step' or '- [completed] Step'.\n\
                 - After </plan>, provide a short explanation grounded in the inspected code.\n",
+            );
+            prompt.push_str(
+                "- If a key product or implementation decision blocks progress, also emit a <request_user_input> block.\n\
+                - Inside that block, write one 'question: ...' line and up to three 'option: label | description' lines.\n\
+                - After </request_user_input>, keep the rest of the explanation concise.\n",
             );
         }
         prompt.push_str("\n## Capabilities:\n\
@@ -200,6 +222,10 @@ impl Agent {
             AgentExecutionMode::Execute => "execute",
             AgentExecutionMode::Plan => "plan",
         }
+    }
+
+    pub fn set_bash_approval_mode(&mut self, mode: BashApprovalMode) {
+        self.bash_approval_mode = mode;
     }
 
     pub async fn compact_if_needed(&mut self) -> Result<()> {
@@ -366,6 +392,28 @@ impl Agent {
     {
         let mut tool_results = Vec::new();
         for tool_call in tool_calls {
+            if tool_call.name == "bash" && matches!(self.bash_approval_mode, BashApprovalMode::Suggestion) {
+                let command = tool_call
+                    .input
+                    .get("command")
+                    .and_then(Value::as_str)
+                    .unwrap_or("<command>");
+                let suggestion_text = format!(
+                    "Approval required before running bash.\nSuggested command: {}\nSwitch approval to always before executing.",
+                    command
+                );
+                report(AgentEvent::ToolResult {
+                    name: tool_call.name.clone(),
+                    content: suggestion_text.clone(),
+                    is_error: true,
+                });
+                tool_results.push(tool_result_message(
+                    &tool_call.id,
+                    suggestion_text,
+                    true,
+                ));
+                continue;
+            }
             if !self.is_tool_allowed_in_current_mode(&tool_call.name) {
                 let error_text = format!(
                     "Error: tool '{}' is unavailable in {} mode. Inspect with read-only tools and return a plan instead.",
@@ -462,12 +510,14 @@ impl Agent {
 
     fn capture_plan_from_text(&mut self, text: &str) {
         let Some((steps, explanation)) = parse_plan_block(text) else {
+            self.pending_user_input = parse_request_user_input_block(text);
             return;
         };
         if !steps.is_empty() {
             self.current_plan = steps;
         }
         self.plan_explanation = explanation;
+        self.pending_user_input = parse_request_user_input_block(text);
     }
 }
 
@@ -506,6 +556,45 @@ fn parse_plan_block(text: &str) -> Option<(Vec<PlanStep>, Option<String>)> {
     ))
 }
 
+fn parse_request_user_input_block(text: &str) -> Option<PendingUserInput> {
+    let start = text.find("<request_user_input>")?;
+    let end = text.find("</request_user_input>")?;
+    if end <= start {
+        return None;
+    }
+
+    let block = &text[start + "<request_user_input>".len()..end];
+    let mut question = None;
+    let mut options = Vec::new();
+    for line in block.lines().map(str::trim).filter(|line| !line.is_empty()) {
+        if let Some(value) = line.strip_prefix("question:") {
+            question = Some(value.trim().to_string());
+            continue;
+        }
+        if let Some(value) = line.strip_prefix("option:") {
+            let value = value.trim();
+            if let Some((label, description)) = value.split_once('|') {
+                options.push((label.trim().to_string(), description.trim().to_string()));
+            } else {
+                options.push((value.to_string(), String::new()));
+            }
+        }
+    }
+
+    let note = text[end + "</request_user_input>".len()..]
+        .trim()
+        .strip_prefix("</plan>")
+        .unwrap_or(text[end + "</request_user_input>".len()..].trim())
+        .trim()
+        .to_string();
+
+    Some(PendingUserInput {
+        question: question?,
+        options,
+        note: (!note.is_empty()).then_some(note),
+    })
+}
+
 fn tool_continuation_message() -> Message {
     Message {
         role: "user".to_string(),
@@ -530,7 +619,7 @@ fn tool_result_message(tool_use_id: &str, content: String, is_error: bool) -> Me
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_plan_block, tool_continuation_message, Agent, AgentExecutionMode, AnthropicResponse, ContentBlock, Message, PlanStep, PlanStepStatus, TokenUsage};
+    use super::{parse_plan_block, parse_request_user_input_block, tool_continuation_message, Agent, AgentExecutionMode, AnthropicResponse, ContentBlock, Message, PendingUserInput, PlanStep, PlanStepStatus, TokenUsage};
     use crate::llm::LlmBackend;
     use crate::session::SessionManager;
     use crate::tool::{Tool, ToolError, ToolManager};
@@ -761,6 +850,29 @@ mod tests {
         assert_eq!(
             parsed.1.as_deref(),
             Some("Focus on agent.rs and tui/runtime.rs first.")
+        );
+    }
+
+    #[test]
+    fn parses_request_user_input_block() {
+        let text = "<request_user_input>\nquestion: Which path should we take first?\noption: Minimal | Keep the diff small and local.\noption: Broad | Reshape the module boundaries now.\n</request_user_input>\nNeed direction before editing.";
+        let parsed = parse_request_user_input_block(text).expect("question block should parse");
+        assert_eq!(
+            parsed,
+            PendingUserInput {
+                question: "Which path should we take first?".to_string(),
+                options: vec![
+                    (
+                        "Minimal".to_string(),
+                        "Keep the diff small and local.".to_string(),
+                    ),
+                    (
+                        "Broad".to_string(),
+                        "Reshape the module boundaries now.".to_string(),
+                    ),
+                ],
+                note: Some("Need direction before editing.".to_string()),
+            }
         );
     }
 }

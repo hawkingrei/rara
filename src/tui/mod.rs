@@ -30,6 +30,7 @@ use self::runtime::{
 use self::state::{
     current_model_presets, HelpTab, Overlay, PROVIDER_FAMILIES, TuiApp, MODEL_GUIDE_OPTIONS,
 };
+use crate::agent::AgentExecutionMode;
 
 pub async fn run_tui(agent: Agent, oauth_manager: OAuthManager) -> anyhow::Result<()> {
     enable_raw_mode()?;
@@ -361,9 +362,52 @@ async fn handle_submit(
     } else if input.trim_start().starts_with('/') {
         app.push_notice(format!("Unknown command '{}'. Use /help.", input.trim()));
     } else if let Some(agent) = agent_slot.take() {
+        if matches!(app.agent_execution_mode, AgentExecutionMode::Execute)
+            && should_auto_enter_plan_mode(&input)
+        {
+            app.set_agent_execution_mode(AgentExecutionMode::Plan);
+            app.push_notice("Auto-entered plan mode for a complex task.");
+        }
         start_query_task(app, input.trim().to_string(), agent);
     }
     Ok(false)
+}
+
+fn should_auto_enter_plan_mode(input: &str) -> bool {
+    let trimmed = input.trim();
+    if trimmed.len() >= 80 {
+        return true;
+    }
+
+    let lowered = trimmed.to_ascii_lowercase();
+    let keywords = [
+        "plan",
+        "review",
+        "architecture",
+        "refactor",
+        "improve",
+        "analyze",
+        "codebase",
+        "repository",
+        "repo",
+    ];
+    if keywords.iter().any(|keyword| lowered.contains(keyword)) {
+        return true;
+    }
+
+    [
+        "看一下当前的代码",
+        "看看代码",
+        "当前目录",
+        "当前项目",
+        "还有什么值得改进",
+        "修改建议",
+        "架构",
+        "重构",
+        "优化一下",
+    ]
+    .iter()
+    .any(|keyword| trimmed.contains(keyword))
 }
 
 fn clamp_command_palette_selection(app: &mut TuiApp) {

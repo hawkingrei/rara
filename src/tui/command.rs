@@ -7,7 +7,7 @@ use super::state::{
     PROVIDER_FAMILIES,
 };
 
-pub const COMMAND_SPECS: [CommandSpec; 9] = [
+pub const COMMAND_SPECS: [CommandSpec; 10] = [
     CommandSpec {
         category: "Session",
         name: "help",
@@ -35,6 +35,13 @@ pub const COMMAND_SPECS: [CommandSpec; 9] = [
         usage: "/plan",
         summary: "Toggle read-only planning mode.",
         detail: "Toggle the active agent between plan mode and normal execution. In plan mode, read-only inspection tools stay available, but editing, shell execution, memory writes, and sub-agent launch tools are hidden and blocked.",
+    },
+    CommandSpec {
+        category: "Session",
+        name: "approval",
+        usage: "/approval",
+        summary: "Toggle bash approval between suggestion and always.",
+        detail: "Toggle bash execution between suggestion-only mode and always-run mode. Suggestion mode keeps bash inside the plan/approval flow instead of executing immediately.",
     },
     CommandSpec {
         category: "Setup",
@@ -89,6 +96,7 @@ pub fn parse_local_command(input: &str) -> Option<LocalCommand> {
         "status" => LocalCommandKind::Status,
         "clear" => LocalCommandKind::Clear,
         "plan" => LocalCommandKind::Plan,
+        "approval" => LocalCommandKind::Approval,
         "setup" => LocalCommandKind::Setup,
         "model" => LocalCommandKind::Model,
         "base-url" => LocalCommandKind::BaseUrl,
@@ -125,7 +133,7 @@ pub fn recommended_commands(app: &TuiApp) -> Vec<&'static CommandSpec> {
     let names: &[&str] = if app.is_busy() {
         &["status", "help", "clear"]
     } else {
-        &["plan", "model", "base-url", "status", "help", "clear", "setup"]
+        &["plan", "approval", "model", "base-url", "status", "help", "clear", "setup"]
     };
     names
         .iter()
@@ -171,7 +179,7 @@ pub fn command_detail_text(spec: &CommandSpec) -> String {
 }
 
 pub fn general_help_text() -> &'static str {
-    "RARA uses a single composer as the control surface.\n\nNormal input goes to the current agent.\nSlash commands stay local and open overlays or update runtime state.\n\nModes:\n  /plan toggles read-only planning mode\n\nEditing:\n  apply_patch is the default tool for updating existing files\n  write_file is for new files or full rewrites\n  replace is only a simple fallback for unique string swaps\n\nKeyboard:\n  Enter submit current composer input\n  Esc close the current overlay only\n  Up/Down or j/k move inside lists\n  1/2/3 switch help tabs or choose guided model options\n\nExit:\n  /quit or /exit leave the TUI."
+    "RARA uses a single composer as the control surface.\n\nNormal input goes to the current agent.\nSlash commands stay local and open overlays or update runtime state.\n\nModes:\n  /plan toggles read-only planning mode\n  /approval toggles bash approval between suggestion and always\n\nEditing:\n  apply_patch is the default tool for updating existing files\n  write_file is for new files or full rewrites\n  replace is only a simple fallback for unique string swaps\n\nKeyboard:\n  Enter submit current composer input\n  Esc close the current overlay only\n  Up/Down or j/k move inside lists\n  1/2/3 switch help tabs or choose guided model options\n\nExit:\n  /quit or /exit leave the TUI."
 }
 
 fn command_score(spec: &CommandSpec, query: &str) -> Option<u8> {
@@ -217,7 +225,7 @@ pub fn help_text() -> String {
         .collect::<Vec<_>>()
         .join("\n");
     format!(
-        "Built-in commands:\n{}\n\nModes:\n  /plan      toggle read-only planning mode\n\nEditing:\n  apply_patch  preferred for editing existing files\n  write_file   use for new files or full rewrites\n  replace      simple fallback for unique string replacement\n\nKeyboard:\n  Enter submit\n  Esc close current overlay\n  S open setup\n\nExit:\n  /quit\n  /exit\n\nModel switching:\n  /model\n\nProvider URL:\n  /base-url",
+        "Built-in commands:\n{}\n\nModes:\n  /plan      toggle read-only planning mode\n  /approval  toggle bash approval mode\n\nEditing:\n  apply_patch  preferred for editing existing files\n  write_file   use for new files or full rewrites\n  replace      simple fallback for unique string replacement\n\nKeyboard:\n  Enter submit\n  Esc close current overlay\n  S open setup\n\nExit:\n  /quit\n  /exit\n\nModel switching:\n  /model\n\nProvider URL:\n  /base-url",
         commands
     )
 }
@@ -246,12 +254,13 @@ pub fn status_runtime_text(app: &TuiApp) -> String {
         ("remote".to_string(), "-".to_string())
     };
     format!(
-        "provider={}\nmodel={}\nbase_url={}\nrevision={}\nagent_mode={}\nmode={}\napi_key={}\nthinking={}\ndevice={}\ndtype={}\nphase={}\ndetail={}",
+        "provider={}\nmodel={}\nbase_url={}\nrevision={}\nagent_mode={}\nbash_approval={}\nmode={}\napi_key={}\nthinking={}\ndevice={}\ndtype={}\nphase={}\ndetail={}",
         app.config.provider,
         app.current_model_label(),
         app.config.base_url.as_deref().unwrap_or("-"),
         app.config.revision.as_deref().unwrap_or("main"),
         app.agent_execution_mode_label(),
+        app.bash_approval_mode_label(),
         mode,
         api_key_status(&app.config),
         thinking,
@@ -410,6 +419,7 @@ pub fn quick_actions_text() -> &'static str {
      /base-url  open the provider URL editor\n\
      /status    inspect runtime and workspace\n\
      /plan      toggle read-only planning mode\n\
+     /approval  toggle bash approval mode\n\
      /clear     reset the visible transcript\n\
      /setup     open fallback setup\n\
      /quit      leave the TUI"
@@ -465,6 +475,57 @@ pub fn status_plan_text(app: &TuiApp) -> String {
     } else {
         format!("steps:\n{}", steps)
     }
+}
+
+pub fn status_request_user_input_text(app: &TuiApp) -> String {
+    let Some((question, options, note)) = app.snapshot.pending_question.as_ref() else {
+        return "No pending structured question.".to_string();
+    };
+
+    let options_text = if options.is_empty() {
+        "No predefined options.".to_string()
+    } else {
+        options
+            .iter()
+            .enumerate()
+            .map(|(idx, (label, description))| {
+                if description.is_empty() {
+                    format!("{}. {}", idx + 1, label)
+                } else {
+                    format!("{}. {} — {}", idx + 1, label, description)
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+
+    if let Some(note) = note {
+        format!("question:\n{}\n\noptions:\n{}\n\nnote:\n{}", question, options_text, note)
+    } else {
+        format!("question:\n{}\n\noptions:\n{}", question, options_text)
+    }
+}
+
+pub fn current_turn_preview(app: &TuiApp, limit: usize) -> String {
+    let Some(last_user_idx) = app
+        .transcript
+        .iter()
+        .rposition(|(role, _)| role == "You")
+    else {
+        return "No active turn yet.".to_string();
+    };
+
+    app.transcript
+        .iter()
+        .skip(last_user_idx)
+        .take(limit)
+        .map(|(role, message)| {
+            let first_line = message.lines().next().unwrap_or("").trim();
+            let preview = if first_line.is_empty() { "(empty)" } else { first_line };
+            format!("{role}: {preview}")
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 pub fn model_help_text(app: &TuiApp) -> String {
@@ -562,6 +623,12 @@ mod tests {
     fn parses_plan_command() {
         let plan = parse_local_command("/plan").expect("plan should parse");
         assert!(matches!(plan.kind, LocalCommandKind::Plan));
+    }
+
+    #[test]
+    fn parses_approval_command() {
+        let approval = parse_local_command("/approval").expect("approval should parse");
+        assert!(matches!(approval.kind, LocalCommandKind::Approval));
     }
 
     #[test]

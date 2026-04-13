@@ -3,7 +3,7 @@ use std::time::Instant;
 
 use tokio::sync::mpsc;
 
-use crate::agent::{Agent, AgentEvent, AgentExecutionMode, AgentOutputMode};
+use crate::agent::{Agent, AgentEvent, AgentExecutionMode, AgentOutputMode, BashApprovalMode};
 use crate::llm::LlmBackend;
 use crate::oauth::OAuthManager;
 use crate::sandbox::SandboxManager;
@@ -41,6 +41,7 @@ pub async fn execute_local_command(
         LocalCommandKind::Status => "status",
         LocalCommandKind::Clear => "clear",
         LocalCommandKind::Plan => "plan",
+        LocalCommandKind::Approval => "approval",
         LocalCommandKind::Setup => "setup",
         LocalCommandKind::Model => "model",
         LocalCommandKind::BaseUrl => "base-url",
@@ -83,6 +84,22 @@ pub async fn execute_local_command(
             }
             app.push_notice(notice);
         }
+        LocalCommandKind::Approval => {
+            let next_mode = match app.bash_approval_mode {
+                BashApprovalMode::Suggestion => BashApprovalMode::Always,
+                BashApprovalMode::Always => BashApprovalMode::Suggestion,
+            };
+            app.bash_approval_mode = next_mode;
+            if let Some(agent) = agent_slot.as_mut() {
+                agent.set_bash_approval_mode(next_mode);
+            }
+            let notice = match next_mode {
+                BashApprovalMode::Always => "Bash approval set to always.",
+                BashApprovalMode::Suggestion => "Bash approval set to suggestion.",
+            };
+            app.set_runtime_phase(RuntimePhase::LocalCommand, Some("updating approval mode".into()));
+            app.push_notice(notice);
+        }
         LocalCommandKind::Setup => {
             app.set_runtime_phase(RuntimePhase::LocalCommand, Some("opening setup".into()));
             app.open_overlay(Overlay::Setup);
@@ -109,6 +126,8 @@ pub async fn execute_local_command(
 
 pub fn start_query_task(app: &mut TuiApp, prompt: String, mut agent: Agent) {
     let (sender, receiver) = mpsc::unbounded_channel();
+    agent.set_execution_mode(app.agent_execution_mode);
+    agent.set_bash_approval_mode(app.bash_approval_mode);
     app.notice = Some("Running prompt.".into());
     app.set_runtime_phase(RuntimePhase::SendingPrompt, Some("sending prompt".into()));
     app.push_entry("You", prompt.clone());
@@ -247,6 +266,7 @@ pub async fn finish_running_task_if_ready(
             Ok(agent) => {
                 let mut agent = agent;
                 agent.set_execution_mode(app.agent_execution_mode);
+                agent.set_bash_approval_mode(app.bash_approval_mode);
                 app.config_manager.save(&app.config)?;
                 app.setup_status = Some(format!(
                     "Applied {} / {}",

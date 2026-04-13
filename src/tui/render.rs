@@ -8,9 +8,9 @@ use ratatui::{
 
 use super::command::{
     api_key_status, command_detail_text, command_spec_by_index, general_help_text, help_text,
-    download_status_text, matching_commands, model_help_text, palette_command_by_index,
+    current_turn_preview, download_status_text, matching_commands, model_help_text, palette_command_by_index,
     palette_commands, quick_actions_text, recent_transcript_preview, status_prompt_sources_text,
-    status_plan_text, status_resources_text, status_runtime_text, status_workspace_text,
+    status_plan_text, status_request_user_input_text, status_resources_text, status_runtime_text, status_workspace_text,
 };
 use super::state::{
     current_model_presets, HelpTab, Overlay, PROVIDER_FAMILIES, TaskKind, TuiApp,
@@ -527,7 +527,7 @@ fn command_palette_item(
 fn render_status_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(8), Constraint::Length(6), Constraint::Length(8), Constraint::Min(6), Constraint::Length(2)])
+        .constraints([Constraint::Length(8), Constraint::Length(6), Constraint::Length(8), Constraint::Length(8), Constraint::Min(6), Constraint::Length(2)])
         .split(area);
     let top = Layout::default()
         .direction(Direction::Horizontal)
@@ -585,16 +585,32 @@ fn render_status_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
             .wrap(Wrap { trim: false }),
         chunks[2],
     );
+    let lower = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .split(chunks[3]);
+    f.render_widget(
+        Paragraph::new(status_request_user_input_text(app))
+            .block(Block::default().borders(Borders::ALL).title(" Request Input "))
+            .wrap(Wrap { trim: false }),
+        lower[0],
+    );
+    f.render_widget(
+        Paragraph::new(current_turn_preview(app, 10))
+            .block(Block::default().borders(Borders::ALL).title(" Current Turn "))
+            .wrap(Wrap { trim: false }),
+        lower[1],
+    );
     f.render_widget(
         Paragraph::new(recent_transcript_preview(app, 8))
             .block(Block::default().borders(Borders::ALL).title(" Recent Activity "))
             .wrap(Wrap { trim: false }),
-        chunks[3],
+        chunks[4],
     );
     f.render_widget(
         Paragraph::new("Esc close  Enter close  /help commands  /model switch runtime")
             .alignment(Alignment::Center),
-        chunks[4],
+        chunks[5],
     );
 }
 

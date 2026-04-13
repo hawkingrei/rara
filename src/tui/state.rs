@@ -2,7 +2,7 @@ use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::task::JoinHandle;
 use std::time::Instant;
 
-use crate::agent::{Agent, AgentExecutionMode};
+use crate::agent::{Agent, AgentExecutionMode, BashApprovalMode};
 use crate::config::{ConfigManager, RaraConfig};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -36,6 +36,7 @@ pub enum LocalCommandKind {
     Status,
     Clear,
     Plan,
+    Approval,
     Setup,
     Model,
     BaseUrl,
@@ -88,6 +89,7 @@ pub struct RuntimeSnapshot {
     pub total_output_tokens: u32,
     pub plan_steps: Vec<(String, String)>,
     pub plan_explanation: Option<String>,
+    pub pending_question: Option<(String, Vec<(String, String)>, Option<String>)>,
 }
 
 pub enum TaskKind {
@@ -175,6 +177,7 @@ pub struct TuiApp {
     pub runtime_phase_detail: Option<String>,
     pub snapshot: RuntimeSnapshot,
     pub agent_execution_mode: AgentExecutionMode,
+    pub bash_approval_mode: BashApprovalMode,
     pub provider_picker_idx: usize,
     pub model_picker_idx: usize,
     pub model_guide_idx: usize,
@@ -206,6 +209,7 @@ impl TuiApp {
             runtime_phase_detail: None,
             snapshot: RuntimeSnapshot::default(),
             agent_execution_mode: AgentExecutionMode::Execute,
+            bash_approval_mode: BashApprovalMode::Suggestion,
             provider_picker_idx,
             model_picker_idx,
             model_guide_idx: 0,
@@ -283,8 +287,16 @@ impl TuiApp {
                 })
                 .collect(),
             plan_explanation: agent.plan_explanation.clone(),
+            pending_question: agent.pending_user_input.as_ref().map(|question| {
+                (
+                    question.question.clone(),
+                    question.options.clone(),
+                    question.note.clone(),
+                )
+            }),
         };
         self.agent_execution_mode = agent.execution_mode;
+        self.bash_approval_mode = agent.bash_approval_mode;
     }
 
     pub fn push_entry(&mut self, role: &'static str, message: impl Into<String>) {
@@ -361,6 +373,13 @@ impl TuiApp {
         match self.agent_execution_mode {
             AgentExecutionMode::Execute => "execute",
             AgentExecutionMode::Plan => "plan",
+        }
+    }
+
+    pub fn bash_approval_mode_label(&self) -> &'static str {
+        match self.bash_approval_mode {
+            BashApprovalMode::Always => "always",
+            BashApprovalMode::Suggestion => "suggestion",
         }
     }
 
