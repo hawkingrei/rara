@@ -214,6 +214,14 @@ pub(crate) async fn build_backend_with_progress(
                 .unwrap_or_else(|| "http://localhost:8080".to_string()),
             model: config.model.clone().unwrap_or_else(|| "codex".to_string()),
         })),
+        "ollama" => Ok(Box::new(OpenAiCompatibleBackend {
+            api_key: config.api_key.clone().unwrap_or_default(),
+            base_url: config
+                .base_url
+                .clone()
+                .unwrap_or_else(|| "http://localhost:11434/v1".to_string()),
+            model: config.model.clone().unwrap_or_else(|| "gemma4:e4b".to_string()),
+        })),
         "gemini" => Ok(Box::new(GeminiBackend {
             api_key: config.api_key.clone().expect("API key required for Gemini"),
             model: config

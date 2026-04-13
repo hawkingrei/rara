@@ -40,7 +40,7 @@ pub struct OpenAiCompatibleBackend {
 impl LlmBackend for OpenAiCompatibleBackend {
     async fn ask(&self, messages: &[Message], tools: &[Value]) -> Result<AnthropicResponse> {
         let client = reqwest::Client::new();
-        let openai_messages: Vec<Value> = messages.iter().map(|m| json!({ "role": m.role, "content": m.content })).collect();
+        let openai_messages = to_openai_messages(messages);
         let openai_tools: Vec<Value> = tools.iter().map(|t| json!({
             "type": "function", "function": { "name": t["name"], "description": t["description"], "parameters": t["input_schema"] }
         })).collect();
@@ -48,21 +48,27 @@ impl LlmBackend for OpenAiCompatibleBackend {
         let mut body = json!({ "model": self.model, "messages": openai_messages });
         if !openai_tools.is_empty() { body["tools"] = json!(openai_tools); }
 
-        let res = client.post(&format!("{}/v1/chat/completions", self.base_url.trim_end_matches('/')))
-            .header("Authorization", format!("Bearer {}", self.api_key))
-            .json(&body).send().await?;
+        let mut request = client.post(&format!("{}/v1/chat/completions", self.base_url.trim_end_matches('/')));
+        if !self.api_key.is_empty() {
+            request = request.header("Authorization", format!("Bearer {}", self.api_key));
+        }
+        let res = request.json(&body).send().await?;
 
         if !res.status().is_success() { return Err(anyhow!("API Error: {}", res.text().await?)); }
         let resp_json: Value = res.json().await?;
         let choice = &resp_json["choices"][0]["message"];
         let mut content = Vec::new();
-        if let Some(text) = choice["content"].as_str() { content.push(ContentBlock::Text { text: text.to_string() }); }
+        if let Some(text) = extract_message_text(choice.get("content")) {
+            if !text.trim().is_empty() {
+                content.push(ContentBlock::Text { text });
+            }
+        }
         if let Some(tool_calls) = choice["tool_calls"].as_array() {
             for tc in tool_calls {
                 content.push(ContentBlock::ToolUse {
                     id: tc["id"].as_str().unwrap_or_default().to_string(),
                     name: tc["function"]["name"].as_str().unwrap_or_default().to_string(),
-                    input: serde_json::from_str(tc["function"]["arguments"].as_str().unwrap_or("{}"))?,
+                    input: parse_tool_arguments(&tc["function"]["arguments"])?,
                 });
             }
         }
@@ -80,9 +86,11 @@ impl LlmBackend for OpenAiCompatibleBackend {
     async fn embed(&self, text: &str) -> Result<Vec<f32>> {
         let client = reqwest::Client::new();
         let body = json!({ "model": "text-embedding-3-small", "input": text });
-        let res = client.post(&format!("{}/v1/embeddings", self.base_url.trim_end_matches('/')))
-            .header("Authorization", format!("Bearer {}", self.api_key))
-            .json(&body).send().await?;
+        let mut request = client.post(&format!("{}/v1/embeddings", self.base_url.trim_end_matches('/')));
+        if !self.api_key.is_empty() {
+            request = request.header("Authorization", format!("Bearer {}", self.api_key));
+        }
+        let res = request.json(&body).send().await?;
         let resp_json: Value = res.json().await?;
         let embedding = resp_json["data"][0]["embedding"].as_array()
             .ok_or_else(|| anyhow!("Failed to parse embedding"))?
@@ -94,12 +102,160 @@ impl LlmBackend for OpenAiCompatibleBackend {
         let client = reqwest::Client::new();
         let mut msgs = messages.to_vec();
         msgs.push(Message { role: "user".to_string(), content: json!("Summarize concisely.") });
-        let body = json!({ "model": self.model, "messages": msgs });
-        let res = client.post(&format!("{}/v1/chat/completions", self.base_url.trim_end_matches('/')))
-            .header("Authorization", format!("Bearer {}", self.api_key))
-            .json(&body).send().await?;
+        let body = json!({ "model": self.model, "messages": to_openai_messages(&msgs) });
+        let mut request = client.post(&format!("{}/v1/chat/completions", self.base_url.trim_end_matches('/')));
+        if !self.api_key.is_empty() {
+            request = request.header("Authorization", format!("Bearer {}", self.api_key));
+        }
+        let res = request.json(&body).send().await?;
         let resp_json: Value = res.json().await?;
-        Ok(resp_json["choices"][0]["message"]["content"].as_str().unwrap_or("").to_string())
+        Ok(extract_message_text(resp_json["choices"][0]["message"].get("content")).unwrap_or_default())
+    }
+}
+
+fn to_openai_messages(messages: &[Message]) -> Vec<Value> {
+    let mut openai_messages = Vec::new();
+    for message in messages {
+        match message.role.as_str() {
+            "system" => openai_messages.push(json!({
+                "role": "system",
+                "content": render_openai_message_content(&message.content),
+            })),
+            "assistant" => openai_messages.push(render_openai_assistant_message(&message.content)),
+            "user" => {
+                if let Some(tool_result) = extract_tool_result_message(&message.content) {
+                    openai_messages.push(tool_result);
+                } else {
+                    openai_messages.push(json!({
+                        "role": "user",
+                        "content": render_openai_message_content(&message.content),
+                    }));
+                }
+            }
+            other => openai_messages.push(json!({
+                "role": other,
+                "content": render_openai_message_content(&message.content),
+            })),
+        }
+    }
+    openai_messages
+}
+
+fn render_openai_assistant_message(content: &Value) -> Value {
+    let mut text_parts = Vec::new();
+    let mut tool_calls = Vec::new();
+    if let Some(items) = content.as_array() {
+        for item in items {
+            match item.get("type").and_then(Value::as_str) {
+                Some("text") => {
+                    if let Some(text) = item.get("text").and_then(Value::as_str) {
+                        if !text.trim().is_empty() {
+                            text_parts.push(text.to_string());
+                        }
+                    }
+                }
+                Some("tool_use") => {
+                    tool_calls.push(json!({
+                        "id": item.get("id").and_then(Value::as_str).unwrap_or_default(),
+                        "type": "function",
+                        "function": {
+                            "name": item.get("name").and_then(Value::as_str).unwrap_or_default(),
+                            "arguments": serde_json::to_string(
+                                &item.get("input").cloned().unwrap_or_else(|| json!({}))
+                            ).unwrap_or_else(|_| "{}".to_string()),
+                        }
+                    }));
+                }
+                _ => {}
+            }
+        }
+    } else if let Some(text) = content.as_str() {
+        text_parts.push(text.to_string());
+    }
+
+    let mut message = json!({
+        "role": "assistant",
+        "content": if text_parts.is_empty() {
+            Value::Null
+        } else {
+            Value::String(text_parts.join("\n\n"))
+        },
+    });
+    if !tool_calls.is_empty() {
+        message["tool_calls"] = Value::Array(tool_calls);
+    }
+    message
+}
+
+fn extract_tool_result_message(content: &Value) -> Option<Value> {
+    let items = content.as_array()?;
+    if items.len() != 1 {
+        return None;
+    }
+    let item = &items[0];
+    if item.get("type").and_then(Value::as_str) != Some("tool_result") {
+        return None;
+    }
+    Some(json!({
+        "role": "tool",
+        "tool_call_id": item.get("tool_use_id").and_then(Value::as_str).unwrap_or_default(),
+        "content": item.get("content").and_then(Value::as_str).unwrap_or(""),
+    }))
+}
+
+fn render_openai_message_content(content: &Value) -> String {
+    if let Some(text) = content.as_str() {
+        return text.to_string();
+    }
+    if let Some(items) = content.as_array() {
+        let text_parts = items
+            .iter()
+            .filter_map(|item| match item.get("type").and_then(Value::as_str) {
+                Some("text") => item.get("text").and_then(Value::as_str).map(str::to_string),
+                Some("tool_result") => item
+                    .get("content")
+                    .and_then(Value::as_str)
+                    .map(|text| format!("tool_result: {text}")),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        if !text_parts.is_empty() {
+            return text_parts.join("\n\n");
+        }
+    }
+    content.to_string()
+}
+
+fn extract_message_text(content: Option<&Value>) -> Option<String> {
+    let content = content?;
+    if let Some(text) = content.as_str() {
+        return Some(text.to_string());
+    }
+    let items = content.as_array()?;
+    let texts = items
+        .iter()
+        .filter_map(|item| {
+            let item_type = item.get("type").and_then(Value::as_str)?;
+            if item_type == "text" {
+                item.get("text").and_then(Value::as_str).map(str::to_string)
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>();
+    if texts.is_empty() {
+        None
+    } else {
+        Some(texts.join("\n\n"))
+    }
+}
+
+fn parse_tool_arguments(arguments: &Value) -> Result<Value> {
+    match arguments {
+        Value::String(raw) => serde_json::from_str(raw).map_err(Into::into),
+        Value::Object(_) => Ok(arguments.clone()),
+        Value::Null => Ok(json!({})),
+        _ => Err(anyhow!("tool arguments must be a string or object")),
     }
 }
 
@@ -123,4 +279,58 @@ impl LlmBackend for GeminiBackend {
     async fn ask(&self, _: &[Message], _: &[Value]) -> Result<AnthropicResponse> { Err(anyhow!("Gemini pending")) }
     async fn embed(&self, _: &str) -> Result<Vec<f32>> { Err(anyhow!("Gemini pending")) }
     async fn summarize(&self, _: &[Message]) -> Result<String> { Err(anyhow!("Gemini pending")) }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{extract_message_text, parse_tool_arguments, to_openai_messages, Message};
+    use serde_json::json;
+
+    #[test]
+    fn converts_assistant_tool_history_to_openai_messages() {
+        let messages = vec![
+            Message {
+                role: "assistant".to_string(),
+                content: json!([
+                    {"type":"text","text":"Need a tool."},
+                    {"type":"tool_use","id":"tool-1","name":"read_file","input":{"path":"Cargo.toml"}}
+                ]),
+            },
+            Message {
+                role: "user".to_string(),
+                content: json!([
+                    {"type":"tool_result","tool_use_id":"tool-1","content":"[package]"}
+                ]),
+            },
+        ];
+
+        let openai_messages = to_openai_messages(&messages);
+        assert_eq!(openai_messages[0]["role"], "assistant");
+        assert_eq!(openai_messages[0]["tool_calls"][0]["function"]["name"], "read_file");
+        assert_eq!(openai_messages[1]["role"], "tool");
+        assert_eq!(openai_messages[1]["tool_call_id"], "tool-1");
+    }
+
+    #[test]
+    fn parses_tool_arguments_from_string_and_object() {
+        assert_eq!(
+            parse_tool_arguments(&json!("{\"path\":\"Cargo.toml\"}")).unwrap(),
+            json!({"path":"Cargo.toml"})
+        );
+        assert_eq!(
+            parse_tool_arguments(&json!({"path":"Cargo.toml"})).unwrap(),
+            json!({"path":"Cargo.toml"})
+        );
+    }
+
+    #[test]
+    fn extracts_text_from_openai_content_array() {
+        assert_eq!(
+            extract_message_text(Some(&json!([
+                {"type":"text","text":"hello"},
+                {"type":"text","text":"world"}
+            ]))),
+            Some("hello\n\nworld".to_string())
+        );
+    }
 }

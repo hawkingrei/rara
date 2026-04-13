@@ -314,6 +314,6 @@ fn teardown_terminal(
 pub(crate) fn provider_requires_api_key(provider: &str) -> bool {
     !matches!(
         provider,
-        "mock" | "local" | "local-candle" | "gemma4" | "qwen3" | "qwn3"
+        "mock" | "local" | "local-candle" | "gemma4" | "qwen3" | "qwn3" | "ollama"
     )
 }
