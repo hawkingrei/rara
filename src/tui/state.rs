@@ -14,7 +14,6 @@ pub enum HelpTab {
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Overlay {
-    Welcome,
     Help(HelpTab),
     CommandPalette,
     Status,
@@ -187,7 +186,7 @@ impl TuiApp {
         let overlay = if cfg.api_key.is_none() && super::provider_requires_api_key(&cfg.provider) {
             Some(Overlay::Setup)
         } else {
-            Some(Overlay::Welcome)
+            None
         };
         let provider_picker_idx = selected_provider_family_idx_for_config(&cfg);
         let model_picker_idx = selected_preset_idx_for_config(&cfg, provider_picker_idx);

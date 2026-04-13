@@ -283,7 +283,6 @@ fn render_overlay(f: &mut Frame, app: &TuiApp, overlay: Overlay) {
     let popup = centered_rect(78, 70, f.area());
     f.render_widget(Clear, popup);
     match overlay {
-        Overlay::Welcome => render_welcome_modal(f, app, popup),
         Overlay::Help(tab) => render_help_modal(f, app, popup, tab),
         Overlay::CommandPalette => render_command_palette(f, app, popup),
         Overlay::Status => render_status_modal(f, app, popup),
@@ -293,35 +292,6 @@ fn render_overlay(f: &mut Frame, app: &TuiApp, overlay: Overlay) {
         Overlay::ModelPicker => render_model_picker_modal(f, app, popup),
         Overlay::BaseUrlEditor => render_base_url_editor_modal(f, app, popup),
     }
-}
-
-fn render_welcome_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
-    let content = format!(
-        "RARA now uses a single chat composer as the control surface.\n\n\
-         Start here:\n\
-           - Type a task directly in the composer.\n\
-           - Use /help to browse built-in commands.\n\
-           - Use /model to switch local presets.\n\
-           - Use /status to inspect runtime state.\n\n\
-         Current runtime:\n\
-           provider={}\n\
-           model={}\n\
-           revision={}\n\
-           workspace={}\n\
-           branch={}\n\n\
-         Press Esc to close this welcome panel.",
-        app.config.provider,
-        app.current_model_label(),
-        app.config.revision.as_deref().unwrap_or("main"),
-        app.snapshot.cwd,
-        app.snapshot.branch,
-    );
-    f.render_widget(
-        Paragraph::new(content)
-            .block(Block::default().borders(Borders::ALL).title(" Welcome "))
-            .wrap(Wrap { trim: false }),
-        area,
-    );
 }
 
 fn render_help_modal(f: &mut Frame, app: &TuiApp, area: Rect, tab: HelpTab) {

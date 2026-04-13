@@ -75,12 +75,6 @@ pub async fn run_tui(agent: Agent, oauth_manager: OAuthManager) -> anyhow::Resul
 
 fn map_key_to_event(key: KeyCode, app: &TuiApp) -> AppEvent {
     match app.overlay {
-        Some(Overlay::Welcome) => match key {
-            KeyCode::Esc | KeyCode::Enter => AppEvent::CloseOverlay,
-            KeyCode::Char(c) => AppEvent::InputChar(c),
-            KeyCode::Backspace => AppEvent::Backspace,
-            _ => AppEvent::Noop,
-        },
         Some(Overlay::Help(_)) => match key {
             KeyCode::Esc => AppEvent::CloseOverlay,
             KeyCode::Char('1') => AppEvent::SelectHelpTab(HelpTab::General),
@@ -180,14 +174,6 @@ async fn dispatch_event(
         AppEvent::InputChar(c) => {
             if matches!(app.overlay, Some(Overlay::BaseUrlEditor)) {
                 app.base_url_input.push(c);
-            } else if matches!(app.overlay, Some(Overlay::Welcome)) {
-                app.close_overlay();
-                app.input.push(c);
-                if app.input.trim_start().starts_with('/') {
-                    app.open_overlay(Overlay::CommandPalette);
-                } else if matches!(app.overlay, Some(Overlay::CommandPalette)) {
-                    app.close_overlay();
-                }
             } else {
                 app.input.push(c);
                 if app.input.trim_start().starts_with('/') {
