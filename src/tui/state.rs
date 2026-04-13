@@ -383,6 +383,14 @@ impl TuiApp {
         }
     }
 
+    pub fn pending_question_option_label(&self, index: usize) -> Option<String> {
+        self.snapshot
+            .pending_question
+            .as_ref()
+            .and_then(|(_, options, _)| options.get(index))
+            .map(|(label, _)| label.clone())
+    }
+
     pub fn close_overlay(&mut self) {
         self.overlay = match self.overlay {
             Some(Overlay::BaseUrlEditor) => Some(Overlay::ModelPicker),

@@ -149,6 +149,15 @@ fn map_key_to_event(key: KeyCode, app: &TuiApp) -> AppEvent {
         None => match key {
             KeyCode::Esc => AppEvent::Noop,
             KeyCode::Enter => AppEvent::SubmitComposer,
+            KeyCode::Char('1') if app.input.is_empty() && app.snapshot.pending_question.is_some() => {
+                AppEvent::SelectPendingOption(0)
+            }
+            KeyCode::Char('2') if app.input.is_empty() && app.snapshot.pending_question.is_some() => {
+                AppEvent::SelectPendingOption(1)
+            }
+            KeyCode::Char('3') if app.input.is_empty() && app.snapshot.pending_question.is_some() => {
+                AppEvent::SelectPendingOption(2)
+            }
             KeyCode::Char('s') => AppEvent::OpenOverlay(Overlay::Setup),
             KeyCode::Backspace => AppEvent::Backspace,
             KeyCode::Char(c) => AppEvent::InputChar(c),
@@ -233,6 +242,16 @@ async fn dispatch_event(
             } else if matches!(app.overlay, Some(Overlay::ModelPicker)) && !app.is_busy() {
                 app.select_local_model(app.model_picker_idx);
                 start_rebuild_task(app);
+            }
+        }
+        AppEvent::SelectPendingOption(idx) => {
+            if app.is_busy() {
+                app.push_notice("Wait for the current task before answering the structured question.");
+            } else if let Some(label) = app.pending_question_option_label(idx) {
+                app.input = label;
+                if handle_submit(app, agent_slot, oauth_manager).await? {
+                    return Ok(true);
+                }
             }
         }
         AppEvent::CycleModelSelection => {

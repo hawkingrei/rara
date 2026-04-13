@@ -220,6 +220,7 @@ fn current_turn_lines(app: &TuiApp, current_turn_start: usize) -> Vec<Line<'stat
         for line in status_request_user_input_text(app).lines().take(8) {
             lines.push(Line::from(format!("  {line}")));
         }
+        lines.push(Line::from("  shortcuts: press 1/2/3 to answer immediately"));
         lines.push(Line::from(""));
     }
 
@@ -365,6 +366,8 @@ fn render_composer(f: &mut Frame, app: &TuiApp, area: Rect) {
         "slash command  Enter run highlighted command  Esc close overlay"
     } else if app.is_busy() {
         "runtime busy  wait for the current task to finish"
+    } else if app.snapshot.pending_question.is_some() {
+        "structured question pending  press 1/2/3 to answer or type your own response"
     } else if app.agent_execution_mode_label() == "plan" {
         "plan mode  read-only analysis  /plan return to implementation mode"
     } else {
