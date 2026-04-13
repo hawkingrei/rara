@@ -24,7 +24,6 @@ use crate::tools::workspace::UpdateProjectMemoryTool;
 use crate::vectordb::VectorDB;
 use crate::workspace::WorkspaceMemory;
 
-use super::command::{model_help_text, resolve_model_selection};
 use super::state::{
     HelpTab, LocalCommand, LocalCommandKind, Overlay, RunningTask, RuntimePhase, TaskCompletion,
     TaskKind, TuiApp, TuiEvent,
@@ -42,6 +41,7 @@ pub async fn execute_local_command(
         LocalCommandKind::Clear => "clear",
         LocalCommandKind::Setup => "setup",
         LocalCommandKind::Model => "model",
+        LocalCommandKind::BaseUrl => "base-url",
         LocalCommandKind::Login => "login",
         LocalCommandKind::Quit => "quit",
     });
@@ -63,6 +63,7 @@ pub async fn execute_local_command(
             app.open_overlay(Overlay::Setup);
         }
         LocalCommandKind::Model => handle_model_command(command.arg.as_deref(), app)?,
+        LocalCommandKind::BaseUrl => handle_base_url_command(command.arg.as_deref(), app)?,
         LocalCommandKind::Login => {
             if app.is_busy() {
                 app.push_notice("A task is already running. Wait for it to finish.");
@@ -278,25 +279,56 @@ fn emit_query_heartbeat(app: &mut TuiApp) {
 }
 
 fn handle_model_command(arg: Option<&str>, app: &mut TuiApp) -> anyhow::Result<()> {
+    if arg.map(str::trim).filter(|arg| !arg.is_empty()).is_some() {
+        app.push_notice("/model does not accept arguments. Use the interactive menu.");
+    }
+    app.open_overlay(Overlay::ModelGuide);
+    app.notice = Some("Opened model guide.".into());
+    Ok(())
+}
+
+fn handle_base_url_command(arg: Option<&str>, app: &mut TuiApp) -> anyhow::Result<()> {
     let Some(raw_arg) = arg.map(str::trim).filter(|arg| !arg.is_empty()) else {
-        app.open_overlay(Overlay::ModelGuide);
-        app.notice = Some("Opened model guide.".into());
+        let current = app
+            .config
+            .base_url
+            .as_deref()
+            .unwrap_or("unset");
+        app.push_notice(format!("Current base URL: {current}"));
         return Ok(());
     };
 
-    if raw_arg == "list" {
-        app.push_notice(model_help_text(app));
-        return Ok(());
+    match raw_arg {
+        "show" => {
+            let current = app
+                .config
+                .base_url
+                .as_deref()
+                .unwrap_or("unset");
+            app.push_notice(format!("Current base URL: {current}"));
+        }
+        "default" => {
+            app.config.base_url = Some("http://localhost:11434".to_string());
+            app.push_notice("Base URL reset to http://localhost:11434");
+        }
+        "clear" => {
+            app.config.base_url = None;
+            app.push_notice("Cleared provider base URL override.");
+        }
+        value => {
+            app.config.base_url = Some(value.to_string());
+            app.push_notice(format!("Updated base URL to {value}"));
+        }
     }
 
-    let Some((provider_idx, model_idx)) = resolve_model_selection(raw_arg, app) else {
-        app.push_notice(format!("Unknown model preset '{raw_arg}'. Try /model or /help."));
-        return Ok(());
-    };
-
-    app.provider_picker_idx = provider_idx;
-    app.select_local_model(model_idx);
-    start_rebuild_task(app);
+    app.config_manager.save(&app.config)?;
+    if app.config.provider == "ollama" {
+        if app.is_busy() {
+            app.push_notice("Saved base URL. Rebuild later to apply the new Ollama target.");
+        } else {
+            start_rebuild_task(app);
+        }
+    }
     Ok(())
 }
 

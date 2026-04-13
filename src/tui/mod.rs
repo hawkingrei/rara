@@ -138,7 +138,17 @@ fn map_key_to_event(key: KeyCode, app: &TuiApp) -> AppEvent {
             KeyCode::Char('1') => AppEvent::SetModelSelection(0),
             KeyCode::Char('2') => AppEvent::SetModelSelection(1),
             KeyCode::Char('3') => AppEvent::SetModelSelection(2),
+            KeyCode::Char('b') if app.provider_picker_idx == 1 => {
+                AppEvent::OpenOverlay(Overlay::BaseUrlEditor)
+            }
             KeyCode::Enter => AppEvent::ApplyOverlaySelection,
+            _ => AppEvent::Noop,
+        },
+        Some(Overlay::BaseUrlEditor) => match key {
+            KeyCode::Esc => AppEvent::CloseOverlay,
+            KeyCode::Enter => AppEvent::SaveBaseUrlInput,
+            KeyCode::Backspace => AppEvent::Backspace,
+            KeyCode::Char(c) => AppEvent::InputChar(c),
             _ => AppEvent::Noop,
         },
         None => match key {
@@ -168,18 +178,31 @@ async fn dispatch_event(
             }
         }
         AppEvent::InputChar(c) => {
-            if matches!(app.overlay, Some(Overlay::Welcome)) {
+            if matches!(app.overlay, Some(Overlay::BaseUrlEditor)) {
+                app.base_url_input.push(c);
+            } else if matches!(app.overlay, Some(Overlay::Welcome)) {
                 app.close_overlay();
-            }
-            app.input.push(c);
-            if app.input.trim_start().starts_with('/') {
-                app.open_overlay(Overlay::CommandPalette);
-            } else if matches!(app.overlay, Some(Overlay::CommandPalette)) {
-                app.close_overlay();
+                app.input.push(c);
+                if app.input.trim_start().starts_with('/') {
+                    app.open_overlay(Overlay::CommandPalette);
+                } else if matches!(app.overlay, Some(Overlay::CommandPalette)) {
+                    app.close_overlay();
+                }
+            } else {
+                app.input.push(c);
+                if app.input.trim_start().starts_with('/') {
+                    app.open_overlay(Overlay::CommandPalette);
+                } else if matches!(app.overlay, Some(Overlay::CommandPalette)) {
+                    app.close_overlay();
+                }
             }
         }
         AppEvent::Backspace => {
-            app.input.pop();
+            if matches!(app.overlay, Some(Overlay::BaseUrlEditor)) {
+                app.base_url_input.pop();
+            } else {
+                app.input.pop();
+            }
             if app.input.trim().is_empty() && matches!(app.overlay, Some(Overlay::CommandPalette)) {
                 app.close_overlay();
             }
@@ -228,6 +251,20 @@ async fn dispatch_event(
         AppEvent::CycleModelSelection => {
             app.cycle_local_model();
         }
+        AppEvent::SaveBaseUrlInput => {
+            let value = app.base_url_input.trim();
+            app.config.base_url = if value.is_empty() {
+                None
+            } else {
+                Some(value.to_string())
+            };
+            app.config_manager.save(&app.config)?;
+            app.notice = Some(format!(
+                "Saved base URL: {}",
+                app.config.base_url.as_deref().unwrap_or("unset")
+            ));
+            app.close_overlay();
+        }
         AppEvent::SelectHelpTab(tab) => {
             app.open_overlay(Overlay::Help(tab));
         }
@@ -262,6 +299,20 @@ async fn dispatch_event(
                 } else {
                     app.open_overlay(Overlay::ModelPicker);
                 }
+            }
+            Some(Overlay::BaseUrlEditor) => {
+                let value = app.base_url_input.trim();
+                app.config.base_url = if value.is_empty() {
+                    None
+                } else {
+                    Some(value.to_string())
+                };
+                app.config_manager.save(&app.config)?;
+                app.notice = Some(format!(
+                    "Saved base URL: {}",
+                    app.config.base_url.as_deref().unwrap_or("unset")
+                ));
+                app.close_overlay();
             }
             Some(Overlay::ModelPicker) => {
                 if app.is_busy() {

@@ -16,6 +16,7 @@ pub enum AppEvent {
     SetProviderSelection(usize),
     SetModelSelection(usize),
     CycleModelSelection,
+    SaveBaseUrlInput,
     SelectHelpTab(HelpTab),
     StartOAuth,
     ApplyOverlaySelection,

@@ -2,10 +2,10 @@ use crate::config::RaraConfig;
 
 use super::state::{
     current_model_presets, CommandSpec, LocalCommand, LocalCommandKind, ProviderFamily, TuiApp,
-    LOCAL_MODEL_PRESETS, OLLAMA_MODEL_PRESETS, PROVIDER_FAMILIES,
+    PROVIDER_FAMILIES,
 };
 
-pub const COMMAND_SPECS: [CommandSpec; 7] = [
+pub const COMMAND_SPECS: [CommandSpec; 8] = [
     CommandSpec {
         category: "Session",
         name: "help",
@@ -37,9 +37,16 @@ pub const COMMAND_SPECS: [CommandSpec; 7] = [
     CommandSpec {
         category: "Models",
         name: "model",
-        usage: "/model [name|1|2|3|next|list]",
-        summary: "Open the model guide or switch local model presets in place.",
-        detail: "Use without args to open the guided model flow. Use an explicit preset name or index to switch immediately and rebuild the backend in background.",
+        usage: "/model",
+        summary: "Open the guided provider and model switching flow.",
+        detail: "Open the interactive model flow. First choose a provider family, then choose a concrete model. Ollama base URL editing lives inside that flow.",
+    },
+    CommandSpec {
+        category: "Models",
+        name: "base-url",
+        usage: "/base-url [url|default|show|clear]",
+        summary: "Inspect or override the provider base URL.",
+        detail: "Use this mainly for Ollama. Without args it shows the current value. Use /base-url default to restore http://localhost:11434.",
     },
     CommandSpec {
         category: "Setup",
@@ -74,6 +81,7 @@ pub fn parse_local_command(input: &str) -> Option<LocalCommand> {
         "clear" => LocalCommandKind::Clear,
         "setup" => LocalCommandKind::Setup,
         "model" => LocalCommandKind::Model,
+        "base-url" => LocalCommandKind::BaseUrl,
         "login" => LocalCommandKind::Login,
         "quit" | "exit" => LocalCommandKind::Quit,
         _ => return None,
@@ -107,7 +115,7 @@ pub fn recommended_commands(app: &TuiApp) -> Vec<&'static CommandSpec> {
     let names: &[&str] = if app.is_busy() {
         &["status", "help", "clear"]
     } else {
-        &["model", "status", "help", "clear", "setup"]
+        &["model", "base-url", "status", "help", "clear", "setup"]
     };
     names
         .iter()
@@ -199,7 +207,7 @@ pub fn help_text() -> String {
         .collect::<Vec<_>>()
         .join("\n");
     format!(
-        "Built-in commands:\n{}\n\nKeyboard:\n  Enter submit\n  Esc close current overlay\n  S open setup\n\nExit:\n  /quit\n  /exit\n\nModel switching examples:\n  /model\n  /model list\n  /model qwen3-8b\n  /model gemma4:e4b\n  /model next",
+        "Built-in commands:\n{}\n\nKeyboard:\n  Enter submit\n  Esc close current overlay\n  S open setup\n\nExit:\n  /quit\n  /exit\n\nModel switching:\n  /model\n\nProvider URL examples:\n  /base-url\n  /base-url http://localhost:11434",
         commands
     )
 }
@@ -219,9 +227,10 @@ pub fn status_runtime_text(app: &TuiApp) -> String {
         ("remote".to_string(), "-".to_string())
     };
     format!(
-        "provider={}\nmodel={}\nrevision={}\nmode={}\napi_key={}\ndevice={}\ndtype={}\nphase={}\ndetail={}",
+        "provider={}\nmodel={}\nbase_url={}\nrevision={}\nmode={}\napi_key={}\ndevice={}\ndtype={}\nphase={}\ndetail={}",
         app.config.provider,
         app.current_model_label(),
+        app.config.base_url.as_deref().unwrap_or("-"),
         app.config.revision.as_deref().unwrap_or("main"),
         mode,
         api_key_status(&app.config),
@@ -342,6 +351,7 @@ fn download_stage_index(stage: &str) -> usize {
 pub fn quick_actions_text() -> &'static str {
     "/help      browse commands and keyboard hints\n\
      /model     open guided model switching\n\
+     /base-url  inspect or override provider URL\n\
      /status    inspect runtime and workspace\n\
      /clear     reset the visible transcript\n\
      /setup     open fallback setup\n\
@@ -401,51 +411,11 @@ pub fn model_help_text(app: &TuiApp) -> String {
         .collect::<Vec<_>>()
         .join("\n\n");
     format!(
-        "Current model: {} / {}\n\nAvailable presets:\n{}\n\nGemma 4 Candle presets are marked experimental.\n\nUse /model to open the guide, /model list to inspect providers, /model <name> to switch directly, or /model next to rotate within the current provider family.",
+        "Current model: {} / {}\n\nAvailable presets:\n{}\n\nGemma 4 Candle presets are marked experimental.\n\nUse /model to open the interactive provider and model flow.",
         app.config.provider,
         app.current_model_label(),
         lines
     )
-}
-
-pub fn resolve_model_selection(arg: &str, app: &TuiApp) -> Option<(usize, usize)> {
-    match arg {
-        "1" => Some((app.provider_picker_idx, 0)),
-        "2" => Some((app.provider_picker_idx, 1)),
-        "3" => Some((app.provider_picker_idx, 2)),
-        "next" => Some((
-            app.provider_picker_idx,
-            (app.selected_preset_idx() + 1) % current_model_presets(app.provider_picker_idx).len(),
-        )),
-        _ => current_model_presets(app.provider_picker_idx)
-            .iter()
-            .position(|(label, provider, model)| {
-                *model == arg
-                    || *provider == arg
-                    || normalize_command_token(label) == normalize_command_token(arg)
-                    || (*model == "qwn3-8b" && arg.eq_ignore_ascii_case("qwen3-8b"))
-                    || (*model == "gemma4-e4b" && arg.eq_ignore_ascii_case("gemma-4-e4b"))
-                    || (*model == "gemma4-e2b" && arg.eq_ignore_ascii_case("gemma-4-e2b"))
-            })
-            .map(|idx| (app.provider_picker_idx, idx))
-            .or_else(|| {
-                OLLAMA_MODEL_PRESETS.iter().position(|(label, provider, model)| {
-                    *model == arg
-                        || *provider == arg
-                        || normalize_command_token(label) == normalize_command_token(arg)
-                }).map(|idx| (1, idx))
-            })
-            .or_else(|| {
-                LOCAL_MODEL_PRESETS.iter().position(|(label, provider, model)| {
-                    *model == arg
-                        || *provider == arg
-                        || normalize_command_token(label) == normalize_command_token(arg)
-                        || (*model == "qwn3-8b" && arg.eq_ignore_ascii_case("qwen3-8b"))
-                        || (*model == "gemma4-e4b" && arg.eq_ignore_ascii_case("gemma-4-e4b"))
-                        || (*model == "gemma4-e2b" && arg.eq_ignore_ascii_case("gemma-4-e2b"))
-                }).map(|idx| (0, idx))
-            }),
-    }
 }
 
 pub fn api_key_status(config: &RaraConfig) -> &'static str {
@@ -462,6 +432,7 @@ pub fn is_local_provider(provider: &str) -> bool {
     matches!(provider, "local" | "local-candle" | "gemma4" | "qwen3" | "qwn3")
 }
 
+#[cfg(test)]
 pub fn normalize_command_token(value: &str) -> String {
     value
         .chars()
@@ -476,9 +447,9 @@ mod tests {
 
     #[test]
     fn parses_model_command_argument() {
-        let command = parse_local_command("/model qwen3-8b").expect("command should parse");
+        let command = parse_local_command("/model anything").expect("command should parse");
         assert!(matches!(command.kind, LocalCommandKind::Model));
-        assert_eq!(command.arg.as_deref(), Some("qwen3-8b"));
+        assert_eq!(command.arg.as_deref(), Some("anything"));
     }
 
     #[test]
@@ -493,6 +464,14 @@ mod tests {
 
         let exit = parse_local_command("/exit").expect("exit should parse");
         assert!(matches!(exit.kind, LocalCommandKind::Quit));
+    }
+
+    #[test]
+    fn parses_base_url_command_argument() {
+        let command =
+            parse_local_command("/base-url http://localhost:11434").expect("command should parse");
+        assert!(matches!(command.kind, LocalCommandKind::BaseUrl));
+        assert_eq!(command.arg.as_deref(), Some("http://localhost:11434"));
     }
 
     #[test]

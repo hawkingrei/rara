@@ -285,6 +285,7 @@ fn render_overlay(f: &mut Frame, app: &TuiApp, overlay: Overlay) {
         Overlay::ModelGuide => render_model_guide_modal(f, app, popup),
         Overlay::ProviderPicker => render_provider_picker_modal(f, app, popup),
         Overlay::ModelPicker => render_model_picker_modal(f, app, popup),
+        Overlay::BaseUrlEditor => render_base_url_editor_modal(f, app, popup),
     }
 }
 
@@ -605,13 +606,14 @@ fn render_setup_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
         .collect::<Vec<_>>()
         .join("\n");
     let text = format!(
-        "Provider: {}\nModel: {}\nAPI key: {}\nRevision: {}\n\n\
+        "Provider: {}\nModel: {}\nBase URL: {}\nAPI key: {}\nRevision: {}\n\n\
          Presets:\n{}\n\n\
          [1/2/3] Select preset\n[M] Cycle preset\n[Enter] Apply and rebuild\n[L] OAuth login\n[Esc] Close\n\n\
          Use /model for the full provider menu.\n\
          Recommended: Qwn3 8B for stable local use.",
         app.config.provider,
         app.current_model_label(),
+        app.config.base_url.as_deref().unwrap_or("-"),
         api_key_status(&app.config),
         app.config.revision.as_deref().unwrap_or("main"),
         preset_lines,
@@ -703,7 +705,8 @@ fn render_model_picker_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
         .split(area);
     f.render_widget(
         Paragraph::new(format!(
-            "Provider: {provider_label}\nSelect a concrete model preset. Enter applies immediately."
+            "Provider: {provider_label}\nBase URL: {}\nSelect a concrete model preset. Enter applies immediately.",
+            app.config.base_url.as_deref().unwrap_or("http://localhost:11434"),
         ))
             .block(Block::default().borders(Borders::ALL).title(" Model Picker ")),
         chunks[0],
@@ -713,10 +716,28 @@ fn render_model_picker_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
         chunks[1],
     );
     f.render_widget(
-        Paragraph::new("1/2/3 apply directly  Up/Down move  Enter apply  Esc close")
+        Paragraph::new("1/2/3 apply directly  Up/Down move  B edit base URL  Enter apply  Esc close")
             .alignment(Alignment::Center),
         chunks[2],
     );
+}
+
+fn render_base_url_editor_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(4), Constraint::Length(3), Constraint::Length(2)])
+        .split(area);
+    let intro = Paragraph::new(
+        "Edit the Ollama base URL for this provider.\nLeave it empty to clear the override. Default: http://localhost:11434",
+    )
+    .block(Block::default().borders(Borders::ALL).title(" Base URL "));
+    let editor = Paragraph::new(app.base_url_input.as_str())
+        .block(Block::default().borders(Borders::ALL).title(" Value "));
+    let footer = Paragraph::new("Enter save  Esc back to model picker")
+        .alignment(Alignment::Center);
+    f.render_widget(intro, chunks[0]);
+    f.render_widget(editor, chunks[1]);
+    f.render_widget(footer, chunks[2]);
 }
 
 fn render_model_guide_modal(f: &mut Frame, app: &TuiApp, area: Rect) {

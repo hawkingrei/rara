@@ -22,6 +22,7 @@ pub enum Overlay {
     ModelGuide,
     ProviderPicker,
     ModelPicker,
+    BaseUrlEditor,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -37,6 +38,7 @@ pub enum LocalCommandKind {
     Clear,
     Setup,
     Model,
+    BaseUrl,
     Login,
     Quit,
 }
@@ -174,6 +176,7 @@ pub struct TuiApp {
     pub model_picker_idx: usize,
     pub model_guide_idx: usize,
     pub command_palette_idx: usize,
+    pub base_url_input: String,
     pub recent_commands: Vec<String>,
     pub running_task: Option<RunningTask>,
 }
@@ -203,6 +206,7 @@ impl TuiApp {
             model_picker_idx,
             model_guide_idx: 0,
             command_palette_idx: 0,
+            base_url_input: String::new(),
             recent_commands: Vec::new(),
             running_task: None,
         }
@@ -230,11 +234,22 @@ impl TuiApp {
         self.model_picker_idx = idx;
         self.config.provider = provider.to_string();
         self.config.model = Some(model.to_string());
-        self.config.revision = if provider == "ollama" {
-            None
+        if provider == "ollama" {
+            self.config.revision = None;
+            if self
+                .config
+                .base_url
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .is_none()
+            {
+                self.config.base_url = Some("http://localhost:11434".to_string());
+            }
         } else {
-            Some("main".to_string())
-        };
+            self.config.revision = Some("main".to_string());
+            self.config.base_url = None;
+        }
     }
 
     pub fn cycle_local_model(&mut self) {
@@ -310,11 +325,21 @@ impl TuiApp {
         if matches!(overlay, Overlay::ModelPicker) {
             self.model_picker_idx = self.selected_preset_idx();
         }
+        if matches!(overlay, Overlay::BaseUrlEditor) {
+            self.base_url_input = self
+                .config
+                .base_url
+                .clone()
+                .unwrap_or_else(|| "http://localhost:11434".to_string());
+        }
         self.overlay = Some(overlay);
     }
 
     pub fn close_overlay(&mut self) {
-        self.overlay = None;
+        self.overlay = match self.overlay {
+            Some(Overlay::BaseUrlEditor) => Some(Overlay::ModelPicker),
+            _ => None,
+        };
     }
 }
 
