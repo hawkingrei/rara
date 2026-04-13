@@ -220,6 +220,15 @@ pub fn status_runtime_text(app: &TuiApp) -> String {
     };
     let phase = app.runtime_phase_label();
     let detail = app.runtime_phase_detail.as_deref().unwrap_or("-");
+    let thinking = if app.config.provider == "ollama" || app.config.provider == "ollama-native" {
+        if app.config.thinking.unwrap_or(true) {
+            "on"
+        } else {
+            "off"
+        }
+    } else {
+        "default"
+    };
     let (device, dtype) = if is_local_provider(&app.config.provider) {
         crate::local_backend::local_runtime_target()
             .unwrap_or_else(|_| ("unavailable".to_string(), "unavailable".to_string()))
@@ -227,13 +236,14 @@ pub fn status_runtime_text(app: &TuiApp) -> String {
         ("remote".to_string(), "-".to_string())
     };
     format!(
-        "provider={}\nmodel={}\nbase_url={}\nrevision={}\nmode={}\napi_key={}\ndevice={}\ndtype={}\nphase={}\ndetail={}",
+        "provider={}\nmodel={}\nbase_url={}\nrevision={}\nmode={}\napi_key={}\nthinking={}\ndevice={}\ndtype={}\nphase={}\ndetail={}",
         app.config.provider,
         app.current_model_label(),
         app.config.base_url.as_deref().unwrap_or("-"),
         app.config.revision.as_deref().unwrap_or("main"),
         mode,
         api_key_status(&app.config),
+        thinking,
         device,
         dtype,
         phase,

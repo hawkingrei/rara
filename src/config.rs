@@ -10,6 +10,7 @@ pub struct RaraConfig {
     pub base_url: Option<String>,
     pub model: Option<String>,
     pub revision: Option<String>,
+    pub thinking: Option<bool>,
 }
 
 pub struct ConfigManager {
@@ -35,6 +36,7 @@ impl ConfigManager {
         }
         RaraConfig {
             provider: "mock".to_string(),
+            thinking: Some(true),
             ..Default::default()
         }
     }

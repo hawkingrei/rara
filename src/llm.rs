@@ -40,6 +40,7 @@ pub struct OpenAiCompatibleBackend {
 pub struct OllamaBackend {
     pub base_url: String,
     pub model: String,
+    pub thinking: bool,
 }
 
 #[async_trait]
@@ -274,6 +275,7 @@ impl LlmBackend for OllamaBackend {
             "model": self.model,
             "messages": to_ollama_messages(messages),
             "stream": false,
+            "think": self.thinking,
         });
         if !tools.is_empty() {
             body["tools"] = Value::Array(
