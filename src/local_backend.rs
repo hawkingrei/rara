@@ -37,6 +37,7 @@ struct LocalRuntime {
     tokenizer: Tokenizer,
     device: Device,
     eos_token_ids: Vec<u32>,
+    context_window: usize,
 }
 
 enum LocalTextModel {
@@ -137,6 +138,7 @@ impl LocalLlmBackend {
         let vb = unsafe { VarBuilder::from_mmaped_safetensors(&weight_paths, dtype, &device)? };
         let model = spec.build_model(&raw_config, vb)?;
         let eos_token_ids = spec.eos_token_ids(&tokenizer)?;
+        let context_window = spec.context_window(&raw_config);
         report_progress(
             &progress,
             format!("Ready · {} loaded", spec.alias()),
@@ -149,6 +151,7 @@ impl LocalLlmBackend {
                 tokenizer,
                 device,
                 eos_token_ids,
+                context_window,
             })),
             max_new_tokens: 384,
         })
@@ -258,6 +261,7 @@ impl LocalRuntime {
                 output_tokens: 0,
             });
         }
+        let max_new_tokens = self.suggest_max_new_tokens(messages, tools, prompt_tokens.len(), max_new_tokens);
 
         let mut tokens = prompt_tokens.clone();
         let mut generated = Vec::new();
@@ -290,6 +294,22 @@ impl LocalRuntime {
             input_tokens: prompt_tokens.len() as u32,
             output_tokens: generated.len() as u32,
         })
+    }
+
+    fn suggest_max_new_tokens(
+        &self,
+        messages: &[Message],
+        tools: &[Value],
+        prompt_tokens: usize,
+        configured_cap: usize,
+    ) -> usize {
+        let scenario_cap = scenario_token_cap(messages, tools);
+        let safety_buffer = 256usize;
+        let safe_budget = self
+            .context_window
+            .saturating_sub(prompt_tokens.saturating_add(safety_buffer))
+            .max(48);
+        safe_budget.min(configured_cap).min(scenario_cap).max(48)
     }
 
     fn summarize(&mut self, messages: &[Message]) -> Result<String> {
@@ -408,6 +428,13 @@ impl LocalModelSpec {
             Self::Gemma4E4B => "google/gemma-4-E4B-it",
             Self::Qwen3_8B => "Qwen/Qwen3-8B",
         }
+    }
+
+    fn context_window(self, raw_config: &Value) -> usize {
+        extract_context_window(raw_config).unwrap_or_else(|| match self {
+            Self::Gemma4E2B | Self::Gemma4E4B => 8192,
+            Self::Qwen3_8B => 32768,
+        })
     }
 
     fn format_prompt(self, prompt: &str) -> String {
@@ -572,6 +599,54 @@ fn load_safetensors(repo: &ApiRepo) -> Result<Vec<PathBuf>> {
         return Err(anyhow!("no weight shards found in safetensors index"));
     }
     Ok(files.into_iter().collect())
+}
+
+fn extract_context_window(raw_config: &Value) -> Option<usize> {
+    [
+        raw_config.pointer("/text_config/max_position_embeddings"),
+        raw_config.pointer("/max_position_embeddings"),
+        raw_config.pointer("/text_config/sliding_window"),
+        raw_config.pointer("/sliding_window"),
+        raw_config.pointer("/text_config/model_max_length"),
+        raw_config.pointer("/model_max_length"),
+        raw_config.pointer("/seq_length"),
+    ]
+    .into_iter()
+    .flatten()
+    .find_map(|value| value.as_u64().map(|v| v as usize))
+}
+
+fn scenario_token_cap(messages: &[Message], tools: &[Value]) -> usize {
+    if !tools.is_empty() {
+        return 128;
+    }
+
+    let last_user_text = messages
+        .iter()
+        .rev()
+        .find(|message| message.role == "user")
+        .map(|message| render_content(&message.content))
+        .unwrap_or_default();
+    let normalized = last_user_text.to_ascii_lowercase();
+    let trimmed = last_user_text.trim();
+
+    if trimmed.chars().count() <= 12 {
+        96
+    } else if [
+        "summarize",
+        "summary",
+        "rewrite",
+        "explain in detail",
+        "detailed",
+        "long-form",
+    ]
+    .iter()
+    .any(|keyword| normalized.contains(keyword))
+    {
+        320
+    } else {
+        192
+    }
 }
 
 fn preferred_dtype(device: &Device) -> DType {
@@ -760,7 +835,10 @@ fn hashed_embedding(text: &str, dim: usize) -> Vec<f32> {
 
 #[cfg(test)]
 mod tests {
-    use super::{default_local_model_cache_dir, extract_json_object, parse_tool_aware_reply, render_content, LocalModelSpec};
+    use super::{
+        default_local_model_cache_dir, extract_context_window, extract_json_object,
+        parse_tool_aware_reply, render_content, scenario_token_cap, LocalModelSpec, Message,
+    };
     use serde_json::json;
 
     #[test]
@@ -812,5 +890,31 @@ mod tests {
         ]));
         assert!(rendered.contains("hello"));
         assert!(rendered.contains("tool_result(id=1): world"));
+    }
+
+    #[test]
+    fn extracts_context_window_from_text_config() {
+        let raw = json!({
+            "text_config": {
+                "max_position_embeddings": 32768
+            }
+        });
+        assert_eq!(extract_context_window(&raw), Some(32768));
+    }
+
+    #[test]
+    fn uses_smaller_budget_for_short_and_tool_prompts() {
+        let short_messages = vec![Message {
+            role: "user".to_string(),
+            content: json!([{"type": "text", "text": "你好"}]),
+        }];
+        assert_eq!(scenario_token_cap(&short_messages, &[]), 96);
+
+        let normal_messages = vec![Message {
+            role: "user".to_string(),
+            content: json!([{"type": "text", "text": "Explain this repository structure."}]),
+        }];
+        assert_eq!(scenario_token_cap(&normal_messages, &[json!({"name":"read_file"})]), 128);
+        assert_eq!(scenario_token_cap(&normal_messages, &[]), 192);
     }
 }
