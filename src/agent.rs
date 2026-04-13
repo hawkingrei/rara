@@ -16,6 +16,9 @@ const TOOL_CONTINUATION_PROMPT: &str =
 const PLAN_CONTINUATION_PROMPT: &str =
     "<agent_runtime>\nphase: plan_continuation_required\ninstructions:\n- Continue planning immediately.\n- Use read-only tools to inspect the repository before stopping.\n- Expand the plan into multiple concrete steps grounded in the inspected code.\n- Only stop planning when you have either gathered enough code context or need structured user input.\n- Do not ask the user to continue.\n</agent_runtime>";
 const MAX_PLAN_CONTINUATIONS_PER_TURN: usize = 2;
+const EXECUTE_CONTINUATION_PROMPT: &str =
+    "<agent_runtime>\nphase: execution_continuation_required\ninstructions:\n- Continue the same task immediately.\n- You already inspected part of the repository and should keep gathering the next relevant code context now.\n- If you mentioned a next file or next inspection step, call the tool for it directly.\n- Only stop when you can provide concrete, evidence-based suggestions or when structured user input is required.\n- Do not ask the user to continue.\n</agent_runtime>";
+const MAX_EXECUTE_CONTINUATIONS_PER_TURN: usize = 2;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AgentExecutionMode {
@@ -232,6 +235,8 @@ impl Agent {
             - When a tool is needed, emit the tool call directly.\n\
             - Do not announce a future tool call in prose.\n\
             - Do not say that you will use a tool such as 'list_files' or 'read_file'; actually call the tool instead.\n\
+            - For repository review or architecture analysis, keep inspecting relevant source files until you have enough concrete evidence for actionable suggestions.\n\
+            - Do not stop after saying which file you want to inspect next. Call the tool for that file immediately.\n\
             - Before the first tool call, a single short sentence of intent is enough. Do not narrate every step.\n\
             - After every tool result, decide the next step immediately: either call another tool or provide the final answer.\n\
             - Do not stop at an intermediate status update once tool results are available.\n\
@@ -380,6 +385,7 @@ impl Agent {
         let turn_start_idx = self.history.len();
         let mut tool_rounds = 0usize;
         let mut plan_continuations = 0usize;
+        let mut execute_continuations = 0usize;
         self.compact_if_needed_with_reporter(&mut report).await?;
         self.history = repair_tool_result_history(&self.history);
         self.clear_completed_interactions();
@@ -394,6 +400,7 @@ impl Agent {
             &mut report,
             &mut tool_rounds,
             &mut plan_continuations,
+            &mut execute_continuations,
         )
             .await?;
 
@@ -486,11 +493,13 @@ impl Agent {
     {
         let mut tool_rounds = 0usize;
         let mut plan_continuations = 0usize;
+        let mut execute_continuations = 0usize;
         self.run_agent_loop_with_limit(
             output_mode,
             report,
             &mut tool_rounds,
             &mut plan_continuations,
+            &mut execute_continuations,
         )
             .await
     }
@@ -501,6 +510,7 @@ impl Agent {
         report: &mut F,
         tool_rounds: &mut usize,
         plan_continuations: &mut usize,
+        execute_continuations: &mut usize,
     ) -> Result<()>
     where
         F: FnMut(AgentEvent),
@@ -525,6 +535,19 @@ impl Agent {
                             .to_string(),
                     ));
                     self.history.push(plan_continuation_message());
+                    continue;
+                }
+                if self.should_continue_execute_without_tools(
+                    &turn_output.assistant_text,
+                    *tool_rounds,
+                    *execute_continuations,
+                ) {
+                    *execute_continuations += 1;
+                    report(AgentEvent::Status(
+                        "Repository review needs more code inspection. Continuing the same turn."
+                            .to_string(),
+                    ));
+                    self.history.push(execute_continuation_message());
                     continue;
                 }
                 self.complete_remaining_plan_steps();
@@ -785,6 +808,20 @@ impl Agent {
             && !self.current_plan.is_empty()
     }
 
+    fn should_continue_execute_without_tools(
+        &self,
+        assistant_text: &str,
+        tool_rounds: usize,
+        execute_continuations: usize,
+    ) -> bool {
+        matches!(self.execution_mode, AgentExecutionMode::Execute)
+            && tool_rounds > 0
+            && execute_continuations < MAX_EXECUTE_CONTINUATIONS_PER_TURN
+            && self.pending_user_input.is_none()
+            && self.pending_approval.is_none()
+            && assistant_text_signals_more_work(assistant_text)
+    }
+
     fn ensure_active_plan_step(&mut self) {
         if !matches!(self.execution_mode, AgentExecutionMode::Execute) || self.current_plan.is_empty() {
             return;
@@ -925,6 +962,13 @@ fn plan_continuation_message() -> Message {
     }
 }
 
+fn execute_continuation_message() -> Message {
+    Message {
+        role: "user".to_string(),
+        content: json!([{"type": "text", "text": EXECUTE_CONTINUATION_PROMPT}]),
+    }
+}
+
 fn assistant_text_signals_more_work(text: &str) -> bool {
     let text = text.to_ascii_lowercase();
     [
@@ -963,7 +1007,7 @@ fn tool_result_message(tool_use_id: &str, content: String, is_error: bool) -> Me
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_plan_block, parse_request_user_input_block, plan_continuation_message, tool_continuation_message, Agent, AgentExecutionMode, AnthropicResponse, ContentBlock, Message, PendingUserInput, PlanStep, PlanStepStatus, TokenUsage};
+    use super::{execute_continuation_message, parse_plan_block, parse_request_user_input_block, plan_continuation_message, tool_continuation_message, Agent, AgentExecutionMode, AnthropicResponse, ContentBlock, Message, PendingUserInput, PlanStep, PlanStepStatus, TokenUsage};
     use crate::llm::LlmBackend;
     use crate::session::SessionManager;
     use crate::tool::{Tool, ToolError, ToolManager};
@@ -1266,6 +1310,57 @@ mod tests {
         assert!(observed[2]
             .iter()
             .any(|message| message.content == plan_continuation_message().content));
+    }
+
+    #[tokio::test]
+    async fn continues_execute_mode_after_exploration_if_assistant_still_signals_more_work() {
+        let backend = Arc::new(SequencedBackend::new(vec![
+            AnthropicResponse {
+                content: vec![ContentBlock::ToolUse {
+                    id: "tool-1".to_string(),
+                    name: "stub_tool".to_string(),
+                    input: json!({}),
+                }],
+                stop_reason: Some("tool_use".to_string()),
+                usage: Some(TokenUsage::default()),
+            },
+            AnthropicResponse {
+                content: vec![ContentBlock::Text {
+                    text: "I have checked the top-level structure. Next, I will inspect src/main.rs to understand the bootstrap flow.".to_string(),
+                }],
+                stop_reason: Some("end_turn".to_string()),
+                usage: Some(TokenUsage::default()),
+            },
+            AnthropicResponse {
+                content: vec![ContentBlock::Text {
+                    text: "done".to_string(),
+                }],
+                stop_reason: Some("end_turn".to_string()),
+                usage: Some(TokenUsage::default()),
+            },
+        ]));
+
+        let mut tool_manager = ToolManager::new();
+        tool_manager.register(Box::new(StubTool));
+        let mut agent = Agent::new(
+            tool_manager,
+            backend.clone(),
+            Arc::new(VectorDB::new("data/lancedb")),
+            Arc::new(SessionManager::new().expect("session manager")),
+            Arc::new(WorkspaceMemory::new().expect("workspace memory")),
+        );
+        agent.set_execution_mode(AgentExecutionMode::Execute);
+
+        agent
+            .query_with_mode("inspect".to_string(), super::AgentOutputMode::Silent)
+            .await
+            .expect("query should succeed");
+
+        let observed = backend.observed_messages.lock().expect("lock");
+        assert_eq!(observed.len(), 3);
+        assert!(observed[2]
+            .iter()
+            .any(|message| message.content == execute_continuation_message().content));
     }
 
     #[test]
