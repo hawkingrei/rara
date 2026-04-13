@@ -14,7 +14,6 @@ use super::command::{
 };
 use super::state::{
     current_model_presets, HelpTab, Overlay, PROVIDER_FAMILIES, TaskKind, TranscriptEntry, TuiApp,
-    LOCAL_MODEL_PRESETS, MODEL_GUIDE_OPTIONS,
 };
 
 pub fn render(f: &mut Frame, app: &TuiApp) {
@@ -130,6 +129,11 @@ fn current_turn_lines(app: &TuiApp) -> Vec<Line<'static>> {
         .rev()
         .find(|entry| entry.role == "Agent")
         .map(|entry| entry.message.as_str());
+    let latest_system = current_turn
+        .iter()
+        .rev()
+        .find(|entry| entry.role == "System")
+        .map(|entry| entry.message.as_str());
     let latest_tool_result = current_turn
         .iter()
         .rev()
@@ -202,6 +206,11 @@ fn current_turn_lines(app: &TuiApp) -> Vec<Line<'static>> {
     if let Some(agent_message) = latest_agent {
         lines.push(Line::from(role_badge_span("Agent")));
         for line in agent_message.lines() {
+            lines.push(Line::from(format!("  {line}")));
+        }
+    } else if let Some(system_message) = latest_system {
+        lines.push(Line::from(role_badge_span("System")));
+        for line in system_message.lines().take(14) {
             lines.push(Line::from(format!("  {line}")));
         }
     } else if let Some((role, tool_result)) = latest_tool_result {
@@ -473,7 +482,6 @@ fn render_overlay(f: &mut Frame, app: &TuiApp, overlay: Overlay) {
         Overlay::CommandPalette => render_command_palette(f, app, popup),
         Overlay::Status => render_status_modal(f, app, popup),
         Overlay::Setup => render_setup_modal(f, app, popup),
-        Overlay::ModelGuide => render_model_guide_modal(f, app, popup),
         Overlay::ProviderPicker => render_provider_picker_modal(f, app, popup),
         Overlay::ModelPicker => render_model_picker_modal(f, app, popup),
         Overlay::BaseUrlEditor => render_base_url_editor_modal(f, app, popup),
@@ -934,57 +942,6 @@ fn render_base_url_editor_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
     f.render_widget(intro, chunks[0]);
     f.render_widget(editor, chunks[1]);
     f.render_widget(footer, chunks[2]);
-}
-
-fn render_model_guide_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(4), Constraint::Min(8), Constraint::Length(2)])
-        .split(area);
-    f.render_widget(
-        Paragraph::new(
-            "Model guide\n\nWhat do you want to optimize for right now?\nGemma 4 paths are marked experimental.",
-        )
-        .block(Block::default().borders(Borders::ALL).title(" Model Guide ")),
-        chunks[0],
-    );
-    let items = MODEL_GUIDE_OPTIONS
-        .iter()
-        .enumerate()
-        .map(|(idx, (label, detail, preset_idx))| {
-            let style = if idx == app.model_guide_idx {
-                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
-            } else {
-                Style::default()
-            };
-            let selected_marker = MODEL_GUIDE_OPTIONS[idx]
-                .2
-                .and_then(|preset_idx| {
-                    let (_, provider, model) = LOCAL_MODEL_PRESETS[preset_idx];
-                    (app.config.provider == provider && app.config.model.as_deref() == Some(model))
-                        .then_some(" current")
-                })
-                .unwrap_or("");
-            let target = preset_idx
-                .map(|preset| format!(" -> {}", LOCAL_MODEL_PRESETS[preset].0))
-                .unwrap_or_else(|| " -> provider menu".to_string());
-            ListItem::new(vec![
-                Line::from(format!("[{}] {}{}{}", idx + 1, label, target, selected_marker)),
-                Line::from(*detail),
-                Line::from(""),
-            ])
-            .style(style)
-        })
-        .collect::<Vec<_>>();
-    f.render_widget(
-        List::new(items).block(Block::default().borders(Borders::LEFT | Borders::RIGHT)),
-        chunks[1],
-    );
-    f.render_widget(
-        Paragraph::new("1 fast  2 balanced  3 strongest  4 manual  Enter apply  Esc close")
-            .alignment(Alignment::Center),
-        chunks[2],
-    );
 }
 
 fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {

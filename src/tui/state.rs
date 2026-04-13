@@ -18,7 +18,6 @@ pub enum Overlay {
     CommandPalette,
     Status,
     Setup,
-    ModelGuide,
     ProviderPicker,
     ModelPicker,
     BaseUrlEditor,
@@ -154,21 +153,6 @@ pub const PROVIDER_FAMILIES: [(ProviderFamily, &str, &str); 2] = [
     ),
 ];
 
-pub const MODEL_GUIDE_OPTIONS: [(&str, &str, Option<usize>); 4] = [
-    ("Fast", "Switch to Qwn3 8B for faster local responses.", Some(2)),
-    (
-        "Balanced",
-        "Switch to Gemma 4 E2B. This path is experimental.",
-        Some(1),
-    ),
-    (
-        "Strongest",
-        "Switch to Gemma 4 E4B. This path is experimental.",
-        Some(0),
-    ),
-    ("Manual", "Open the full model list and choose explicitly.", None),
-];
-
 #[derive(Clone, Default)]
 pub struct TranscriptEntry {
     pub role: String,
@@ -197,7 +181,6 @@ pub struct TuiApp {
     pub bash_approval_mode: BashApprovalMode,
     pub provider_picker_idx: usize,
     pub model_picker_idx: usize,
-    pub model_guide_idx: usize,
     pub command_palette_idx: usize,
     pub base_url_input: String,
     pub recent_commands: Vec<String>,
@@ -232,7 +215,6 @@ impl TuiApp {
             bash_approval_mode: BashApprovalMode::Suggestion,
             provider_picker_idx,
             model_picker_idx,
-            model_guide_idx: 0,
             command_palette_idx: 0,
             base_url_input: String::new(),
             recent_commands: Vec::new(),
@@ -399,9 +381,6 @@ impl TuiApp {
     pub fn open_overlay(&mut self, overlay: Overlay) {
         if matches!(overlay, Overlay::CommandPalette) {
             self.command_palette_idx = 0;
-        }
-        if matches!(overlay, Overlay::ModelGuide) {
-            self.model_guide_idx = 0;
         }
         if matches!(overlay, Overlay::ProviderPicker) {
             self.provider_picker_idx = selected_provider_family_idx_for_config(&self.config);

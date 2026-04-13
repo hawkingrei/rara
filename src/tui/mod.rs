@@ -32,9 +32,7 @@ use self::runtime::{
     execute_local_command, finish_running_task_if_ready, start_oauth_task, start_pending_approval_task, start_query_task,
     start_rebuild_task,
 };
-use self::state::{
-    current_model_presets, HelpTab, Overlay, PROVIDER_FAMILIES, TuiApp, MODEL_GUIDE_OPTIONS,
-};
+use self::state::{current_model_presets, HelpTab, Overlay, PROVIDER_FAMILIES, TuiApp};
 use crate::agent::BashApprovalMode;
 
 pub async fn run_tui(agent: Agent, oauth_manager: OAuthManager) -> anyhow::Result<()> {
@@ -116,17 +114,6 @@ fn map_key_to_event(key: KeyCode, app: &TuiApp) -> AppEvent {
             KeyCode::Char('3') => AppEvent::SetModelSelection(2),
             KeyCode::Char('m') => AppEvent::CycleModelSelection,
             KeyCode::Char('l') => AppEvent::StartOAuth,
-            KeyCode::Enter => AppEvent::ApplyOverlaySelection,
-            _ => AppEvent::Noop,
-        },
-        Some(Overlay::ModelGuide) => match key {
-            KeyCode::Esc => AppEvent::CloseOverlay,
-            KeyCode::Up | KeyCode::Char('k') => AppEvent::MoveGuideSelection(-1),
-            KeyCode::Down | KeyCode::Char('j') => AppEvent::MoveGuideSelection(1),
-            KeyCode::Char('1') => AppEvent::SetGuideSelection(0),
-            KeyCode::Char('2') => AppEvent::SetGuideSelection(1),
-            KeyCode::Char('3') => AppEvent::SetGuideSelection(2),
-            KeyCode::Char('4') => AppEvent::SetGuideSelection(3),
             KeyCode::Enter => AppEvent::ApplyOverlaySelection,
             _ => AppEvent::Noop,
         },
@@ -228,11 +215,6 @@ async fn dispatch_event(
                 app.command_palette_idx = next as usize;
             }
         }
-        AppEvent::MoveGuideSelection(delta) => {
-            let next = (app.model_guide_idx as i32 + delta)
-                .clamp(0, MODEL_GUIDE_OPTIONS.len() as i32 - 1);
-            app.model_guide_idx = next as usize;
-        }
         AppEvent::MoveProviderSelection(delta) => {
             let next = (app.provider_picker_idx as i32 + delta)
                 .clamp(0, PROVIDER_FAMILIES.len() as i32 - 1);
@@ -242,12 +224,6 @@ async fn dispatch_event(
             let next = (app.model_picker_idx as i32 + delta)
                 .clamp(0, current_model_presets(app.provider_picker_idx).len() as i32 - 1);
             app.model_picker_idx = next as usize;
-        }
-        AppEvent::SetGuideSelection(idx) => {
-            app.model_guide_idx = idx.min(MODEL_GUIDE_OPTIONS.len() - 1);
-            if !app.is_busy() {
-                apply_model_guide_selection(app);
-            }
         }
         AppEvent::SetProviderSelection(idx) => {
             app.provider_picker_idx = idx.min(PROVIDER_FAMILIES.len() - 1);
@@ -323,13 +299,6 @@ async fn dispatch_event(
                     }
                 }
             }
-            Some(Overlay::ModelGuide) => {
-                if app.is_busy() {
-                    app.push_notice("A task is already running. Wait for it to finish.");
-                } else {
-                    apply_model_guide_selection(app);
-                }
-            }
             Some(Overlay::ProviderPicker) => {
                 if app.is_busy() {
                     app.push_notice("A task is already running. Wait for it to finish.");
@@ -370,17 +339,6 @@ async fn dispatch_event(
         },
     }
     Ok(false)
-}
-
-fn apply_model_guide_selection(app: &mut TuiApp) {
-    match MODEL_GUIDE_OPTIONS[app.model_guide_idx].2 {
-        Some(preset_idx) => {
-            app.provider_picker_idx = 0;
-            app.select_local_model(preset_idx);
-            start_rebuild_task(app);
-        }
-        None => app.open_overlay(Overlay::ProviderPicker),
-    }
 }
 
 async fn handle_submit(

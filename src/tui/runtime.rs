@@ -370,7 +370,6 @@ pub async fn finish_running_task_if_ready(
                     app.set_runtime_phase(RuntimePhase::Idle, Some("prompt finished".into()));
                 }
                 Err(err) => {
-                    app.finalize_active_turn();
                     app.set_runtime_phase(RuntimePhase::Failed, Some("query failed".into()));
                     let mut message = format!("Query failed: {err}");
                     if app.config.provider == "ollama" {
@@ -381,6 +380,7 @@ pub async fn finish_running_task_if_ready(
                             .unwrap_or("http://localhost:11434");
                         message.push_str(&format!("\nbase_url={base_url}"));
                     }
+                    app.push_entry("System", message.clone());
                     app.push_notice(message);
                 }
             }
@@ -472,8 +472,8 @@ fn handle_model_command(arg: Option<&str>, app: &mut TuiApp) -> anyhow::Result<(
     if arg.map(str::trim).filter(|arg| !arg.is_empty()).is_some() {
         app.push_notice("/model does not accept arguments. Use the interactive menu.");
     }
-    app.open_overlay(Overlay::ModelGuide);
-    app.notice = Some("Opened model guide.".into());
+    app.open_overlay(Overlay::ProviderPicker);
+    app.notice = Some("Opened provider picker.".into());
     Ok(())
 }
 
