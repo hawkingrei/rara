@@ -41,8 +41,8 @@ pub fn render(f: &mut Frame, app: &TuiApp) {
 }
 
 fn render_transcript(f: &mut Frame, app: &TuiApp, area: Rect) {
-    let items = if app.transcript.is_empty() {
-        vec![
+    if app.transcript.is_empty() {
+        let items = vec![
             ListItem::new(Line::from(Span::styled(
                 "No messages yet.",
                 Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
@@ -64,51 +64,201 @@ fn render_transcript(f: &mut Frame, app: &TuiApp, area: Rect) {
             ))),
             ListItem::new(Line::from("  Explain this repository structure.")),
             ListItem::new(Line::from("  Find the main agent loop and summarize it.")),
-        ]
-    } else {
-        let max_visible_entries = area.height.saturating_sub(3).max(6) as usize / 4;
-        let max_visible_entries = max_visible_entries.max(3);
-        let start = app.transcript.len().saturating_sub(max_visible_entries);
-        let mut items = Vec::new();
-        if start > 0 {
-            items.push(ListItem::new(Line::from(vec![
-                Span::styled(
-                    "Earlier entries hidden ",
-                    Style::default()
-                        .fg(Color::Yellow)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::raw(format!(
-                    "showing latest {} of {} transcript events",
-                    app.transcript.len() - start,
-                    app.transcript.len()
-                )),
-            ])));
-            items.push(ListItem::new(Line::from("")));
-        }
-        items.extend(
-            app.transcript
-                .iter()
-                .skip(start)
-                .enumerate()
-                .map(|(idx, (role, message))| {
-                    let absolute_idx = idx + start;
-                    let is_active_tail = app.is_busy()
-                        && absolute_idx + 2 >= app.transcript.len();
-                    transcript_item(role, message, is_active_tail)
-                }),
+        ];
+        f.render_widget(
+            List::new(items).block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(" Conversation "),
+            ),
+            area,
         );
-        items
+        return;
+    }
+
+    let outer = Block::default().borders(Borders::ALL).title(" Conversation ");
+    let inner = outer.inner(area);
+    f.render_widget(outer, area);
+
+    let Some(current_turn_start) = latest_turn_start(app) else {
+        let items = app
+            .transcript
+            .iter()
+            .map(|(role, message)| transcript_item(role, message, false))
+            .collect::<Vec<_>>();
+        f.render_widget(List::new(items), inner);
+        return;
     };
 
+    let current_turn_height = 14_u16.min(inner.height.saturating_sub(4)).max(8);
+    let sections = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(6), Constraint::Length(current_turn_height)])
+        .split(inner);
+
+    let history_items = history_items(app, current_turn_start, sections[0].height as usize);
     f.render_widget(
-        List::new(items).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(" Conversation "),
-        ),
-        area,
+        List::new(history_items).block(Block::default().borders(Borders::BOTTOM).title(" Earlier Conversation ")),
+        sections[0],
     );
+    f.render_widget(
+        Paragraph::new(current_turn_lines(app, current_turn_start))
+            .block(Block::default().title(" Current Turn "))
+            .wrap(Wrap { trim: false }),
+        sections[1],
+    );
+}
+
+fn history_items(app: &TuiApp, current_turn_start: usize, available_height: usize) -> Vec<ListItem<'static>> {
+    let history = app
+        .transcript
+        .iter()
+        .take(current_turn_start)
+        .filter(|(role, _)| matches!(role.as_str(), "You" | "Agent" | "System"))
+        .collect::<Vec<_>>();
+
+    if history.is_empty() {
+        return vec![ListItem::new(Line::from(Span::styled(
+            "No earlier conversation.",
+            Style::default().fg(Color::DarkGray),
+        )))];
+    }
+
+    let max_visible_entries = available_height.saturating_sub(2).max(3) / 3;
+    let start = history.len().saturating_sub(max_visible_entries);
+    let mut items = Vec::new();
+    if start > 0 {
+        items.push(ListItem::new(Line::from(vec![
+            Span::styled(
+                "Earlier entries hidden ",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(format!(
+                "showing latest {} of {} conversation entries",
+                history.len() - start,
+                history.len()
+            )),
+        ])));
+        items.push(ListItem::new(Line::from("")));
+    }
+
+    items.extend(
+        history
+            .into_iter()
+            .skip(start)
+            .map(|(role, message)| transcript_item(role, message, false)),
+    );
+    items
+}
+
+fn current_turn_lines(app: &TuiApp, current_turn_start: usize) -> Vec<Line<'static>> {
+    let current_turn = app.transcript.iter().skip(current_turn_start).collect::<Vec<_>>();
+    let user_message = current_turn
+        .iter()
+        .find(|(role, _)| role == "You")
+        .map(|(_, message)| message.as_str())
+        .unwrap_or("");
+    let latest_agent = current_turn
+        .iter()
+        .rev()
+        .find(|(role, _)| role == "Agent")
+        .map(|(_, message)| message.as_str());
+    let mut lines = vec![
+        Line::from(role_badge_span("You")),
+        Line::from(format!("  {}", user_message)),
+        Line::from(""),
+    ];
+
+    if let Some(summary) = current_turn_tool_summary(current_turn.as_slice()) {
+        lines.push(Line::from(Span::styled(
+            " Tool Summary ",
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        )));
+        lines.extend(summary.lines().map(|line| Line::from(format!("  {line}"))));
+        lines.push(Line::from(""));
+    }
+
+    if !app.snapshot.plan_steps.is_empty() {
+        lines.push(Line::from(Span::styled(
+            " Plan ",
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::LightBlue)
+                .add_modifier(Modifier::BOLD),
+        )));
+        for line in status_plan_text(app).lines().take(8) {
+            lines.push(Line::from(format!("  {line}")));
+        }
+        lines.push(Line::from(""));
+    }
+
+    if app.snapshot.pending_question.is_some() {
+        lines.push(Line::from(Span::styled(
+            " Request Input ",
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::LightGreen)
+                .add_modifier(Modifier::BOLD),
+        )));
+        for line in status_request_user_input_text(app).lines().take(8) {
+            lines.push(Line::from(format!("  {line}")));
+        }
+        lines.push(Line::from(""));
+    }
+
+    if let Some(agent_message) = latest_agent {
+        lines.push(Line::from(role_badge_span("Agent")));
+        for line in agent_message.lines() {
+            lines.push(Line::from(format!("  {line}")));
+        }
+    } else if app.is_busy() {
+        lines.push(Line::from(role_badge_span("Status")));
+        lines.push(Line::from(format!(
+            "  {}",
+            app.runtime_phase_detail
+                .as_deref()
+                .unwrap_or("waiting for the current turn to finish")
+        )));
+    } else {
+        lines.push(Line::from(role_badge_span("Status")));
+        lines.push(Line::from("  No final answer yet."));
+    }
+
+    lines
+}
+
+fn current_turn_tool_summary(current_turn: &[&(String, String)]) -> Option<String> {
+    let tools = current_turn
+        .iter()
+        .filter_map(|(role, message)| {
+            if role != "Tool" {
+                return None;
+            }
+            message.split_whitespace().next().map(str::to_string)
+        })
+        .collect::<Vec<_>>();
+    if tools.is_empty() {
+        return None;
+    }
+
+    let mut parts = vec![format!("Used {} tool call(s): {}", tools.len(), tools.join(", "))];
+    let results = current_turn
+        .iter()
+        .filter(|(role, _)| *role == "Tool Result" || *role == "Tool Error")
+        .count();
+    if results > 0 {
+        parts.push(format!("Recorded {} tool result(s).", results));
+    }
+    Some(parts.join("\n"))
+}
+
+fn latest_turn_start(app: &TuiApp) -> Option<usize> {
+    app.transcript.iter().rposition(|(role, _)| role == "You")
 }
 
 fn render_activity_bar(f: &mut Frame, app: &TuiApp, area: Rect) {
