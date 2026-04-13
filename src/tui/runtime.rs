@@ -41,7 +41,6 @@ pub async fn execute_local_command(
         LocalCommandKind::Status => "status",
         LocalCommandKind::Clear => "clear",
         LocalCommandKind::Plan => "plan",
-        LocalCommandKind::Execute => "execute",
         LocalCommandKind::Setup => "setup",
         LocalCommandKind::Model => "model",
         LocalCommandKind::BaseUrl => "base-url",
@@ -62,20 +61,27 @@ pub async fn execute_local_command(
             app.reset_transcript();
         }
         LocalCommandKind::Plan => {
-            app.set_runtime_phase(RuntimePhase::LocalCommand, Some("entering plan mode".into()));
-            app.set_agent_execution_mode(AgentExecutionMode::Plan);
+            let next_mode = if matches!(app.agent_execution_mode, AgentExecutionMode::Plan) {
+                AgentExecutionMode::Execute
+            } else {
+                AgentExecutionMode::Plan
+            };
+            let (detail, notice) = match next_mode {
+                AgentExecutionMode::Plan => (
+                    "entering plan mode".into(),
+                    "Plan mode active. Read-only tools only.".to_string(),
+                ),
+                AgentExecutionMode::Execute => (
+                    "returning to execute mode".into(),
+                    "Execute mode active. Full toolset restored.".to_string(),
+                ),
+            };
+            app.set_runtime_phase(RuntimePhase::LocalCommand, Some(detail));
+            app.set_agent_execution_mode(next_mode);
             if let Some(agent) = agent_slot.as_mut() {
-                agent.set_execution_mode(AgentExecutionMode::Plan);
+                agent.set_execution_mode(next_mode);
             }
-            app.push_notice("Plan mode active. Read-only tools only.");
-        }
-        LocalCommandKind::Execute => {
-            app.set_runtime_phase(RuntimePhase::LocalCommand, Some("entering execute mode".into()));
-            app.set_agent_execution_mode(AgentExecutionMode::Execute);
-            if let Some(agent) = agent_slot.as_mut() {
-                agent.set_execution_mode(AgentExecutionMode::Execute);
-            }
-            app.push_notice("Execute mode active. Full toolset restored.");
+            app.push_notice(notice);
         }
         LocalCommandKind::Setup => {
             app.set_runtime_phase(RuntimePhase::LocalCommand, Some("opening setup".into()));

@@ -195,7 +195,7 @@ fn render_composer(f: &mut Frame, app: &TuiApp, area: Rect) {
     } else if app.is_busy() {
         "runtime busy  wait for current task to finish"
     } else if app.agent_execution_mode_label() == "plan" {
-        "plan mode  read-only analysis  /execute return to implementation mode"
+        "plan mode  read-only analysis  /plan return to implementation mode"
     } else {
         "plain prompt mode  /plan read-only planning  /help commands  /quit exit"
     };
@@ -219,7 +219,7 @@ fn render_footer(f: &mut Frame, app: &TuiApp, area: Rect) {
     } else if app.is_busy() {
         "/status inspect runtime  /quit exit  background task keeps UI responsive"
     } else if app.agent_execution_mode_label() == "plan" {
-        "/execute leave plan mode  /status inspect runtime  /quit exit"
+        "/plan leave plan mode  /status inspect runtime  /quit exit"
     } else {
         "Enter submit prompt  /plan read-only planning  /model switch providers  /quit exit"
     };

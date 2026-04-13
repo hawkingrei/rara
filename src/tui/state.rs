@@ -36,7 +36,6 @@ pub enum LocalCommandKind {
     Status,
     Clear,
     Plan,
-    Execute,
     Setup,
     Model,
     BaseUrl,
