@@ -172,22 +172,13 @@ fn compact_list_files(input: &Value, result: &Value) -> String {
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
-    let total = files.len();
-    let preview = files
+    let rendered = files
         .iter()
-        .take(FILE_LIST_PREVIEW_LIMIT)
         .filter_map(Value::as_str)
         .collect::<Vec<_>>()
         .join("\n");
-    let remaining = total.saturating_sub(FILE_LIST_PREVIEW_LIMIT);
     let summary = summarize_tool_result("list_files", input, result);
-    if remaining > 0 {
-        format!(
-            "{summary}\nPreview:\n{preview}\n... {remaining} more path(s) omitted."
-        )
-    } else {
-        format!("{summary}\nPreview:\n{preview}")
-    }
+    format!("{summary}\nPreview:\n{rendered}")
 }
 
 fn compact_read_file(input: &Value, result: &Value) -> String {

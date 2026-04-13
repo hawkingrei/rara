@@ -455,6 +455,20 @@ fn format_tool_result(name: &str, content: &str) -> String {
         }
     }
 
+    if name == "list_files" {
+        return content.to_string();
+    }
+
+    if let Some(summary) = content.lines().next().map(str::trim).filter(|line| !line.is_empty()) {
+        let mut rendered = format!("{name}: {summary}");
+        if content.contains("full_result_path=") {
+            rendered.push_str("\nfull result stored on disk");
+        } else if content.lines().nth(1).is_some() {
+            rendered.push_str("\npreview available");
+        }
+        return rendered;
+    }
+
     format!("{name}: {content}")
 }
 

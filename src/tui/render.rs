@@ -841,14 +841,28 @@ fn transcript_item(role: &str, message: &str, is_active_tail: bool) -> ListItem<
         Span::raw(" "),
         role_badge_span(role),
     ])];
+    let max_message_lines = match role {
+        "Tool Result" | "Tool Error" => 4,
+        "Status" => 2,
+        _ => 8,
+    };
     let message_lines = message.lines().collect::<Vec<_>>();
     if message_lines.is_empty() {
         lines.push(Line::from("  "));
     } else {
-        for line in message_lines {
+        for line in message_lines.iter().take(max_message_lines) {
             lines.push(Line::from(vec![
                 Span::styled("  ", Style::default().fg(Color::DarkGray)),
-                Span::raw(line.to_string()),
+                Span::raw((*line).to_string()),
+            ]));
+        }
+        if message_lines.len() > max_message_lines {
+            lines.push(Line::from(vec![
+                Span::styled("  ", Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    format!("... {} more line(s)", message_lines.len() - max_message_lines),
+                    Style::default().fg(Color::DarkGray),
+                ),
             ]));
         }
     }
