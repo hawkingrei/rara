@@ -125,6 +125,7 @@ struct TurnOutput {
     assistant_message: Message,
     tool_calls: Vec<ToolCall>,
     plan_updated: bool,
+    assistant_text: String,
 }
 
 pub struct Agent {
@@ -438,10 +439,15 @@ impl Agent {
 
         let mut tool_calls = Vec::new();
         let mut plan_updated = false;
+        let mut assistant_text = String::new();
         for block in &response.content {
             match block {
                 ContentBlock::Text { text } => {
                     report(AgentEvent::AssistantText(text.clone()));
+                    if !assistant_text.is_empty() {
+                        assistant_text.push('\n');
+                    }
+                    assistant_text.push_str(text);
                     if matches!(self.execution_mode, AgentExecutionMode::Plan) {
                         plan_updated = self.capture_plan_from_text(text) || plan_updated;
                     }
@@ -470,6 +476,7 @@ impl Agent {
             },
             tool_calls,
             plan_updated,
+            assistant_text,
         })
     }
 
@@ -508,6 +515,7 @@ impl Agent {
             if turn_output.tool_calls.is_empty() {
                 if self.should_continue_plan_without_tools(
                     turn_output.plan_updated,
+                    &turn_output.assistant_text,
                     *tool_rounds,
                     *plan_continuations,
                 ) {
@@ -764,12 +772,14 @@ impl Agent {
     fn should_continue_plan_without_tools(
         &self,
         plan_updated: bool,
+        assistant_text: &str,
         tool_rounds: usize,
         plan_continuations: usize,
     ) -> bool {
+        let shallow_initial_plan = plan_updated && tool_rounds == 0 && self.current_plan.len() <= 1;
+        let explicit_more_work_after_exploration = tool_rounds > 0 && assistant_text_signals_more_work(assistant_text);
         matches!(self.execution_mode, AgentExecutionMode::Plan)
-            && plan_updated
-            && tool_rounds == 0
+            && (shallow_initial_plan || explicit_more_work_after_exploration)
             && plan_continuations < MAX_PLAN_CONTINUATIONS_PER_TURN
             && self.pending_user_input.is_none()
             && !self.current_plan.is_empty()
@@ -913,6 +923,27 @@ fn plan_continuation_message() -> Message {
         role: "user".to_string(),
         content: json!([{"type": "text", "text": PLAN_CONTINUATION_PROMPT}]),
     }
+}
+
+fn assistant_text_signals_more_work(text: &str) -> bool {
+    let text = text.to_ascii_lowercase();
+    [
+        "i will ",
+        "i'll ",
+        "next,",
+        "next ",
+        "to provide",
+        "to understand",
+        "to inspect",
+        "need to",
+        "i need to",
+        "i should",
+        "i want to inspect",
+        "i will examine",
+        "i will inspect",
+    ]
+    .iter()
+    .any(|needle| text.contains(needle))
 }
 
 fn tool_result_message(tool_use_id: &str, content: String, is_error: bool) -> Message {
@@ -1177,6 +1208,62 @@ mod tests {
         let observed = backend.observed_messages.lock().expect("lock");
         assert_eq!(observed.len(), 2);
         assert!(observed[1]
+            .iter()
+            .any(|message| message.content == plan_continuation_message().content));
+    }
+
+    #[tokio::test]
+    async fn continues_plan_mode_after_exploration_if_assistant_still_signals_more_work() {
+        let backend = Arc::new(SequencedBackend::new(vec![
+            AnthropicResponse {
+                content: vec![
+                    ContentBlock::Text {
+                        text: "<plan>\n- [pending] Inspect the repository structure\n</plan>\nStart with the top-level layout.".to_string(),
+                    },
+                    ContentBlock::ToolUse {
+                        id: "tool-1".to_string(),
+                        name: "stub_tool".to_string(),
+                        input: json!({}),
+                    },
+                ],
+                stop_reason: Some("tool_use".to_string()),
+                usage: Some(TokenUsage::default()),
+            },
+            AnthropicResponse {
+                content: vec![ContentBlock::Text {
+                    text: "I have examined the overall structure. To provide detailed feedback, I will inspect the more complex components next.".to_string(),
+                }],
+                stop_reason: Some("end_turn".to_string()),
+                usage: Some(TokenUsage::default()),
+            },
+            AnthropicResponse {
+                content: vec![ContentBlock::Text {
+                    text: "done".to_string(),
+                }],
+                stop_reason: Some("end_turn".to_string()),
+                usage: Some(TokenUsage::default()),
+            },
+        ]));
+
+        let mut tool_manager = ToolManager::new();
+        tool_manager.register(Box::new(StubTool));
+        let mut agent = Agent::new(
+            tool_manager,
+            backend.clone(),
+            Arc::new(VectorDB::new("data/lancedb")),
+            Arc::new(SessionManager::new().expect("session manager")),
+            Arc::new(WorkspaceMemory::new().expect("workspace memory")),
+        );
+        agent.set_execution_mode(AgentExecutionMode::Plan);
+
+        agent
+            .query_with_mode("inspect".to_string(), super::AgentOutputMode::Silent)
+            .await
+            .expect("query should succeed");
+
+        let observed = backend.observed_messages.lock().expect("lock");
+        assert_eq!(observed.len(), 3);
+        assert!(observed[2]
             .iter()
             .any(|message| message.content == plan_continuation_message().content));
     }
