@@ -12,7 +12,7 @@ use uuid::Uuid;
 
 const MAX_TOOL_ROUNDS_PER_TURN: usize = 8;
 const TOOL_CONTINUATION_PROMPT: &str =
-    "Tool results are now available. Continue the task. Use another tool if needed, otherwise provide the final answer. Do not repeat the tool result verbatim.";
+    "<agent_runtime>\nphase: tool_results_available\ninstructions:\n- Continue the same task immediately.\n- Review the tool results already present in the conversation.\n- Either call the next tool directly, or provide the final answer.\n- Do not ask the user to continue.\n- Do not repeat tool results verbatim.\n</agent_runtime>";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AgentExecutionMode {
@@ -209,7 +209,10 @@ impl Agent {
             - Do not say that you will use a tool such as 'list_files' or 'read_file'; actually call the tool instead.\n\
             - Before the first tool call, a single short sentence of intent is enough. Do not narrate every step.\n\
             - After every tool result, decide the next step immediately: either call another tool or provide the final answer.\n\
-            - Do not stop at an intermediate status update once tool results are available.");
+            - Do not stop at an intermediate status update once tool results are available.\n\
+            - Runtime may append an <agent_runtime> block after tool execution.\n\
+            - Treat that block as internal execution state, not as a new user request.\n\
+            - When phase is 'tool_results_available', continue the same task immediately.");
         prompt
     }
 
@@ -481,7 +484,7 @@ impl Agent {
     {
         self.history.extend(tool_results);
         report(AgentEvent::Status(
-            "Tool results recorded. Continuing agent reasoning.".to_string(),
+            "Tool results recorded. Advancing to the next agent step.".to_string(),
         ));
         self.history.push(tool_continuation_message());
     }

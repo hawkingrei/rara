@@ -171,6 +171,18 @@ fn current_turn_lines(app: &TuiApp, current_turn_start: usize) -> Vec<Line<'stat
         Line::from(""),
     ];
 
+    if app.agent_execution_mode_label() == "plan" {
+        lines.push(Line::from(Span::styled(
+            " Plan Mode ",
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::LightBlue)
+                .add_modifier(Modifier::BOLD),
+        )));
+        lines.push(Line::from("  Read-only planning is active for this turn."));
+        lines.push(Line::from(""));
+    }
+
     if let Some(summary) = current_turn_tool_summary(current_turn.as_slice()) {
         lines.push(Line::from(Span::styled(
             " Tool Summary ",
