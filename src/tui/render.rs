@@ -23,7 +23,7 @@ pub fn render(f: &mut Frame, app: &TuiApp) {
         .constraints([
             Constraint::Length(3),
             Constraint::Min(8),
-            Constraint::Length(1),
+            Constraint::Length(3),
             Constraint::Length(4),
             Constraint::Length(1),
         ])
@@ -104,8 +104,8 @@ fn render_transcript(f: &mut Frame, app: &TuiApp, area: Rect) {
     f.render_widget(
         List::new(items).block(
             Block::default()
-                .borders(Borders::LEFT | Borders::RIGHT)
-                .title(" Transcript "),
+                .borders(Borders::ALL)
+                .title(" Conversation "),
         ),
         area,
     );
@@ -125,20 +125,29 @@ fn render_activity_bar(f: &mut Frame, app: &TuiApp, area: Rect) {
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| app.notice.as_deref().unwrap_or("waiting for input"));
     let animated_label = animated_activity_label(app, label);
-    let line = Line::from(vec![
-        Span::styled(
-            format!(" {} ", animated_label),
-            Style::default().fg(Color::Black).bg(color).add_modifier(Modifier::BOLD),
-        ),
-        Span::raw(" "),
-        Span::styled(
-            app.runtime_phase_label(),
-            Style::default().add_modifier(Modifier::BOLD),
-        ),
-        Span::raw("  "),
-        Span::raw(detail),
-    ]);
-    f.render_widget(Paragraph::new(line), area);
+    let mode_color = if app.agent_execution_mode_label() == "plan" {
+        Color::LightBlue
+    } else {
+        Color::LightGreen
+    };
+    let status = Paragraph::new(vec![
+        Line::from(vec![
+            Span::styled(
+                format!(" {} ", animated_label),
+                Style::default().fg(Color::Black).bg(color).add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(" "),
+            badge("mode", app.agent_execution_mode_label(), mode_color),
+            Span::raw(" "),
+            badge("phase", app.runtime_phase_label(), Color::Gray),
+        ]),
+        Line::from(vec![
+            Span::styled(" ", Style::default()),
+            Span::styled(detail, Style::default().fg(Color::Gray)),
+        ]),
+    ])
+    .block(Block::default().borders(Borders::ALL).title(" Status "));
+    f.render_widget(status, area);
 }
 
 fn animated_activity_label(app: &TuiApp, label: &str) -> String {
@@ -159,9 +168,9 @@ fn animated_activity_label(app: &TuiApp, label: &str) -> String {
 
 fn render_composer(f: &mut Frame, app: &TuiApp, area: Rect) {
     let title = if app.is_busy() {
-        " Composer (busy) "
+        " Message (busy) "
     } else {
-        " Composer "
+        " Message "
     };
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -191,16 +200,16 @@ fn render_composer(f: &mut Frame, app: &TuiApp, area: Rect) {
         chunks[0],
     );
     let hint = if app.input.trim_start().starts_with('/') {
-        "slash command mode  Enter run highlighted command  Esc close overlay"
+        "slash command  Enter run highlighted command  Esc close overlay"
     } else if app.is_busy() {
-        "runtime busy  wait for current task to finish"
+        "runtime busy  wait for the current task to finish"
     } else if app.agent_execution_mode_label() == "plan" {
         "plan mode  read-only analysis  /plan return to implementation mode"
     } else {
-        "plain prompt mode  /plan read-only planning  /help commands  /quit exit"
+        "prompt mode  /plan planning  /help commands  /quit exit"
     };
     f.render_widget(
-        Paragraph::new(hint).alignment(Alignment::Right),
+        Paragraph::new(Span::styled(hint, Style::default().fg(Color::Gray))).alignment(Alignment::Right),
         chunks[1],
     );
 }
@@ -217,14 +226,18 @@ fn render_footer(f: &mut Frame, app: &TuiApp, area: Rect) {
     let hint = if app.input.trim_start().starts_with('/') {
         "Enter run highlighted command  Esc close overlay"
     } else if app.is_busy() {
-        "/status inspect runtime  /quit exit  background task keeps UI responsive"
+        "/status inspect runtime  /quit exit  background task stays responsive"
     } else if app.agent_execution_mode_label() == "plan" {
         "/plan leave plan mode  /status inspect runtime  /quit exit"
     } else {
         "Enter submit prompt  /plan read-only planning  /model switch providers  /quit exit"
     };
     f.render_widget(
-        Paragraph::new(Line::from(vec![Span::raw(summary), Span::raw("  "), Span::raw(hint)])),
+        Paragraph::new(Line::from(vec![
+            Span::styled(summary, Style::default().fg(Color::Gray)),
+            Span::raw("  "),
+            Span::styled(hint, Style::default().fg(Color::DarkGray)),
+        ])),
         area,
     );
 }
@@ -273,22 +286,20 @@ fn render_header(f: &mut Frame, app: &TuiApp, area: Rect) {
             Span::raw(" "),
             badge("key", key_status, key_color),
         ]),
-        Line::from(format!(
-            " phase={} ",
-            app.runtime_phase_label()
-        )),
         Line::from(vec![
-            Span::raw(format!(
-                " model={}  revision={}  workspace={} ",
-                app.current_model_label(),
-                app.config.revision.as_deref().unwrap_or("main"),
-                app.snapshot.cwd,
-            )),
+            Span::styled(" ", Style::default()),
+            Span::styled(
+                format!(
+                    "model={}  revision={}  workspace={}  branch={}  session={}",
+                    app.current_model_label(),
+                    app.config.revision.as_deref().unwrap_or("main"),
+                    app.snapshot.cwd,
+                    app.snapshot.branch,
+                    app.snapshot.session_id
+                ),
+                Style::default().fg(Color::Gray),
+            ),
         ]),
-        Line::from(format!(
-            " branch={}  session={} ",
-            app.snapshot.branch, app.snapshot.session_id
-        )),
     ];
     f.render_widget(Paragraph::new(lines), area);
 }
@@ -837,16 +848,18 @@ fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
 }
 
 fn transcript_item(role: &str, message: &str, is_active_tail: bool) -> ListItem<'static> {
-    let mut lines = vec![Line::from(vec![
-        Span::styled(
-            if is_active_tail { ">" } else { " " },
+    let mut header = vec![role_badge_span(role)];
+    if is_active_tail {
+        header.push(Span::raw(" "));
+        header.push(Span::styled(
+            " live ",
             Style::default()
-                .fg(if is_active_tail { Color::Yellow } else { Color::DarkGray })
-                .add_modifier(if is_active_tail { Modifier::BOLD } else { Modifier::empty() }),
-        ),
-        Span::raw(" "),
-        role_badge_span(role),
-    ])];
+                .fg(Color::Black)
+                .bg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ));
+    }
+    let mut lines = vec![Line::from(header)];
     let max_message_lines = match role {
         "Tool Result" | "Tool Error" => 4,
         "Status" => 2,
@@ -885,14 +898,14 @@ fn command_preview_text(spec: &super::state::CommandSpec) -> String {
 
 fn role_badge_span(role: &str) -> Span<'static> {
     let (fg, bg) = match role {
-        "You" => (Color::Black, Color::Green),
+        "You" => (Color::Black, Color::LightBlue),
         "Agent" => (Color::Black, Color::Cyan),
         "Tool" => (Color::Black, Color::Yellow),
         "Tool Result" => (Color::Black, Color::LightGreen),
         "Tool Error" => (Color::White, Color::Red),
         "Download" => (Color::Black, Color::LightBlue),
         "Runtime" => (Color::Black, Color::LightBlue),
-        "Status" => (Color::Black, Color::Gray),
+        "Status" => (Color::White, Color::DarkGray),
         "System" => (Color::Black, Color::Magenta),
         _ => (Color::White, Color::DarkGray),
     };
