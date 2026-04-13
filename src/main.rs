@@ -8,6 +8,7 @@ mod sandbox;
 mod session;
 mod skill;
 mod tool;
+mod tool_result;
 mod tools;
 mod tui;
 mod vectordb;

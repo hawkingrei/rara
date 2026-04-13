@@ -1,4 +1,5 @@
 use crate::tool::{ToolManager};
+use crate::tool_result::{default_tool_result_store_dir, repair_tool_result_history, ToolResultStore};
 use crate::llm::LlmBackend;
 use crate::vectordb::{VectorDB, MemoryMetadata};
 use crate::session::SessionManager;
@@ -69,6 +70,7 @@ pub struct Agent {
     pub session_id: String,
     pub total_input_tokens: u32,
     pub total_output_tokens: u32,
+    pub tool_result_store: ToolResultStore,
 }
 
 impl Agent {
@@ -89,6 +91,8 @@ impl Agent {
             session_id: Uuid::new_v4().to_string(),
             total_input_tokens: 0,
             total_output_tokens: 0,
+            tool_result_store: ToolResultStore::new(default_tool_result_store_dir())
+                .expect("tool result store"),
         }
     }
 
@@ -160,6 +164,7 @@ impl Agent {
     {
         let turn_start_idx = self.history.len();
         self.compact_if_needed_with_reporter(&mut report).await?;
+        self.history = repair_tool_result_history(&self.history);
         
         self.history.push(Message {
             role: "user".to_string(),
@@ -207,9 +212,14 @@ impl Agent {
             for (id, name, input) in tool_calls {
                 if let Some(tool) = self.tool_manager.get_tool(&name) {
                     report(AgentEvent::Status(format!("Running tool {name}.")));
-                    match tool.call(input).await {
+                    match tool.call(input.clone()).await {
                         Ok(result) => {
-                            let result_text = result.to_string();
+                            let result_text = self.tool_result_store.compact_result(
+                                &name,
+                                &id,
+                                &input,
+                                &result,
+                            )?;
                             report(AgentEvent::ToolResult {
                                 name: name.clone(),
                                 content: result_text.clone(),
