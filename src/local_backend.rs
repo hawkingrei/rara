@@ -542,6 +542,12 @@ pub fn default_local_model_cache_dir() -> PathBuf {
     base
 }
 
+pub fn local_runtime_target() -> Result<(String, String)> {
+    let device = select_device()?;
+    let dtype = preferred_dtype(&device);
+    Ok((device_label(&device).to_string(), dtype_label(dtype).to_string()))
+}
+
 fn load_safetensors(repo: &ApiRepo) -> Result<Vec<PathBuf>> {
     let index_path = repo
         .get("model.safetensors.index.json")
@@ -573,6 +579,29 @@ fn preferred_dtype(device: &Device) -> DType {
         DType::BF16
     } else {
         DType::F32
+    }
+}
+
+fn device_label(device: &Device) -> &'static str {
+    if device.is_cuda() {
+        "cuda"
+    } else if device.is_metal() {
+        "metal"
+    } else {
+        "cpu"
+    }
+}
+
+fn dtype_label(dtype: DType) -> &'static str {
+    match dtype {
+        DType::BF16 => "bf16",
+        DType::F16 => "f16",
+        DType::F32 => "f32",
+        DType::F64 => "f64",
+        DType::U8 => "u8",
+        DType::U32 => "u32",
+        DType::I64 => "i64",
+        _ => "unknown",
     }
 }
 

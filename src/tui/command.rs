@@ -201,13 +201,21 @@ pub fn status_runtime_text(app: &TuiApp) -> String {
     };
     let phase = app.runtime_phase_label();
     let detail = app.runtime_phase_detail.as_deref().unwrap_or("-");
+    let (device, dtype) = if is_local_provider(&app.config.provider) {
+        crate::local_backend::local_runtime_target()
+            .unwrap_or_else(|_| ("unavailable".to_string(), "unavailable".to_string()))
+    } else {
+        ("remote".to_string(), "-".to_string())
+    };
     format!(
-        "provider={}\nmodel={}\nrevision={}\nmode={}\napi_key={}\nphase={}\ndetail={}",
+        "provider={}\nmodel={}\nrevision={}\nmode={}\napi_key={}\ndevice={}\ndtype={}\nphase={}\ndetail={}",
         app.config.provider,
         app.current_model_label(),
         app.config.revision.as_deref().unwrap_or("main"),
         mode,
         api_key_status(&app.config),
+        device,
+        dtype,
         phase,
         detail,
     )
