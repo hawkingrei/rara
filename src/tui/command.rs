@@ -262,7 +262,7 @@ pub fn status_runtime_text(app: &TuiApp) -> String {
         ("remote".to_string(), "-".to_string())
     };
     format!(
-        "provider={}\nmodel={}\nbase_url={}\nrevision={}\nagent_mode={}\nbash_approval={}\nmode={}\napi_key={}\nthinking={}\ndevice={}\ndtype={}\nphase={}\ndetail={}",
+        "provider={}\nmodel={}\nbase_url={}\nrevision={}\nagent_mode={}\nbash_approval={}\nmode={}\napi_key={}\nthinking={}\ndevice={}\ndtype={}\nfocused={}\nphase={}\ndetail={}",
         app.config.provider,
         app.current_model_label(),
         app.config.base_url.as_deref().unwrap_or("-"),
@@ -274,6 +274,7 @@ pub fn status_runtime_text(app: &TuiApp) -> String {
         thinking,
         device,
         dtype,
+        app.terminal_focused,
         phase,
         detail,
     )

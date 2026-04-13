@@ -185,6 +185,7 @@ pub struct TuiApp {
     pub base_url_input: String,
     pub recent_commands: Vec<String>,
     pub transcript_scroll: usize,
+    pub terminal_focused: bool,
     pub running_task: Option<RunningTask>,
 }
 
@@ -219,6 +220,7 @@ impl TuiApp {
             base_url_input: String::new(),
             recent_commands: Vec::new(),
             transcript_scroll: 0,
+            terminal_focused: true,
             running_task: None,
         }
     }

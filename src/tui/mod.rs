@@ -1,5 +1,6 @@
 mod app_event;
 mod command;
+mod event_stream;
 mod render;
 mod runtime;
 mod state;
@@ -9,7 +10,7 @@ use std::sync::Arc;
 
 use crossterm::{
     cursor::{Hide, Show},
-    event::{Event, EventStream, KeyCode, KeyEventKind},
+    event::{EventStream, KeyCode},
     execute,
     terminal::size as terminal_size,
     terminal::{disable_raw_mode, enable_raw_mode},
@@ -27,6 +28,7 @@ use crate::oauth::OAuthManager;
 
 use self::app_event::AppEvent;
 use self::command::{palette_command_by_index, palette_commands, parse_local_command};
+use self::event_stream::{translate_event, UiEvent};
 use self::render::{committed_turn_lines, render};
 use self::runtime::{
     execute_local_command, finish_running_task_if_ready, start_oauth_task, start_pending_approval_task, start_query_task,
@@ -60,16 +62,23 @@ pub async fn run_tui(agent: Agent, oauth_manager: OAuthManager) -> anyhow::Resul
             _ = tick.tick() => {}
             maybe_event = events.next() => {
                 match maybe_event {
-                    Some(Ok(Event::Key(key))) if key.kind == KeyEventKind::Press => {
-                        let event = map_key_to_event(key.code, &app);
-                        if dispatch_event(event, &mut app, &mut agent_slot, &oauth_manager).await? {
-                            break Ok(());
+                    Some(Ok(event)) => match translate_event(event, &app) {
+                        Some(UiEvent::App(event)) => {
+                            if dispatch_event(event, &mut app, &mut agent_slot, &oauth_manager).await? {
+                                break Ok(());
+                            }
                         }
-                    }
-                    Some(Ok(Event::Resize(_, _))) => {
-                        terminal = build_terminal()?;
-                    }
-                    Some(Ok(_)) => {}
+                        Some(UiEvent::Draw) => {
+                            terminal = build_terminal()?;
+                        }
+                        Some(UiEvent::Paste(text)) => {
+                            handle_paste(text, &mut app);
+                        }
+                        Some(UiEvent::FocusChanged(focused)) => {
+                            app.terminal_focused = focused;
+                        }
+                        None => {}
+                    },
                     Some(Err(err)) => break Err(err.into()),
                     None => break Ok(()),
                 }
@@ -79,6 +88,20 @@ pub async fn run_tui(agent: Agent, oauth_manager: OAuthManager) -> anyhow::Resul
 
     teardown_terminal(terminal)?;
     result
+}
+
+fn handle_paste(text: String, app: &mut TuiApp) {
+    if matches!(app.overlay, Some(Overlay::BaseUrlEditor)) {
+        app.base_url_input.push_str(&text);
+        return;
+    }
+
+    app.input.push_str(&text);
+    if app.input.trim_start().starts_with('/') {
+        app.open_overlay(Overlay::CommandPalette);
+    } else if matches!(app.overlay, Some(Overlay::CommandPalette)) {
+        app.close_overlay();
+    }
 }
 
 fn build_terminal() -> anyhow::Result<Terminal<CrosstermBackend<std::io::Stdout>>> {
