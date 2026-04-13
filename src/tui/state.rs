@@ -86,6 +86,8 @@ pub struct RuntimeSnapshot {
     pub history_len: usize,
     pub total_input_tokens: u32,
     pub total_output_tokens: u32,
+    pub plan_steps: Vec<(String, String)>,
+    pub plan_explanation: Option<String>,
 }
 
 pub enum TaskKind {
@@ -268,6 +270,19 @@ impl TuiApp {
             history_len: agent.history.len(),
             total_input_tokens: agent.total_input_tokens,
             total_output_tokens: agent.total_output_tokens,
+            plan_steps: agent
+                .current_plan
+                .iter()
+                .map(|step| {
+                    let status = match step.status {
+                        crate::agent::PlanStepStatus::Pending => "pending",
+                        crate::agent::PlanStepStatus::InProgress => "in_progress",
+                        crate::agent::PlanStepStatus::Completed => "completed",
+                    };
+                    (status.to_string(), step.step.clone())
+                })
+                .collect(),
+            plan_explanation: agent.plan_explanation.clone(),
         };
         self.agent_execution_mode = agent.execution_mode;
     }

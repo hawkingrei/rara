@@ -439,6 +439,34 @@ pub fn recent_transcript_preview(app: &TuiApp, limit: usize) -> String {
         .join("\n")
 }
 
+pub fn status_plan_text(app: &TuiApp) -> String {
+    if app.snapshot.plan_steps.is_empty() {
+        return "No structured plan captured yet.".to_string();
+    }
+
+    let steps = app
+        .snapshot
+        .plan_steps
+        .iter()
+        .enumerate()
+        .map(|(idx, (status, step))| {
+            let marker = match status.as_str() {
+                "completed" => "x",
+                "in_progress" => ">",
+                _ => " ",
+            };
+            format!("[{marker}] {}. {}", idx + 1, step)
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    if let Some(explanation) = app.snapshot.plan_explanation.as_deref() {
+        format!("steps:\n{}\n\nnote:\n{}", steps, explanation)
+    } else {
+        format!("steps:\n{}", steps)
+    }
+}
+
 pub fn model_help_text(app: &TuiApp) -> String {
     let lines = PROVIDER_FAMILIES
         .iter()

@@ -20,6 +20,19 @@ pub enum AgentExecutionMode {
     Plan,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PlanStepStatus {
+    Pending,
+    InProgress,
+    Completed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanStep {
+    pub step: String,
+    pub status: PlanStepStatus,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Message {
     pub role: String,
@@ -95,6 +108,8 @@ pub struct Agent {
     pub total_output_tokens: u32,
     pub tool_result_store: ToolResultStore,
     pub execution_mode: AgentExecutionMode,
+    pub current_plan: Vec<PlanStep>,
+    pub plan_explanation: Option<String>,
 }
 
 impl Agent {
@@ -118,6 +133,8 @@ impl Agent {
             tool_result_store: ToolResultStore::new(default_tool_result_store_dir())
                 .expect("tool result store"),
             execution_mode: AgentExecutionMode::Execute,
+            current_plan: Vec::new(),
+            plan_explanation: None,
         }
     }
 
@@ -140,6 +157,11 @@ impl Agent {
                 - This pass is read-only.\n\
                 - Inspect the codebase, analyze constraints, and produce a concrete implementation plan.\n\
                 - Do not call tools that edit files, run shell commands, update project memory, save experience, or spawn sub-agents.\n",
+            );
+            prompt.push_str(
+                "- Start your response with a <plan> block.\n\
+                - Inside the block, emit one step per line in the form '- [pending] Step' or '- [in_progress] Step' or '- [completed] Step'.\n\
+                - After </plan>, provide a short explanation grounded in the inspected code.\n",
             );
         }
         prompt.push_str("\n## Capabilities:\n\
@@ -304,6 +326,9 @@ impl Agent {
             match block {
                 ContentBlock::Text { text } => {
                     report(AgentEvent::AssistantText(text.clone()));
+                    if matches!(self.execution_mode, AgentExecutionMode::Plan) {
+                        self.capture_plan_from_text(text);
+                    }
                     if matches!(output_mode, AgentOutputMode::Terminal) {
                         println!("Agent: {}", text);
                     }
@@ -434,6 +459,51 @@ impl Agent {
             ),
         }
     }
+
+    fn capture_plan_from_text(&mut self, text: &str) {
+        let Some((steps, explanation)) = parse_plan_block(text) else {
+            return;
+        };
+        if !steps.is_empty() {
+            self.current_plan = steps;
+        }
+        self.plan_explanation = explanation;
+    }
+}
+
+fn parse_plan_block(text: &str) -> Option<(Vec<PlanStep>, Option<String>)> {
+    let start = text.find("<plan>")?;
+    let end = text.find("</plan>")?;
+    if end <= start {
+        return None;
+    }
+
+    let block = &text[start + "<plan>".len()..end];
+    let mut steps = Vec::new();
+    for line in block.lines().map(str::trim).filter(|line| !line.is_empty()) {
+        let Some(rest) = line.strip_prefix("- [") else {
+            continue;
+        };
+        let Some((status, step)) = rest.split_once("] ") else {
+            continue;
+        };
+        let status = match status.trim() {
+            "pending" => PlanStepStatus::Pending,
+            "in_progress" => PlanStepStatus::InProgress,
+            "completed" => PlanStepStatus::Completed,
+            _ => continue,
+        };
+        steps.push(PlanStep {
+            step: step.trim().to_string(),
+            status,
+        });
+    }
+
+    let explanation = text[end + "</plan>".len()..].trim();
+    Some((
+        steps,
+        (!explanation.is_empty()).then(|| explanation.to_string()),
+    ))
 }
 
 fn tool_continuation_message() -> Message {
@@ -460,7 +530,7 @@ fn tool_result_message(tool_use_id: &str, content: String, is_error: bool) -> Me
 
 #[cfg(test)]
 mod tests {
-    use super::{tool_continuation_message, Agent, AgentExecutionMode, AnthropicResponse, ContentBlock, Message, TokenUsage};
+    use super::{parse_plan_block, tool_continuation_message, Agent, AgentExecutionMode, AnthropicResponse, ContentBlock, Message, PlanStep, PlanStepStatus, TokenUsage};
     use crate::llm::LlmBackend;
     use crate::session::SessionManager;
     use crate::tool::{Tool, ToolError, ToolManager};
@@ -665,5 +735,32 @@ mod tests {
         let observed_tools = backend.observed_tools();
         assert_eq!(observed_tools.len(), 1);
         assert_eq!(observed_tools[0], vec!["stub_tool".to_string()]);
+    }
+
+    #[test]
+    fn parses_structured_plan_block() {
+        let text = "<plan>\n- [in_progress] Inspect core agent loop\n- [pending] Review TUI rendering path\n- [completed] Confirm current constraints\n</plan>\nFocus on agent.rs and tui/runtime.rs first.";
+        let parsed = parse_plan_block(text).expect("plan block should parse");
+        assert_eq!(
+            parsed.0,
+            vec![
+                PlanStep {
+                    step: "Inspect core agent loop".to_string(),
+                    status: PlanStepStatus::InProgress,
+                },
+                PlanStep {
+                    step: "Review TUI rendering path".to_string(),
+                    status: PlanStepStatus::Pending,
+                },
+                PlanStep {
+                    step: "Confirm current constraints".to_string(),
+                    status: PlanStepStatus::Completed,
+                },
+            ]
+        );
+        assert_eq!(
+            parsed.1.as_deref(),
+            Some("Focus on agent.rs and tui/runtime.rs first.")
+        );
     }
 }
