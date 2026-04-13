@@ -98,7 +98,7 @@ fn render_transcript(f: &mut Frame, app: &TuiApp, area: Rect) {
 
     let history_items = history_items(app, current_turn_start, sections[0].height as usize);
     f.render_widget(
-        List::new(history_items).block(Block::default().borders(Borders::BOTTOM).title(" Earlier Conversation ")),
+        List::new(history_items).block(Block::default().borders(Borders::BOTTOM).title(" Conversation History ")),
         sections[0],
     );
     f.render_widget(
@@ -119,38 +119,18 @@ fn history_items(app: &TuiApp, current_turn_start: usize, available_height: usiz
 
     if history.is_empty() {
         return vec![ListItem::new(Line::from(Span::styled(
-            "No earlier conversation.",
+            "No committed conversation yet.",
             Style::default().fg(Color::DarkGray),
         )))];
     }
 
-    let max_visible_entries = available_height.saturating_sub(2).max(3) / 3;
+    let max_visible_entries = available_height.saturating_sub(1).max(3) / 3;
     let start = history.len().saturating_sub(max_visible_entries);
-    let mut items = Vec::new();
-    if start > 0 {
-        items.push(ListItem::new(Line::from(vec![
-            Span::styled(
-                "Earlier entries hidden ",
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::raw(format!(
-                "showing latest {} of {} conversation entries",
-                history.len() - start,
-                history.len()
-            )),
-        ])));
-        items.push(ListItem::new(Line::from("")));
-    }
-
-    items.extend(
-        history
-            .into_iter()
-            .skip(start)
-            .map(|(role, message)| transcript_item(role, message, false)),
-    );
-    items
+    history
+        .into_iter()
+        .skip(start)
+        .map(|(role, message)| transcript_item(role, message, false))
+        .collect()
 }
 
 fn current_turn_lines(app: &TuiApp, current_turn_start: usize) -> Vec<Line<'static>> {
@@ -180,6 +160,23 @@ fn current_turn_lines(app: &TuiApp, current_turn_start: usize) -> Vec<Line<'stat
                 .add_modifier(Modifier::BOLD),
         )));
         lines.push(Line::from("  Read-only planning is active for this turn."));
+        lines.push(Line::from(""));
+    }
+
+    if let Some(summary) = current_turn_exploration_summary(app, current_turn.as_slice(), latest_agent.is_none()) {
+        let title = if app.is_busy() && latest_agent.is_none() {
+            " Exploring "
+        } else {
+            " Explored "
+        };
+        lines.push(Line::from(Span::styled(
+            title,
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        )));
+        lines.extend(summary.lines().map(|line| Line::from(format!("  {line}"))));
         lines.push(Line::from(""));
     }
 
@@ -274,6 +271,41 @@ fn current_turn_lines(app: &TuiApp, current_turn_start: usize) -> Vec<Line<'stat
     lines
 }
 
+fn current_turn_exploration_summary(
+    app: &TuiApp,
+    current_turn: &[&(String, String)],
+    prefer_live_label: bool,
+) -> Option<String> {
+    let mut actions = Vec::new();
+    for (role, message) in current_turn {
+        if role != "Tool" {
+            continue;
+        }
+        if let Some(action) = exploration_action_label(message) {
+            actions.push(action);
+        }
+    }
+    if actions.is_empty() {
+        return None;
+    }
+
+    let mut lines = actions
+        .into_iter()
+        .map(|action| format!("└ {action}"))
+        .collect::<Vec<_>>();
+
+    if app.is_busy() && prefer_live_label {
+        lines.push(format!(
+            "└ {}",
+            app.runtime_phase_detail
+                .as_deref()
+                .unwrap_or("waiting for more exploration output")
+        ));
+    }
+
+    Some(lines.join("\n"))
+}
+
 fn current_turn_tool_summary(current_turn: &[&(String, String)]) -> Option<String> {
     let tools = current_turn
         .iter()
@@ -281,7 +313,11 @@ fn current_turn_tool_summary(current_turn: &[&(String, String)]) -> Option<Strin
             if role != "Tool" {
                 return None;
             }
-            message.split_whitespace().next().map(str::to_string)
+            let name = message.split_whitespace().next()?;
+            if is_exploration_tool(name) {
+                return None;
+            }
+            Some(name.to_string())
         })
         .collect::<Vec<_>>();
     if tools.is_empty() {
@@ -297,6 +333,24 @@ fn current_turn_tool_summary(current_turn: &[&(String, String)]) -> Option<Strin
         parts.push(format!("Recorded {} tool result(s).", results));
     }
     Some(parts.join("\n"))
+}
+
+fn is_exploration_tool(name: &str) -> bool {
+    matches!(name, "list_files" | "read_file" | "glob" | "grep" | "search_files")
+}
+
+fn exploration_action_label(message: &str) -> Option<String> {
+    let mut parts = message.split_whitespace();
+    let name = parts.next()?;
+    let rest = parts.collect::<Vec<_>>().join(" ");
+    match name {
+        "list_files" => Some(format!("List {}", if rest.is_empty() { "." } else { rest.as_str() })),
+        "read_file" => Some(format!("Read {}", if rest.is_empty() { "file" } else { rest.as_str() })),
+        "glob" => Some(format!("Glob {}", if rest.is_empty() { "workspace" } else { rest.as_str() })),
+        "grep" => Some(format!("Search {}", if rest.is_empty() { "workspace" } else { rest.as_str() })),
+        "search_files" => Some(format!("Search files {}", if rest.is_empty() { "workspace" } else { rest.as_str() })),
+        _ => None,
+    }
 }
 
 fn latest_turn_start(app: &TuiApp) -> Option<usize> {
