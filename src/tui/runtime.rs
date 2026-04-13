@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Instant;
 
 use tokio::sync::mpsc;
 
@@ -95,6 +96,9 @@ pub fn start_query_task(app: &mut TuiApp, prompt: String, mut agent: Agent) {
         kind: TaskKind::Query,
         receiver,
         handle,
+        started_at: Instant::now(),
+        next_heartbeat_after_secs: 2,
+        next_transcript_after_secs: 5,
     });
 }
 
@@ -126,6 +130,9 @@ pub fn start_rebuild_task(app: &mut TuiApp) {
         kind: TaskKind::Rebuild,
         receiver,
         handle,
+        started_at: Instant::now(),
+        next_heartbeat_after_secs: u64::MAX,
+        next_transcript_after_secs: u64::MAX,
     });
 }
 
@@ -144,6 +151,9 @@ pub fn start_oauth_task(app: &mut TuiApp, oauth_manager: Arc<OAuthManager>) {
         kind: TaskKind::OAuth,
         receiver,
         handle,
+        started_at: Instant::now(),
+        next_heartbeat_after_secs: u64::MAX,
+        next_transcript_after_secs: u64::MAX,
     });
 }
 
@@ -170,6 +180,7 @@ pub async fn finish_running_task_if_ready(
     }
 
     if !is_finished {
+        emit_query_heartbeat(app);
         return Ok(());
     }
 
@@ -242,6 +253,39 @@ pub async fn finish_running_task_if_ready(
     }
 
     Ok(())
+}
+
+fn emit_query_heartbeat(app: &mut TuiApp) {
+    let Some(task) = app.running_task.as_mut() else {
+        return;
+    };
+    if !matches!(task.kind, TaskKind::Query) || !super::command::is_local_provider(&app.config.provider) {
+        return;
+    }
+
+    let elapsed = task.started_at.elapsed().as_secs();
+    if elapsed < task.next_heartbeat_after_secs {
+        return;
+    }
+
+    let detail = format!("local model is still generating · {}s elapsed", elapsed);
+    let should_log_transcript = elapsed >= task.next_transcript_after_secs;
+    task.next_heartbeat_after_secs = elapsed.saturating_add(1);
+    if should_log_transcript {
+        task.next_transcript_after_secs = elapsed.saturating_add(10);
+    }
+
+    app.set_runtime_phase(RuntimePhase::SendingPrompt, Some(detail.clone()));
+    app.notice = Some(format!("Working locally · {}s elapsed", elapsed));
+    if should_log_transcript {
+        app.push_entry(
+            "Status",
+            format!(
+                "Local model is still generating. First-token latency can be high on local inference.\nElapsed: {}s",
+                elapsed
+            ),
+        );
+    }
 }
 
 fn handle_model_command(arg: Option<&str>, app: &mut TuiApp) -> anyhow::Result<()> {

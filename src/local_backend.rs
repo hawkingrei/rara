@@ -150,7 +150,7 @@ impl LocalLlmBackend {
                 device,
                 eos_token_ids,
             })),
-            max_new_tokens: 1024,
+            max_new_tokens: 384,
         })
     }
 }

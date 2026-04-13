@@ -1,5 +1,6 @@
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::task::JoinHandle;
+use std::time::Instant;
 
 use crate::agent::Agent;
 use crate::config::{ConfigManager, RaraConfig};
@@ -107,6 +108,9 @@ pub struct RunningTask {
     pub kind: TaskKind,
     pub receiver: UnboundedReceiver<TuiEvent>,
     pub handle: JoinHandle<TaskCompletion>,
+    pub started_at: Instant,
+    pub next_heartbeat_after_secs: u64,
+    pub next_transcript_after_secs: u64,
 }
 
 pub const LOCAL_MODEL_PRESETS: [(&str, &str, &str); 3] = [
