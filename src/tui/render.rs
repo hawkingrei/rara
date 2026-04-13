@@ -23,66 +23,62 @@ pub fn render(f: &mut Frame, app: &TuiApp) {
         .constraints([
             Constraint::Length(2),
             Constraint::Min(8),
-            Constraint::Length(3),
-            Constraint::Length(3),
-            Constraint::Length(1),
+            Constraint::Length(6),
         ])
         .split(f.area());
 
     render_header(f, app, layout[0]);
     render_transcript(f, app, layout[1]);
-    render_activity_bar(f, app, layout[2]);
-    render_composer(f, app, layout[3]);
-    render_footer(f, app, layout[4]);
+    render_bottom_pane(f, app, layout[2]);
 
     if let Some(overlay) = app.overlay {
         render_overlay(f, app, overlay);
     }
 }
 
+fn render_bottom_pane(f: &mut Frame, app: &TuiApp, area: Rect) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(1), Constraint::Min(4), Constraint::Length(1)])
+        .split(area);
+    render_activity_bar(f, app, chunks[0]);
+    render_composer(f, app, chunks[1]);
+    render_footer(f, app, chunks[2]);
+}
+
 fn render_transcript(f: &mut Frame, app: &TuiApp, area: Rect) {
     if !app.has_any_transcript() {
-        let items = vec![
-            ListItem::new(Line::from(Span::styled(
+        let lines = vec![
+            Line::from(Span::styled(
                 "Ready.",
                 Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
-            ))),
-            ListItem::new(Line::from("Use the input bar below to start a task or run a local command.")),
-            ListItem::new(Line::from("")),
-            ListItem::new(Line::from(Span::styled(
+            )),
+            Line::from("Use the input bar below to start a task or run a local command."),
+            Line::from(""),
+            Line::from(Span::styled(
                 "Start with:",
                 Style::default().fg(Color::LightBlue).add_modifier(Modifier::BOLD),
-            ))),
-            ListItem::new(Line::from("  /help    browse built-in commands and runtime hints")),
-            ListItem::new(Line::from("  /search  grep the workspace without going through the model")),
-            ListItem::new(Line::from("  /model   choose provider first, then switch models")),
-            ListItem::new(Line::from("  /status  inspect runtime, tokens, cache, and session")),
-            ListItem::new(Line::from("  /quit    leave the TUI and restore the terminal")),
-            ListItem::new(Line::from("")),
-            ListItem::new(Line::from(Span::styled(
+            )),
+            Line::from("  /help    browse built-in commands and runtime hints"),
+            Line::from("  /search  grep the workspace without going through the model"),
+            Line::from("  /model   choose provider first, then switch models"),
+            Line::from("  /status  inspect runtime, tokens, cache, and session"),
+            Line::from("  /quit    leave the TUI and restore the terminal"),
+            Line::from(""),
+            Line::from(Span::styled(
                 "Prompt ideas:",
                 Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
-            ))),
-            ListItem::new(Line::from("  Explain this repository structure.")),
-            ListItem::new(Line::from("  Find the main agent loop and summarize it.")),
+            )),
+            Line::from("  Explain this repository structure."),
+            Line::from("  Find the main agent loop and summarize it."),
         ];
-        f.render_widget(
-            List::new(items).block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title(" Conversation "),
-            ),
-            area,
-        );
+        f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), area);
         return;
     }
 
-    f.render_widget(
-        Paragraph::new(current_turn_lines(app))
-            .block(Block::default().borders(Borders::ALL).title(" Current Turn "))
-            .wrap(Wrap { trim: false }),
-        area,
-    );
+    let mut lines = vec![Line::from(section_span("Current Turn", Color::LightBlue)), Line::from("")];
+    lines.extend(current_turn_lines(app));
+    f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), area);
 }
 
 pub fn committed_turn_lines(entries: &[TranscriptEntry]) -> Vec<Line<'static>> {
@@ -330,26 +326,18 @@ fn render_activity_bar(f: &mut Frame, app: &TuiApp, area: Rect) {
     } else {
         Color::LightGreen
     };
-    let status = Paragraph::new(vec![
-        Line::from(vec![
-            Span::styled(
-                format!(" {} ", animated_label),
-                Style::default().fg(Color::Black).bg(color).add_modifier(Modifier::BOLD),
-            ),
-            Span::raw(" "),
-            badge("mode", app.agent_execution_mode_label(), mode_color),
-            Span::raw(" "),
-            Span::styled(app.runtime_phase_label(), Style::default().fg(Color::Gray)),
-        ]),
-        Line::from(vec![
-            Span::styled(
-                format!(" {}  ", app.current_model_label()),
-                Style::default().fg(Color::DarkGray),
-            ),
-            Span::styled(detail, Style::default().fg(Color::Gray)),
-        ]),
-    ])
-    .block(Block::default().borders(Borders::ALL).title(" Runtime "));
+    let status = Paragraph::new(Line::from(vec![
+        Span::styled(
+            animated_label,
+            Style::default().fg(color).add_modifier(Modifier::BOLD),
+        ),
+        Span::raw("  "),
+        badge("mode", app.agent_execution_mode_label(), mode_color),
+        Span::raw("  "),
+        Span::styled(app.runtime_phase_label(), Style::default().fg(Color::Gray)),
+        Span::raw("  "),
+        Span::styled(detail, Style::default().fg(Color::DarkGray)),
+    ]));
     f.render_widget(status, area);
 }
 
@@ -370,17 +358,13 @@ fn animated_activity_label(app: &TuiApp, label: &str) -> String {
 }
 
 fn render_composer(f: &mut Frame, app: &TuiApp, area: Rect) {
-    let title = if app.is_busy() {
-        " Input "
-    } else {
-        " Input "
-    };
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(1), Constraint::Length(1)])
+        .constraints([Constraint::Min(2), Constraint::Length(1)])
         .split(area);
-    let composer_text = if app.input.is_empty() {
-        Line::from(vec![
+    let composer_lines = if app.input.is_empty() {
+        vec![Line::from(vec![
+            Span::styled("› ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
             Span::styled(
                 "Ask about the repo, request a code change, or type ",
                 Style::default().fg(Color::DarkGray),
@@ -392,13 +376,22 @@ fn render_composer(f: &mut Frame, app: &TuiApp, area: Rect) {
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(" to browse commands.", Style::default().fg(Color::DarkGray)),
-        ])
+        ])]
     } else {
-        Line::from(app.input.as_str())
+        app.input
+            .lines()
+            .map(|line| {
+                Line::from(vec![
+                    Span::styled("› ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                    Span::raw(line.to_string()),
+                ])
+            })
+            .collect::<Vec<_>>()
     };
     f.render_widget(
-        Paragraph::new(composer_text)
-            .block(Block::default().borders(Borders::ALL).title(title))
+        Paragraph::new(composer_lines)
+            .block(Block::default())
+            .style(Style::default().bg(Color::Rgb(18, 20, 24)))
             .wrap(Wrap { trim: false }),
         chunks[0],
     );
@@ -431,7 +424,8 @@ fn render_footer(f: &mut Frame, app: &TuiApp, area: Rect) {
         app.snapshot.total_output_tokens,
     );
     f.render_widget(
-        Paragraph::new(Line::from(Span::styled(summary, Style::default().fg(Color::DarkGray)))),
+        Paragraph::new(Line::from(Span::styled(summary, Style::default().fg(Color::DarkGray))))
+            .alignment(Alignment::Right),
         area,
     );
 }

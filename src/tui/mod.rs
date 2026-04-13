@@ -11,6 +11,7 @@ use crossterm::{
     cursor::{Hide, Show},
     event::{Event, EventStream, KeyCode, KeyEventKind},
     execute,
+    terminal::size as terminal_size,
     terminal::{disable_raw_mode, enable_raw_mode},
 };
 use futures::StreamExt;
@@ -40,10 +41,12 @@ pub async fn run_tui(agent: Agent, oauth_manager: OAuthManager) -> anyhow::Resul
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, Hide)?;
+    let (_, rows) = terminal_size()?;
+    let viewport_height = rows.saturating_sub(2).max(12);
     let mut terminal = Terminal::with_options(
         CrosstermBackend::new(stdout),
         TerminalOptions {
-            viewport: Viewport::Inline(18),
+            viewport: Viewport::Inline(viewport_height),
         },
     )?;
     let mut app = TuiApp::new(crate::config::ConfigManager::new()?);
