@@ -480,12 +480,14 @@ impl Agent {
         F: FnMut(AgentEvent),
     {
         loop {
+            self.ensure_active_plan_step();
             let turn_output = self
                 .run_model_turn(output_mode, report)
                 .await?;
             self.history.push(turn_output.assistant_message);
 
             if turn_output.tool_calls.is_empty() {
+                self.complete_remaining_plan_steps();
                 break;
             }
             *tool_rounds += 1;
@@ -502,6 +504,7 @@ impl Agent {
             if self.pending_approval.is_some() {
                 break;
             }
+            self.advance_plan_step();
             self.extend_history_for_next_turn(tool_results, report);
         }
         Ok(())
@@ -723,6 +726,57 @@ impl Agent {
         }
         self.plan_explanation = explanation;
         self.pending_user_input = parse_request_user_input_block(text);
+    }
+
+    fn ensure_active_plan_step(&mut self) {
+        if !matches!(self.execution_mode, AgentExecutionMode::Execute) || self.current_plan.is_empty() {
+            return;
+        }
+        if self
+            .current_plan
+            .iter()
+            .any(|step| matches!(step.status, PlanStepStatus::InProgress))
+        {
+            return;
+        }
+        if let Some(step) = self
+            .current_plan
+            .iter_mut()
+            .find(|step| matches!(step.status, PlanStepStatus::Pending))
+        {
+            step.status = PlanStepStatus::InProgress;
+        }
+    }
+
+    fn advance_plan_step(&mut self) {
+        if !matches!(self.execution_mode, AgentExecutionMode::Execute) || self.current_plan.is_empty() {
+            return;
+        }
+        if let Some(step) = self
+            .current_plan
+            .iter_mut()
+            .find(|step| matches!(step.status, PlanStepStatus::InProgress))
+        {
+            step.status = PlanStepStatus::Completed;
+        }
+        if let Some(step) = self
+            .current_plan
+            .iter_mut()
+            .find(|step| matches!(step.status, PlanStepStatus::Pending))
+        {
+            step.status = PlanStepStatus::InProgress;
+        }
+    }
+
+    fn complete_remaining_plan_steps(&mut self) {
+        if !matches!(self.execution_mode, AgentExecutionMode::Execute) || self.current_plan.is_empty() {
+            return;
+        }
+        for step in &mut self.current_plan {
+            if !matches!(step.status, PlanStepStatus::Completed) {
+                step.status = PlanStepStatus::Completed;
+            }
+        }
     }
 }
 
@@ -1079,5 +1133,68 @@ mod tests {
                 note: Some("Need direction before editing.".to_string()),
             }
         );
+    }
+
+    #[test]
+    fn advances_plan_steps_during_execute_mode() {
+        let mut agent = Agent::new(
+            ToolManager::new(),
+            Arc::new(SequencedBackend::new(Vec::new())),
+            Arc::new(VectorDB::new("data/lancedb")),
+            Arc::new(SessionManager::new().expect("session manager")),
+            Arc::new(WorkspaceMemory::new().expect("workspace memory")),
+        );
+        agent.set_execution_mode(AgentExecutionMode::Execute);
+        agent.current_plan = vec![
+            PlanStep {
+                step: "Inspect code".to_string(),
+                status: PlanStepStatus::Pending,
+            },
+            PlanStep {
+                step: "Apply changes".to_string(),
+                status: PlanStepStatus::Pending,
+            },
+        ];
+
+        agent.ensure_active_plan_step();
+        assert_eq!(agent.current_plan[0].status, PlanStepStatus::InProgress);
+        assert_eq!(agent.current_plan[1].status, PlanStepStatus::Pending);
+
+        agent.advance_plan_step();
+        assert_eq!(agent.current_plan[0].status, PlanStepStatus::Completed);
+        assert_eq!(agent.current_plan[1].status, PlanStepStatus::InProgress);
+    }
+
+    #[test]
+    fn completes_remaining_plan_steps_on_finish() {
+        let mut agent = Agent::new(
+            ToolManager::new(),
+            Arc::new(SequencedBackend::new(Vec::new())),
+            Arc::new(VectorDB::new("data/lancedb")),
+            Arc::new(SessionManager::new().expect("session manager")),
+            Arc::new(WorkspaceMemory::new().expect("workspace memory")),
+        );
+        agent.set_execution_mode(AgentExecutionMode::Execute);
+        agent.current_plan = vec![
+            PlanStep {
+                step: "Inspect code".to_string(),
+                status: PlanStepStatus::Completed,
+            },
+            PlanStep {
+                step: "Apply changes".to_string(),
+                status: PlanStepStatus::InProgress,
+            },
+            PlanStep {
+                step: "Summarize".to_string(),
+                status: PlanStepStatus::Pending,
+            },
+        ];
+
+        agent.complete_remaining_plan_steps();
+
+        assert!(agent
+            .current_plan
+            .iter()
+            .all(|step| step.status == PlanStepStatus::Completed));
     }
 }
