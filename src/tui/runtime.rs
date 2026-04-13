@@ -187,8 +187,11 @@ pub async fn finish_running_task_if_ready(
         return Ok(());
     }
 
-    let task = app.running_task.take().expect("task should exist");
+    let mut task = app.running_task.take().expect("task should exist");
     let completion = task.handle.await?;
+    while let Ok(event) = task.receiver.try_recv() {
+        apply_tui_event(app, event);
+    }
     match completion {
         TaskCompletion::Query { agent, result } => {
             *agent_slot = Some(agent);
@@ -198,10 +201,7 @@ pub async fn finish_running_task_if_ready(
             match result {
                 Ok(_) => {
                     app.notice = Some("Prompt finished.".into());
-                    app.set_runtime_phase(
-                        RuntimePhase::ProcessingResponse,
-                        Some("prompt finished".into()),
-                    );
+                    app.set_runtime_phase(RuntimePhase::Idle, Some("prompt finished".into()));
                 }
                 Err(err) => {
                     app.set_runtime_phase(RuntimePhase::Failed, Some("query failed".into()));
@@ -356,7 +356,7 @@ fn convert_agent_event(event: AgentEvent) -> TuiEvent {
         },
         AgentEvent::ToolUse { name, input } => TuiEvent::Transcript {
             role: "Tool",
-            message: format!("{name} {input}"),
+            message: format_tool_use(&name, &input),
         },
         AgentEvent::ToolResult {
             name,
@@ -364,9 +364,104 @@ fn convert_agent_event(event: AgentEvent) -> TuiEvent {
             is_error,
         } => TuiEvent::Transcript {
             role: if is_error { "Tool Error" } else { "Tool Result" },
-            message: format!("{name}: {content}"),
+            message: format_tool_result(&name, &content),
         },
     }
+}
+
+fn format_tool_use(name: &str, input: &serde_json::Value) -> String {
+    match name {
+        "bash" => input
+            .get("command")
+            .and_then(serde_json::Value::as_str)
+            .map(|command| format!("bash {command}"))
+            .unwrap_or_else(|| format!("{name} {input}")),
+        "read_file" => input
+            .get("path")
+            .and_then(serde_json::Value::as_str)
+            .map(|path| format!("read_file {path}"))
+            .unwrap_or_else(|| format!("{name} {input}")),
+        "write_file" => input
+            .get("path")
+            .and_then(serde_json::Value::as_str)
+            .map(|path| format!("write_file {path}"))
+            .unwrap_or_else(|| format!("{name} {input}")),
+        "replace" => input
+            .get("path")
+            .and_then(serde_json::Value::as_str)
+            .map(|path| format!("replace {path}"))
+            .unwrap_or_else(|| format!("{name} {input}")),
+        "list_files" => input
+            .get("path")
+            .and_then(serde_json::Value::as_str)
+            .map(|path| format!("list_files {path}"))
+            .unwrap_or_else(|| format!("{name} {input}")),
+        "grep" => {
+            let pattern = input
+                .get("pattern")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("<pattern>");
+            let path = input
+                .get("path")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or(".");
+            format!("grep {pattern} in {path}")
+        }
+        "glob" => {
+            let pattern = input
+                .get("pattern")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("<pattern>");
+            let path = input
+                .get("path")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or(".");
+            format!("glob {pattern} in {path}")
+        }
+        "web_fetch" => input
+            .get("url")
+            .and_then(serde_json::Value::as_str)
+            .map(|url| format!("web_fetch {url}"))
+            .unwrap_or_else(|| format!("{name} {input}")),
+        "apply_patch" => "apply_patch".to_string(),
+        _ => format!("{name} {input}"),
+    }
+}
+
+fn format_tool_result(name: &str, content: &str) -> String {
+    if name == "bash" {
+        if let Ok(value) = serde_json::from_str::<serde_json::Value>(content) {
+            let exit_code = value
+                .get("exit_code")
+                .and_then(serde_json::Value::as_i64)
+                .map(|code| code.to_string())
+                .unwrap_or_else(|| "?".to_string());
+            let stdout = value
+                .get("stdout")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default();
+            let stderr = value
+                .get("stderr")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default();
+            let mut summary = format!("bash exit_code={exit_code}");
+            if !stdout.trim().is_empty() {
+                summary.push_str(&format!("\nstdout: {}", first_non_empty_line(stdout)));
+            }
+            if !stderr.trim().is_empty() {
+                summary.push_str(&format!("\nstderr: {}", first_non_empty_line(stderr)));
+            }
+            return summary;
+        }
+    }
+
+    format!("{name}: {content}")
+}
+
+fn first_non_empty_line(text: &str) -> &str {
+    text.lines()
+        .find(|line| !line.trim().is_empty())
+        .unwrap_or(text)
 }
 
 fn format_error_chain(err: &anyhow::Error) -> String {
