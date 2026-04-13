@@ -297,47 +297,10 @@ fn handle_model_command(arg: Option<&str>, app: &mut TuiApp) -> anyhow::Result<(
 }
 
 fn handle_base_url_command(arg: Option<&str>, app: &mut TuiApp) -> anyhow::Result<()> {
-    let Some(raw_arg) = arg.map(str::trim).filter(|arg| !arg.is_empty()) else {
-        let current = app
-            .config
-            .base_url
-            .as_deref()
-            .unwrap_or("unset");
-        app.push_notice(format!("Current base URL: {current}"));
-        return Ok(());
-    };
-
-    match raw_arg {
-        "show" => {
-            let current = app
-                .config
-                .base_url
-                .as_deref()
-                .unwrap_or("unset");
-            app.push_notice(format!("Current base URL: {current}"));
-        }
-        "default" => {
-            app.config.base_url = Some("http://localhost:11434".to_string());
-            app.push_notice("Base URL reset to http://localhost:11434");
-        }
-        "clear" => {
-            app.config.base_url = None;
-            app.push_notice("Cleared provider base URL override.");
-        }
-        value => {
-            app.config.base_url = Some(value.to_string());
-            app.push_notice(format!("Updated base URL to {value}"));
-        }
+    if arg.map(str::trim).filter(|arg| !arg.is_empty()).is_some() {
+        app.push_notice("/base-url does not accept arguments. Edit the value in the TUI.");
     }
-
-    app.config_manager.save(&app.config)?;
-    if app.config.provider == "ollama" {
-        if app.is_busy() {
-            app.push_notice("Saved base URL. Rebuild later to apply the new Ollama target.");
-        } else {
-            start_rebuild_task(app);
-        }
-    }
+    app.open_overlay(Overlay::BaseUrlEditor);
     Ok(())
 }
 

@@ -44,9 +44,9 @@ pub const COMMAND_SPECS: [CommandSpec; 8] = [
     CommandSpec {
         category: "Models",
         name: "base-url",
-        usage: "/base-url [url|default|show|clear]",
-        summary: "Inspect or override the provider base URL.",
-        detail: "Use this mainly for Ollama. Without args it shows the current value. Use /base-url default to restore http://localhost:11434.",
+        usage: "/base-url",
+        summary: "Open the provider base URL editor.",
+        detail: "Open the interactive base URL editor. Use this mainly for Ollama. Edit and save the value inside the TUI instead of passing command arguments.",
     },
     CommandSpec {
         category: "Setup",
@@ -207,7 +207,7 @@ pub fn help_text() -> String {
         .collect::<Vec<_>>()
         .join("\n");
     format!(
-        "Built-in commands:\n{}\n\nKeyboard:\n  Enter submit\n  Esc close current overlay\n  S open setup\n\nExit:\n  /quit\n  /exit\n\nModel switching:\n  /model\n\nProvider URL examples:\n  /base-url\n  /base-url http://localhost:11434",
+        "Built-in commands:\n{}\n\nKeyboard:\n  Enter submit\n  Esc close current overlay\n  S open setup\n\nExit:\n  /quit\n  /exit\n\nModel switching:\n  /model\n\nProvider URL:\n  /base-url",
         commands
     )
 }
@@ -351,7 +351,7 @@ fn download_stage_index(stage: &str) -> usize {
 pub fn quick_actions_text() -> &'static str {
     "/help      browse commands and keyboard hints\n\
      /model     open guided model switching\n\
-     /base-url  inspect or override provider URL\n\
+     /base-url  open the provider URL editor\n\
      /status    inspect runtime and workspace\n\
      /clear     reset the visible transcript\n\
      /setup     open fallback setup\n\
@@ -467,11 +467,10 @@ mod tests {
     }
 
     #[test]
-    fn parses_base_url_command_argument() {
-        let command =
-            parse_local_command("/base-url http://localhost:11434").expect("command should parse");
+    fn parses_base_url_command() {
+        let command = parse_local_command("/base-url").expect("command should parse");
         assert!(matches!(command.kind, LocalCommandKind::BaseUrl));
-        assert_eq!(command.arg.as_deref(), Some("http://localhost:11434"));
+        assert_eq!(command.arg.as_deref(), None);
     }
 
     #[test]
