@@ -844,7 +844,7 @@ fn transcript_item(role: &str, message: &str, is_active_tail: bool) -> ListItem<
     let max_message_lines = match role {
         "Tool Result" | "Tool Error" => 4,
         "Status" => 2,
-        _ => 8,
+        _ => usize::MAX,
     };
     let message_lines = message.lines().collect::<Vec<_>>();
     if message_lines.is_empty() {
