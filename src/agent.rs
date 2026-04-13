@@ -109,6 +109,7 @@ impl Agent {
             prompt.push_str("\n");
         }
         prompt.push_str("\n## Capabilities:\n\
+            - Prefer 'apply_patch' for editing existing files and use 'write_file' only for new files or full rewrites.\n\
             - Use 'remember_experience' for global vector memory.\n\
             - Use 'update_project_memory' to record facts into memory.md.\n\
             - Use 'retrieve_session_context' to recall past conversations.\n\

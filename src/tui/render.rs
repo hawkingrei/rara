@@ -237,6 +237,12 @@ fn render_header(f: &mut Frame, app: &TuiApp, area: Rect) {
     } else {
         Color::Green
     };
+    let key_status = api_key_status(&app.config);
+    let key_color = match key_status {
+        "configured" => Color::Green,
+        "not-required" => Color::Blue,
+        _ => Color::Red,
+    };
     let lines = vec![
         Line::from(vec![
             Span::styled(
@@ -251,7 +257,7 @@ fn render_header(f: &mut Frame, app: &TuiApp, area: Rect) {
             Span::raw(" "),
             badge("state", activity.0, activity.1),
             Span::raw(" "),
-            badge("key", api_key_status(&app.config), Color::DarkGray),
+            badge("key", key_status, key_color),
         ]),
         Line::from(format!(
             " phase={} ",
@@ -865,10 +871,16 @@ fn role_badge_span(role: &str) -> Span<'static> {
 }
 
 fn badge<'a>(label: &'a str, value: &'a str, color: Color) -> Span<'a> {
+    let fg = match color {
+        Color::Black | Color::DarkGray | Color::Gray | Color::Blue | Color::Red | Color::Magenta => {
+            Color::White
+        }
+        _ => Color::Black,
+    };
     Span::styled(
         format!(" {}={} ", label, value),
         Style::default()
-            .fg(Color::Black)
+            .fg(fg)
             .bg(color)
             .add_modifier(Modifier::BOLD),
     )

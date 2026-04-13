@@ -33,6 +33,7 @@ impl ToolResultStore {
     ) -> Result<String> {
         let summary = summarize_tool_result(tool_name, input, result);
         let inline = match tool_name {
+            "apply_patch" => compact_apply_patch(result),
             "list_files" => compact_list_files(input, result),
             "read_file" => compact_read_file(input, result),
             "glob" => compact_glob(result),
@@ -264,6 +265,39 @@ fn compact_web_fetch(input: &Value, result: &Value) -> String {
     }
 }
 
+fn compact_apply_patch(result: &Value) -> String {
+    let status = result.get("status").and_then(Value::as_str).unwrap_or("unknown");
+    let files_changed = result
+        .get("files_changed")
+        .and_then(Value::as_u64)
+        .unwrap_or_default();
+    let hunks_applied = result
+        .get("hunks_applied")
+        .and_then(Value::as_u64)
+        .unwrap_or_default();
+    let summary_items = result
+        .get("summary")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let preview = summary_items
+        .iter()
+        .take(10)
+        .filter_map(Value::as_str)
+        .collect::<Vec<_>>()
+        .join("\n");
+    let remainder = summary_items.len().saturating_sub(10);
+    if remainder > 0 {
+        format!(
+            "Patch {status}: {files_changed} file(s), {hunks_applied} hunk(s).\nChanges:\n{preview}\n... {remainder} more change(s) omitted."
+        )
+    } else {
+        format!(
+            "Patch {status}: {files_changed} file(s), {hunks_applied} hunk(s).\nChanges:\n{preview}"
+        )
+    }
+}
+
 fn compact_generic(summary: &str, result: &Value) -> String {
     let rendered = serde_json::to_string_pretty(result).unwrap_or_else(|_| result.to_string());
     format!("{summary}\nPayload:\n{}", truncate_text(&rendered, LARGE_PREVIEW_HEAD))
@@ -310,6 +344,18 @@ fn summarize_tool_result(tool_name: &str, input: &Value, result: &Value) -> Stri
                 .map(|content| content.chars().count())
                 .unwrap_or_default();
             format!("Fetched {url} ({total_chars} chars).")
+        }
+        "apply_patch" => {
+            let status = result.get("status").and_then(Value::as_str).unwrap_or("unknown");
+            let files_changed = result
+                .get("files_changed")
+                .and_then(Value::as_u64)
+                .unwrap_or_default();
+            let hunks_applied = result
+                .get("hunks_applied")
+                .and_then(Value::as_u64)
+                .unwrap_or_default();
+            format!("Patch {status}: {files_changed} file(s), {hunks_applied} hunk(s).")
         }
         _ => {
             let keys = result

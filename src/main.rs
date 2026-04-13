@@ -32,6 +32,7 @@ use crate::tools::context::RetrieveSessionContextTool;
 use crate::tools::file::{
     ListFilesTool, ReadFileTool, ReplaceTool, SearchFilesTool, WriteFileTool,
 };
+use crate::tools::patch::ApplyPatchTool;
 use crate::tools::search::{GlobTool, GrepTool};
 use crate::tools::skill::SkillTool;
 use crate::tools::vector::{RememberExperienceTool, RetrieveExperienceTool};
@@ -151,6 +152,7 @@ fn create_full_tool_manager(
         sandbox: sandbox.clone(),
     }));
     tm.register(Box::new(ReadFileTool));
+    tm.register(Box::new(ApplyPatchTool));
     tm.register(Box::new(WriteFileTool));
     tm.register(Box::new(ListFilesTool));
     tm.register(Box::new(SearchFilesTool));
