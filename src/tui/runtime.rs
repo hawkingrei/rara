@@ -365,10 +365,12 @@ pub async fn finish_running_task_if_ready(
             }
             match result {
                 Ok(_) => {
+                    app.finalize_active_turn();
                     app.notice = Some("Prompt finished.".into());
                     app.set_runtime_phase(RuntimePhase::Idle, Some("prompt finished".into()));
                 }
                 Err(err) => {
+                    app.finalize_active_turn();
                     app.set_runtime_phase(RuntimePhase::Failed, Some("query failed".into()));
                     let mut message = format!("Query failed: {err}");
                     if app.config.provider == "ollama" {
@@ -395,7 +397,7 @@ pub async fn finish_running_task_if_ready(
                     app.current_model_label()
                 ));
                 app.notice = app.setup_status.clone();
-                app.transcript.clear();
+                app.reset_transcript();
                 *agent_slot = Some(agent);
                 if let Some(agent) = agent_slot.as_ref() {
                     app.sync_snapshot(agent);
@@ -403,6 +405,7 @@ pub async fn finish_running_task_if_ready(
                 app.close_overlay();
                 app.set_runtime_phase(RuntimePhase::BackendReady, Some("backend ready".into()));
                 app.push_entry("Runtime", app.setup_status.clone().unwrap_or_default());
+                app.finalize_active_turn();
             }
             Err(err) => {
                 app.set_runtime_phase(
@@ -424,6 +427,7 @@ pub async fn finish_running_task_if_ready(
                 app.set_runtime_phase(RuntimePhase::OAuthSaved, Some("oauth token saved".into()));
                 app.close_overlay();
                 app.push_entry("Runtime", "Saved OAuth token.");
+                app.finalize_active_turn();
             }
             Err(err) => {
                 app.set_runtime_phase(RuntimePhase::Failed, Some("oauth failed".into()));

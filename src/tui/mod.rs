@@ -11,10 +11,14 @@ use crossterm::{
     cursor::{Hide, Show},
     event::{Event, EventStream, KeyCode, KeyEventKind},
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{disable_raw_mode, enable_raw_mode},
 };
 use futures::StreamExt;
-use ratatui::{backend::CrosstermBackend, Terminal};
+use ratatui::{
+    backend::CrosstermBackend,
+    widgets::{Paragraph, Widget},
+    Terminal, TerminalOptions, Viewport,
+};
 use tokio::time::{interval, Duration};
 
 use crate::agent::Agent;
@@ -22,7 +26,7 @@ use crate::oauth::OAuthManager;
 
 use self::app_event::AppEvent;
 use self::command::{palette_command_by_index, palette_commands, parse_local_command};
-use self::render::render;
+use self::render::{committed_turn_lines, render};
 use self::runtime::{
     execute_local_command, finish_running_task_if_ready, start_oauth_task, start_pending_approval_task, start_query_task,
     start_rebuild_task,
@@ -30,13 +34,18 @@ use self::runtime::{
 use self::state::{
     current_model_presets, HelpTab, Overlay, PROVIDER_FAMILIES, TuiApp, MODEL_GUIDE_OPTIONS,
 };
-use crate::agent::{AgentExecutionMode, BashApprovalMode};
+use crate::agent::BashApprovalMode;
 
 pub async fn run_tui(agent: Agent, oauth_manager: OAuthManager) -> anyhow::Result<()> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen, Hide)?;
-    let mut terminal = Terminal::new(CrosstermBackend::new(stdout))?;
+    execute!(stdout, Hide)?;
+    let mut terminal = Terminal::with_options(
+        CrosstermBackend::new(stdout),
+        TerminalOptions {
+            viewport: Viewport::Inline(18),
+        },
+    )?;
     let mut app = TuiApp::new(crate::config::ConfigManager::new()?);
     let mut agent_slot = Some(agent);
     let oauth_manager = Arc::new(oauth_manager);
@@ -50,6 +59,7 @@ pub async fn run_tui(agent: Agent, oauth_manager: OAuthManager) -> anyhow::Resul
     let result = loop {
         finish_running_task_if_ready(&mut app, &mut agent_slot).await?;
         clamp_command_palette_selection(&mut app);
+        flush_committed_history(&mut terminal, &mut app)?;
         terminal.draw(|f| render(f, &app))?;
 
         tokio::select! {
@@ -149,6 +159,10 @@ fn map_key_to_event(key: KeyCode, app: &TuiApp) -> AppEvent {
         None => match key {
             KeyCode::Esc => AppEvent::Noop,
             KeyCode::Enter => AppEvent::SubmitComposer,
+            KeyCode::Up | KeyCode::Char('k') if app.input.is_empty() => AppEvent::ScrollTranscript(-1),
+            KeyCode::Down | KeyCode::Char('j') if app.input.is_empty() => AppEvent::ScrollTranscript(1),
+            KeyCode::PageUp if app.input.is_empty() => AppEvent::ScrollTranscript(-8),
+            KeyCode::PageDown if app.input.is_empty() => AppEvent::ScrollTranscript(8),
             KeyCode::Char('1') if app.input.is_empty() && app.snapshot.pending_question.is_some() => {
                 AppEvent::SelectPendingOption(0)
             }
@@ -203,6 +217,7 @@ async fn dispatch_event(
                 app.close_overlay();
             }
         }
+        AppEvent::ScrollTranscript(delta) => app.scroll_transcript(delta),
         AppEvent::MoveCommandSelection(delta) => {
             let len = palette_commands(app, app.input.trim_start().trim_start_matches('/')).len();
             if len > 0 {
@@ -398,52 +413,9 @@ async fn handle_submit(
         if app.snapshot.pending_question.is_some() {
             agent.consume_pending_user_input(input.trim());
         }
-        if matches!(app.agent_execution_mode, AgentExecutionMode::Execute)
-            && should_auto_enter_plan_mode(&input)
-        {
-            app.set_agent_execution_mode(AgentExecutionMode::Plan);
-            app.push_notice("Auto-entered plan mode for a complex task.");
-        }
         start_query_task(app, input.trim().to_string(), agent);
     }
     Ok(false)
-}
-
-fn should_auto_enter_plan_mode(input: &str) -> bool {
-    let trimmed = input.trim();
-    if trimmed.len() >= 80 {
-        return true;
-    }
-
-    let lowered = trimmed.to_ascii_lowercase();
-    let keywords = [
-        "plan",
-        "review",
-        "architecture",
-        "refactor",
-        "improve",
-        "analyze",
-        "codebase",
-        "repository",
-        "repo",
-    ];
-    if keywords.iter().any(|keyword| lowered.contains(keyword)) {
-        return true;
-    }
-
-    [
-        "看一下当前的代码",
-        "看看代码",
-        "当前目录",
-        "当前项目",
-        "还有什么值得改进",
-        "修改建议",
-        "架构",
-        "重构",
-        "优化一下",
-    ]
-    .iter()
-    .any(|keyword| trimmed.contains(keyword))
 }
 
 fn clamp_command_palette_selection(app: &mut TuiApp) {
@@ -459,8 +431,29 @@ fn teardown_terminal(
     mut terminal: Terminal<CrosstermBackend<std::io::Stdout>>,
 ) -> anyhow::Result<()> {
     disable_raw_mode()?;
-    execute!(terminal.backend_mut(), Show, LeaveAlternateScreen)?;
+    execute!(terminal.backend_mut(), Show)?;
     terminal.show_cursor()?;
+    Ok(())
+}
+
+fn flush_committed_history(
+    terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
+    app: &mut TuiApp,
+) -> anyhow::Result<()> {
+    while app.inserted_turns < app.committed_turns.len() {
+        let turn = &app.committed_turns[app.inserted_turns];
+        let mut lines = committed_turn_lines(turn.entries.as_slice());
+        if app.inserted_turns > 0 && !lines.is_empty() {
+            lines.insert(0, ratatui::text::Line::from(""));
+        }
+        if !lines.is_empty() {
+            let line_count = lines.len() as u16;
+            terminal.insert_before(line_count, |buf| {
+                Paragraph::new(lines).render(buf.area, buf);
+            })?;
+        }
+        app.inserted_turns += 1;
+    }
     Ok(())
 }
 

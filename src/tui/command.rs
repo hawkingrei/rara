@@ -286,7 +286,7 @@ pub fn status_workspace_text(app: &TuiApp) -> String {
         app.snapshot.branch,
         app.snapshot.session_id,
         app.snapshot.history_len,
-        app.transcript.len(),
+        app.transcript_entry_count(),
     )
 }
 
@@ -434,24 +434,30 @@ pub fn quick_actions_text() -> &'static str {
 }
 
 pub fn recent_transcript_preview(app: &TuiApp, limit: usize) -> String {
-    if app.transcript.is_empty() {
+    let mut entries = app
+        .committed_turns
+        .iter()
+        .flat_map(|turn| turn.entries.iter())
+        .chain(app.active_turn.entries.iter())
+        .collect::<Vec<_>>();
+    if entries.is_empty() {
         return "No transcript entries yet.".to_string();
     }
-    app.transcript
-        .iter()
+    entries
+        .drain(..)
         .rev()
         .take(limit)
         .collect::<Vec<_>>()
         .into_iter()
         .rev()
-        .map(|(role, message)| {
-            let first_line = message.lines().next().unwrap_or("").trim();
+        .map(|entry| {
+            let first_line = entry.message.lines().next().unwrap_or("").trim();
             let preview = if first_line.is_empty() {
                 "(empty)"
             } else {
                 first_line
             };
-            format!("{role}: {preview}")
+            format!("{}: {preview}", entry.role)
         })
         .collect::<Vec<_>>()
         .join("\n")
@@ -515,22 +521,18 @@ pub fn status_request_user_input_text(app: &TuiApp) -> String {
 }
 
 pub fn current_turn_preview(app: &TuiApp, limit: usize) -> String {
-    let Some(last_user_idx) = app
-        .transcript
-        .iter()
-        .rposition(|(role, _)| role == "You")
-    else {
+    if app.active_turn.entries.is_empty() {
         return "No active turn yet.".to_string();
-    };
+    }
 
-    app.transcript
+    app.active_turn
+        .entries
         .iter()
-        .skip(last_user_idx)
         .take(limit)
-        .map(|(role, message)| {
-            let first_line = message.lines().next().unwrap_or("").trim();
+        .map(|entry| {
+            let first_line = entry.message.lines().next().unwrap_or("").trim();
             let preview = if first_line.is_empty() { "(empty)" } else { first_line };
-            format!("{role}: {preview}")
+            format!("{}: {preview}", entry.role)
         })
         .collect::<Vec<_>>()
         .join("\n")

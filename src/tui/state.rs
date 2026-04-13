@@ -169,9 +169,22 @@ pub const MODEL_GUIDE_OPTIONS: [(&str, &str, Option<usize>); 4] = [
     ("Manual", "Open the full model list and choose explicitly.", None),
 ];
 
+#[derive(Clone, Default)]
+pub struct TranscriptEntry {
+    pub role: String,
+    pub message: String,
+}
+
+#[derive(Clone, Default)]
+pub struct TranscriptTurn {
+    pub entries: Vec<TranscriptEntry>,
+}
+
 pub struct TuiApp {
     pub input: String,
-    pub transcript: Vec<(String, String)>,
+    pub committed_turns: Vec<TranscriptTurn>,
+    pub active_turn: TranscriptTurn,
+    pub inserted_turns: usize,
     pub overlay: Option<Overlay>,
     pub config: RaraConfig,
     pub config_manager: ConfigManager,
@@ -188,6 +201,7 @@ pub struct TuiApp {
     pub command_palette_idx: usize,
     pub base_url_input: String,
     pub recent_commands: Vec<String>,
+    pub transcript_scroll: usize,
     pub running_task: Option<RunningTask>,
 }
 
@@ -203,7 +217,9 @@ impl TuiApp {
         let model_picker_idx = selected_preset_idx_for_config(&cfg, provider_picker_idx);
         Self {
             input: String::new(),
-            transcript: Vec::new(),
+            committed_turns: Vec::new(),
+            active_turn: TranscriptTurn::default(),
+            inserted_turns: 0,
             overlay,
             config: cfg,
             config_manager: cm,
@@ -220,6 +236,7 @@ impl TuiApp {
             command_palette_idx: 0,
             base_url_input: String::new(),
             recent_commands: Vec::new(),
+            transcript_scroll: 0,
             running_task: None,
         }
     }
@@ -316,7 +333,13 @@ impl TuiApp {
     }
 
     pub fn push_entry(&mut self, role: &'static str, message: impl Into<String>) {
-        self.transcript.push((role.into(), message.into()));
+        if role == "You" && !self.active_turn.entries.is_empty() {
+            self.commit_active_turn();
+        }
+        self.active_turn.entries.push(TranscriptEntry {
+            role: role.to_string(),
+            message: message.into(),
+        });
     }
 
     pub fn push_notice(&mut self, message: impl Into<String>) {
@@ -326,8 +349,23 @@ impl TuiApp {
     }
 
     pub fn reset_transcript(&mut self) {
-        self.transcript.clear();
+        self.committed_turns.clear();
+        self.active_turn.entries.clear();
+        self.inserted_turns = 0;
+        self.transcript_scroll = 0;
         self.notice = Some("Cleared local transcript view.".into());
+    }
+
+    pub fn scroll_transcript(&mut self, delta: i32) {
+        if delta < 0 {
+            self.transcript_scroll = self
+                .transcript_scroll
+                .saturating_add(delta.unsigned_abs() as usize);
+        } else {
+            self.transcript_scroll = self
+                .transcript_scroll
+                .saturating_sub(delta as usize);
+        }
     }
 
     pub fn set_runtime_phase(&mut self, phase: RuntimePhase, detail: Option<String>) {
@@ -417,6 +455,37 @@ impl TuiApp {
             Some(Overlay::BaseUrlEditor) => Some(Overlay::ModelPicker),
             _ => None,
         };
+    }
+
+    pub fn has_any_transcript(&self) -> bool {
+        !self.committed_turns.is_empty() || !self.active_turn.entries.is_empty()
+    }
+
+    pub fn transcript_entry_count(&self) -> usize {
+        self.committed_turns
+            .iter()
+            .map(|turn| turn.entries.len())
+            .sum::<usize>()
+            + self.active_turn.entries.len()
+    }
+
+    pub fn committed_entry_count(&self) -> usize {
+        self.committed_turns
+            .iter()
+            .map(|turn| turn.entries.len())
+            .sum()
+    }
+
+    fn commit_active_turn(&mut self) {
+        if self.active_turn.entries.is_empty() {
+            return;
+        }
+        self.committed_turns.push(std::mem::take(&mut self.active_turn));
+        self.transcript_scroll = 0;
+    }
+
+    pub fn finalize_active_turn(&mut self) {
+        self.commit_active_turn();
     }
 }
 

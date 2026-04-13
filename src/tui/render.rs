@@ -13,7 +13,7 @@ use super::command::{
     status_plan_text, status_request_user_input_text, status_resources_text, status_runtime_text, status_workspace_text,
 };
 use super::state::{
-    current_model_presets, HelpTab, Overlay, PROVIDER_FAMILIES, TaskKind, TuiApp,
+    current_model_presets, HelpTab, Overlay, PROVIDER_FAMILIES, TaskKind, TranscriptEntry, TuiApp,
     LOCAL_MODEL_PRESETS, MODEL_GUIDE_OPTIONS,
 };
 
@@ -21,10 +21,10 @@ pub fn render(f: &mut Frame, app: &TuiApp) {
     let layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3),
+            Constraint::Length(2),
             Constraint::Min(8),
             Constraint::Length(3),
-            Constraint::Length(4),
+            Constraint::Length(3),
             Constraint::Length(1),
         ])
         .split(f.area());
@@ -41,19 +41,20 @@ pub fn render(f: &mut Frame, app: &TuiApp) {
 }
 
 fn render_transcript(f: &mut Frame, app: &TuiApp, area: Rect) {
-    if app.transcript.is_empty() {
+    if !app.has_any_transcript() {
         let items = vec![
             ListItem::new(Line::from(Span::styled(
-                "No messages yet.",
+                "Ready.",
                 Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
             ))),
-            ListItem::new(Line::from("Use the composer below to start a task or open a local command.")),
+            ListItem::new(Line::from("Use the input bar below to start a task or run a local command.")),
             ListItem::new(Line::from("")),
             ListItem::new(Line::from(Span::styled(
                 "Start with:",
-                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                Style::default().fg(Color::LightBlue).add_modifier(Modifier::BOLD),
             ))),
             ListItem::new(Line::from("  /help    browse built-in commands and runtime hints")),
+            ListItem::new(Line::from("  /search  grep the workspace without going through the model")),
             ListItem::new(Line::from("  /model   choose provider first, then switch models")),
             ListItem::new(Line::from("  /status  inspect runtime, tokens, cache, and session")),
             ListItem::new(Line::from("  /quit    leave the TUI and restore the terminal")),
@@ -76,134 +77,100 @@ fn render_transcript(f: &mut Frame, app: &TuiApp, area: Rect) {
         return;
     }
 
-    let outer = Block::default().borders(Borders::ALL).title(" Conversation ");
-    let inner = outer.inner(area);
-    f.render_widget(outer, area);
-
-    let Some(current_turn_start) = latest_turn_start(app) else {
-        let items = app
-            .transcript
-            .iter()
-            .map(|(role, message)| transcript_item(role, message, false))
-            .collect::<Vec<_>>();
-        f.render_widget(List::new(items), inner);
-        return;
-    };
-
-    let current_turn_height = 14_u16.min(inner.height.saturating_sub(4)).max(8);
-    let sections = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Min(6), Constraint::Length(current_turn_height)])
-        .split(inner);
-
-    let history_items = history_items(app, current_turn_start, sections[0].height as usize);
     f.render_widget(
-        List::new(history_items).block(Block::default().borders(Borders::BOTTOM).title(" Conversation History ")),
-        sections[0],
-    );
-    f.render_widget(
-        Paragraph::new(current_turn_lines(app, current_turn_start))
-            .block(Block::default().title(" Current Turn "))
+        Paragraph::new(current_turn_lines(app))
+            .block(Block::default().borders(Borders::ALL).title(" Current Turn "))
             .wrap(Wrap { trim: false }),
-        sections[1],
+        area,
     );
 }
 
-fn history_items(app: &TuiApp, current_turn_start: usize, available_height: usize) -> Vec<ListItem<'static>> {
-    let history = app
-        .transcript
+pub fn committed_turn_lines(entries: &[TranscriptEntry]) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    for entry in entries
         .iter()
-        .take(current_turn_start)
-        .filter(|(role, _)| matches!(role.as_str(), "You" | "Agent" | "System"))
-        .collect::<Vec<_>>();
-
-    if history.is_empty() {
-        return vec![ListItem::new(Line::from(Span::styled(
-            "No committed conversation yet.",
-            Style::default().fg(Color::DarkGray),
-        )))];
+        .filter(|entry| matches!(entry.role.as_str(), "You" | "Agent" | "System"))
+    {
+        lines.push(Line::from(role_badge_span(&entry.role)));
+        let max_lines = if entry.role == "Agent" { 8 } else { 4 };
+        let message_lines = entry.message.lines().collect::<Vec<_>>();
+        if message_lines.is_empty() {
+            lines.push(Line::from("  "));
+        } else {
+            for line in message_lines.iter().take(max_lines) {
+                lines.push(Line::from(format!("  {line}")));
+            }
+            if message_lines.len() > max_lines {
+                lines.push(Line::from(Span::styled(
+                    format!("  ... {} more line(s)", message_lines.len() - max_lines),
+                    Style::default().fg(Color::DarkGray),
+                )));
+            }
+        }
+        lines.push(Line::from(""));
     }
-
-    let max_visible_entries = available_height.saturating_sub(1).max(3) / 3;
-    let start = history.len().saturating_sub(max_visible_entries);
-    history
-        .into_iter()
-        .skip(start)
-        .map(|(role, message)| transcript_item(role, message, false))
-        .collect()
+    while matches!(lines.last(), Some(line) if line.spans.iter().all(|span| span.content == ""))
+    {
+        lines.pop();
+    }
+    lines
 }
 
-fn current_turn_lines(app: &TuiApp, current_turn_start: usize) -> Vec<Line<'static>> {
-    let current_turn = app.transcript.iter().skip(current_turn_start).collect::<Vec<_>>();
+fn current_turn_lines(app: &TuiApp) -> Vec<Line<'static>> {
+    let current_turn = app.active_turn.entries.iter().collect::<Vec<_>>();
+    if current_turn.is_empty() {
+        return vec![
+            Line::from(section_span("Ready", Color::Green)),
+            Line::from("  No active turn."),
+        ];
+    }
     let user_message = current_turn
         .iter()
-        .find(|(role, _)| role == "You")
-        .map(|(_, message)| message.as_str())
+        .find(|entry| entry.role == "You")
+        .map(|entry| entry.message.as_str())
         .unwrap_or("");
     let latest_agent = current_turn
         .iter()
         .rev()
-        .find(|(role, _)| role == "Agent")
-        .map(|(_, message)| message.as_str());
+        .find(|entry| entry.role == "Agent")
+        .map(|entry| entry.message.as_str());
     let latest_tool_result = current_turn
         .iter()
         .rev()
-        .find(|(role, _)| *role == "Tool Result" || *role == "Tool Error")
-        .map(|(role, message)| (role.as_str(), message.as_str()));
-    let mut lines = vec![
-        Line::from(role_badge_span("You")),
-        Line::from(format!("  {}", user_message)),
-        Line::from(""),
-    ];
+        .find(|entry| entry.role == "Tool Result" || entry.role == "Tool Error")
+        .map(|entry| (entry.role.as_str(), entry.message.as_str()));
+    let mut lines = Vec::new();
+
+    if !user_message.is_empty() {
+        lines.push(Line::from(role_badge_span("You")));
+        lines.push(Line::from(format!("  {}", user_message)));
+        lines.push(Line::from(""));
+    }
 
     if app.agent_execution_mode_label() == "plan" {
-        lines.push(Line::from(Span::styled(
-            " Plan Mode ",
-            Style::default()
-                .fg(Color::Black)
-                .bg(Color::LightBlue)
-                .add_modifier(Modifier::BOLD),
-        )));
+        lines.push(Line::from(section_span("Plan Mode", Color::LightBlue)));
         lines.push(Line::from(""));
     }
 
     if let Some(summary) = current_turn_exploration_summary(app, current_turn.as_slice(), latest_agent.is_none()) {
-        let title = if app.is_busy() && latest_agent.is_none() {
-            " Exploring "
+        let (title, color) = if app.is_busy() && latest_agent.is_none() {
+            ("Exploring", Color::Yellow)
         } else {
-            " Explored "
+            ("Explored", Color::Rgb(231, 201, 92))
         };
-        lines.push(Line::from(Span::styled(
-            title,
-            Style::default()
-                .fg(Color::Black)
-                .bg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
-        )));
+        lines.push(Line::from(section_span(title, color)));
         lines.extend(summary.lines().map(|line| Line::from(format!("  {line}"))));
         lines.push(Line::from(""));
     }
 
     if let Some(summary) = current_turn_tool_summary(current_turn.as_slice()) {
-        lines.push(Line::from(Span::styled(
-            " Tool Summary ",
-            Style::default()
-                .fg(Color::Black)
-                .bg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
-        )));
+        lines.push(Line::from(section_span("Actions", Color::LightYellow)));
         lines.extend(summary.lines().map(|line| Line::from(format!("  {line}"))));
         lines.push(Line::from(""));
     }
 
     if !app.snapshot.plan_steps.is_empty() {
-        lines.push(Line::from(Span::styled(
-            " Plan ",
-            Style::default()
-                .fg(Color::Black)
-                .bg(Color::LightBlue)
-                .add_modifier(Modifier::BOLD),
-        )));
+        lines.push(Line::from(section_span("Plan", Color::LightBlue)));
         for line in status_plan_text(app).lines().take(8) {
             lines.push(Line::from(format!("  {line}")));
         }
@@ -212,17 +179,11 @@ fn current_turn_lines(app: &TuiApp, current_turn_start: usize) -> Vec<Line<'stat
 
     if app.snapshot.pending_question.is_some() {
         let (title, color) = if app.has_pending_approval() {
-            (" Approval ", Color::Yellow)
+            ("Approval", Color::Yellow)
         } else {
-            (" Request Input ", Color::LightGreen)
+            ("Request Input", Color::LightGreen)
         };
-        lines.push(Line::from(Span::styled(
-            title,
-            Style::default()
-                .fg(Color::Black)
-                .bg(color)
-                .add_modifier(Modifier::BOLD),
-        )));
+        lines.push(Line::from(section_span(title, color)));
         for line in status_request_user_input_text(app).lines().take(8) {
             lines.push(Line::from(format!("  {line}")));
         }
@@ -231,25 +192,13 @@ fn current_turn_lines(app: &TuiApp, current_turn_start: usize) -> Vec<Line<'stat
     }
 
     if let Some((title, summary)) = app.snapshot.completed_approval.as_ref() {
-        lines.push(Line::from(Span::styled(
-            " Approval Completed ",
-            Style::default()
-                .fg(Color::Black)
-                .bg(Color::LightGreen)
-                .add_modifier(Modifier::BOLD),
-        )));
+        lines.push(Line::from(section_span("Approval Completed", Color::LightGreen)));
         lines.push(Line::from(format!("  {}: {}", title, summary)));
         lines.push(Line::from(""));
     }
 
     if let Some((title, summary)) = app.snapshot.completed_question.as_ref() {
-        lines.push(Line::from(Span::styled(
-            " Question Answered ",
-            Style::default()
-                .fg(Color::Black)
-                .bg(Color::LightGreen)
-                .add_modifier(Modifier::BOLD),
-        )));
+        lines.push(Line::from(section_span("Question Answered", Color::LightGreen)));
         lines.push(Line::from(format!("  {}: {}", title, summary)));
         lines.push(Line::from(""));
     }
@@ -265,7 +214,7 @@ fn current_turn_lines(app: &TuiApp, current_turn_start: usize) -> Vec<Line<'stat
             lines.push(Line::from(format!("  {line}")));
         }
     } else if app.is_busy() {
-        lines.push(Line::from(role_badge_span("Status")));
+        lines.push(Line::from(section_span("Working", Color::Yellow)));
         lines.push(Line::from(format!(
             "  {}",
             app.runtime_phase_detail
@@ -273,7 +222,7 @@ fn current_turn_lines(app: &TuiApp, current_turn_start: usize) -> Vec<Line<'stat
                 .unwrap_or("waiting for the current turn to finish")
         )));
     } else {
-        lines.push(Line::from(role_badge_span("Status")));
+        lines.push(Line::from(section_span("Ready", Color::Green)));
         lines.push(Line::from("  No final answer yet."));
     }
 
@@ -282,15 +231,15 @@ fn current_turn_lines(app: &TuiApp, current_turn_start: usize) -> Vec<Line<'stat
 
 fn current_turn_exploration_summary(
     app: &TuiApp,
-    current_turn: &[&(String, String)],
+    current_turn: &[&TranscriptEntry],
     prefer_live_label: bool,
 ) -> Option<String> {
     let mut actions = Vec::new();
-    for (role, message) in current_turn {
-        if role != "Tool" {
+    for entry in current_turn {
+        if entry.role != "Tool" {
             continue;
         }
-        if let Some(action) = exploration_action_label(message) {
+        if let Some(action) = exploration_action_label(&entry.message) {
             actions.push(action);
         }
     }
@@ -315,14 +264,14 @@ fn current_turn_exploration_summary(
     Some(lines.join("\n"))
 }
 
-fn current_turn_tool_summary(current_turn: &[&(String, String)]) -> Option<String> {
+fn current_turn_tool_summary(current_turn: &[&TranscriptEntry]) -> Option<String> {
     let tools = current_turn
         .iter()
-        .filter_map(|(role, message)| {
-            if role != "Tool" {
+        .filter_map(|entry| {
+            if entry.role != "Tool" {
                 return None;
             }
-            let name = message.split_whitespace().next()?;
+            let name = entry.message.split_whitespace().next()?;
             if is_exploration_tool(name) {
                 return None;
             }
@@ -336,7 +285,7 @@ fn current_turn_tool_summary(current_turn: &[&(String, String)]) -> Option<Strin
     let mut parts = vec![format!("Used {} tool call(s): {}", tools.len(), tools.join(", "))];
     let results = current_turn
         .iter()
-        .filter(|(role, _)| *role == "Tool Result" || *role == "Tool Error")
+        .filter(|entry| entry.role == "Tool Result" || entry.role == "Tool Error")
         .count();
     if results > 0 {
         parts.push(format!("Recorded {} tool result(s).", results));
@@ -360,10 +309,6 @@ fn exploration_action_label(message: &str) -> Option<String> {
         "search_files" => Some(format!("Search files {}", if rest.is_empty() { "workspace" } else { rest.as_str() })),
         _ => None,
     }
-}
-
-fn latest_turn_start(app: &TuiApp) -> Option<usize> {
-    app.transcript.iter().rposition(|(role, _)| role == "You")
 }
 
 fn render_activity_bar(f: &mut Frame, app: &TuiApp, area: Rect) {
@@ -394,14 +339,17 @@ fn render_activity_bar(f: &mut Frame, app: &TuiApp, area: Rect) {
             Span::raw(" "),
             badge("mode", app.agent_execution_mode_label(), mode_color),
             Span::raw(" "),
-            badge("phase", app.runtime_phase_label(), Color::Gray),
+            Span::styled(app.runtime_phase_label(), Style::default().fg(Color::Gray)),
         ]),
         Line::from(vec![
-            Span::styled(" ", Style::default()),
+            Span::styled(
+                format!(" {}  ", app.current_model_label()),
+                Style::default().fg(Color::DarkGray),
+            ),
             Span::styled(detail, Style::default().fg(Color::Gray)),
         ]),
     ])
-    .block(Block::default().borders(Borders::ALL).title(" Status "));
+    .block(Block::default().borders(Borders::ALL).title(" Runtime "));
     f.render_widget(status, area);
 }
 
@@ -423,9 +371,9 @@ fn animated_activity_label(app: &TuiApp, label: &str) -> String {
 
 fn render_composer(f: &mut Frame, app: &TuiApp, area: Rect) {
     let title = if app.is_busy() {
-        " Message (busy) "
+        " Input "
     } else {
-        " Message "
+        " Input "
     };
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -455,106 +403,66 @@ fn render_composer(f: &mut Frame, app: &TuiApp, area: Rect) {
         chunks[0],
     );
     let hint = if app.input.trim_start().starts_with('/') {
-        "slash command  Enter run highlighted command  Esc close overlay"
+        "slash command  Enter run  Esc close"
     } else if app.is_busy() {
-        "runtime busy  wait for the current task to finish"
+        "busy  wait for the current task to finish"
     } else if app.has_pending_approval() {
-        "approval pending  1 run once  2 always allow bash  3 suggestion only"
+        "approval pending  1 once  2 always  3 suggestion"
     } else if app.snapshot.pending_question.is_some() {
-        "structured question pending  press 1/2/3 to answer or type your own response"
+        "question pending  press 1/2/3 or type a reply"
     } else if app.agent_execution_mode_label() == "plan" {
-        "plan mode  read-only analysis  /plan return to implementation mode"
+        "plan mode  /plan return to execute"
     } else {
-        "prompt mode  /plan planning  /help commands  /quit exit"
+        "/search grep  terminal scrollback for history  /plan toggle  /quit exit"
     };
     f.render_widget(
-        Paragraph::new(Span::styled(hint, Style::default().fg(Color::Gray))).alignment(Alignment::Right),
+        Paragraph::new(Span::styled(hint, Style::default().fg(Color::Gray))).alignment(Alignment::Left),
         chunks[1],
     );
 }
 
 fn render_footer(f: &mut Frame, app: &TuiApp, area: Rect) {
     let summary = format!(
-        "key={}  messages={}  transcript={}  tokens={} in / {} out",
+        "key={}  history={}  local={}  tokens={} in / {} out",
         api_key_status(&app.config),
         app.snapshot.history_len,
-        app.transcript.len(),
+        app.transcript_entry_count(),
         app.snapshot.total_input_tokens,
         app.snapshot.total_output_tokens,
     );
-    let hint = if app.input.trim_start().starts_with('/') {
-        "Enter run highlighted command  Esc close overlay"
-    } else if app.is_busy() {
-        "/status inspect runtime  /quit exit  background task stays responsive"
-    } else if app.agent_execution_mode_label() == "plan" {
-        "/plan leave plan mode  /status inspect runtime  /quit exit"
-    } else {
-        "Enter submit prompt  /plan read-only planning  /model switch providers  /quit exit"
-    };
     f.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled(summary, Style::default().fg(Color::Gray)),
-            Span::raw("  "),
-            Span::styled(hint, Style::default().fg(Color::DarkGray)),
-        ])),
+        Paragraph::new(Line::from(Span::styled(summary, Style::default().fg(Color::DarkGray)))),
         area,
     );
 }
 
 fn render_header(f: &mut Frame, app: &TuiApp, area: Rect) {
-    let activity = match app.running_task.as_ref().map(|task| &task.kind) {
-        Some(TaskKind::Query) => ("query", Color::Yellow),
-        Some(TaskKind::Rebuild) => ("reload", Color::LightBlue),
-        Some(TaskKind::OAuth) => ("oauth", Color::LightGreen),
-        None => ("idle", Color::DarkGray),
-    };
     let provider_color = if super::provider_requires_api_key(&app.config.provider) {
         Color::Magenta
     } else {
-        Color::Green
+        Color::LightBlue
     };
     let key_status = api_key_status(&app.config);
-    let key_color = match key_status {
-        "configured" => Color::Green,
-        "not-required" => Color::Blue,
-        _ => Color::Red,
-    };
     let lines = vec![
         Line::from(vec![
             Span::styled(
                 " RARA ",
                 Style::default()
-                    .bg(Color::Cyan)
+                    .bg(Color::LightBlue)
                     .fg(Color::Black)
                     .add_modifier(Modifier::BOLD),
             ),
             Span::raw(" "),
             badge("provider", &app.config.provider, provider_color),
-            Span::raw(" "),
-            badge(
-                "mode",
-                app.agent_execution_mode_label(),
-                if app.agent_execution_mode_label() == "plan" {
-                    Color::LightBlue
-                } else {
-                    Color::LightGreen
-                },
-            ),
-            Span::raw(" "),
-            badge("state", activity.0, activity.1),
-            Span::raw(" "),
-            badge("key", key_status, key_color),
         ]),
         Line::from(vec![
             Span::styled(" ", Style::default()),
             Span::styled(
                 format!(
-                    "model={}  revision={}  workspace={}  branch={}  session={}",
+                    "model={}  branch={}  key={}",
                     app.current_model_label(),
-                    app.config.revision.as_deref().unwrap_or("main"),
-                    app.snapshot.cwd,
                     app.snapshot.branch,
-                    app.snapshot.session_id
+                    key_status,
                 ),
                 Style::default().fg(Color::Gray),
             ),
@@ -1106,51 +1014,6 @@ fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
     horizontal[1]
 }
 
-fn transcript_item(role: &str, message: &str, is_active_tail: bool) -> ListItem<'static> {
-    let mut header = vec![role_badge_span(role)];
-    if is_active_tail {
-        header.push(Span::raw(" "));
-        header.push(Span::styled(
-            " live ",
-            Style::default()
-                .fg(Color::Black)
-                .bg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
-        ));
-    }
-    let mut lines = vec![Line::from(header)];
-    let max_message_lines = match role {
-        "Tool Result" | "Tool Error" => 4,
-        "Status" => 2,
-        _ => usize::MAX,
-    };
-    let message_lines = message.lines().collect::<Vec<_>>();
-    if message_lines.is_empty() {
-        lines.push(Line::from("  "));
-    } else {
-        for line in message_lines.iter().take(max_message_lines) {
-            lines.push(Line::from(vec![
-                Span::styled("  ", Style::default().fg(Color::DarkGray)),
-                Span::raw((*line).to_string()),
-            ]));
-        }
-        if message_lines.len() > max_message_lines {
-            lines.push(Line::from(vec![
-                Span::styled("  ", Style::default().fg(Color::DarkGray)),
-                Span::styled(
-                    format!("... {} more line(s)", message_lines.len() - max_message_lines),
-                    Style::default().fg(Color::DarkGray),
-                ),
-            ]));
-        }
-    }
-    lines.push(Line::from(Span::styled(
-        "  ",
-        Style::default().fg(Color::DarkGray),
-    )));
-    ListItem::new(lines)
-}
-
 fn command_preview_text(spec: &super::state::CommandSpec) -> String {
     format!("{}\n\n{}", spec.usage, spec.summary)
 }
@@ -1158,8 +1021,8 @@ fn command_preview_text(spec: &super::state::CommandSpec) -> String {
 fn role_badge_span(role: &str) -> Span<'static> {
     let (fg, bg) = match role {
         "You" => (Color::Black, Color::LightBlue),
-        "Agent" => (Color::Black, Color::Cyan),
-        "Tool" => (Color::Black, Color::Yellow),
+        "Agent" => (Color::Black, Color::White),
+        "Tool" => (Color::Black, Color::Rgb(231, 201, 92)),
         "Tool Result" => (Color::Black, Color::LightGreen),
         "Tool Error" => (Color::White, Color::Red),
         "Download" => (Color::Black, Color::LightBlue),
@@ -1171,6 +1034,16 @@ fn role_badge_span(role: &str) -> Span<'static> {
     Span::styled(
         format!(" {} ", role),
         Style::default().fg(fg).bg(bg).add_modifier(Modifier::BOLD),
+    )
+}
+
+fn section_span<'a>(title: &'a str, color: Color) -> Span<'a> {
+    Span::styled(
+        format!(" {} ", title),
+        Style::default()
+            .fg(Color::Black)
+            .bg(color)
+            .add_modifier(Modifier::BOLD),
     )
 }
 

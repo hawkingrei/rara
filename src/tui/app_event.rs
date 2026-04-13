@@ -8,6 +8,7 @@ pub enum AppEvent {
     SubmitComposer,
     InputChar(char),
     Backspace,
+    ScrollTranscript(i32),
     MoveCommandSelection(i32),
     MoveGuideSelection(i32),
     MoveProviderSelection(i32),
