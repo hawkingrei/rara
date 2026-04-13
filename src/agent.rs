@@ -10,6 +10,10 @@ use anyhow::{Result};
 use std::sync::Arc;
 use uuid::Uuid;
 
+const MAX_TOOL_ROUNDS_PER_TURN: usize = 8;
+const TOOL_CONTINUATION_PROMPT: &str =
+    "Tool results are now available. Continue the task. Use another tool if needed, otherwise provide the final answer. Do not repeat the tool result verbatim.";
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Message {
     pub role: String,
@@ -113,7 +117,9 @@ impl Agent {
             - Use 'remember_experience' for global vector memory.\n\
             - Use 'update_project_memory' to record facts into memory.md.\n\
             - Use 'retrieve_session_context' to recall past conversations.\n\
-            - Use 'spawn_agent' or 'team_create' for complex parallel tasks.");
+            - Use 'spawn_agent' or 'team_create' for complex parallel tasks.\n\
+            - After every tool result, decide the next step immediately: either call another tool or provide the final answer.\n\
+            - Do not stop at an intermediate status update once tool results are available.");
         prompt
     }
 
@@ -164,6 +170,7 @@ impl Agent {
         F: FnMut(AgentEvent),
     {
         let turn_start_idx = self.history.len();
+        let mut tool_rounds = 0usize;
         self.compact_if_needed_with_reporter(&mut report).await?;
         self.history = repair_tool_result_history(&self.history);
         
@@ -209,6 +216,13 @@ impl Agent {
             });
 
             if tool_calls.is_empty() { break; }
+            tool_rounds += 1;
+            if tool_rounds > MAX_TOOL_ROUNDS_PER_TURN {
+                return Err(anyhow::anyhow!(
+                    "Tool loop exceeded {} rounds without reaching a final answer",
+                    MAX_TOOL_ROUNDS_PER_TURN
+                ));
+            }
 
             for (id, name, input) in tool_calls {
                 if let Some(tool) = self.tool_manager.get_tool(&name) {
@@ -246,6 +260,11 @@ impl Agent {
                     }
                 }
             }
+
+            report(AgentEvent::Status(
+                "Tool results recorded. Continuing agent reasoning.".to_string(),
+            ));
+            self.history.push(tool_continuation_message());
         }
 
         self.session_manager.save_session(&self.session_id, &self.history)?;
@@ -258,5 +277,113 @@ impl Agent {
             }, vector).await;
         }
         Ok(())
+    }
+}
+
+fn tool_continuation_message() -> Message {
+    Message {
+        role: "user".to_string(),
+        content: json!([{"type": "text", "text": TOOL_CONTINUATION_PROMPT}]),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{tool_continuation_message, Agent, AnthropicResponse, ContentBlock, Message, TokenUsage};
+    use crate::llm::LlmBackend;
+    use crate::session::SessionManager;
+    use crate::tool::{Tool, ToolError, ToolManager};
+    use crate::vectordb::VectorDB;
+    use crate::workspace::WorkspaceMemory;
+    use anyhow::Result;
+    use async_trait::async_trait;
+    use serde_json::{json, Value};
+    use std::sync::{Arc, Mutex};
+
+    struct StubTool;
+
+    #[async_trait]
+    impl Tool for StubTool {
+        fn name(&self) -> &str { "stub_tool" }
+        fn description(&self) -> &str { "Return a simple structured result" }
+        fn input_schema(&self) -> Value { json!({"type":"object"}) }
+        async fn call(&self, _input: Value) -> Result<Value, ToolError> {
+            Ok(json!({ "status": "ok", "value": 42 }))
+        }
+    }
+
+    struct SequencedBackend {
+        responses: Mutex<Vec<AnthropicResponse>>,
+        observed_messages: Mutex<Vec<Vec<Message>>>,
+    }
+
+    impl SequencedBackend {
+        fn new(responses: Vec<AnthropicResponse>) -> Self {
+            Self {
+                responses: Mutex::new(responses),
+                observed_messages: Mutex::new(Vec::new()),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl LlmBackend for SequencedBackend {
+        async fn ask(&self, messages: &[Message], _tools: &[Value]) -> Result<AnthropicResponse> {
+            self.observed_messages.lock().expect("lock").push(messages.to_vec());
+            Ok(self.responses.lock().expect("lock").remove(0))
+        }
+
+        async fn embed(&self, _text: &str) -> Result<Vec<f32>> {
+            Ok(vec![0.0; 8])
+        }
+
+        async fn summarize(&self, _messages: &[Message]) -> Result<String> {
+            Ok("summary".to_string())
+        }
+    }
+
+    #[tokio::test]
+    async fn appends_continuation_after_tool_result() {
+        let backend = Arc::new(SequencedBackend::new(vec![
+            AnthropicResponse {
+                content: vec![ContentBlock::ToolUse {
+                    id: "tool-1".to_string(),
+                    name: "stub_tool".to_string(),
+                    input: json!({}),
+                }],
+                stop_reason: Some("tool_use".to_string()),
+                usage: Some(TokenUsage::default()),
+            },
+            AnthropicResponse {
+                content: vec![ContentBlock::Text {
+                    text: "done".to_string(),
+                }],
+                stop_reason: Some("end_turn".to_string()),
+                usage: Some(TokenUsage::default()),
+            },
+        ]));
+
+        let mut tool_manager = ToolManager::new();
+        tool_manager.register(Box::new(StubTool));
+        let mut agent = Agent::new(
+            tool_manager,
+            backend.clone(),
+            Arc::new(VectorDB::new("data/lancedb")),
+            Arc::new(SessionManager::new().expect("session manager")),
+            Arc::new(WorkspaceMemory::new().expect("workspace memory")),
+        );
+
+        agent
+            .query_with_mode("do work".to_string(), super::AgentOutputMode::Silent)
+            .await
+            .expect("query should succeed");
+
+        let observed = backend.observed_messages.lock().expect("lock");
+        assert_eq!(observed.len(), 2);
+        let second_round = &observed[1];
+        assert!(second_round.iter().any(|message| message.content == tool_continuation_message().content));
+        assert!(second_round.iter().any(|message| {
+            message.content.to_string().contains("tool_result")
+        }));
     }
 }
