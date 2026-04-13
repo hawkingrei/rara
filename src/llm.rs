@@ -517,7 +517,8 @@ impl LlmBackend for GeminiBackend {
 #[cfg(test)]
 mod tests {
     use super::{
-        extract_message_text, parse_tool_arguments, to_ollama_messages, to_openai_messages, Message,
+        extract_message_text, parse_tool_arguments, to_ollama_messages, to_openai_messages,
+        Message,
     };
     use serde_json::json;
 
@@ -593,4 +594,5 @@ mod tests {
         assert_eq!(ollama_messages[1]["role"], "tool");
         assert_eq!(ollama_messages[1]["tool_name"], "read_file");
     }
+
 }
