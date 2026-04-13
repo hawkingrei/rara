@@ -271,7 +271,7 @@ fn emit_query_heartbeat(app: &mut TuiApp) {
     let Some(task) = app.running_task.as_mut() else {
         return;
     };
-    if !matches!(task.kind, TaskKind::Query) || !super::command::is_local_provider(&app.config.provider) {
+    if !matches!(task.kind, TaskKind::Query) {
         return;
     }
 
@@ -280,11 +280,20 @@ fn emit_query_heartbeat(app: &mut TuiApp) {
         return;
     }
 
-    let detail = format!("local model is still generating · {}s elapsed", elapsed);
+    let is_local = super::command::is_local_provider(&app.config.provider);
+    let detail = if is_local {
+        format!("local model is still generating · {}s elapsed", elapsed)
+    } else {
+        format!("waiting for model response · {}s elapsed", elapsed)
+    };
     task.next_heartbeat_after_secs = elapsed.saturating_add(1);
 
     app.set_runtime_phase(RuntimePhase::SendingPrompt, Some(detail.clone()));
-    app.notice = Some(format!("Working locally · {}s elapsed", elapsed));
+    app.notice = Some(if is_local {
+        format!("Working locally · {}s elapsed", elapsed)
+    } else {
+        format!("Waiting on {} · {}s elapsed", app.config.provider, elapsed)
+    });
 }
 
 fn handle_model_command(arg: Option<&str>, app: &mut TuiApp) -> anyhow::Result<()> {
@@ -312,6 +321,7 @@ fn apply_tui_event(app: &mut TuiApp, event: TuiEvent) {
                     RuntimePhase::ProcessingResponse,
                     Some(message.lines().next().unwrap_or(role).trim().to_string()),
                 );
+                return;
             } else if role == "Tool" || role == "Tool Result" || role == "Tool Error" {
                 app.set_runtime_phase(
                     RuntimePhase::RunningTool,
