@@ -11,6 +11,7 @@ pub struct RaraConfig {
     pub model: Option<String>,
     pub revision: Option<String>,
     pub thinking: Option<bool>,
+    pub num_ctx: Option<u32>,
 }
 
 pub struct ConfigManager {

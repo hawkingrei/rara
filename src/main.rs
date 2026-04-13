@@ -226,6 +226,7 @@ pub(crate) async fn build_backend_with_progress(
                 .unwrap_or_else(|| "http://localhost:11434".to_string()),
             model: config.model.clone().unwrap_or_else(|| "gemma4:e4b".to_string()),
             thinking: config.thinking.unwrap_or(true),
+            num_ctx: config.num_ctx,
         })),
         "ollama-openai" => Ok(Box::new(OpenAiCompatibleBackend {
             api_key: config.api_key.clone().unwrap_or_default(),

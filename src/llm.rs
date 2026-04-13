@@ -41,6 +41,7 @@ pub struct OllamaBackend {
     pub base_url: String,
     pub model: String,
     pub thinking: bool,
+    pub num_ctx: Option<u32>,
 }
 
 #[async_trait]
@@ -277,6 +278,9 @@ impl LlmBackend for OllamaBackend {
             "stream": false,
             "think": self.thinking,
         });
+        if let Some(options) = build_ollama_options(messages, tools, self.thinking, self.num_ctx) {
+            body["options"] = options;
+        }
         if !tools.is_empty() {
             body["tools"] = Value::Array(
                 tools.iter()
@@ -403,6 +407,78 @@ fn to_ollama_messages(messages: &[Message]) -> Vec<Value> {
     ollama_messages
 }
 
+fn build_ollama_options(
+    messages: &[Message],
+    tools: &[Value],
+    thinking: bool,
+    configured_num_ctx: Option<u32>,
+) -> Option<Value> {
+    let num_ctx = configured_num_ctx.or_else(|| suggest_ollama_num_ctx(messages, tools, thinking))?;
+    Some(json!({
+        "num_ctx": num_ctx,
+    }))
+}
+
+fn suggest_ollama_num_ctx(messages: &[Message], tools: &[Value], thinking: bool) -> Option<u32> {
+    if messages.is_empty() {
+        return None;
+    }
+
+    let mut tool_results = 0usize;
+    let mut assistant_tool_uses = 0usize;
+    let mut combined_text = String::new();
+
+    for message in messages {
+        if !combined_text.is_empty() {
+            combined_text.push('\n');
+        }
+        combined_text.push_str(&render_openai_message_content(&message.content));
+
+        if let Some(items) = message.content.as_array() {
+            for item in items {
+                match item.get("type").and_then(Value::as_str) {
+                    Some("tool_result") => tool_results += 1,
+                    Some("tool_use") => assistant_tool_uses += 1,
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    let has_plan_markers = combined_text.contains("<plan>") || combined_text.contains("Plan Mode");
+    let has_runtime_markers = combined_text.contains("<agent_runtime>");
+
+    let lower_text = combined_text.to_ascii_lowercase();
+    let review_like = [
+        "architecture",
+        "codebase",
+        "repository",
+        "repo",
+        "review",
+        "inspect",
+        "analyze",
+        "improve",
+        "directory",
+        "project structure",
+    ]
+    .iter()
+    .any(|needle| lower_text.contains(needle));
+
+    if has_plan_markers || has_runtime_markers || tool_results >= 2 || assistant_tool_uses >= 2 {
+        return Some(32768);
+    }
+
+    if review_like || messages.len() >= 10 || (!tools.is_empty() && thinking) {
+        return Some(24576);
+    }
+
+    if !tools.is_empty() || thinking {
+        return Some(16384);
+    }
+
+    None
+}
+
 fn render_ollama_assistant_message(
     content: &Value,
     tool_names_by_id: &mut HashMap<String, String>,
@@ -517,8 +593,8 @@ impl LlmBackend for GeminiBackend {
 #[cfg(test)]
 mod tests {
     use super::{
-        extract_message_text, parse_tool_arguments, to_ollama_messages, to_openai_messages,
-        Message,
+        build_ollama_options, extract_message_text, parse_tool_arguments, suggest_ollama_num_ctx,
+        to_ollama_messages, to_openai_messages, Message,
     };
     use serde_json::json;
 
@@ -593,6 +669,45 @@ mod tests {
         assert_eq!(ollama_messages[0]["tool_calls"][0]["function"]["name"], "read_file");
         assert_eq!(ollama_messages[1]["role"], "tool");
         assert_eq!(ollama_messages[1]["tool_name"], "read_file");
+    }
+
+    #[test]
+    fn suggests_larger_num_ctx_for_plan_and_tool_heavy_turns() {
+        let messages = vec![
+            Message {
+                role: "system".to_string(),
+                content: json!("<plan>\n- [pending] Inspect src/\n</plan>"),
+            },
+            Message {
+                role: "assistant".to_string(),
+                content: json!([
+                    {"type":"tool_use","id":"tool-1","name":"list_files","input":{"path":"src"}}
+                ]),
+            },
+            Message {
+                role: "user".to_string(),
+                content: json!([
+                    {"type":"tool_result","tool_use_id":"tool-1","content":"src/main.rs\nsrc/agent.rs"}
+                ]),
+            },
+            Message {
+                role: "user".to_string(),
+                content: json!("<agent_runtime>\nphase: tool_results_available\n</agent_runtime>"),
+            },
+        ];
+
+        assert_eq!(suggest_ollama_num_ctx(&messages, &[], true), Some(32768));
+    }
+
+    #[test]
+    fn prefers_explicit_num_ctx_override_for_ollama_options() {
+        let messages = vec![Message {
+            role: "user".to_string(),
+            content: json!("hello"),
+        }];
+
+        let options = build_ollama_options(&messages, &[], true, Some(65536)).unwrap();
+        assert_eq!(options["num_ctx"], json!(65536));
     }
 
 }
