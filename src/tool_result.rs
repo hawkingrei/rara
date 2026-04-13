@@ -311,7 +311,25 @@ fn summarize_tool_result(tool_name: &str, input: &Value, result: &Value) -> Stri
                 .and_then(Value::as_str)
                 .map(|content| content.chars().count())
                 .unwrap_or_default();
-            format!("Read file {path} ({total_chars} chars).")
+            let total_lines = result
+                .get("total_lines")
+                .and_then(Value::as_u64)
+                .unwrap_or_default();
+            let start_line = result
+                .get("start_line")
+                .and_then(Value::as_u64)
+                .unwrap_or(1);
+            let end_line = result
+                .get("end_line")
+                .and_then(Value::as_u64)
+                .unwrap_or(total_lines);
+            if total_lines > 0 && (start_line != 1 || end_line != total_lines) {
+                format!(
+                    "Read file {path} lines {start_line}-{end_line} of {total_lines} ({total_chars} chars)."
+                )
+            } else {
+                format!("Read file {path} ({total_lines} lines, {total_chars} chars).")
+            }
         }
         "glob" => {
             let total = result
