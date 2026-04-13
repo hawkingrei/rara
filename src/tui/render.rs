@@ -13,7 +13,8 @@ use super::command::{
     status_runtime_text, status_workspace_text,
 };
 use super::state::{
-    HelpTab, Overlay, TaskKind, TuiApp, LOCAL_MODEL_PRESETS, MODEL_GUIDE_OPTIONS,
+    current_model_presets, HelpTab, Overlay, PROVIDER_FAMILIES, TaskKind, TuiApp,
+    LOCAL_MODEL_PRESETS, MODEL_GUIDE_OPTIONS,
 };
 
 pub fn render(f: &mut Frame, app: &TuiApp) {
@@ -53,8 +54,9 @@ fn render_transcript(f: &mut Frame, app: &TuiApp, area: Rect) {
                 Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
             ))),
             ListItem::new(Line::from("  /help    browse built-in commands and runtime hints")),
-            ListItem::new(Line::from("  /model   switch between Qwn3 and Gemma presets")),
+            ListItem::new(Line::from("  /model   choose provider first, then switch models")),
             ListItem::new(Line::from("  /status  inspect runtime, tokens, cache, and session")),
+            ListItem::new(Line::from("  /quit    leave the TUI and restore the terminal")),
             ListItem::new(Line::from("")),
             ListItem::new(Line::from(Span::styled(
                 "Prompt ideas:",
@@ -193,7 +195,7 @@ fn render_composer(f: &mut Frame, app: &TuiApp, area: Rect) {
     } else if app.is_busy() {
         "runtime busy  wait for current task to finish"
     } else {
-        "plain prompt mode  /help commands  /model switch models"
+        "plain prompt mode  /help commands  /model providers  /quit exit"
     };
     f.render_widget(
         Paragraph::new(hint).alignment(Alignment::Right),
@@ -213,9 +215,9 @@ fn render_footer(f: &mut Frame, app: &TuiApp, area: Rect) {
     let hint = if app.input.trim_start().starts_with('/') {
         "Enter run highlighted command  Esc close overlay"
     } else if app.is_busy() {
-        "Esc quit app  background task keeps UI responsive"
+        "/status inspect runtime  /quit exit  background task keeps UI responsive"
     } else {
-        "Enter submit prompt  /help commands  /model switch models"
+        "Enter submit prompt  /help commands  /model switch providers  /quit exit"
     };
     f.render_widget(
         Paragraph::new(Line::from(vec![Span::raw(summary), Span::raw("  "), Span::raw(hint)])),
@@ -281,6 +283,7 @@ fn render_overlay(f: &mut Frame, app: &TuiApp, overlay: Overlay) {
         Overlay::Status => render_status_modal(f, app, popup),
         Overlay::Setup => render_setup_modal(f, app, popup),
         Overlay::ModelGuide => render_model_guide_modal(f, app, popup),
+        Overlay::ProviderPicker => render_provider_picker_modal(f, app, popup),
         Overlay::ModelPicker => render_model_picker_modal(f, app, popup),
     }
 }
@@ -587,7 +590,7 @@ fn render_status_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
 }
 
 fn render_setup_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
-    let preset_lines = LOCAL_MODEL_PRESETS
+    let preset_lines = current_model_presets(app.provider_picker_idx)
         .iter()
         .enumerate()
         .map(|(idx, (label, provider, model))| {
@@ -605,8 +608,8 @@ fn render_setup_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
         "Provider: {}\nModel: {}\nAPI key: {}\nRevision: {}\n\n\
          Presets:\n{}\n\n\
          [1/2/3] Select preset\n[M] Cycle preset\n[Enter] Apply and rebuild\n[L] OAuth login\n[Esc] Close\n\n\
-         Recommended: Qwn3 8B for stable local use.\n\
-         Gemma 4 presets are marked experimental.",
+         Use /model for the full provider menu.\n\
+         Recommended: Qwn3 8B for stable local use.",
         app.config.provider,
         app.current_model_label(),
         api_key_status(&app.config),
@@ -621,8 +624,48 @@ fn render_setup_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
     );
 }
 
+fn render_provider_picker_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
+    let items = PROVIDER_FAMILIES
+        .iter()
+        .enumerate()
+        .map(|(idx, (_, label, detail))| {
+            let style = if idx == app.provider_picker_idx {
+                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
+            ListItem::new(vec![
+                Line::from(format!("[{}] {}", idx + 1, label)),
+                Line::from(*detail),
+                Line::from(""),
+            ])
+            .style(style)
+        })
+        .collect::<Vec<_>>();
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(3), Constraint::Min(6), Constraint::Length(2)])
+        .split(area);
+    f.render_widget(
+        Paragraph::new("Select a provider family first, then choose a concrete model.")
+            .block(Block::default().borders(Borders::ALL).title(" Provider Menu ")),
+        chunks[0],
+    );
+    f.render_widget(
+        List::new(items).block(Block::default().borders(Borders::LEFT | Borders::RIGHT)),
+        chunks[1],
+    );
+    f.render_widget(
+        Paragraph::new("1/2 select  Up/Down move  Enter continue  Esc close")
+            .alignment(Alignment::Center),
+        chunks[2],
+    );
+}
+
 fn render_model_picker_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
-    let items = LOCAL_MODEL_PRESETS
+    let presets = current_model_presets(app.provider_picker_idx);
+    let provider_label = PROVIDER_FAMILIES[app.provider_picker_idx].1;
+    let items = presets
         .iter()
         .enumerate()
         .map(|(idx, (label, provider, model))| {
@@ -636,8 +679,8 @@ fn render_model_picker_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
                     " current"
                 } else {
                     ""
-                };
-            let recommendation = if idx == 2 {
+            };
+            let recommendation = if provider_label == "Candle Local" && idx == 2 {
                 " recommended"
             } else {
                 ""
@@ -659,7 +702,9 @@ fn render_model_picker_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
         .constraints([Constraint::Length(3), Constraint::Min(6), Constraint::Length(2)])
         .split(area);
     f.render_widget(
-        Paragraph::new("Select a local model preset. Qwn3 is the stable default; Gemma 4 presets are experimental. Enter applies immediately.")
+        Paragraph::new(format!(
+            "Provider: {provider_label}\nSelect a concrete model preset. Enter applies immediately."
+        ))
             .block(Block::default().borders(Borders::ALL).title(" Model Picker ")),
         chunks[0],
     );
@@ -705,7 +750,7 @@ fn render_model_guide_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
                 .unwrap_or("");
             let target = preset_idx
                 .map(|preset| format!(" -> {}", LOCAL_MODEL_PRESETS[preset].0))
-                .unwrap_or_else(|| " -> open picker".to_string());
+                .unwrap_or_else(|| " -> provider menu".to_string());
             ListItem::new(vec![
                 Line::from(format!("[{}] {}{}{}", idx + 1, label, target, selected_marker)),
                 Line::from(*detail),

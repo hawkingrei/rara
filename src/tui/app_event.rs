@@ -3,7 +3,6 @@ use super::state::{HelpTab, Overlay};
 #[derive(Debug, Clone)]
 pub enum AppEvent {
     Noop,
-    Quit,
     OpenOverlay(Overlay),
     CloseOverlay,
     SubmitComposer,
@@ -11,8 +10,10 @@ pub enum AppEvent {
     Backspace,
     MoveCommandSelection(i32),
     MoveGuideSelection(i32),
+    MoveProviderSelection(i32),
     MoveModelSelection(i32),
     SetGuideSelection(usize),
+    SetProviderSelection(usize),
     SetModelSelection(usize),
     CycleModelSelection,
     SelectHelpTab(HelpTab),

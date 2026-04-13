@@ -2,6 +2,7 @@ use async_trait::async_trait;
 use anyhow::{Result, anyhow};
 use crate::agent::{Message, AnthropicResponse, ContentBlock};
 use serde_json::{json, Value};
+use std::collections::HashMap;
 
 #[async_trait]
 pub trait LlmBackend: Send + Sync {
@@ -32,6 +33,11 @@ impl LlmBackend for MockLlm {
 
 pub struct OpenAiCompatibleBackend {
     pub api_key: String,
+    pub base_url: String,
+    pub model: String,
+}
+
+pub struct OllamaBackend {
     pub base_url: String,
     pub model: String,
 }
@@ -259,6 +265,230 @@ fn parse_tool_arguments(arguments: &Value) -> Result<Value> {
     }
 }
 
+#[async_trait]
+impl LlmBackend for OllamaBackend {
+    async fn ask(&self, messages: &[Message], tools: &[Value]) -> Result<AnthropicResponse> {
+        let client = reqwest::Client::new();
+        let mut body = json!({
+            "model": self.model,
+            "messages": to_ollama_messages(messages),
+            "stream": false,
+        });
+        if !tools.is_empty() {
+            body["tools"] = Value::Array(
+                tools.iter()
+                    .map(|tool| {
+                        json!({
+                            "type": "function",
+                            "function": {
+                                "name": tool["name"],
+                                "description": tool["description"],
+                                "parameters": tool["input_schema"],
+                            }
+                        })
+                    })
+                    .collect(),
+            );
+        }
+
+        let res = client
+            .post(&format!("{}/api/chat", self.base_url.trim_end_matches('/')))
+            .json(&body)
+            .send()
+            .await?;
+
+        if !res.status().is_success() {
+            return Err(anyhow!("API Error: {}", res.text().await?));
+        }
+        let resp_json: Value = res.json().await?;
+        let message = &resp_json["message"];
+        let mut content = Vec::new();
+        if let Some(text) = message.get("content").and_then(Value::as_str) {
+            if !text.trim().is_empty() {
+                content.push(ContentBlock::Text {
+                    text: text.to_string(),
+                });
+            }
+        }
+        if let Some(tool_calls) = message.get("tool_calls").and_then(Value::as_array) {
+            for (idx, call) in tool_calls.iter().enumerate() {
+                content.push(ContentBlock::ToolUse {
+                    id: format!("ollama-tool-{}", idx + 1),
+                    name: call["function"]["name"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .to_string(),
+                    input: parse_tool_arguments(&call["function"]["arguments"])?,
+                });
+            }
+        }
+
+        Ok(AnthropicResponse {
+            content,
+            stop_reason: resp_json
+                .get("done_reason")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            usage: Some(crate::agent::TokenUsage {
+                input_tokens: resp_json
+                    .get("prompt_eval_count")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0) as u32,
+                output_tokens: resp_json
+                    .get("eval_count")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0) as u32,
+            }),
+        })
+    }
+
+    async fn embed(&self, text: &str) -> Result<Vec<f32>> {
+        Ok(hashed_embedding(text, 256))
+    }
+
+    async fn summarize(&self, messages: &[Message]) -> Result<String> {
+        let mut messages = messages.to_vec();
+        messages.push(Message {
+            role: "user".to_string(),
+            content: json!("Summarize concisely."),
+        });
+        let response = self.ask(&messages, &[]).await?;
+        let text = response
+            .content
+            .into_iter()
+            .filter_map(|block| match block {
+                ContentBlock::Text { text } => Some(text),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        Ok(text)
+    }
+}
+
+fn to_ollama_messages(messages: &[Message]) -> Vec<Value> {
+    let mut ollama_messages = Vec::new();
+    let mut tool_names_by_id = HashMap::new();
+    for message in messages {
+        match message.role.as_str() {
+            "system" => ollama_messages.push(json!({
+                "role": "system",
+                "content": render_openai_message_content(&message.content),
+            })),
+            "assistant" => ollama_messages.push(render_ollama_assistant_message(
+                &message.content,
+                &mut tool_names_by_id,
+            )),
+            "user" => {
+                if let Some(tool_result) =
+                    extract_ollama_tool_result_message(&message.content, &tool_names_by_id)
+                {
+                    ollama_messages.push(tool_result);
+                } else {
+                    ollama_messages.push(json!({
+                        "role": "user",
+                        "content": render_openai_message_content(&message.content),
+                    }));
+                }
+            }
+            other => ollama_messages.push(json!({
+                "role": other,
+                "content": render_openai_message_content(&message.content),
+            })),
+        }
+    }
+    ollama_messages
+}
+
+fn render_ollama_assistant_message(
+    content: &Value,
+    tool_names_by_id: &mut HashMap<String, String>,
+) -> Value {
+    let mut text_parts = Vec::new();
+    let mut tool_calls = Vec::new();
+    if let Some(items) = content.as_array() {
+        for item in items {
+            match item.get("type").and_then(Value::as_str) {
+                Some("text") => {
+                    if let Some(text) = item.get("text").and_then(Value::as_str) {
+                        if !text.trim().is_empty() {
+                            text_parts.push(text.to_string());
+                        }
+                    }
+                }
+                Some("tool_use") => {
+                    let tool_name = item
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string();
+                    if let Some(id) = item.get("id").and_then(Value::as_str) {
+                        tool_names_by_id.insert(id.to_string(), tool_name.clone());
+                    }
+                    tool_calls.push(json!({
+                        "function": {
+                            "name": tool_name,
+                            "arguments": item.get("input").cloned().unwrap_or_else(|| json!({})),
+                        }
+                    }));
+                }
+                _ => {}
+            }
+        }
+    } else if let Some(text) = content.as_str() {
+        text_parts.push(text.to_string());
+    }
+
+    let mut message = json!({
+        "role": "assistant",
+        "content": text_parts.join("\n\n"),
+    });
+    if !tool_calls.is_empty() {
+        message["tool_calls"] = Value::Array(tool_calls);
+    }
+    message
+}
+
+fn extract_ollama_tool_result_message(
+    content: &Value,
+    tool_names_by_id: &HashMap<String, String>,
+) -> Option<Value> {
+    let items = content.as_array()?;
+    if items.len() != 1 {
+        return None;
+    }
+    let item = &items[0];
+    if item.get("type").and_then(Value::as_str) != Some("tool_result") {
+        return None;
+    }
+    let tool_use_id = item.get("tool_use_id").and_then(Value::as_str).unwrap_or_default();
+    Some(json!({
+        "role": "tool",
+        "tool_name": tool_names_by_id.get(tool_use_id).cloned().unwrap_or_default(),
+        "content": item.get("content").and_then(Value::as_str).unwrap_or(""),
+    }))
+}
+
+fn hashed_embedding(text: &str, dim: usize) -> Vec<f32> {
+    use sha2::{Digest, Sha256};
+
+    let mut values = vec![0f32; dim];
+    for token in text.split_whitespace() {
+        let digest = Sha256::digest(token.as_bytes());
+        let bucket = ((digest[0] as usize) << 8 | digest[1] as usize) % dim;
+        let sign = if digest[2] % 2 == 0 { 1.0 } else { -1.0 };
+        values[bucket] += sign;
+    }
+
+    let norm = values.iter().map(|v| v * v).sum::<f32>().sqrt();
+    if norm > 0.0 {
+        for value in &mut values {
+            *value /= norm;
+        }
+    }
+    values
+}
+
 pub struct CodexBackend { pub api_key: String, pub base_url: String, pub model: String }
 #[async_trait]
 impl LlmBackend for CodexBackend {
@@ -283,7 +513,9 @@ impl LlmBackend for GeminiBackend {
 
 #[cfg(test)]
 mod tests {
-    use super::{extract_message_text, parse_tool_arguments, to_openai_messages, Message};
+    use super::{
+        extract_message_text, parse_tool_arguments, to_ollama_messages, to_openai_messages, Message,
+    };
     use serde_json::json;
 
     #[test]
@@ -332,5 +564,30 @@ mod tests {
             ]))),
             Some("hello\n\nworld".to_string())
         );
+    }
+
+    #[test]
+    fn converts_tool_history_to_ollama_messages() {
+        let messages = vec![
+            Message {
+                role: "assistant".to_string(),
+                content: json!([
+                    {"type":"text","text":"Need a tool."},
+                    {"type":"tool_use","id":"tool-1","name":"read_file","input":{"path":"Cargo.toml"}}
+                ]),
+            },
+            Message {
+                role: "user".to_string(),
+                content: json!([
+                    {"type":"tool_result","tool_use_id":"tool-1","content":"[package]"}
+                ]),
+            },
+        ];
+
+        let ollama_messages = to_ollama_messages(&messages);
+        assert_eq!(ollama_messages[0]["role"], "assistant");
+        assert_eq!(ollama_messages[0]["tool_calls"][0]["function"]["name"], "read_file");
+        assert_eq!(ollama_messages[1]["role"], "tool");
+        assert_eq!(ollama_messages[1]["tool_name"], "read_file");
     }
 }

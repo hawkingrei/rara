@@ -27,7 +27,9 @@ use self::runtime::{
     execute_local_command, finish_running_task_if_ready, start_oauth_task, start_query_task,
     start_rebuild_task,
 };
-use self::state::{HelpTab, Overlay, TuiApp, LOCAL_MODEL_PRESETS, MODEL_GUIDE_OPTIONS};
+use self::state::{
+    current_model_presets, HelpTab, Overlay, PROVIDER_FAMILIES, TuiApp, MODEL_GUIDE_OPTIONS,
+};
 
 pub async fn run_tui(agent: Agent, oauth_manager: OAuthManager) -> anyhow::Result<()> {
     enable_raw_mode()?;
@@ -120,6 +122,15 @@ fn map_key_to_event(key: KeyCode, app: &TuiApp) -> AppEvent {
             KeyCode::Enter => AppEvent::ApplyOverlaySelection,
             _ => AppEvent::Noop,
         },
+        Some(Overlay::ProviderPicker) => match key {
+            KeyCode::Esc => AppEvent::CloseOverlay,
+            KeyCode::Up | KeyCode::Char('k') => AppEvent::MoveProviderSelection(-1),
+            KeyCode::Down | KeyCode::Char('j') => AppEvent::MoveProviderSelection(1),
+            KeyCode::Char('1') => AppEvent::SetProviderSelection(0),
+            KeyCode::Char('2') => AppEvent::SetProviderSelection(1),
+            KeyCode::Enter => AppEvent::ApplyOverlaySelection,
+            _ => AppEvent::Noop,
+        },
         Some(Overlay::ModelPicker) => match key {
             KeyCode::Esc => AppEvent::CloseOverlay,
             KeyCode::Up | KeyCode::Char('k') => AppEvent::MoveModelSelection(-1),
@@ -131,7 +142,7 @@ fn map_key_to_event(key: KeyCode, app: &TuiApp) -> AppEvent {
             _ => AppEvent::Noop,
         },
         None => match key {
-            KeyCode::Esc => AppEvent::Quit,
+            KeyCode::Esc => AppEvent::Noop,
             KeyCode::Enter => AppEvent::SubmitComposer,
             KeyCode::Char('s') => AppEvent::OpenOverlay(Overlay::Setup),
             KeyCode::Backspace => AppEvent::Backspace,
@@ -148,11 +159,14 @@ async fn dispatch_event(
     oauth_manager: &Arc<OAuthManager>,
 ) -> anyhow::Result<bool> {
     match event {
-        AppEvent::Quit => return Ok(true),
         AppEvent::Noop => {}
         AppEvent::OpenOverlay(overlay) => app.open_overlay(overlay),
         AppEvent::CloseOverlay => app.close_overlay(),
-        AppEvent::SubmitComposer => handle_submit(app, agent_slot, oauth_manager).await?,
+        AppEvent::SubmitComposer => {
+            if handle_submit(app, agent_slot, oauth_manager).await? {
+                return Ok(true);
+            }
+        }
         AppEvent::InputChar(c) => {
             if matches!(app.overlay, Some(Overlay::Welcome)) {
                 app.close_overlay();
@@ -182,8 +196,14 @@ async fn dispatch_event(
                 .clamp(0, MODEL_GUIDE_OPTIONS.len() as i32 - 1);
             app.model_guide_idx = next as usize;
         }
+        AppEvent::MoveProviderSelection(delta) => {
+            let next = (app.provider_picker_idx as i32 + delta)
+                .clamp(0, PROVIDER_FAMILIES.len() as i32 - 1);
+            app.provider_picker_idx = next as usize;
+        }
         AppEvent::MoveModelSelection(delta) => {
-            let next = (app.model_picker_idx as i32 + delta).clamp(0, LOCAL_MODEL_PRESETS.len() as i32 - 1);
+            let next = (app.model_picker_idx as i32 + delta)
+                .clamp(0, current_model_presets(app.provider_picker_idx).len() as i32 - 1);
             app.model_picker_idx = next as usize;
         }
         AppEvent::SetGuideSelection(idx) => {
@@ -192,8 +212,12 @@ async fn dispatch_event(
                 apply_model_guide_selection(app);
             }
         }
+        AppEvent::SetProviderSelection(idx) => {
+            app.provider_picker_idx = idx.min(PROVIDER_FAMILIES.len() - 1);
+            app.model_picker_idx = 0;
+        }
         AppEvent::SetModelSelection(idx) => {
-            app.model_picker_idx = idx.min(LOCAL_MODEL_PRESETS.len() - 1);
+            app.model_picker_idx = idx.min(current_model_presets(app.provider_picker_idx).len() - 1);
             if matches!(app.overlay, Some(Overlay::Setup)) {
                 app.select_local_model(app.model_picker_idx);
             } else if matches!(app.overlay, Some(Overlay::ModelPicker)) && !app.is_busy() {
@@ -220,7 +244,9 @@ async fn dispatch_event(
                 if let Some(spec) = palette_command_by_index(app, query, app.command_palette_idx) {
                     app.input = spec.usage.to_string();
                     app.close_overlay();
-                    handle_submit(app, agent_slot, oauth_manager).await?;
+                    if handle_submit(app, agent_slot, oauth_manager).await? {
+                        return Ok(true);
+                    }
                 }
             }
             Some(Overlay::ModelGuide) => {
@@ -228,6 +254,13 @@ async fn dispatch_event(
                     app.push_notice("A task is already running. Wait for it to finish.");
                 } else {
                     apply_model_guide_selection(app);
+                }
+            }
+            Some(Overlay::ProviderPicker) => {
+                if app.is_busy() {
+                    app.push_notice("A task is already running. Wait for it to finish.");
+                } else {
+                    app.open_overlay(Overlay::ModelPicker);
                 }
             }
             Some(Overlay::ModelPicker) => {
@@ -254,10 +287,11 @@ async fn dispatch_event(
 fn apply_model_guide_selection(app: &mut TuiApp) {
     match MODEL_GUIDE_OPTIONS[app.model_guide_idx].2 {
         Some(preset_idx) => {
+            app.provider_picker_idx = 0;
             app.select_local_model(preset_idx);
             start_rebuild_task(app);
         }
-        None => app.open_overlay(Overlay::ModelPicker),
+        None => app.open_overlay(Overlay::ProviderPicker),
     }
 }
 
@@ -265,7 +299,7 @@ async fn handle_submit(
     app: &mut TuiApp,
     agent_slot: &mut Option<Agent>,
     oauth_manager: &Arc<OAuthManager>,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<bool> {
     if matches!(app.overlay, Some(Overlay::CommandPalette)) {
         let query = app.input.trim_start().trim_start_matches('/');
         if let Some(spec) = palette_command_by_index(app, query, app.command_palette_idx) {
@@ -275,22 +309,24 @@ async fn handle_submit(
     }
 
     if app.input.is_empty() {
-        return Ok(());
+        return Ok(false);
     }
     if app.is_busy() {
         app.push_notice("A task is already running. Wait for it to finish.");
-        return Ok(());
+        return Ok(false);
     }
 
     let input = std::mem::take(&mut app.input);
     if let Some(command) = parse_local_command(&input) {
-        execute_local_command(command, app, agent_slot, oauth_manager).await?;
+        if execute_local_command(command, app, agent_slot, oauth_manager).await? {
+            return Ok(true);
+        }
     } else if input.trim_start().starts_with('/') {
         app.push_notice(format!("Unknown command '{}'. Use /help.", input.trim()));
     } else if let Some(agent) = agent_slot.take() {
         start_query_task(app, input.trim().to_string(), agent);
     }
-    Ok(())
+    Ok(false)
 }
 
 fn clamp_command_palette_selection(app: &mut TuiApp) {

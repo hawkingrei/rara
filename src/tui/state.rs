@@ -20,7 +20,14 @@ pub enum Overlay {
     Status,
     Setup,
     ModelGuide,
+    ProviderPicker,
     ModelPicker,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ProviderFamily {
+    CandleLocal,
+    Ollama,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -31,6 +38,7 @@ pub enum LocalCommandKind {
     Setup,
     Model,
     Login,
+    Quit,
 }
 
 pub struct LocalCommand {
@@ -118,6 +126,24 @@ pub const LOCAL_MODEL_PRESETS: [(&str, &str, &str); 3] = [
     ("Qwn3 8B", "qwn3", "qwn3-8b"),
 ];
 
+pub const OLLAMA_MODEL_PRESETS: [(&str, &str, &str); 2] = [
+    ("Gemma 4 E4B", "ollama", "gemma4:e4b"),
+    ("Gemma 4 E2B", "ollama", "gemma4:e2b"),
+];
+
+pub const PROVIDER_FAMILIES: [(ProviderFamily, &str, &str); 2] = [
+    (
+        ProviderFamily::CandleLocal,
+        "Candle Local",
+        "Run local Candle models directly in-process.",
+    ),
+    (
+        ProviderFamily::Ollama,
+        "Ollama",
+        "Use an external Ollama server and choose a local tag.",
+    ),
+];
+
 pub const MODEL_GUIDE_OPTIONS: [(&str, &str, Option<usize>); 4] = [
     ("Fast", "Switch to Qwn3 8B for faster local responses.", Some(2)),
     (
@@ -144,6 +170,7 @@ pub struct TuiApp {
     pub runtime_phase: RuntimePhase,
     pub runtime_phase_detail: Option<String>,
     pub snapshot: RuntimeSnapshot,
+    pub provider_picker_idx: usize,
     pub model_picker_idx: usize,
     pub model_guide_idx: usize,
     pub command_palette_idx: usize,
@@ -159,7 +186,8 @@ impl TuiApp {
         } else {
             Some(Overlay::Welcome)
         };
-        let model_picker_idx = selected_preset_idx_for_config(&cfg);
+        let provider_picker_idx = selected_provider_family_idx_for_config(&cfg);
+        let model_picker_idx = selected_preset_idx_for_config(&cfg, provider_picker_idx);
         Self {
             input: String::new(),
             transcript: Vec::new(),
@@ -171,6 +199,7 @@ impl TuiApp {
             runtime_phase: RuntimePhase::Idle,
             runtime_phase_detail: None,
             snapshot: RuntimeSnapshot::default(),
+            provider_picker_idx,
             model_picker_idx,
             model_guide_idx: 0,
             command_palette_idx: 0,
@@ -188,19 +217,28 @@ impl TuiApp {
     }
 
     pub fn selected_preset_idx(&self) -> usize {
-        selected_preset_idx_for_config(&self.config)
+        selected_preset_idx_for_config(&self.config, self.provider_picker_idx)
+    }
+
+    pub fn selected_provider_family(&self) -> ProviderFamily {
+        PROVIDER_FAMILIES[self.provider_picker_idx].0
     }
 
     pub fn select_local_model(&mut self, idx: usize) {
-        let (_, provider, model) = LOCAL_MODEL_PRESETS[idx];
+        let presets = current_model_presets(self.provider_picker_idx);
+        let (_, provider, model) = presets[idx];
         self.model_picker_idx = idx;
         self.config.provider = provider.to_string();
         self.config.model = Some(model.to_string());
-        self.config.revision = Some("main".to_string());
+        self.config.revision = if provider == "ollama" {
+            None
+        } else {
+            Some("main".to_string())
+        };
     }
 
     pub fn cycle_local_model(&mut self) {
-        let next = (self.selected_preset_idx() + 1) % LOCAL_MODEL_PRESETS.len();
+        let next = (self.selected_preset_idx() + 1) % current_model_presets(self.provider_picker_idx).len();
         self.select_local_model(next);
     }
 
@@ -266,6 +304,9 @@ impl TuiApp {
         if matches!(overlay, Overlay::ModelGuide) {
             self.model_guide_idx = 0;
         }
+        if matches!(overlay, Overlay::ProviderPicker) {
+            self.provider_picker_idx = selected_provider_family_idx_for_config(&self.config);
+        }
         if matches!(overlay, Overlay::ModelPicker) {
             self.model_picker_idx = self.selected_preset_idx();
         }
@@ -277,8 +318,22 @@ impl TuiApp {
     }
 }
 
-pub fn selected_preset_idx_for_config(config: &RaraConfig) -> usize {
-    LOCAL_MODEL_PRESETS
+pub fn selected_provider_family_idx_for_config(config: &RaraConfig) -> usize {
+    match config.provider.as_str() {
+        "ollama" => 1,
+        _ => 0,
+    }
+}
+
+pub fn current_model_presets(provider_picker_idx: usize) -> &'static [(&'static str, &'static str, &'static str)] {
+    match PROVIDER_FAMILIES[provider_picker_idx].0 {
+        ProviderFamily::CandleLocal => &LOCAL_MODEL_PRESETS,
+        ProviderFamily::Ollama => &OLLAMA_MODEL_PRESETS,
+    }
+}
+
+pub fn selected_preset_idx_for_config(config: &RaraConfig, provider_picker_idx: usize) -> usize {
+    current_model_presets(provider_picker_idx)
         .iter()
         .position(|(_, provider, model)| {
             config.provider == *provider && config.model.as_deref() == Some(*model)

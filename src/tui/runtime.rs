@@ -35,7 +35,7 @@ pub async fn execute_local_command(
     app: &mut TuiApp,
     agent_slot: &mut Option<Agent>,
     oauth_manager: &Arc<OAuthManager>,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<bool> {
     app.remember_command(match command.kind {
         LocalCommandKind::Help => "help",
         LocalCommandKind::Status => "status",
@@ -43,6 +43,7 @@ pub async fn execute_local_command(
         LocalCommandKind::Setup => "setup",
         LocalCommandKind::Model => "model",
         LocalCommandKind::Login => "login",
+        LocalCommandKind::Quit => "quit",
     });
     match command.kind {
         LocalCommandKind::Help => {
@@ -69,11 +70,15 @@ pub async fn execute_local_command(
                 start_oauth_task(app, Arc::clone(oauth_manager));
             }
         }
+        LocalCommandKind::Quit => {
+            app.set_runtime_phase(RuntimePhase::LocalCommand, Some("quitting".into()));
+            return Ok(true);
+        }
     }
     if let Some(agent) = agent_slot.as_ref() {
         app.sync_snapshot(agent);
     }
-    Ok(())
+    Ok(false)
 }
 
 pub fn start_query_task(app: &mut TuiApp, prompt: String, mut agent: Agent) {
@@ -284,12 +289,13 @@ fn handle_model_command(arg: Option<&str>, app: &mut TuiApp) -> anyhow::Result<(
         return Ok(());
     }
 
-    let Some(idx) = resolve_model_selection(raw_arg, app) else {
+    let Some((provider_idx, model_idx)) = resolve_model_selection(raw_arg, app) else {
         app.push_notice(format!("Unknown model preset '{raw_arg}'. Try /model or /help."));
         return Ok(());
     };
 
-    app.select_local_model(idx);
+    app.provider_picker_idx = provider_idx;
+    app.select_local_model(model_idx);
     start_rebuild_task(app);
     Ok(())
 }

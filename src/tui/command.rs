@@ -1,8 +1,11 @@
 use crate::config::RaraConfig;
 
-use super::state::{CommandSpec, LocalCommand, LocalCommandKind, TuiApp, LOCAL_MODEL_PRESETS};
+use super::state::{
+    current_model_presets, CommandSpec, LocalCommand, LocalCommandKind, ProviderFamily, TuiApp,
+    LOCAL_MODEL_PRESETS, OLLAMA_MODEL_PRESETS, PROVIDER_FAMILIES,
+};
 
-pub const COMMAND_SPECS: [CommandSpec; 6] = [
+pub const COMMAND_SPECS: [CommandSpec; 7] = [
     CommandSpec {
         category: "Session",
         name: "help",
@@ -45,6 +48,13 @@ pub const COMMAND_SPECS: [CommandSpec; 6] = [
         summary: "Start OAuth login in the background.",
         detail: "Start OAuth without blocking the TUI. Progress and completion are written back into the transcript and notice line.",
     },
+    CommandSpec {
+        category: "Session",
+        name: "quit",
+        usage: "/quit",
+        summary: "Exit the TUI session.",
+        detail: "Leave the RARA TUI and restore the terminal. The /exit alias behaves the same way.",
+    },
 ];
 
 pub fn parse_local_command(input: &str) -> Option<LocalCommand> {
@@ -65,6 +75,7 @@ pub fn parse_local_command(input: &str) -> Option<LocalCommand> {
         "setup" => LocalCommandKind::Setup,
         "model" => LocalCommandKind::Model,
         "login" => LocalCommandKind::Login,
+        "quit" | "exit" => LocalCommandKind::Quit,
         _ => return None,
     };
 
@@ -142,7 +153,7 @@ pub fn command_detail_text(spec: &CommandSpec) -> String {
 }
 
 pub fn general_help_text() -> &'static str {
-    "RARA uses a single composer as the control surface.\n\nNormal input goes to the current agent.\nSlash commands stay local and open overlays or update runtime state.\n\nKeyboard:\n  Enter submit current composer input\n  Esc close overlay or quit the app\n  Up/Down or j/k move inside lists\n  1/2/3 switch help tabs or choose guided model options"
+    "RARA uses a single composer as the control surface.\n\nNormal input goes to the current agent.\nSlash commands stay local and open overlays or update runtime state.\n\nKeyboard:\n  Enter submit current composer input\n  Esc close the current overlay only\n  Up/Down or j/k move inside lists\n  1/2/3 switch help tabs or choose guided model options\n\nExit:\n  /quit or /exit leave the TUI."
 }
 
 fn command_score(spec: &CommandSpec, query: &str) -> Option<u8> {
@@ -188,7 +199,7 @@ pub fn help_text() -> String {
         .collect::<Vec<_>>()
         .join("\n");
     format!(
-        "Built-in commands:\n{}\n\nKeyboard:\n  Enter submit\n  Esc quit or leave current panel\n  S open setup\n\nModel switching examples:\n  /model\n  /model list\n  /model 2\n  /model qwen3-8b\n  /model gemma4-e2b\n  /model next",
+        "Built-in commands:\n{}\n\nKeyboard:\n  Enter submit\n  Esc close current overlay\n  S open setup\n\nExit:\n  /quit\n  /exit\n\nModel switching examples:\n  /model\n  /model list\n  /model qwen3-8b\n  /model gemma4:e4b\n  /model next",
         commands
     )
 }
@@ -333,7 +344,8 @@ pub fn quick_actions_text() -> &'static str {
      /model     open guided model switching\n\
      /status    inspect runtime and workspace\n\
      /clear     reset the visible transcript\n\
-     /setup     open fallback setup"
+     /setup     open fallback setup\n\
+     /quit      leave the TUI"
 }
 
 pub fn recent_transcript_preview(app: &TuiApp, limit: usize) -> String {
@@ -361,35 +373,51 @@ pub fn recent_transcript_preview(app: &TuiApp, limit: usize) -> String {
 }
 
 pub fn model_help_text(app: &TuiApp) -> String {
-    let lines = LOCAL_MODEL_PRESETS
+    let lines = PROVIDER_FAMILIES
         .iter()
         .enumerate()
-        .map(|(idx, (label, provider, model))| {
-            let marker =
-                if app.config.provider == *provider && app.config.model.as_deref() == Some(*model) {
-                    "*"
-                } else {
-                    " "
-                };
-            format!("{marker} {}. {} ({}/{})", idx + 1, label, provider, model)
+        .map(|(provider_idx, (family, title, _))| {
+            let provider_lines = current_model_presets(provider_idx)
+                .iter()
+                .enumerate()
+                .map(|(idx, (label, provider, model))| {
+                    let marker = if app.config.provider == *provider
+                        && app.config.model.as_deref() == Some(*model)
+                    {
+                        "*"
+                    } else {
+                        " "
+                    };
+                    let shortcut = match family {
+                        ProviderFamily::CandleLocal => (idx + 1).to_string(),
+                        ProviderFamily::Ollama => model.to_string(),
+                    };
+                    format!("{marker} {shortcut}. {label} ({provider}/{model})")
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            format!("{title}\n{provider_lines}")
         })
         .collect::<Vec<_>>()
-        .join("\n");
+        .join("\n\n");
     format!(
-        "Current model: {} / {}\n\nAvailable presets:\n{}\n\nGemma 4 presets are marked experimental.\n\nUse /model to open the guide, or /model <name>, /model <1|2|3>, /model list, /model next.",
+        "Current model: {} / {}\n\nAvailable presets:\n{}\n\nGemma 4 Candle presets are marked experimental.\n\nUse /model to open the guide, /model list to inspect providers, /model <name> to switch directly, or /model next to rotate within the current provider family.",
         app.config.provider,
         app.current_model_label(),
         lines
     )
 }
 
-pub fn resolve_model_selection(arg: &str, app: &TuiApp) -> Option<usize> {
+pub fn resolve_model_selection(arg: &str, app: &TuiApp) -> Option<(usize, usize)> {
     match arg {
-        "1" => Some(0),
-        "2" => Some(1),
-        "3" => Some(2),
-        "next" => Some((app.selected_preset_idx() + 1) % LOCAL_MODEL_PRESETS.len()),
-        _ => LOCAL_MODEL_PRESETS
+        "1" => Some((app.provider_picker_idx, 0)),
+        "2" => Some((app.provider_picker_idx, 1)),
+        "3" => Some((app.provider_picker_idx, 2)),
+        "next" => Some((
+            app.provider_picker_idx,
+            (app.selected_preset_idx() + 1) % current_model_presets(app.provider_picker_idx).len(),
+        )),
+        _ => current_model_presets(app.provider_picker_idx)
             .iter()
             .position(|(label, provider, model)| {
                 *model == arg
@@ -398,6 +426,24 @@ pub fn resolve_model_selection(arg: &str, app: &TuiApp) -> Option<usize> {
                     || (*model == "qwn3-8b" && arg.eq_ignore_ascii_case("qwen3-8b"))
                     || (*model == "gemma4-e4b" && arg.eq_ignore_ascii_case("gemma-4-e4b"))
                     || (*model == "gemma4-e2b" && arg.eq_ignore_ascii_case("gemma-4-e2b"))
+            })
+            .map(|idx| (app.provider_picker_idx, idx))
+            .or_else(|| {
+                OLLAMA_MODEL_PRESETS.iter().position(|(label, provider, model)| {
+                    *model == arg
+                        || *provider == arg
+                        || normalize_command_token(label) == normalize_command_token(arg)
+                }).map(|idx| (1, idx))
+            })
+            .or_else(|| {
+                LOCAL_MODEL_PRESETS.iter().position(|(label, provider, model)| {
+                    *model == arg
+                        || *provider == arg
+                        || normalize_command_token(label) == normalize_command_token(arg)
+                        || (*model == "qwn3-8b" && arg.eq_ignore_ascii_case("qwen3-8b"))
+                        || (*model == "gemma4-e4b" && arg.eq_ignore_ascii_case("gemma-4-e4b"))
+                        || (*model == "gemma4-e2b" && arg.eq_ignore_ascii_case("gemma-4-e2b"))
+                }).map(|idx| (0, idx))
             }),
     }
 }
@@ -438,6 +484,15 @@ mod tests {
     #[test]
     fn returns_none_for_unknown_command() {
         assert!(parse_local_command("/unknown").is_none());
+    }
+
+    #[test]
+    fn parses_quit_aliases() {
+        let quit = parse_local_command("/quit").expect("quit should parse");
+        assert!(matches!(quit.kind, LocalCommandKind::Quit));
+
+        let exit = parse_local_command("/exit").expect("exit should parse");
+        assert!(matches!(exit.kind, LocalCommandKind::Quit));
     }
 
     #[test]
