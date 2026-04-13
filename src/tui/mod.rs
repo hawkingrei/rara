@@ -39,14 +39,7 @@ pub async fn run_tui(agent: Agent, oauth_manager: OAuthManager) -> anyhow::Resul
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, Hide)?;
-    let (_, rows) = terminal_size()?;
-    let viewport_height = rows.saturating_sub(1).max(14);
-    let mut terminal = Terminal::with_options(
-        CrosstermBackend::new(stdout),
-        TerminalOptions {
-            viewport: Viewport::Inline(viewport_height),
-        },
-    )?;
+    let mut terminal = build_terminal()?;
     let mut app = TuiApp::new(crate::config::ConfigManager::new()?);
     let mut agent_slot = Some(agent);
     let oauth_manager = Arc::new(oauth_manager);
@@ -73,6 +66,9 @@ pub async fn run_tui(agent: Agent, oauth_manager: OAuthManager) -> anyhow::Resul
                             break Ok(());
                         }
                     }
+                    Some(Ok(Event::Resize(_, _))) => {
+                        terminal = build_terminal()?;
+                    }
                     Some(Ok(_)) => {}
                     Some(Err(err)) => break Err(err.into()),
                     None => break Ok(()),
@@ -83,6 +79,18 @@ pub async fn run_tui(agent: Agent, oauth_manager: OAuthManager) -> anyhow::Resul
 
     teardown_terminal(terminal)?;
     result
+}
+
+fn build_terminal() -> anyhow::Result<Terminal<CrosstermBackend<std::io::Stdout>>> {
+    let (_, rows) = terminal_size()?;
+    let viewport_height = rows.saturating_sub(1).max(14);
+    let terminal = Terminal::with_options(
+        CrosstermBackend::new(io::stdout()),
+        TerminalOptions {
+            viewport: Viewport::Inline(viewport_height),
+        },
+    )?;
+    Ok(terminal)
 }
 
 fn map_key_to_event(key: KeyCode, app: &TuiApp) -> AppEvent {
