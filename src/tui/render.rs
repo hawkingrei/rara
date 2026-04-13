@@ -93,7 +93,7 @@ fn render_transcript(f: &mut Frame, app: &TuiApp, area: Rect) {
                     let absolute_idx = idx + start;
                     let is_active_tail = app.is_busy()
                         && absolute_idx + 2 >= app.transcript.len();
-                    transcript_item(absolute_idx, role, message, is_active_tail)
+                    transcript_item(role, message, is_active_tail)
                 }),
         );
         items
@@ -746,7 +746,7 @@ fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
     horizontal[1]
 }
 
-fn transcript_item(index: usize, role: &str, message: &str, is_active_tail: bool) -> ListItem<'static> {
+fn transcript_item(role: &str, message: &str, is_active_tail: bool) -> ListItem<'static> {
     let mut lines = vec![Line::from(vec![
         Span::styled(
             if is_active_tail { ">" } else { " " },
@@ -756,11 +756,6 @@ fn transcript_item(index: usize, role: &str, message: &str, is_active_tail: bool
         ),
         Span::raw(" "),
         role_badge_span(role),
-        Span::raw(" "),
-        Span::styled(
-            format!("#{}", index + 1),
-            Style::default().fg(Color::DarkGray),
-        ),
     ])];
     let message_lines = message.lines().collect::<Vec<_>>();
     if message_lines.is_empty() {
