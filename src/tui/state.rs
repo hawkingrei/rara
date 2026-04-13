@@ -37,6 +37,7 @@ pub enum LocalCommandKind {
     Clear,
     Plan,
     Approval,
+    Search,
     Setup,
     Model,
     BaseUrl,

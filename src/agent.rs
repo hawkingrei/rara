@@ -131,6 +131,61 @@ struct TurnOutput {
     assistant_text: String,
 }
 
+#[derive(Debug, Clone, Default)]
+struct InspectionProgress {
+    list_calls: usize,
+    source_reads: usize,
+    config_reads: usize,
+    instruction_reads: usize,
+}
+
+impl InspectionProgress {
+    fn record_tool(&mut self, name: &str, input: &Value) {
+        match name {
+            "list_files" => {
+                self.list_calls += 1;
+            }
+            "read_file" => {
+                let path = input
+                    .get("path")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_ascii_lowercase();
+                if path.starts_with("src/") || path.ends_with(".rs") {
+                    self.source_reads += 1;
+                } else if path.ends_with("cargo.toml")
+                    || path.ends_with("cargo.lock")
+                    || path.ends_with(".toml")
+                {
+                    self.config_reads += 1;
+                } else if path.ends_with("agents.md")
+                    || path.ends_with("readme.md")
+                    || path.ends_with(".rara/instructions.md")
+                    || path.ends_with(".rara/memory.md")
+                    || path.ends_with(".md")
+                {
+                    self.instruction_reads += 1;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn has_minimum_review_evidence(&self) -> bool {
+        self.source_reads >= 2
+            || (self.source_reads >= 1
+                && self.list_calls >= 1
+                && (self.config_reads >= 1 || self.instruction_reads >= 1))
+    }
+
+    fn has_any_evidence(&self) -> bool {
+        self.list_calls > 0
+            || self.source_reads > 0
+            || self.config_reads > 0
+            || self.instruction_reads > 0
+    }
+}
+
 pub struct Agent {
     pub tool_manager: ToolManager,
     pub llm_backend: Arc<dyn LlmBackend>,
@@ -150,6 +205,7 @@ pub struct Agent {
     pub pending_approval: Option<PendingApproval>,
     pub completed_user_input: Option<CompletedInteraction>,
     pub completed_approval: Option<CompletedInteraction>,
+    inspection_progress: InspectionProgress,
 }
 
 impl Agent {
@@ -180,6 +236,7 @@ impl Agent {
             pending_approval: None,
             completed_user_input: None,
             completed_approval: None,
+            inspection_progress: InspectionProgress::default(),
         }
     }
 
@@ -386,6 +443,7 @@ impl Agent {
         let mut tool_rounds = 0usize;
         let mut plan_continuations = 0usize;
         let mut execute_continuations = 0usize;
+        self.inspection_progress = InspectionProgress::default();
         self.compact_if_needed_with_reporter(&mut report).await?;
         self.history = repair_tool_result_history(&self.history);
         self.clear_completed_interactions();
@@ -641,6 +699,8 @@ impl Agent {
                 continue;
             }
             if let Some(tool) = self.tool_manager.get_tool(&tool_call.name) {
+                self.inspection_progress
+                    .record_tool(&tool_call.name, &tool_call.input);
                 report(AgentEvent::Status(format!(
                     "Running tool {}.",
                     tool_call.name
@@ -795,14 +855,17 @@ impl Agent {
     fn should_continue_plan_without_tools(
         &self,
         plan_updated: bool,
-        assistant_text: &str,
+        _assistant_text: &str,
         tool_rounds: usize,
         plan_continuations: usize,
     ) -> bool {
         let shallow_initial_plan = plan_updated && tool_rounds == 0 && self.current_plan.len() <= 1;
-        let explicit_more_work_after_exploration = tool_rounds > 0 && assistant_text_signals_more_work(assistant_text);
+        let still_missing_inspection_evidence =
+            tool_rounds > 0
+                && self.inspection_progress.has_any_evidence()
+                && !self.inspection_progress.has_minimum_review_evidence();
         matches!(self.execution_mode, AgentExecutionMode::Plan)
-            && (shallow_initial_plan || explicit_more_work_after_exploration)
+            && (shallow_initial_plan || still_missing_inspection_evidence)
             && plan_continuations < MAX_PLAN_CONTINUATIONS_PER_TURN
             && self.pending_user_input.is_none()
             && !self.current_plan.is_empty()
@@ -811,15 +874,17 @@ impl Agent {
     fn should_continue_execute_without_tools(
         &self,
         assistant_text: &str,
-        tool_rounds: usize,
+        _tool_rounds: usize,
         execute_continuations: usize,
     ) -> bool {
+        let inspection_intent =
+            self.inspection_progress.has_any_evidence() || text_mentions_local_file_targets(assistant_text);
         matches!(self.execution_mode, AgentExecutionMode::Execute)
-            && tool_rounds > 0
+            && inspection_intent
             && execute_continuations < MAX_EXECUTE_CONTINUATIONS_PER_TURN
             && self.pending_user_input.is_none()
             && self.pending_approval.is_none()
-            && assistant_text_signals_more_work(assistant_text)
+            && !self.inspection_progress.has_minimum_review_evidence()
     }
 
     fn ensure_active_plan_step(&mut self) {
@@ -969,25 +1034,21 @@ fn execute_continuation_message() -> Message {
     }
 }
 
-fn assistant_text_signals_more_work(text: &str) -> bool {
-    let text = text.to_ascii_lowercase();
+fn text_mentions_local_file_targets(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
     [
-        "i will ",
-        "i'll ",
-        "next,",
-        "next ",
-        "to provide",
-        "to understand",
-        "to inspect",
-        "need to",
-        "i need to",
-        "i should",
-        "i want to inspect",
-        "i will examine",
-        "i will inspect",
+        "cargo.toml",
+        "cargo.lock",
+        "agents.md",
+        "readme.md",
+        "src/",
+        "src\\",
+        ".rs",
+        ".toml",
+        ".md",
     ]
     .iter()
-    .any(|needle| text.contains(needle))
+    .any(|needle| lower.contains(needle))
 }
 
 fn tool_result_message(tool_use_id: &str, content: String, is_error: bool) -> Message {
@@ -1205,7 +1266,7 @@ mod tests {
         agent.set_execution_mode(AgentExecutionMode::Plan);
 
         agent
-            .query_with_mode("inspect".to_string(), super::AgentOutputMode::Silent)
+            .query_with_mode("review-current-project".to_string(), super::AgentOutputMode::Silent)
             .await
             .expect("query should succeed");
 
@@ -1306,10 +1367,7 @@ mod tests {
             .expect("query should succeed");
 
         let observed = backend.observed_messages.lock().expect("lock");
-        assert_eq!(observed.len(), 3);
-        assert!(observed[2]
-            .iter()
-            .any(|message| message.content == plan_continuation_message().content));
+        assert_eq!(observed.len(), 2);
     }
 
     #[tokio::test]
@@ -1359,6 +1417,86 @@ mod tests {
         let observed = backend.observed_messages.lock().expect("lock");
         assert_eq!(observed.len(), 3);
         assert!(observed[2]
+            .iter()
+            .any(|message| message.content == execute_continuation_message().content));
+    }
+
+    #[tokio::test]
+    async fn continues_execute_mode_when_assistant_only_plans_followup_file_reads() {
+        let backend = Arc::new(SequencedBackend::new(vec![
+            AnthropicResponse {
+                content: vec![ContentBlock::Text {
+                    text: "I have checked the repository layout. Next, I will read Cargo.toml, AGENTS.md, and src/main.rs to understand the bootstrap and architecture.".to_string(),
+                }],
+                stop_reason: Some("end_turn".to_string()),
+                usage: Some(TokenUsage::default()),
+            },
+            AnthropicResponse {
+                content: vec![ContentBlock::Text {
+                    text: "done".to_string(),
+                }],
+                stop_reason: Some("end_turn".to_string()),
+                usage: Some(TokenUsage::default()),
+            },
+        ]));
+
+        let mut agent = Agent::new(
+            ToolManager::new(),
+            backend.clone(),
+            Arc::new(VectorDB::new("data/lancedb")),
+            Arc::new(SessionManager::new().expect("session manager")),
+            Arc::new(WorkspaceMemory::new().expect("workspace memory")),
+        );
+        agent.set_execution_mode(AgentExecutionMode::Execute);
+
+        agent
+            .query_with_mode("inspect".to_string(), super::AgentOutputMode::Silent)
+            .await
+            .expect("query should succeed");
+
+        let observed = backend.observed_messages.lock().expect("lock");
+        assert_eq!(observed.len(), 2);
+        assert!(observed[1]
+            .iter()
+            .any(|message| message.content == execute_continuation_message().content));
+    }
+
+    #[tokio::test]
+    async fn continues_execute_mode_for_chinese_followup_file_reads() {
+        let backend = Arc::new(SequencedBackend::new(vec![
+            AnthropicResponse {
+                content: vec![ContentBlock::Text {
+                    text: "我已经看过当前目录结构。接下来我将阅读 Cargo.toml、AGENTS.md 和 src/main.rs，以便理解项目依赖和启动流程。".to_string(),
+                }],
+                stop_reason: Some("end_turn".to_string()),
+                usage: Some(TokenUsage::default()),
+            },
+            AnthropicResponse {
+                content: vec![ContentBlock::Text {
+                    text: "done".to_string(),
+                }],
+                stop_reason: Some("end_turn".to_string()),
+                usage: Some(TokenUsage::default()),
+            },
+        ]));
+
+        let mut agent = Agent::new(
+            ToolManager::new(),
+            backend.clone(),
+            Arc::new(VectorDB::new("data/lancedb")),
+            Arc::new(SessionManager::new().expect("session manager")),
+            Arc::new(WorkspaceMemory::new().expect("workspace memory")),
+        );
+        agent.set_execution_mode(AgentExecutionMode::Execute);
+
+        agent
+            .query_with_mode("inspect".to_string(), super::AgentOutputMode::Silent)
+            .await
+            .expect("query should succeed");
+
+        let observed = backend.observed_messages.lock().expect("lock");
+        assert_eq!(observed.len(), 2);
+        assert!(observed[1]
             .iter()
             .any(|message| message.content == execute_continuation_message().content));
     }

@@ -145,6 +145,11 @@ fn current_turn_lines(app: &TuiApp, current_turn_start: usize) -> Vec<Line<'stat
         .rev()
         .find(|(role, _)| role == "Agent")
         .map(|(_, message)| message.as_str());
+    let latest_tool_result = current_turn
+        .iter()
+        .rev()
+        .find(|(role, _)| *role == "Tool Result" || *role == "Tool Error")
+        .map(|(role, message)| (role.as_str(), message.as_str()));
     let mut lines = vec![
         Line::from(role_badge_span("You")),
         Line::from(format!("  {}", user_message)),
@@ -252,6 +257,11 @@ fn current_turn_lines(app: &TuiApp, current_turn_start: usize) -> Vec<Line<'stat
     if let Some(agent_message) = latest_agent {
         lines.push(Line::from(role_badge_span("Agent")));
         for line in agent_message.lines() {
+            lines.push(Line::from(format!("  {line}")));
+        }
+    } else if let Some((role, tool_result)) = latest_tool_result {
+        lines.push(Line::from(role_badge_span(role)));
+        for line in tool_result.lines().take(14) {
             lines.push(Line::from(format!("  {line}")));
         }
     } else if app.is_busy() {

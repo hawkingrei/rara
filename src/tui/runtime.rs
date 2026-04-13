@@ -1,6 +1,8 @@
 use std::sync::Arc;
 use std::time::Instant;
 
+use anyhow::anyhow;
+use serde_json::json;
 use tokio::sync::mpsc;
 
 use crate::agent::{Agent, AgentEvent, AgentExecutionMode, AgentOutputMode, BashApprovalMode};
@@ -22,6 +24,7 @@ use crate::tools::skill::SkillTool;
 use crate::tools::vector::{RememberExperienceTool, RetrieveExperienceTool};
 use crate::tools::web::WebFetchTool;
 use crate::tools::workspace::UpdateProjectMemoryTool;
+use crate::tool::Tool;
 use crate::vectordb::VectorDB;
 use crate::workspace::WorkspaceMemory;
 
@@ -42,6 +45,7 @@ pub async fn execute_local_command(
         LocalCommandKind::Clear => "clear",
         LocalCommandKind::Plan => "plan",
         LocalCommandKind::Approval => "approval",
+        LocalCommandKind::Search => "search",
         LocalCommandKind::Setup => "setup",
         LocalCommandKind::Model => "model",
         LocalCommandKind::BaseUrl => "base-url",
@@ -102,6 +106,7 @@ pub async fn execute_local_command(
             app.set_runtime_phase(RuntimePhase::LocalCommand, Some("updating approval mode".into()));
             app.push_notice(notice);
         }
+        LocalCommandKind::Search => handle_search_command(command.arg.as_deref(), app).await?,
         LocalCommandKind::Setup => {
             app.set_runtime_phase(RuntimePhase::LocalCommand, Some("opening setup".into()));
             app.open_overlay(Overlay::Setup);
@@ -124,6 +129,87 @@ pub async fn execute_local_command(
         app.sync_snapshot(agent);
     }
     Ok(false)
+}
+
+async fn handle_search_command(arg: Option<&str>, app: &mut TuiApp) -> anyhow::Result<()> {
+    let raw = arg
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| anyhow!("/search requires a pattern. Use /search <pattern> [in <path>]."))?;
+    let (pattern, path) = parse_search_argument(raw);
+    let tool = GrepTool;
+    let input = json!({
+        "pattern": pattern,
+        "path": path,
+    });
+    app.set_runtime_phase(
+        RuntimePhase::LocalCommand,
+        Some(format!("searching {path} for {pattern}")),
+    );
+    app.push_entry("You", format!("/search {raw}"));
+    app.push_entry("Tool", format!("grep {pattern} in {path}"));
+
+    match tool.call(input).await {
+        Ok(result) => {
+            let rendered = render_local_search_result(pattern, path, &result);
+            app.push_entry("Tool Result", rendered.clone());
+            app.push_entry("Agent", rendered);
+            app.push_notice(format!("Search completed for \"{pattern}\"."));
+        }
+        Err(err) => {
+            let rendered = format!("grep failed: {err}");
+            app.push_entry("Tool Error", rendered.clone());
+            app.push_notice(rendered);
+        }
+    }
+    Ok(())
+}
+
+fn parse_search_argument(raw: &str) -> (&str, &str) {
+    if let Some((pattern, path)) = raw.rsplit_once(" in ") {
+        let pattern = pattern.trim();
+        let path = path.trim();
+        if !pattern.is_empty() && !path.is_empty() {
+            return (pattern, path);
+        }
+    }
+    (raw, ".")
+}
+
+fn render_local_search_result(pattern: &str, path: &str, result: &serde_json::Value) -> String {
+    let entries = result
+        .get("results")
+        .and_then(serde_json::Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let total = entries.len();
+    if total == 0 {
+        return format!("Search \"{pattern}\" in {path}: no matches.");
+    }
+
+    let preview = entries
+        .iter()
+        .take(12)
+        .map(|entry| {
+            let file = entry.get("file").and_then(serde_json::Value::as_str).unwrap_or("<unknown>");
+            let line = entry.get("line").and_then(serde_json::Value::as_u64).unwrap_or(0);
+            let content = entry.get("content").and_then(serde_json::Value::as_str).unwrap_or_default();
+            format!("{file}:{line}: {content}")
+        })
+        .collect::<Vec<_>>();
+    let remaining = total.saturating_sub(preview.len());
+
+    if remaining > 0 {
+        format!(
+            "Search \"{pattern}\" in {path}: {total} match(es).\nTop hits:\n{}\n... {remaining} more match(es).",
+            preview.join("\n")
+        )
+    } else {
+        format!(
+            "Search \"{pattern}\" in {path}: {total} match(es).\nTop hits:\n{}",
+            preview.join("\n")
+        )
+    }
 }
 
 pub fn start_query_task(app: &mut TuiApp, prompt: String, mut agent: Agent) {
