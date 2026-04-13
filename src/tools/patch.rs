@@ -397,4 +397,25 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&file).expect("read"), "hello\nworld\n");
         assert_eq!(result["status"], "validated");
     }
+
+    #[tokio::test]
+    async fn creates_new_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("created.txt");
+
+        let tool = ApplyPatchTool;
+        let result = tool
+            .call(json!({
+                "patch": format!(
+                    "*** Begin Patch\n*** Add File: {}\n+hello\n+world\n*** End Patch",
+                    file.display()
+                )
+            }))
+            .await
+            .expect("create file");
+
+        assert_eq!(std::fs::read_to_string(&file).expect("read"), "hello\nworld\n");
+        assert_eq!(result["status"], "applied");
+        assert_eq!(result["created_files"][0], file.display().to_string());
+    }
 }
