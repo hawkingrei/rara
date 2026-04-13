@@ -205,7 +205,16 @@ pub async fn finish_running_task_if_ready(
                 }
                 Err(err) => {
                     app.set_runtime_phase(RuntimePhase::Failed, Some("query failed".into()));
-                    app.push_notice(format!("Query failed: {err}"));
+                    let mut message = format!("Query failed: {err}");
+                    if app.config.provider == "ollama" {
+                        let base_url = app
+                            .config
+                            .base_url
+                            .as_deref()
+                            .unwrap_or("http://localhost:11434");
+                        message.push_str(&format!("\nbase_url={base_url}"));
+                    }
+                    app.push_notice(message);
                 }
             }
         }

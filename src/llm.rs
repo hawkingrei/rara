@@ -269,6 +269,7 @@ fn parse_tool_arguments(arguments: &Value) -> Result<Value> {
 impl LlmBackend for OllamaBackend {
     async fn ask(&self, messages: &[Message], tools: &[Value]) -> Result<AnthropicResponse> {
         let client = reqwest::Client::new();
+        let endpoint = format!("{}/api/chat", self.base_url.trim_end_matches('/'));
         let mut body = json!({
             "model": self.model,
             "messages": to_ollama_messages(messages),
@@ -292,13 +293,13 @@ impl LlmBackend for OllamaBackend {
         }
 
         let res = client
-            .post(&format!("{}/api/chat", self.base_url.trim_end_matches('/')))
+            .post(&endpoint)
             .json(&body)
             .send()
             .await?;
 
         if !res.status().is_success() {
-            return Err(anyhow!("API Error: {}", res.text().await?));
+            return Err(anyhow!("API Error at {}: {}", endpoint, res.text().await?));
         }
         let resp_json: Value = res.json().await?;
         let message = &resp_json["message"];
