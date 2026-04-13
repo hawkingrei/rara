@@ -14,6 +14,12 @@ const MAX_TOOL_ROUNDS_PER_TURN: usize = 8;
 const TOOL_CONTINUATION_PROMPT: &str =
     "Tool results are now available. Continue the task. Use another tool if needed, otherwise provide the final answer. Do not repeat the tool result verbatim.";
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AgentExecutionMode {
+    Execute,
+    Plan,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Message {
     pub role: String,
@@ -88,6 +94,7 @@ pub struct Agent {
     pub total_input_tokens: u32,
     pub total_output_tokens: u32,
     pub tool_result_store: ToolResultStore,
+    pub execution_mode: AgentExecutionMode,
 }
 
 impl Agent {
@@ -110,6 +117,7 @@ impl Agent {
             total_output_tokens: 0,
             tool_result_store: ToolResultStore::new(default_tool_result_store_dir())
                 .expect("tool result store"),
+            execution_mode: AgentExecutionMode::Execute,
         }
     }
 
@@ -124,6 +132,15 @@ impl Agent {
             prompt.push_str("\n## Local Project Memory:\n");
             prompt.push_str(&mem);
             prompt.push_str("\n");
+        }
+        if matches!(self.execution_mode, AgentExecutionMode::Plan) {
+            prompt.push_str(
+                "\n## Current Execution Mode:\n\
+                - Plan mode is active.\n\
+                - This pass is read-only.\n\
+                - Inspect the codebase, analyze constraints, and produce a concrete implementation plan.\n\
+                - Do not call tools that edit files, run shell commands, update project memory, save experience, or spawn sub-agents.\n",
+            );
         }
         prompt.push_str("\n## Capabilities:\n\
             - Prefer 'apply_patch' for editing existing files and use 'write_file' only for new files or full rewrites.\n\
@@ -150,6 +167,17 @@ impl Agent {
             - After every tool result, decide the next step immediately: either call another tool or provide the final answer.\n\
             - Do not stop at an intermediate status update once tool results are available.");
         prompt
+    }
+
+    pub fn set_execution_mode(&mut self, mode: AgentExecutionMode) {
+        self.execution_mode = mode;
+    }
+
+    pub fn execution_mode_label(&self) -> &'static str {
+        match self.execution_mode {
+            AgentExecutionMode::Execute => "execute",
+            AgentExecutionMode::Plan => "plan",
+        }
     }
 
     pub async fn compact_if_needed(&mut self) -> Result<()> {
@@ -263,7 +291,7 @@ impl Agent {
 
         let response = self
             .llm_backend
-            .ask(&messages, &self.tool_manager.get_schemas())
+            .ask(&messages, &self.visible_tool_schemas())
             .await?;
 
         if let Some(usage) = &response.usage {
@@ -313,6 +341,24 @@ impl Agent {
     {
         let mut tool_results = Vec::new();
         for tool_call in tool_calls {
+            if !self.is_tool_allowed_in_current_mode(&tool_call.name) {
+                let error_text = format!(
+                    "Error: tool '{}' is unavailable in {} mode. Inspect with read-only tools and return a plan instead.",
+                    tool_call.name,
+                    self.execution_mode_label()
+                );
+                report(AgentEvent::ToolResult {
+                    name: tool_call.name.clone(),
+                    content: error_text.clone(),
+                    is_error: true,
+                });
+                tool_results.push(tool_result_message(
+                    &tool_call.id,
+                    error_text,
+                    true,
+                ));
+                continue;
+            }
             if let Some(tool) = self.tool_manager.get_tool(&tool_call.name) {
                 report(AgentEvent::Status(format!(
                     "Running tool {}.",
@@ -366,6 +412,28 @@ impl Agent {
         ));
         self.history.push(tool_continuation_message());
     }
+
+    fn visible_tool_schemas(&self) -> Vec<Value> {
+        self.tool_manager
+            .get_schemas_filtered(|name| self.is_tool_allowed_in_current_mode(name))
+    }
+
+    fn is_tool_allowed_in_current_mode(&self, name: &str) -> bool {
+        match self.execution_mode {
+            AgentExecutionMode::Execute => true,
+            AgentExecutionMode::Plan => !matches!(
+                name,
+                "bash"
+                    | "write_file"
+                    | "replace"
+                    | "apply_patch"
+                    | "update_project_memory"
+                    | "remember_experience"
+                    | "spawn_agent"
+                    | "team_create"
+            ),
+        }
+    }
 }
 
 fn tool_continuation_message() -> Message {
@@ -392,7 +460,7 @@ fn tool_result_message(tool_use_id: &str, content: String, is_error: bool) -> Me
 
 #[cfg(test)]
 mod tests {
-    use super::{tool_continuation_message, Agent, AnthropicResponse, ContentBlock, Message, TokenUsage};
+    use super::{tool_continuation_message, Agent, AgentExecutionMode, AnthropicResponse, ContentBlock, Message, TokenUsage};
     use crate::llm::LlmBackend;
     use crate::session::SessionManager;
     use crate::tool::{Tool, ToolError, ToolManager};
@@ -418,6 +486,7 @@ mod tests {
     struct SequencedBackend {
         responses: Mutex<Vec<AnthropicResponse>>,
         observed_messages: Mutex<Vec<Vec<Message>>>,
+        observed_tools: Mutex<Vec<Vec<String>>>,
     }
 
     impl SequencedBackend {
@@ -425,14 +494,25 @@ mod tests {
             Self {
                 responses: Mutex::new(responses),
                 observed_messages: Mutex::new(Vec::new()),
+                observed_tools: Mutex::new(Vec::new()),
             }
+        }
+
+        fn observed_tools(&self) -> Vec<Vec<String>> {
+            self.observed_tools.lock().expect("lock").clone()
         }
     }
 
     #[async_trait]
     impl LlmBackend for SequencedBackend {
-        async fn ask(&self, messages: &[Message], _tools: &[Value]) -> Result<AnthropicResponse> {
+        async fn ask(&self, messages: &[Message], tools: &[Value]) -> Result<AnthropicResponse> {
             self.observed_messages.lock().expect("lock").push(messages.to_vec());
+            self.observed_tools.lock().expect("lock").push(
+                tools
+                    .iter()
+                    .filter_map(|tool| tool.get("name").and_then(Value::as_str).map(str::to_string))
+                    .collect(),
+            );
             Ok(self.responses.lock().expect("lock").remove(0))
         }
 
@@ -553,5 +633,37 @@ mod tests {
         assert!(error
             .to_string()
             .contains("Tool loop exceeded"));
+    }
+
+    #[tokio::test]
+    async fn plan_mode_filters_write_tools_from_schema() {
+        let backend = Arc::new(SequencedBackend::new(vec![AnthropicResponse {
+            content: vec![ContentBlock::Text {
+                text: "plan".to_string(),
+            }],
+            stop_reason: Some("end_turn".to_string()),
+            usage: Some(TokenUsage::default()),
+        }]));
+
+        let mut tool_manager = ToolManager::new();
+        tool_manager.register(Box::new(StubTool));
+        tool_manager.register(Box::new(crate::tools::file::WriteFileTool));
+        let mut agent = Agent::new(
+            tool_manager,
+            backend.clone(),
+            Arc::new(VectorDB::new("data/lancedb")),
+            Arc::new(SessionManager::new().expect("session manager")),
+            Arc::new(WorkspaceMemory::new().expect("workspace memory")),
+        );
+        agent.set_execution_mode(AgentExecutionMode::Plan);
+
+        agent
+            .query_with_mode("inspect".to_string(), super::AgentOutputMode::Silent)
+            .await
+            .expect("query should succeed");
+
+        let observed_tools = backend.observed_tools();
+        assert_eq!(observed_tools.len(), 1);
+        assert_eq!(observed_tools[0], vec!["stub_tool".to_string()]);
     }
 }

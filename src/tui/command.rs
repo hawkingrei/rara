@@ -7,7 +7,7 @@ use super::state::{
     PROVIDER_FAMILIES,
 };
 
-pub const COMMAND_SPECS: [CommandSpec; 8] = [
+pub const COMMAND_SPECS: [CommandSpec; 10] = [
     CommandSpec {
         category: "Session",
         name: "help",
@@ -28,6 +28,20 @@ pub const COMMAND_SPECS: [CommandSpec; 8] = [
         usage: "/clear",
         summary: "Clear the visible transcript and keep the current backend.",
         detail: "Reset only the local transcript view. The current backend, session id, and active runtime remain unchanged.",
+    },
+    CommandSpec {
+        category: "Session",
+        name: "plan",
+        usage: "/plan",
+        summary: "Enter read-only planning mode.",
+        detail: "Switch the active agent into plan mode. Read-only inspection tools stay available, but editing, shell execution, memory writes, and sub-agent launch tools are hidden and blocked.",
+    },
+    CommandSpec {
+        category: "Session",
+        name: "execute",
+        usage: "/execute",
+        summary: "Return to normal execution mode.",
+        detail: "Leave read-only planning mode and restore the full toolset for implementation work.",
     },
     CommandSpec {
         category: "Setup",
@@ -81,6 +95,8 @@ pub fn parse_local_command(input: &str) -> Option<LocalCommand> {
         "help" => LocalCommandKind::Help,
         "status" => LocalCommandKind::Status,
         "clear" => LocalCommandKind::Clear,
+        "plan" => LocalCommandKind::Plan,
+        "execute" => LocalCommandKind::Execute,
         "setup" => LocalCommandKind::Setup,
         "model" => LocalCommandKind::Model,
         "base-url" => LocalCommandKind::BaseUrl,
@@ -116,8 +132,10 @@ pub fn command_spec_by_name(name: &str) -> Option<&'static CommandSpec> {
 pub fn recommended_commands(app: &TuiApp) -> Vec<&'static CommandSpec> {
     let names: &[&str] = if app.is_busy() {
         &["status", "help", "clear"]
+    } else if app.agent_execution_mode_label() == "plan" {
+        &["execute", "status", "help", "model", "base-url", "clear"]
     } else {
-        &["model", "base-url", "status", "help", "clear", "setup"]
+        &["plan", "model", "base-url", "status", "help", "clear", "setup"]
     };
     names
         .iter()
@@ -163,7 +181,7 @@ pub fn command_detail_text(spec: &CommandSpec) -> String {
 }
 
 pub fn general_help_text() -> &'static str {
-    "RARA uses a single composer as the control surface.\n\nNormal input goes to the current agent.\nSlash commands stay local and open overlays or update runtime state.\n\nEditing:\n  apply_patch is the default tool for updating existing files\n  write_file is for new files or full rewrites\n  replace is only a simple fallback for unique string swaps\n\nKeyboard:\n  Enter submit current composer input\n  Esc close the current overlay only\n  Up/Down or j/k move inside lists\n  1/2/3 switch help tabs or choose guided model options\n\nExit:\n  /quit or /exit leave the TUI."
+    "RARA uses a single composer as the control surface.\n\nNormal input goes to the current agent.\nSlash commands stay local and open overlays or update runtime state.\n\nModes:\n  /plan enters read-only planning mode\n  /execute returns to normal implementation mode\n\nEditing:\n  apply_patch is the default tool for updating existing files\n  write_file is for new files or full rewrites\n  replace is only a simple fallback for unique string swaps\n\nKeyboard:\n  Enter submit current composer input\n  Esc close the current overlay only\n  Up/Down or j/k move inside lists\n  1/2/3 switch help tabs or choose guided model options\n\nExit:\n  /quit or /exit leave the TUI."
 }
 
 fn command_score(spec: &CommandSpec, query: &str) -> Option<u8> {
@@ -209,7 +227,7 @@ pub fn help_text() -> String {
         .collect::<Vec<_>>()
         .join("\n");
     format!(
-        "Built-in commands:\n{}\n\nEditing:\n  apply_patch  preferred for editing existing files\n  write_file   use for new files or full rewrites\n  replace      simple fallback for unique string replacement\n\nKeyboard:\n  Enter submit\n  Esc close current overlay\n  S open setup\n\nExit:\n  /quit\n  /exit\n\nModel switching:\n  /model\n\nProvider URL:\n  /base-url",
+        "Built-in commands:\n{}\n\nModes:\n  /plan      read-only planning mode\n  /execute   return to normal execution mode\n\nEditing:\n  apply_patch  preferred for editing existing files\n  write_file   use for new files or full rewrites\n  replace      simple fallback for unique string replacement\n\nKeyboard:\n  Enter submit\n  Esc close current overlay\n  S open setup\n\nExit:\n  /quit\n  /exit\n\nModel switching:\n  /model\n\nProvider URL:\n  /base-url",
         commands
     )
 }
@@ -238,11 +256,12 @@ pub fn status_runtime_text(app: &TuiApp) -> String {
         ("remote".to_string(), "-".to_string())
     };
     format!(
-        "provider={}\nmodel={}\nbase_url={}\nrevision={}\nmode={}\napi_key={}\nthinking={}\ndevice={}\ndtype={}\nphase={}\ndetail={}",
+        "provider={}\nmodel={}\nbase_url={}\nrevision={}\nagent_mode={}\nmode={}\napi_key={}\nthinking={}\ndevice={}\ndtype={}\nphase={}\ndetail={}",
         app.config.provider,
         app.current_model_label(),
         app.config.base_url.as_deref().unwrap_or("-"),
         app.config.revision.as_deref().unwrap_or("main"),
+        app.agent_execution_mode_label(),
         mode,
         api_key_status(&app.config),
         thinking,
@@ -400,6 +419,8 @@ pub fn quick_actions_text() -> &'static str {
      /model     open guided model switching\n\
      /base-url  open the provider URL editor\n\
      /status    inspect runtime and workspace\n\
+     /plan      enter read-only planning mode\n\
+     /execute   return to full execution mode\n\
      /clear     reset the visible transcript\n\
      /setup     open fallback setup\n\
      /quit      leave the TUI"
@@ -518,6 +539,15 @@ mod tests {
         let command = parse_local_command("/base-url").expect("command should parse");
         assert!(matches!(command.kind, LocalCommandKind::BaseUrl));
         assert_eq!(command.arg.as_deref(), None);
+    }
+
+    #[test]
+    fn parses_plan_and_execute_commands() {
+        let plan = parse_local_command("/plan").expect("plan should parse");
+        assert!(matches!(plan.kind, LocalCommandKind::Plan));
+
+        let execute = parse_local_command("/execute").expect("execute should parse");
+        assert!(matches!(execute.kind, LocalCommandKind::Execute));
     }
 
     #[test]

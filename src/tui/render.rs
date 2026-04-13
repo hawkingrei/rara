@@ -194,8 +194,10 @@ fn render_composer(f: &mut Frame, app: &TuiApp, area: Rect) {
         "slash command mode  Enter run highlighted command  Esc close overlay"
     } else if app.is_busy() {
         "runtime busy  wait for current task to finish"
+    } else if app.agent_execution_mode_label() == "plan" {
+        "plan mode  read-only analysis  /execute return to implementation mode"
     } else {
-        "plain prompt mode  /help commands  /model providers  /quit exit"
+        "plain prompt mode  /plan read-only planning  /help commands  /quit exit"
     };
     f.render_widget(
         Paragraph::new(hint).alignment(Alignment::Right),
@@ -216,8 +218,10 @@ fn render_footer(f: &mut Frame, app: &TuiApp, area: Rect) {
         "Enter run highlighted command  Esc close overlay"
     } else if app.is_busy() {
         "/status inspect runtime  /quit exit  background task keeps UI responsive"
+    } else if app.agent_execution_mode_label() == "plan" {
+        "/execute leave plan mode  /status inspect runtime  /quit exit"
     } else {
-        "Enter submit prompt  /help commands  /model switch providers  /quit exit"
+        "Enter submit prompt  /plan read-only planning  /model switch providers  /quit exit"
     };
     f.render_widget(
         Paragraph::new(Line::from(vec![Span::raw(summary), Span::raw("  "), Span::raw(hint)])),
@@ -254,6 +258,16 @@ fn render_header(f: &mut Frame, app: &TuiApp, area: Rect) {
             ),
             Span::raw(" "),
             badge("provider", &app.config.provider, provider_color),
+            Span::raw(" "),
+            badge(
+                "mode",
+                app.agent_execution_mode_label(),
+                if app.agent_execution_mode_label() == "plan" {
+                    Color::LightBlue
+                } else {
+                    Color::LightGreen
+                },
+            ),
             Span::raw(" "),
             badge("state", activity.0, activity.1),
             Span::raw(" "),

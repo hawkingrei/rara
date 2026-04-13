@@ -3,7 +3,7 @@ use std::time::Instant;
 
 use tokio::sync::mpsc;
 
-use crate::agent::{Agent, AgentEvent, AgentOutputMode};
+use crate::agent::{Agent, AgentEvent, AgentExecutionMode, AgentOutputMode};
 use crate::llm::LlmBackend;
 use crate::oauth::OAuthManager;
 use crate::sandbox::SandboxManager;
@@ -16,6 +16,7 @@ use crate::tools::context::RetrieveSessionContextTool;
 use crate::tools::file::{
     ListFilesTool, ReadFileTool, ReplaceTool, SearchFilesTool, WriteFileTool,
 };
+use crate::tools::patch::ApplyPatchTool;
 use crate::tools::search::{GlobTool, GrepTool};
 use crate::tools::skill::SkillTool;
 use crate::tools::vector::{RememberExperienceTool, RetrieveExperienceTool};
@@ -39,6 +40,8 @@ pub async fn execute_local_command(
         LocalCommandKind::Help => "help",
         LocalCommandKind::Status => "status",
         LocalCommandKind::Clear => "clear",
+        LocalCommandKind::Plan => "plan",
+        LocalCommandKind::Execute => "execute",
         LocalCommandKind::Setup => "setup",
         LocalCommandKind::Model => "model",
         LocalCommandKind::BaseUrl => "base-url",
@@ -57,6 +60,22 @@ pub async fn execute_local_command(
         LocalCommandKind::Clear => {
             app.set_runtime_phase(RuntimePhase::LocalCommand, Some("clearing transcript".into()));
             app.reset_transcript();
+        }
+        LocalCommandKind::Plan => {
+            app.set_runtime_phase(RuntimePhase::LocalCommand, Some("entering plan mode".into()));
+            app.set_agent_execution_mode(AgentExecutionMode::Plan);
+            if let Some(agent) = agent_slot.as_mut() {
+                agent.set_execution_mode(AgentExecutionMode::Plan);
+            }
+            app.push_notice("Plan mode active. Read-only tools only.");
+        }
+        LocalCommandKind::Execute => {
+            app.set_runtime_phase(RuntimePhase::LocalCommand, Some("entering execute mode".into()));
+            app.set_agent_execution_mode(AgentExecutionMode::Execute);
+            if let Some(agent) = agent_slot.as_mut() {
+                agent.set_execution_mode(AgentExecutionMode::Execute);
+            }
+            app.push_notice("Execute mode active. Full toolset restored.");
         }
         LocalCommandKind::Setup => {
             app.set_runtime_phase(RuntimePhase::LocalCommand, Some("opening setup".into()));
@@ -220,6 +239,8 @@ pub async fn finish_running_task_if_ready(
         }
         TaskCompletion::Rebuild { result } => match result {
             Ok(agent) => {
+                let mut agent = agent;
+                agent.set_execution_mode(app.agent_execution_mode);
                 app.config_manager.save(&app.config)?;
                 app.setup_status = Some(format!(
                     "Applied {} / {}",
@@ -568,6 +589,7 @@ fn create_full_tool_manager(
         sandbox: sandbox.clone(),
     }));
     tm.register(Box::new(ReadFileTool));
+    tm.register(Box::new(ApplyPatchTool));
     tm.register(Box::new(WriteFileTool));
     tm.register(Box::new(ListFilesTool));
     tm.register(Box::new(SearchFilesTool));

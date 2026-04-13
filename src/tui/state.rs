@@ -2,7 +2,7 @@ use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::task::JoinHandle;
 use std::time::Instant;
 
-use crate::agent::Agent;
+use crate::agent::{Agent, AgentExecutionMode};
 use crate::config::{ConfigManager, RaraConfig};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -35,6 +35,8 @@ pub enum LocalCommandKind {
     Help,
     Status,
     Clear,
+    Plan,
+    Execute,
     Setup,
     Model,
     BaseUrl,
@@ -171,6 +173,7 @@ pub struct TuiApp {
     pub runtime_phase: RuntimePhase,
     pub runtime_phase_detail: Option<String>,
     pub snapshot: RuntimeSnapshot,
+    pub agent_execution_mode: AgentExecutionMode,
     pub provider_picker_idx: usize,
     pub model_picker_idx: usize,
     pub model_guide_idx: usize,
@@ -201,6 +204,7 @@ impl TuiApp {
             runtime_phase: RuntimePhase::Idle,
             runtime_phase_detail: None,
             snapshot: RuntimeSnapshot::default(),
+            agent_execution_mode: AgentExecutionMode::Execute,
             provider_picker_idx,
             model_picker_idx,
             model_guide_idx: 0,
@@ -266,6 +270,7 @@ impl TuiApp {
             total_input_tokens: agent.total_input_tokens,
             total_output_tokens: agent.total_output_tokens,
         };
+        self.agent_execution_mode = agent.execution_mode;
     }
 
     pub fn push_entry(&mut self, role: &'static str, message: impl Into<String>) {
@@ -332,6 +337,17 @@ impl TuiApp {
                 .unwrap_or_else(|| "http://localhost:11434".to_string());
         }
         self.overlay = Some(overlay);
+    }
+
+    pub fn set_agent_execution_mode(&mut self, mode: AgentExecutionMode) {
+        self.agent_execution_mode = mode;
+    }
+
+    pub fn agent_execution_mode_label(&self) -> &'static str {
+        match self.agent_execution_mode {
+            AgentExecutionMode::Execute => "execute",
+            AgentExecutionMode::Plan => "plan",
+        }
     }
 
     pub fn close_overlay(&mut self) {

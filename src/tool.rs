@@ -36,12 +36,21 @@ impl ToolManager {
         self.tools.get(name).map(|b| b.as_ref())
     }
     pub fn get_schemas(&self) -> Vec<Value> {
-        self.tools.values().map(|t| {
-            serde_json::json!({
+        self.get_schemas_filtered(|_| true)
+    }
+    pub fn get_schemas_filtered<F>(&self, mut include: F) -> Vec<Value>
+    where
+        F: FnMut(&str) -> bool,
+    {
+        self.tools.values().filter_map(|t| {
+            if !include(t.name()) {
+                return None;
+            }
+            Some(serde_json::json!({
                 "name": t.name(),
                 "description": t.description(),
                 "input_schema": t.input_schema(),
-            })
+            }))
         }).collect()
     }
 }
