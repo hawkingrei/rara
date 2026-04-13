@@ -22,6 +22,7 @@ pub enum AgentExecutionMode {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BashApprovalMode {
+    Once,
     Always,
     Suggestion,
 }
@@ -44,6 +45,19 @@ pub struct PendingUserInput {
     pub question: String,
     pub options: Vec<(String, String)>,
     pub note: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingApproval {
+    pub tool_use_id: String,
+    pub command: String,
+    pub allow_net: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompletedInteraction {
+    pub title: String,
+    pub summary: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -125,6 +139,9 @@ pub struct Agent {
     pub current_plan: Vec<PlanStep>,
     pub plan_explanation: Option<String>,
     pub pending_user_input: Option<PendingUserInput>,
+    pub pending_approval: Option<PendingApproval>,
+    pub completed_user_input: Option<CompletedInteraction>,
+    pub completed_approval: Option<CompletedInteraction>,
 }
 
 impl Agent {
@@ -152,6 +169,9 @@ impl Agent {
             current_plan: Vec::new(),
             plan_explanation: None,
             pending_user_input: None,
+            pending_approval: None,
+            completed_user_input: None,
+            completed_approval: None,
         }
     }
 
@@ -231,6 +251,81 @@ impl Agent {
         self.bash_approval_mode = mode;
     }
 
+    pub fn clear_completed_interactions(&mut self) {
+        self.completed_user_input = None;
+        self.completed_approval = None;
+    }
+
+    pub fn consume_pending_user_input(&mut self, answer: &str) {
+        if let Some(pending) = self.pending_user_input.take() {
+            self.completed_user_input = Some(CompletedInteraction {
+                title: pending.question,
+                summary: format!("Answered with: {}", answer.trim()),
+            });
+        }
+    }
+
+    pub async fn answer_pending_approval_with_events<F>(
+        &mut self,
+        selection: BashApprovalMode,
+        output_mode: AgentOutputMode,
+        mut report: F,
+    ) -> Result<()>
+    where
+        F: FnMut(AgentEvent),
+    {
+        let pending = self
+            .pending_approval
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("No pending approval to answer"))?;
+
+        self.pending_approval = None;
+        self.pending_user_input = None;
+        self.completed_approval = None;
+
+        match selection {
+            BashApprovalMode::Once => {
+                self.completed_approval = Some(CompletedInteraction {
+                    title: "Bash approval".to_string(),
+                    summary: format!("Approved once for command: {}", pending.command),
+                });
+                self.execute_pending_bash(pending, false, output_mode, &mut report)
+                    .await?;
+            }
+            BashApprovalMode::Always => {
+                self.bash_approval_mode = BashApprovalMode::Always;
+                self.completed_approval = Some(CompletedInteraction {
+                    title: "Bash approval".to_string(),
+                    summary: format!("Approved for session: {}", pending.command),
+                });
+                self.execute_pending_bash(pending, true, output_mode, &mut report)
+                    .await?;
+            }
+            BashApprovalMode::Suggestion => {
+                self.completed_approval = Some(CompletedInteraction {
+                    title: "Bash approval".to_string(),
+                    summary: format!("Kept as suggestion only: {}", pending.command),
+                });
+                let error_text = "Bash command was not approved. Continue without shell execution and find a safer path.".to_string();
+                report(AgentEvent::ToolResult {
+                    name: "bash".to_string(),
+                    content: error_text.clone(),
+                    is_error: true,
+                });
+                self.history.push(tool_result_message(
+                    &pending.tool_use_id,
+                    error_text,
+                    true,
+                ));
+                self.history.push(tool_continuation_message());
+                self.run_agent_loop(output_mode, &mut report).await?;
+            }
+        }
+
+        self.session_manager.save_session(&self.session_id, &self.history)?;
+        Ok(())
+    }
+
     pub async fn compact_if_needed(&mut self) -> Result<()> {
         self.compact_if_needed_with_reporter(|_| {}).await
     }
@@ -281,34 +376,15 @@ impl Agent {
         let mut tool_rounds = 0usize;
         self.compact_if_needed_with_reporter(&mut report).await?;
         self.history = repair_tool_result_history(&self.history);
+        self.clear_completed_interactions();
         
         self.history.push(Message {
             role: "user".to_string(),
             content: json!([{"type": "text", "text": prompt.clone()}]),
         });
 
-        loop {
-            let turn_output = self
-                .run_model_turn(output_mode, &mut report)
-                .await?;
-            self.history.push(turn_output.assistant_message);
-
-            if turn_output.tool_calls.is_empty() {
-                break;
-            }
-            tool_rounds += 1;
-            if tool_rounds > MAX_TOOL_ROUNDS_PER_TURN {
-                return Err(anyhow::anyhow!(
-                    "Tool loop exceeded {} rounds without reaching a final answer",
-                    MAX_TOOL_ROUNDS_PER_TURN
-                ));
-            }
-
-            let tool_results = self
-                .execute_tool_calls(turn_output.tool_calls, &mut report)
-                .await?;
-            self.extend_history_for_next_turn(tool_results, &mut report);
-        }
+        self.run_agent_loop_with_limit(output_mode, &mut report, &mut tool_rounds)
+            .await?;
 
         self.session_manager.save_session(&self.session_id, &self.history)?;
         let turn_text = format!("User: {}\nAgent Response: {:?}", prompt, self.history.last().unwrap().content);
@@ -385,6 +461,52 @@ impl Agent {
         })
     }
 
+    async fn run_agent_loop<F>(&mut self, output_mode: AgentOutputMode, report: &mut F) -> Result<()>
+    where
+        F: FnMut(AgentEvent),
+    {
+        let mut tool_rounds = 0usize;
+        self.run_agent_loop_with_limit(output_mode, report, &mut tool_rounds)
+            .await
+    }
+
+    async fn run_agent_loop_with_limit<F>(
+        &mut self,
+        output_mode: AgentOutputMode,
+        report: &mut F,
+        tool_rounds: &mut usize,
+    ) -> Result<()>
+    where
+        F: FnMut(AgentEvent),
+    {
+        loop {
+            let turn_output = self
+                .run_model_turn(output_mode, report)
+                .await?;
+            self.history.push(turn_output.assistant_message);
+
+            if turn_output.tool_calls.is_empty() {
+                break;
+            }
+            *tool_rounds += 1;
+            if *tool_rounds > MAX_TOOL_ROUNDS_PER_TURN {
+                return Err(anyhow::anyhow!(
+                    "Tool loop exceeded {} rounds without reaching a final answer",
+                    MAX_TOOL_ROUNDS_PER_TURN
+                ));
+            }
+
+            let tool_results = self
+                .execute_tool_calls(turn_output.tool_calls, report)
+                .await?;
+            if self.pending_approval.is_some() {
+                break;
+            }
+            self.extend_history_for_next_turn(tool_results, report);
+        }
+        Ok(())
+    }
+
     async fn execute_tool_calls<F>(
         &mut self,
         tool_calls: Vec<ToolCall>,
@@ -401,21 +523,38 @@ impl Agent {
                     .get("command")
                     .and_then(Value::as_str)
                     .unwrap_or("<command>");
-                let suggestion_text = format!(
-                    "Approval required before running bash.\nSuggested command: {}\nSwitch approval to always before executing.",
-                    command
-                );
-                report(AgentEvent::ToolResult {
-                    name: tool_call.name.clone(),
-                    content: suggestion_text.clone(),
-                    is_error: true,
+                let allow_net = tool_call
+                    .input
+                    .get("allow_net")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                self.pending_approval = Some(PendingApproval {
+                    tool_use_id: tool_call.id.clone(),
+                    command: command.to_string(),
+                    allow_net,
                 });
-                tool_results.push(tool_result_message(
-                    &tool_call.id,
-                    suggestion_text,
-                    true,
+                self.pending_user_input = Some(PendingUserInput {
+                    question: "Bash command needs approval. What should RARA do?".to_string(),
+                    options: vec![
+                        (
+                            "Run once".to_string(),
+                            "Execute this command now and then return to suggestion mode.".to_string(),
+                        ),
+                        (
+                            "Always allow bash".to_string(),
+                            "Execute now and keep bash approval open for later commands.".to_string(),
+                        ),
+                        (
+                            "Suggestion only".to_string(),
+                            "Do not run the command automatically. Continue with a safer path.".to_string(),
+                        ),
+                    ],
+                    note: Some(format!("command: {}", command)),
+                });
+                report(AgentEvent::Status(
+                    "Bash approval required. Waiting for a structured user decision.".to_string(),
                 ));
-                continue;
+                break;
             }
             if !self.is_tool_allowed_in_current_mode(&tool_call.name) {
                 let error_text = format!(
@@ -476,6 +615,69 @@ impl Agent {
             }
         }
         Ok(tool_results)
+    }
+
+    async fn execute_pending_bash<F>(
+        &mut self,
+        pending: PendingApproval,
+        keep_always: bool,
+        output_mode: AgentOutputMode,
+        report: &mut F,
+    ) -> Result<()>
+    where
+        F: FnMut(AgentEvent),
+    {
+        let input = json!({
+            "command": pending.command,
+            "allow_net": pending.allow_net,
+        });
+        report(AgentEvent::ToolUse {
+            name: "bash".to_string(),
+            input: input.clone(),
+        });
+        let tool = self
+            .tool_manager
+            .get_tool("bash")
+            .ok_or_else(|| anyhow::anyhow!("bash tool is unavailable"))?;
+        report(AgentEvent::Status("Running approved bash command.".to_string()));
+        match tool.call(input.clone()).await {
+            Ok(result) => {
+                let result_text = self.tool_result_store.compact_result(
+                    "bash",
+                    &pending.tool_use_id,
+                    &input,
+                    &result,
+                )?;
+                report(AgentEvent::ToolResult {
+                    name: "bash".to_string(),
+                    content: result_text.clone(),
+                    is_error: false,
+                });
+                self.history.push(tool_result_message(
+                    &pending.tool_use_id,
+                    result_text,
+                    false,
+                ));
+            }
+            Err(err) => {
+                let error_text = format!("Error: {}", err);
+                report(AgentEvent::ToolResult {
+                    name: "bash".to_string(),
+                    content: error_text.clone(),
+                    is_error: true,
+                });
+                self.history.push(tool_result_message(
+                    &pending.tool_use_id,
+                    error_text,
+                    true,
+                ));
+            }
+        }
+        self.history.push(tool_continuation_message());
+        if !keep_always {
+            self.bash_approval_mode = BashApprovalMode::Suggestion;
+        }
+        self.run_agent_loop(output_mode, report).await
     }
 
     fn extend_history_for_next_turn<F>(&mut self, tool_results: Vec<Message>, report: &mut F)

@@ -87,6 +87,7 @@ pub async fn execute_local_command(
         LocalCommandKind::Approval => {
             let next_mode = match app.bash_approval_mode {
                 BashApprovalMode::Suggestion => BashApprovalMode::Always,
+                BashApprovalMode::Once => BashApprovalMode::Suggestion,
                 BashApprovalMode::Always => BashApprovalMode::Suggestion,
             };
             app.bash_approval_mode = next_mode;
@@ -95,6 +96,7 @@ pub async fn execute_local_command(
             }
             let notice = match next_mode {
                 BashApprovalMode::Always => "Bash approval set to always.",
+                BashApprovalMode::Once => "Bash approval set to once.",
                 BashApprovalMode::Suggestion => "Bash approval set to suggestion.",
             };
             app.set_runtime_phase(RuntimePhase::LocalCommand, Some("updating approval mode".into()));
@@ -136,6 +138,39 @@ pub fn start_query_task(app: &mut TuiApp, prompt: String, mut agent: Agent) {
         let tx = sender.clone();
         let result = agent
             .query_with_mode_and_events(prompt, AgentOutputMode::Silent, move |event| {
+                let _ = tx.send(convert_agent_event(event));
+            })
+            .await;
+        TaskCompletion::Query { agent, result }
+    });
+
+    app.running_task = Some(RunningTask {
+        kind: TaskKind::Query,
+        receiver,
+        handle,
+        started_at: Instant::now(),
+        next_heartbeat_after_secs: 2,
+    });
+}
+
+pub fn start_pending_approval_task(
+    app: &mut TuiApp,
+    selection: BashApprovalMode,
+    mut agent: Agent,
+) {
+    let (sender, receiver) = mpsc::unbounded_channel();
+    let selection_label = match selection {
+        BashApprovalMode::Once => "run once",
+        BashApprovalMode::Always => "always allow bash",
+        BashApprovalMode::Suggestion => "suggestion only",
+    };
+    app.notice = Some(format!("Answering approval request: {selection_label}."));
+    app.set_runtime_phase(RuntimePhase::ProcessingResponse, Some("resuming after approval".into()));
+
+    let handle = tokio::spawn(async move {
+        let tx = sender.clone();
+        let result = agent
+            .answer_pending_approval_with_events(selection, AgentOutputMode::Silent, move |event| {
                 let _ = tx.send(convert_agent_event(event));
             })
             .await;

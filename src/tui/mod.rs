@@ -24,13 +24,13 @@ use self::app_event::AppEvent;
 use self::command::{palette_command_by_index, palette_commands, parse_local_command};
 use self::render::render;
 use self::runtime::{
-    execute_local_command, finish_running_task_if_ready, start_oauth_task, start_query_task,
+    execute_local_command, finish_running_task_if_ready, start_oauth_task, start_pending_approval_task, start_query_task,
     start_rebuild_task,
 };
 use self::state::{
     current_model_presets, HelpTab, Overlay, PROVIDER_FAMILIES, TuiApp, MODEL_GUIDE_OPTIONS,
 };
-use crate::agent::AgentExecutionMode;
+use crate::agent::{AgentExecutionMode, BashApprovalMode};
 
 pub async fn run_tui(agent: Agent, oauth_manager: OAuthManager) -> anyhow::Result<()> {
     enable_raw_mode()?;
@@ -247,7 +247,20 @@ async fn dispatch_event(
         AppEvent::SelectPendingOption(idx) => {
             if app.is_busy() {
                 app.push_notice("Wait for the current task before answering the structured question.");
+            } else if app.has_pending_approval() {
+                if let Some(agent) = agent_slot.take() {
+                    let selection = match idx {
+                        0 => BashApprovalMode::Once,
+                        1 => BashApprovalMode::Always,
+                        _ => BashApprovalMode::Suggestion,
+                    };
+                    start_pending_approval_task(app, selection, agent);
+                }
             } else if let Some(label) = app.pending_question_option_label(idx) {
+                if let Some(agent) = agent_slot.as_mut() {
+                    agent.consume_pending_user_input(&label);
+                    app.sync_snapshot(agent);
+                }
                 app.input = label;
                 if handle_submit(app, agent_slot, oauth_manager).await? {
                     return Ok(true);
@@ -381,6 +394,10 @@ async fn handle_submit(
     } else if input.trim_start().starts_with('/') {
         app.push_notice(format!("Unknown command '{}'. Use /help.", input.trim()));
     } else if let Some(agent) = agent_slot.take() {
+        let mut agent = agent;
+        if app.snapshot.pending_question.is_some() {
+            agent.consume_pending_user_input(input.trim());
+        }
         if matches!(app.agent_execution_mode, AgentExecutionMode::Execute)
             && should_auto_enter_plan_mode(&input)
         {

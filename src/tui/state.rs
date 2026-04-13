@@ -90,6 +90,9 @@ pub struct RuntimeSnapshot {
     pub plan_steps: Vec<(String, String)>,
     pub plan_explanation: Option<String>,
     pub pending_question: Option<(String, Vec<(String, String)>, Option<String>)>,
+    pub pending_approval_command: Option<String>,
+    pub completed_question: Option<(String, String)>,
+    pub completed_approval: Option<(String, String)>,
 }
 
 pub enum TaskKind {
@@ -294,6 +297,18 @@ impl TuiApp {
                     question.note.clone(),
                 )
             }),
+            pending_approval_command: agent
+                .pending_approval
+                .as_ref()
+                .map(|pending| pending.command.clone()),
+            completed_question: agent
+                .completed_user_input
+                .as_ref()
+                .map(|item| (item.title.clone(), item.summary.clone())),
+            completed_approval: agent
+                .completed_approval
+                .as_ref()
+                .map(|item| (item.title.clone(), item.summary.clone())),
         };
         self.agent_execution_mode = agent.execution_mode;
         self.bash_approval_mode = agent.bash_approval_mode;
@@ -379,6 +394,7 @@ impl TuiApp {
     pub fn bash_approval_mode_label(&self) -> &'static str {
         match self.bash_approval_mode {
             BashApprovalMode::Always => "always",
+            BashApprovalMode::Once => "once",
             BashApprovalMode::Suggestion => "suggestion",
         }
     }
@@ -389,6 +405,10 @@ impl TuiApp {
             .as_ref()
             .and_then(|(_, options, _)| options.get(index))
             .map(|(label, _)| label.clone())
+    }
+
+    pub fn has_pending_approval(&self) -> bool {
+        self.snapshot.pending_approval_command.is_some()
     }
 
     pub fn close_overlay(&mut self) {
