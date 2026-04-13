@@ -159,7 +159,6 @@ fn current_turn_lines(app: &TuiApp, current_turn_start: usize) -> Vec<Line<'stat
                 .bg(Color::LightBlue)
                 .add_modifier(Modifier::BOLD),
         )));
-        lines.push(Line::from("  Read-only planning is active for this turn."));
         lines.push(Line::from(""));
     }
 

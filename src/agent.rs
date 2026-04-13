@@ -13,6 +13,9 @@ use uuid::Uuid;
 const MAX_TOOL_ROUNDS_PER_TURN: usize = 8;
 const TOOL_CONTINUATION_PROMPT: &str =
     "<agent_runtime>\nphase: tool_results_available\ninstructions:\n- Continue the same task immediately.\n- Review the tool results already present in the conversation.\n- Either call the next tool directly, or provide the final answer.\n- Do not ask the user to continue.\n- Do not repeat tool results verbatim.\n</agent_runtime>";
+const PLAN_CONTINUATION_PROMPT: &str =
+    "<agent_runtime>\nphase: plan_continuation_required\ninstructions:\n- Continue planning immediately.\n- Use read-only tools to inspect the repository before stopping.\n- Expand the plan into multiple concrete steps grounded in the inspected code.\n- Only stop planning when you have either gathered enough code context or need structured user input.\n- Do not ask the user to continue.\n</agent_runtime>";
+const MAX_PLAN_CONTINUATIONS_PER_TURN: usize = 2;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AgentExecutionMode {
@@ -121,6 +124,7 @@ struct ToolCall {
 struct TurnOutput {
     assistant_message: Message,
     tool_calls: Vec<ToolCall>,
+    plan_updated: bool,
 }
 
 pub struct Agent {
@@ -374,6 +378,7 @@ impl Agent {
     {
         let turn_start_idx = self.history.len();
         let mut tool_rounds = 0usize;
+        let mut plan_continuations = 0usize;
         self.compact_if_needed_with_reporter(&mut report).await?;
         self.history = repair_tool_result_history(&self.history);
         self.clear_completed_interactions();
@@ -383,7 +388,12 @@ impl Agent {
             content: json!([{"type": "text", "text": prompt.clone()}]),
         });
 
-        self.run_agent_loop_with_limit(output_mode, &mut report, &mut tool_rounds)
+        self.run_agent_loop_with_limit(
+            output_mode,
+            &mut report,
+            &mut tool_rounds,
+            &mut plan_continuations,
+        )
             .await?;
 
         self.session_manager.save_session(&self.session_id, &self.history)?;
@@ -427,12 +437,13 @@ impl Agent {
         }
 
         let mut tool_calls = Vec::new();
+        let mut plan_updated = false;
         for block in &response.content {
             match block {
                 ContentBlock::Text { text } => {
                     report(AgentEvent::AssistantText(text.clone()));
                     if matches!(self.execution_mode, AgentExecutionMode::Plan) {
-                        self.capture_plan_from_text(text);
+                        plan_updated = self.capture_plan_from_text(text) || plan_updated;
                     }
                     if matches!(output_mode, AgentOutputMode::Terminal) {
                         println!("Agent: {}", text);
@@ -458,6 +469,7 @@ impl Agent {
                 content: serde_json::to_value(&response.content)?,
             },
             tool_calls,
+            plan_updated,
         })
     }
 
@@ -466,7 +478,13 @@ impl Agent {
         F: FnMut(AgentEvent),
     {
         let mut tool_rounds = 0usize;
-        self.run_agent_loop_with_limit(output_mode, report, &mut tool_rounds)
+        let mut plan_continuations = 0usize;
+        self.run_agent_loop_with_limit(
+            output_mode,
+            report,
+            &mut tool_rounds,
+            &mut plan_continuations,
+        )
             .await
     }
 
@@ -475,6 +493,7 @@ impl Agent {
         output_mode: AgentOutputMode,
         report: &mut F,
         tool_rounds: &mut usize,
+        plan_continuations: &mut usize,
     ) -> Result<()>
     where
         F: FnMut(AgentEvent),
@@ -487,6 +506,19 @@ impl Agent {
             self.history.push(turn_output.assistant_message);
 
             if turn_output.tool_calls.is_empty() {
+                if self.should_continue_plan_without_tools(
+                    turn_output.plan_updated,
+                    *tool_rounds,
+                    *plan_continuations,
+                ) {
+                    *plan_continuations += 1;
+                    report(AgentEvent::Status(
+                        "Plan needs more repository inspection. Continuing in read-only mode."
+                            .to_string(),
+                    ));
+                    self.history.push(plan_continuation_message());
+                    continue;
+                }
                 self.complete_remaining_plan_steps();
                 break;
             }
@@ -716,16 +748,31 @@ impl Agent {
         }
     }
 
-    fn capture_plan_from_text(&mut self, text: &str) {
+    fn capture_plan_from_text(&mut self, text: &str) -> bool {
         let Some((steps, explanation)) = parse_plan_block(text) else {
             self.pending_user_input = parse_request_user_input_block(text);
-            return;
+            return false;
         };
         if !steps.is_empty() {
             self.current_plan = steps;
         }
         self.plan_explanation = explanation;
         self.pending_user_input = parse_request_user_input_block(text);
+        true
+    }
+
+    fn should_continue_plan_without_tools(
+        &self,
+        plan_updated: bool,
+        tool_rounds: usize,
+        plan_continuations: usize,
+    ) -> bool {
+        matches!(self.execution_mode, AgentExecutionMode::Plan)
+            && plan_updated
+            && tool_rounds == 0
+            && plan_continuations < MAX_PLAN_CONTINUATIONS_PER_TURN
+            && self.pending_user_input.is_none()
+            && !self.current_plan.is_empty()
     }
 
     fn ensure_active_plan_step(&mut self) {
@@ -861,6 +908,13 @@ fn tool_continuation_message() -> Message {
     }
 }
 
+fn plan_continuation_message() -> Message {
+    Message {
+        role: "user".to_string(),
+        content: json!([{"type": "text", "text": PLAN_CONTINUATION_PROMPT}]),
+    }
+}
+
 fn tool_result_message(tool_use_id: &str, content: String, is_error: bool) -> Message {
     let mut block = json!({
         "type": "tool_result",
@@ -878,7 +932,7 @@ fn tool_result_message(tool_use_id: &str, content: String, is_error: bool) -> Me
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_plan_block, parse_request_user_input_block, tool_continuation_message, Agent, AgentExecutionMode, AnthropicResponse, ContentBlock, Message, PendingUserInput, PlanStep, PlanStepStatus, TokenUsage};
+    use super::{parse_plan_block, parse_request_user_input_block, plan_continuation_message, tool_continuation_message, Agent, AgentExecutionMode, AnthropicResponse, ContentBlock, Message, PendingUserInput, PlanStep, PlanStepStatus, TokenUsage};
     use crate::llm::LlmBackend;
     use crate::session::SessionManager;
     use crate::tool::{Tool, ToolError, ToolManager};
@@ -1083,6 +1137,48 @@ mod tests {
         let observed_tools = backend.observed_tools();
         assert_eq!(observed_tools.len(), 1);
         assert_eq!(observed_tools[0], vec!["stub_tool".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn continues_plan_mode_after_shallow_initial_plan() {
+        let backend = Arc::new(SequencedBackend::new(vec![
+            AnthropicResponse {
+                content: vec![ContentBlock::Text {
+                    text: "<plan>\n- [pending] Inspect the repository structure\n</plan>\nStart with the top-level layout.".to_string(),
+                }],
+                stop_reason: Some("end_turn".to_string()),
+                usage: Some(TokenUsage::default()),
+            },
+            AnthropicResponse {
+                content: vec![ContentBlock::Text {
+                    text: "done".to_string(),
+                }],
+                stop_reason: Some("end_turn".to_string()),
+                usage: Some(TokenUsage::default()),
+            },
+        ]));
+
+        let mut tool_manager = ToolManager::new();
+        tool_manager.register(Box::new(StubTool));
+        let mut agent = Agent::new(
+            tool_manager,
+            backend.clone(),
+            Arc::new(VectorDB::new("data/lancedb")),
+            Arc::new(SessionManager::new().expect("session manager")),
+            Arc::new(WorkspaceMemory::new().expect("workspace memory")),
+        );
+        agent.set_execution_mode(AgentExecutionMode::Plan);
+
+        agent
+            .query_with_mode("inspect".to_string(), super::AgentOutputMode::Silent)
+            .await
+            .expect("query should succeed");
+
+        let observed = backend.observed_messages.lock().expect("lock");
+        assert_eq!(observed.len(), 2);
+        assert!(observed[1]
+            .iter()
+            .any(|message| message.content == plan_continuation_message().content));
     }
 
     #[test]
