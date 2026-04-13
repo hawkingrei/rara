@@ -386,4 +386,69 @@ mod tests {
             message.content.to_string().contains("tool_result")
         }));
     }
+
+    #[tokio::test]
+    async fn does_not_append_continuation_without_tools() {
+        let backend = Arc::new(SequencedBackend::new(vec![AnthropicResponse {
+            content: vec![ContentBlock::Text {
+                text: "final".to_string(),
+            }],
+            stop_reason: Some("end_turn".to_string()),
+            usage: Some(TokenUsage::default()),
+        }]));
+
+        let mut agent = Agent::new(
+            ToolManager::new(),
+            backend.clone(),
+            Arc::new(VectorDB::new("data/lancedb")),
+            Arc::new(SessionManager::new().expect("session manager")),
+            Arc::new(WorkspaceMemory::new().expect("workspace memory")),
+        );
+
+        agent
+            .query_with_mode("hello".to_string(), super::AgentOutputMode::Silent)
+            .await
+            .expect("query should succeed");
+
+        let observed = backend.observed_messages.lock().expect("lock");
+        assert_eq!(observed.len(), 1);
+        assert!(!agent
+            .history
+            .iter()
+            .any(|message| message.content == tool_continuation_message().content));
+    }
+
+    #[tokio::test]
+    async fn errors_when_tool_loop_exceeds_limit() {
+        let responses = (0..=super::MAX_TOOL_ROUNDS_PER_TURN)
+            .map(|idx| AnthropicResponse {
+                content: vec![ContentBlock::ToolUse {
+                    id: format!("tool-{idx}"),
+                    name: "stub_tool".to_string(),
+                    input: json!({}),
+                }],
+                stop_reason: Some("tool_use".to_string()),
+                usage: Some(TokenUsage::default()),
+            })
+            .collect::<Vec<_>>();
+        let backend = Arc::new(SequencedBackend::new(responses));
+
+        let mut tool_manager = ToolManager::new();
+        tool_manager.register(Box::new(StubTool));
+        let mut agent = Agent::new(
+            tool_manager,
+            backend,
+            Arc::new(VectorDB::new("data/lancedb")),
+            Arc::new(SessionManager::new().expect("session manager")),
+            Arc::new(WorkspaceMemory::new().expect("workspace memory")),
+        );
+
+        let error = agent
+            .query_with_mode("loop".to_string(), super::AgentOutputMode::Silent)
+            .await
+            .expect_err("query should fail");
+        assert!(error
+            .to_string()
+            .contains("Tool loop exceeded"));
+    }
 }
