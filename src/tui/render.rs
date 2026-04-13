@@ -122,9 +122,10 @@ fn render_activity_bar(f: &mut Frame, app: &TuiApp, area: Rect) {
         .as_deref()
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| app.notice.as_deref().unwrap_or("waiting for input"));
+    let animated_label = animated_activity_label(app, label);
     let line = Line::from(vec![
         Span::styled(
-            format!(" {} ", label),
+            format!(" {} ", animated_label),
             Style::default().fg(Color::Black).bg(color).add_modifier(Modifier::BOLD),
         ),
         Span::raw(" "),
@@ -136,6 +137,22 @@ fn render_activity_bar(f: &mut Frame, app: &TuiApp, area: Rect) {
         Span::raw(detail),
     ]);
     f.render_widget(Paragraph::new(line), area);
+}
+
+fn animated_activity_label(app: &TuiApp, label: &str) -> String {
+    let Some(task) = app.running_task.as_ref() else {
+        return label.to_string();
+    };
+    if !matches!(task.kind, TaskKind::Query | TaskKind::Rebuild) {
+        return label.to_string();
+    }
+
+    let dots = match (task.started_at.elapsed().as_millis() / 450) % 3 {
+        0 => ".",
+        1 => "..",
+        _ => "...",
+    };
+    format!("{label}{dots}")
 }
 
 fn render_composer(f: &mut Frame, app: &TuiApp, area: Rect) {

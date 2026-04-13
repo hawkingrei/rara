@@ -110,7 +110,6 @@ pub struct RunningTask {
     pub handle: JoinHandle<TaskCompletion>,
     pub started_at: Instant,
     pub next_heartbeat_after_secs: u64,
-    pub next_transcript_after_secs: u64,
 }
 
 pub const LOCAL_MODEL_PRESETS: [(&str, &str, &str); 3] = [
