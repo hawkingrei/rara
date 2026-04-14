@@ -30,7 +30,9 @@ The current product direction is to make local inference a first-class path inst
 - The agent loop should continue to depend on a stable backend trait instead of model-specific code paths.
 - Local models should plug into the same `LlmBackend` contract used by hosted providers.
 - TUI interaction should converge toward one unified prompt surface instead of growing separate setup-only flows for common actions.
+- Prefer smaller modules over long files; as a rule of thumb, avoid letting a single source file grow beyond roughly 800 lines unless there is a strong reason not to split it.
 - Non-trivial behavior changes should add or update focused tests when practical.
+- Before implementing any non-trivial behavior change, first inspect the relevant Codex and Claude Code implementations, extract the interaction or runtime pattern that applies, write a short plan for how RARA should mirror or adapt it, and only then start implementation.
 
 ## 4. Current Key Decisions
 

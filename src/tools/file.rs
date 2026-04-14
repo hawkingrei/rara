@@ -2,6 +2,7 @@ use crate::tool::{Tool, ToolError};
 use async_trait::async_trait;
 use serde_json::{Value, json};
 use std::fs;
+use std::path::Path;
 use walkdir::WalkDir;
 
 pub struct ReadFileTool;
@@ -12,13 +13,49 @@ impl Tool for ReadFileTool {
     fn input_schema(&self) -> Value {
         json!({
             "type": "object",
-            "properties": { "path": { "type": "string" } },
+            "properties": {
+                "path": { "type": "string" },
+                "start_line": { "type": "integer", "minimum": 1 },
+                "end_line": { "type": "integer", "minimum": 1 }
+            },
             "required": ["path"]
         })
     }
     async fn call(&self, i: Value) -> Result<Value, ToolError> {
         let p = i["path"].as_str().ok_or(ToolError::InvalidInput("path".into()))?;
-        Ok(json!({ "content": fs::read_to_string(p)? }))
+        let content = fs::read_to_string(p)?;
+        let lines = content.lines().collect::<Vec<_>>();
+        let total_lines = lines.len();
+        let start_line = i.get("start_line").and_then(Value::as_u64).map(|v| v as usize);
+        let end_line = i.get("end_line").and_then(Value::as_u64).map(|v| v as usize);
+
+        let sliced_content = match (start_line, end_line) {
+            (None, None) => content,
+            (start, end) => {
+                let start = start.unwrap_or(1);
+                let end = end.unwrap_or(total_lines.max(1));
+                if start == 0 || end == 0 {
+                    return Err(ToolError::InvalidInput("start_line/end_line must be >= 1".into()));
+                }
+                if start > end {
+                    return Err(ToolError::InvalidInput("start_line must be <= end_line".into()));
+                }
+                if total_lines == 0 {
+                    String::new()
+                } else {
+                    let bounded_start = start.min(total_lines);
+                    let bounded_end = end.min(total_lines);
+                    lines[bounded_start - 1..bounded_end].join("\n")
+                }
+            }
+        };
+
+        Ok(json!({
+            "content": sliced_content,
+            "total_lines": total_lines,
+            "start_line": start_line.unwrap_or(1),
+            "end_line": end_line.unwrap_or(total_lines),
+        }))
     }
 }
 
@@ -78,13 +115,25 @@ impl Tool for ListFilesTool {
     fn input_schema(&self) -> Value {
         json!({
             "type": "object",
-            "properties": { "path": { "type": "string" } },
+            "properties": {
+                "path": { "type": "string" },
+                "include_ignored": { "type": "boolean" }
+            },
             "required": ["path"]
         })
     }
     async fn call(&self, i: Value) -> Result<Value, ToolError> {
         let p = i["path"].as_str().ok_or(ToolError::InvalidInput("path".into()))?;
-        let files: Vec<String> = WalkDir::new(p).into_iter().filter_map(|e| e.ok()).map(|e| e.path().display().to_string()).collect();
+        let include_ignored = i
+            .get("include_ignored")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        let files: Vec<String> = WalkDir::new(p)
+            .into_iter()
+            .filter_entry(|entry| include_ignored || !is_ignored_path(entry.path()))
+            .filter_map(|e| e.ok())
+            .map(|e| e.path().display().to_string())
+            .collect();
         Ok(json!({ "files": files }))
     }
 }
@@ -106,5 +155,78 @@ impl Tool for SearchFilesTool {
     }
     async fn call(&self, _i: Value) -> Result<Value, ToolError> {
         Ok(json!({ "status": "not_fully_implemented" }))
+    }
+}
+
+fn is_ignored_path(path: &Path) -> bool {
+    path.components().any(|component| {
+        let name = component.as_os_str().to_string_lossy();
+        matches!(
+            name.as_ref(),
+            ".git"
+                | "target"
+                | "node_modules"
+                | "dist"
+                | "build"
+                | ".next"
+                | ".cache"
+                | "__pycache__"
+                | ".venv"
+                | "venv"
+        )
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ListFilesTool, ReadFileTool};
+    use crate::tool::Tool;
+    use serde_json::json;
+
+    #[tokio::test]
+    async fn read_file_supports_line_ranges() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("sample.txt");
+        std::fs::write(&path, "a\nb\nc\nd\n").expect("write sample");
+
+        let tool = ReadFileTool;
+        let result = tool
+            .call(json!({
+                "path": path.display().to_string(),
+                "start_line": 2,
+                "end_line": 3
+            }))
+            .await
+            .expect("read file");
+
+        assert_eq!(result["content"], "b\nc");
+        assert_eq!(result["total_lines"], 4);
+        assert_eq!(result["start_line"], 2);
+        assert_eq!(result["end_line"], 3);
+    }
+
+    #[tokio::test]
+    async fn list_files_skips_build_artifacts_by_default() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let root = tempdir.path();
+        std::fs::create_dir_all(root.join("src")).expect("mkdir src");
+        std::fs::create_dir_all(root.join("target/debug")).expect("mkdir target");
+        std::fs::write(root.join("src/main.rs"), "fn main() {}\n").expect("write source");
+        std::fs::write(root.join("target/debug/app"), "bin").expect("write artifact");
+
+        let tool = ListFilesTool;
+        let result = tool
+            .call(json!({ "path": root.display().to_string() }))
+            .await
+            .expect("list files");
+        let files = result["files"].as_array().expect("files array");
+        let rendered = files
+            .iter()
+            .filter_map(|value| value.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(rendered.contains("src/main.rs"));
+        assert!(!rendered.contains("target/debug/app"));
     }
 }

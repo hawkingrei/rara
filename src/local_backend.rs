@@ -6,7 +6,11 @@ use async_trait::async_trait;
 use candle::{DType, Device, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::generation::{LogitsProcessor, Sampling};
-use candle_transformers::models::gemma4::{config::Gemma4TextConfig, text::TextModel as Gemma4TextModel};
+use candle_transformers::models::gemma4::{
+    config::{Gemma4Config, Gemma4TextConfig},
+    text::TextModel as Gemma4TextModel,
+    Model as Gemma4Model,
+};
 use candle_transformers::models::qwen3::{Config as Qwen3Config, ModelForCausalLM as Qwen3Model};
 use hf_hub::{
     api::sync::{ApiBuilder, ApiRepo},
@@ -20,6 +24,8 @@ use crate::agent::{AnthropicResponse, ContentBlock, Message, TokenUsage};
 use crate::config::RaraConfig;
 use crate::llm::LlmBackend;
 
+pub type LocalProgressReporter = Arc<dyn Fn(String) + Send + Sync>;
+
 pub struct LocalLlmBackend {
     runtime: Arc<Mutex<LocalRuntime>>,
     max_new_tokens: usize,
@@ -31,10 +37,12 @@ struct LocalRuntime {
     tokenizer: Tokenizer,
     device: Device,
     eos_token_ids: Vec<u32>,
+    context_window: usize,
 }
 
 enum LocalTextModel {
     Gemma4(Gemma4TextModel),
+    Gemma4Multimodal(Gemma4Model),
     Qwen3(Qwen3Model),
 }
 
@@ -67,12 +75,27 @@ struct GenerationResult {
 
 impl LocalLlmBackend {
     pub fn from_config(config: &RaraConfig) -> Result<Self> {
+        Self::from_config_with_progress(config, None)
+    }
+
+    pub fn from_config_with_progress(
+        config: &RaraConfig,
+        progress: Option<LocalProgressReporter>,
+    ) -> Result<Self> {
         let spec = LocalModelSpec::from_config(config)?;
         let revision = config
             .revision
             .clone()
             .unwrap_or_else(|| "main".to_string());
-        let cache_dir = local_model_cache_dir();
+        let cache_dir = default_local_model_cache_dir();
+        report_progress(
+            &progress,
+            format!("Download setup · {} ({revision})", spec.alias()),
+        );
+        report_progress(
+            &progress,
+            format!("Cache · {}", cache_dir.display()),
+        );
         let api = build_hf_api(config, &cache_dir)?;
         let repo = api.repo(Repo::with_revision(
             spec.model_id().to_string(),
@@ -80,20 +103,25 @@ impl LocalLlmBackend {
             revision,
         ));
 
-        println!(
-            "Loading local model preset '{}' from {}",
-            spec.alias(),
-            spec.model_id()
+        report_progress(
+            &progress,
+            format!("Manifest · resolving {}", spec.model_id()),
         );
-        println!("Model cache directory: {}", cache_dir.display());
 
+        report_progress(&progress, "Artifact · tokenizer.json".to_string());
         let tokenizer_path = repo
             .get("tokenizer.json")
             .context("download tokenizer.json")?;
+        report_progress(&progress, "Artifact · config.json".to_string());
         let config_path = repo.get("config.json").context("download config.json")?;
+        report_progress(&progress, "Weights · downloading model weights".to_string());
         let weight_paths = load_safetensors(&repo)
             .or_else(|_| repo.get("model.safetensors").map(|p| vec![p]))
             .context("download model weights")?;
+        report_progress(
+            &progress,
+            format!("Weights · {} file(s) ready", weight_paths.len()),
+        );
 
         let raw_config: Value =
             serde_json::from_slice(&std::fs::read(&config_path).context("read config.json")?)
@@ -103,9 +131,18 @@ impl LocalLlmBackend {
 
         let device = select_device()?;
         let dtype = preferred_dtype(&device);
+        report_progress(
+            &progress,
+            format!("Runtime · initializing on {:?} with {:?}", device, dtype),
+        );
         let vb = unsafe { VarBuilder::from_mmaped_safetensors(&weight_paths, dtype, &device)? };
         let model = spec.build_model(&raw_config, vb)?;
         let eos_token_ids = spec.eos_token_ids(&tokenizer)?;
+        let context_window = spec.context_window(&raw_config);
+        report_progress(
+            &progress,
+            format!("Ready · {} loaded", spec.alias()),
+        );
 
         Ok(Self {
             runtime: Arc::new(Mutex::new(LocalRuntime {
@@ -114,9 +151,16 @@ impl LocalLlmBackend {
                 tokenizer,
                 device,
                 eos_token_ids,
+                context_window,
             })),
-            max_new_tokens: 1024,
+            max_new_tokens: 384,
         })
+    }
+}
+
+fn report_progress(progress: &Option<LocalProgressReporter>, message: String) {
+    if let Some(callback) = progress {
+        callback(message);
     }
 }
 
@@ -217,6 +261,7 @@ impl LocalRuntime {
                 output_tokens: 0,
             });
         }
+        let max_new_tokens = self.suggest_max_new_tokens(messages, tools, prompt_tokens.len(), max_new_tokens);
 
         let mut tokens = prompt_tokens.clone();
         let mut generated = Vec::new();
@@ -249,6 +294,22 @@ impl LocalRuntime {
             input_tokens: prompt_tokens.len() as u32,
             output_tokens: generated.len() as u32,
         })
+    }
+
+    fn suggest_max_new_tokens(
+        &self,
+        messages: &[Message],
+        tools: &[Value],
+        prompt_tokens: usize,
+        configured_cap: usize,
+    ) -> usize {
+        let scenario_cap = scenario_token_cap(messages, tools);
+        let safety_buffer = 256usize;
+        let safe_budget = self
+            .context_window
+            .saturating_sub(prompt_tokens.saturating_add(safety_buffer))
+            .max(48);
+        safe_budget.min(configured_cap).min(scenario_cap).max(48)
     }
 
     fn summarize(&mut self, messages: &[Message]) -> Result<String> {
@@ -304,6 +365,7 @@ impl LocalTextModel {
     fn forward(&mut self, input: &Tensor, offset: usize) -> candle::Result<Tensor> {
         match self {
             Self::Gemma4(model) => model.forward(input, offset),
+            Self::Gemma4Multimodal(model) => model.forward(input, offset),
             Self::Qwen3(model) => model.forward(input, offset),
         }
     }
@@ -311,6 +373,7 @@ impl LocalTextModel {
     fn clear_kv_cache(&mut self) {
         match self {
             Self::Gemma4(model) => model.clear_kv_cache(),
+            Self::Gemma4Multimodal(model) => model.clear_kv_cache(),
             Self::Qwen3(model) => model.clear_kv_cache(),
         }
     }
@@ -367,6 +430,13 @@ impl LocalModelSpec {
         }
     }
 
+    fn context_window(self, raw_config: &Value) -> usize {
+        extract_context_window(raw_config).unwrap_or_else(|| match self {
+            Self::Gemma4E2B | Self::Gemma4E4B => 8192,
+            Self::Qwen3_8B => 32768,
+        })
+    }
+
     fn format_prompt(self, prompt: &str) -> String {
         match self {
             Self::Qwen3_8B => {
@@ -399,18 +469,7 @@ impl LocalModelSpec {
 
     fn build_model(self, raw_config: &Value, vb: VarBuilder) -> Result<LocalTextModel> {
         match self {
-            Self::Gemma4E2B | Self::Gemma4E4B => {
-                let mut text_config: Gemma4TextConfig =
-                    if let Some(text_cfg) = raw_config.get("text_config") {
-                        serde_json::from_value(text_cfg.clone()).context("parse text_config")?
-                    } else {
-                        serde_json::from_value(raw_config.clone()).context("parse Gemma4TextConfig")?
-                    };
-                text_config.use_flash_attn = false;
-                Ok(LocalTextModel::Gemma4(
-                    Gemma4TextModel::new(&text_config, vb).context("build Gemma4 text model")?,
-                ))
-            }
+            Self::Gemma4E2B | Self::Gemma4E4B => build_gemma4_model(raw_config, vb),
             Self::Qwen3_8B => {
                 let config: Qwen3Config =
                     serde_json::from_value(raw_config.clone()).context("parse Qwen3Config")?;
@@ -419,6 +478,69 @@ impl LocalModelSpec {
                 ))
             }
         }
+    }
+}
+
+fn is_multimodal_gemma4_checkpoint(raw_config: &Value) -> bool {
+    raw_config
+        .get("architectures")
+        .and_then(Value::as_array)
+        .map(|architectures| {
+            architectures.iter().any(|value| {
+                value
+                    .as_str()
+                    .map(|name| name == "Gemma4ForConditionalGeneration")
+                    .unwrap_or(false)
+            })
+        })
+        .unwrap_or(false)
+        || raw_config.get("vision_config").is_some()
+        || raw_config.get("audio_config").is_some()
+}
+
+fn build_gemma4_model(raw_config: &Value, vb: VarBuilder) -> Result<LocalTextModel> {
+    let is_multimodal_layout = is_multimodal_gemma4_checkpoint(raw_config);
+    if is_multimodal_layout {
+        let config: Gemma4Config =
+            serde_json::from_value(raw_config.clone()).context("parse Gemma4Config")?;
+        match Gemma4Model::new(&config, vb.clone()) {
+            Ok(model) => return Ok(LocalTextModel::Gemma4Multimodal(model)),
+            Err(err) if should_fallback_to_text_only(&err) => {}
+            Err(err) => return Err(err).context("build Gemma4 multimodal model"),
+        }
+    }
+
+    let mut text_config: Gemma4TextConfig = if let Some(text_cfg) = raw_config.get("text_config") {
+        serde_json::from_value(text_cfg.clone()).context("parse text_config")?
+    } else {
+        serde_json::from_value(raw_config.clone()).context("parse Gemma4TextConfig")?
+    };
+    text_config.use_flash_attn = false;
+    let text_vb = if is_multimodal_layout {
+        vb.rename_f(|name| remap_multimodal_gemma4_text_tensor(name))
+    } else {
+        vb
+    };
+    Ok(LocalTextModel::Gemma4(
+        Gemma4TextModel::new(&text_config, text_vb).context("build Gemma4 text model")?,
+    ))
+}
+
+fn should_fallback_to_text_only(err: &candle::Error) -> bool {
+    let message = err.to_string();
+    message.contains("cannot find tensor model.vision_tower")
+        || message.contains("cannot find tensor model.audio_tower")
+        || message.contains("cannot find tensor model.vision_encoder")
+        || message.contains("cannot find tensor model.audio_encoder")
+}
+
+fn remap_multimodal_gemma4_text_tensor(name: &str) -> String {
+    if let Some(suffix) = name.strip_prefix("model.") {
+        format!("model.language_model.{suffix}")
+    } else if let Some(suffix) = name.strip_prefix("lm_head.") {
+        format!("model.language_model.lm_head.{suffix}")
+    } else {
+        name.to_string()
     }
 }
 
@@ -437,7 +559,7 @@ fn build_hf_api(config: &RaraConfig, cache_dir: &PathBuf) -> Result<hf_hub::api:
     builder.build().context("build Hugging Face API client")
 }
 
-fn local_model_cache_dir() -> PathBuf {
+pub fn default_local_model_cache_dir() -> PathBuf {
     if let Ok(path) = std::env::var("RARA_MODEL_CACHE") {
         return PathBuf::from(path);
     }
@@ -445,6 +567,12 @@ fn local_model_cache_dir() -> PathBuf {
     base.push("rara");
     base.push("huggingface");
     base
+}
+
+pub fn local_runtime_target() -> Result<(String, String)> {
+    let device = select_device()?;
+    let dtype = preferred_dtype(&device);
+    Ok((device_label(&device).to_string(), dtype_label(dtype).to_string()))
 }
 
 fn load_safetensors(repo: &ApiRepo) -> Result<Vec<PathBuf>> {
@@ -473,11 +601,82 @@ fn load_safetensors(repo: &ApiRepo) -> Result<Vec<PathBuf>> {
     Ok(files.into_iter().collect())
 }
 
+fn extract_context_window(raw_config: &Value) -> Option<usize> {
+    [
+        raw_config.pointer("/text_config/max_position_embeddings"),
+        raw_config.pointer("/max_position_embeddings"),
+        raw_config.pointer("/text_config/sliding_window"),
+        raw_config.pointer("/sliding_window"),
+        raw_config.pointer("/text_config/model_max_length"),
+        raw_config.pointer("/model_max_length"),
+        raw_config.pointer("/seq_length"),
+    ]
+    .into_iter()
+    .flatten()
+    .find_map(|value| value.as_u64().map(|v| v as usize))
+}
+
+fn scenario_token_cap(messages: &[Message], tools: &[Value]) -> usize {
+    if !tools.is_empty() {
+        return 128;
+    }
+
+    let last_user_text = messages
+        .iter()
+        .rev()
+        .find(|message| message.role == "user")
+        .map(|message| render_content(&message.content))
+        .unwrap_or_default();
+    let normalized = last_user_text.to_ascii_lowercase();
+    let trimmed = last_user_text.trim();
+
+    if trimmed.chars().count() <= 12 {
+        96
+    } else if [
+        "summarize",
+        "summary",
+        "rewrite",
+        "explain in detail",
+        "detailed",
+        "long-form",
+    ]
+    .iter()
+    .any(|keyword| normalized.contains(keyword))
+    {
+        320
+    } else {
+        192
+    }
+}
+
 fn preferred_dtype(device: &Device) -> DType {
     if device.is_cuda() || device.is_metal() {
         DType::BF16
     } else {
         DType::F32
+    }
+}
+
+fn device_label(device: &Device) -> &'static str {
+    if device.is_cuda() {
+        "cuda"
+    } else if device.is_metal() {
+        "metal"
+    } else {
+        "cpu"
+    }
+}
+
+fn dtype_label(dtype: DType) -> &'static str {
+    match dtype {
+        DType::BF16 => "bf16",
+        DType::F16 => "f16",
+        DType::F32 => "f32",
+        DType::F64 => "f64",
+        DType::U8 => "u8",
+        DType::U32 => "u32",
+        DType::I64 => "i64",
+        _ => "unknown",
     }
 }
 
@@ -636,7 +835,10 @@ fn hashed_embedding(text: &str, dim: usize) -> Vec<f32> {
 
 #[cfg(test)]
 mod tests {
-    use super::{extract_json_object, local_model_cache_dir, parse_tool_aware_reply, render_content, LocalModelSpec};
+    use super::{
+        default_local_model_cache_dir, extract_context_window, extract_json_object,
+        parse_tool_aware_reply, render_content, scenario_token_cap, LocalModelSpec, Message,
+    };
     use serde_json::json;
 
     #[test]
@@ -657,7 +859,7 @@ mod tests {
 
     #[test]
     fn builds_global_cache_path() {
-        let path = local_model_cache_dir();
+        let path = default_local_model_cache_dir();
         assert!(path.to_string_lossy().contains("rara"));
         assert!(path.to_string_lossy().contains("huggingface"));
     }
@@ -688,5 +890,31 @@ mod tests {
         ]));
         assert!(rendered.contains("hello"));
         assert!(rendered.contains("tool_result(id=1): world"));
+    }
+
+    #[test]
+    fn extracts_context_window_from_text_config() {
+        let raw = json!({
+            "text_config": {
+                "max_position_embeddings": 32768
+            }
+        });
+        assert_eq!(extract_context_window(&raw), Some(32768));
+    }
+
+    #[test]
+    fn uses_smaller_budget_for_short_and_tool_prompts() {
+        let short_messages = vec![Message {
+            role: "user".to_string(),
+            content: json!([{"type": "text", "text": "你好"}]),
+        }];
+        assert_eq!(scenario_token_cap(&short_messages, &[]), 96);
+
+        let normal_messages = vec![Message {
+            role: "user".to_string(),
+            content: json!([{"type": "text", "text": "Explain this repository structure."}]),
+        }];
+        assert_eq!(scenario_token_cap(&normal_messages, &[json!({"name":"read_file"})]), 128);
+        assert_eq!(scenario_token_cap(&normal_messages, &[]), 192);
     }
 }

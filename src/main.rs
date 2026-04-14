@@ -7,7 +7,9 @@ mod oauth;
 mod sandbox;
 mod session;
 mod skill;
+mod state_db;
 mod tool;
+mod tool_result;
 mod tools;
 mod tui;
 mod vectordb;
@@ -16,8 +18,10 @@ mod workspace;
 use crate::acp::{run_acp_stdio, RaraAcpAgent};
 use crate::agent::Agent;
 use crate::config::{ConfigManager, RaraConfig};
-use crate::llm::{CodexBackend, GeminiBackend, LlmBackend, MockLlm, OpenAiCompatibleBackend};
-use crate::local_backend::LocalLlmBackend;
+use crate::llm::{
+    CodexBackend, GeminiBackend, LlmBackend, MockLlm, OllamaBackend, OpenAiCompatibleBackend,
+};
+use crate::local_backend::{LocalLlmBackend, LocalProgressReporter};
 use crate::oauth::OAuthManager;
 use crate::sandbox::SandboxManager;
 use crate::session::SessionManager;
@@ -29,6 +33,7 @@ use crate::tools::context::RetrieveSessionContextTool;
 use crate::tools::file::{
     ListFilesTool, ReadFileTool, ReplaceTool, SearchFilesTool, WriteFileTool,
 };
+use crate::tools::patch::ApplyPatchTool;
 use crate::tools::search::{GlobTool, GrepTool};
 use crate::tools::skill::SkillTool;
 use crate::tools::vector::{RememberExperienceTool, RetrieveExperienceTool};
@@ -148,6 +153,7 @@ fn create_full_tool_manager(
         sandbox: sandbox.clone(),
     }));
     tm.register(Box::new(ReadFileTool));
+    tm.register(Box::new(ApplyPatchTool));
     tm.register(Box::new(WriteFileTool));
     tm.register(Box::new(ListFilesTool));
     tm.register(Box::new(SearchFilesTool));
@@ -189,7 +195,14 @@ fn create_full_tool_manager(
     tm
 }
 
-async fn build_backend(config: &RaraConfig) -> Result<Box<dyn LlmBackend>> {
+pub(crate) async fn build_backend(config: &RaraConfig) -> Result<Box<dyn LlmBackend>> {
+    build_backend_with_progress(config, None).await
+}
+
+pub(crate) async fn build_backend_with_progress(
+    config: &RaraConfig,
+    progress: Option<LocalProgressReporter>,
+) -> Result<Box<dyn LlmBackend>> {
     match config.provider.as_str() {
         "kimi" => Ok(Box::new(OpenAiCompatibleBackend {
             api_key: config.api_key.clone().expect("API key required for Kimi"),
@@ -207,6 +220,23 @@ async fn build_backend(config: &RaraConfig) -> Result<Box<dyn LlmBackend>> {
                 .unwrap_or_else(|| "http://localhost:8080".to_string()),
             model: config.model.clone().unwrap_or_else(|| "codex".to_string()),
         })),
+        "ollama" | "ollama-native" => Ok(Box::new(OllamaBackend {
+            base_url: config
+                .base_url
+                .clone()
+                .unwrap_or_else(|| "http://localhost:11434".to_string()),
+            model: config.model.clone().unwrap_or_else(|| "gemma4".to_string()),
+            thinking: config.thinking.unwrap_or(true),
+            num_ctx: config.num_ctx,
+        })),
+        "ollama-openai" => Ok(Box::new(OpenAiCompatibleBackend {
+            api_key: config.api_key.clone().unwrap_or_default(),
+            base_url: config
+                .base_url
+                .clone()
+                .unwrap_or_else(|| "http://localhost:11434".to_string()),
+            model: config.model.clone().unwrap_or_else(|| "gemma4".to_string()),
+        })),
         "gemini" => Ok(Box::new(GeminiBackend {
             api_key: config.api_key.clone().expect("API key required for Gemini"),
             model: config
@@ -215,7 +245,13 @@ async fn build_backend(config: &RaraConfig) -> Result<Box<dyn LlmBackend>> {
                 .unwrap_or_else(|| "gemini-1.5-pro".to_string()),
         })),
         "gemma4" | "qwen3" | "qwn3" | "local" | "local-candle" => {
-            Ok(Box::new(LocalLlmBackend::from_config(config)?))
+            let config = config.clone();
+            let progress = progress.clone();
+            let backend = tokio::task::spawn_blocking(move || {
+                LocalLlmBackend::from_config_with_progress(&config, progress)
+            })
+            .await??;
+            Ok(Box::new(backend))
         }
         "mock" => Ok(Box::new(MockLlm)),
         _ => Ok(Box::new(MockLlm)),

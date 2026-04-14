@@ -7,7 +7,6 @@ use crate::workspace::WorkspaceMemory;
 use async_trait::async_trait;
 use serde_json::{Value, json};
 use std::sync::Arc;
-use tokio::task::JoinHandle;
 
 pub struct AgentTool { pub backend: Arc<dyn LlmBackend>, pub vdb: Arc<VectorDB>, pub session_manager: Arc<SessionManager>, pub workspace: Arc<WorkspaceMemory> }
 #[async_trait]

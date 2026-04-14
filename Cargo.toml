@@ -8,7 +8,7 @@ tokio = { version = "1.0", features = ["full"] }
 clap = { version = "4.0", features = ["derive", "env"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-reqwest = { version = "0.12", features = ["json"] }
+reqwest = { version = "0.12", features = ["json", "stream"] }
 async-trait = "0.1"
 anyhow = "1.0"
 thiserror = "2.0"
@@ -23,19 +23,23 @@ sha2 = "0.10"
 urlencoding = "2.1"
 url = "2.5"
 ratatui = "0.30"
-crossterm = "0.29"
+crossterm = { version = "0.29", features = ["event-stream"] }
 walkdir = "2.5"
 glob = "0.3"
 regex = "1.11"
 uuid = { version = "1.11", features = ["v4"] }
 lancedb = "0.27"
 futures = "0.3"
+rusqlite = "0.32"
 agent-client-protocol = { version = "0.10", features = ["unstable"] }
 hf-hub = "0.4"
 tokenizers = { version = "0.22", default-features = false, features = ["onig"] }
 candle = { git = "https://github.com/huggingface/candle", rev = "34625ab6d1567a0bc132ac6bc8dc2cce0e16d86d", package = "candle-core" }
 candle-nn = { git = "https://github.com/huggingface/candle", rev = "34625ab6d1567a0bc132ac6bc8dc2cce0e16d86d", package = "candle-nn" }
 candle-transformers = { git = "https://github.com/huggingface/candle", rev = "34625ab6d1567a0bc132ac6bc8dc2cce0e16d86d", package = "candle-transformers" }
+
+[dev-dependencies]
+tempfile = "3.17"
 
 [features]
 default = []

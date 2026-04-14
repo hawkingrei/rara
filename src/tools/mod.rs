@@ -1,5 +1,6 @@
 pub mod bash;
 pub mod file;
+pub mod patch;
 pub mod search;
 pub mod web;
 pub mod vector;
