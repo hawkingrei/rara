@@ -20,15 +20,13 @@ pub fn render(f: &mut Frame, app: &TuiApp) {
     let layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(2),
             Constraint::Min(8),
             Constraint::Length(5),
         ])
         .split(f.area());
 
-    render_header(f, app, layout[0]);
-    render_transcript(f, app, layout[1]);
-    render_bottom_pane(f, app, layout[2]);
+    render_transcript(f, app, layout[0]);
+    render_bottom_pane(f, app, layout[1]);
 
     if let Some(overlay) = app.overlay {
         render_overlay(f, app, overlay);
@@ -75,7 +73,7 @@ fn render_transcript(f: &mut Frame, app: &TuiApp, area: Rect) {
         return;
     }
 
-    let mut lines = vec![Line::from(section_span("Current Turn", Color::LightBlue)), Line::from("")];
+    let mut lines = Vec::new();
     lines.extend(current_turn_lines(app));
     f.render_widget(
         Paragraph::new(lines)
@@ -444,41 +442,6 @@ fn render_footer(f: &mut Frame, app: &TuiApp, area: Rect) {
     );
 }
 
-fn render_header(f: &mut Frame, app: &TuiApp, area: Rect) {
-    let provider_color = if super::provider_requires_api_key(&app.config.provider) {
-        Color::Magenta
-    } else {
-        Color::LightBlue
-    };
-    let key_status = api_key_status(&app.config);
-    let lines = vec![
-        Line::from(vec![
-            Span::styled(
-                " RARA ",
-                Style::default()
-                    .bg(Color::LightBlue)
-                    .fg(Color::Black)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::raw(" "),
-            badge("provider", &app.config.provider, provider_color),
-        ]),
-        Line::from(vec![
-            Span::styled(" ", Style::default()),
-            Span::styled(
-                format!(
-                    "model={}  branch={}  key={}",
-                    app.current_model_label(),
-                    app.snapshot.branch,
-                    key_status,
-                ),
-                Style::default().fg(Color::Gray),
-            ),
-        ]),
-    ];
-    f.render_widget(Paragraph::new(lines), area);
-}
-
 fn render_overlay(f: &mut Frame, app: &TuiApp, overlay: Overlay) {
     let popup = centered_rect(78, 70, f.area());
     f.render_widget(Clear, popup);
@@ -488,6 +451,7 @@ fn render_overlay(f: &mut Frame, app: &TuiApp, overlay: Overlay) {
         Overlay::Status => render_status_modal(f, app, popup),
         Overlay::Setup => render_setup_modal(f, app, popup),
         Overlay::ProviderPicker => render_provider_picker_modal(f, app, popup),
+        Overlay::ResumePicker => render_resume_picker_modal(f, app, popup),
         Overlay::ModelPicker => render_model_picker_modal(f, app, popup),
         Overlay::BaseUrlEditor => render_base_url_editor_modal(f, app, popup),
     }
@@ -868,6 +832,63 @@ fn render_provider_picker_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
     );
     f.render_widget(
         Paragraph::new("1/2 select  Up/Down move  Enter continue  Esc close")
+            .alignment(Alignment::Center),
+        chunks[2],
+    );
+}
+
+fn render_resume_picker_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(3), Constraint::Min(8), Constraint::Length(2)])
+        .split(area);
+    let intro = if app.recent_sessions.is_empty() {
+        "No persisted sessions found yet."
+    } else {
+        "Choose a recent session to restore its transcript, plan state, and interaction cards."
+    };
+    f.render_widget(
+        Paragraph::new(intro)
+            .block(Block::default().borders(Borders::ALL).title(" Resume Session ")),
+        chunks[0],
+    );
+    let items = if app.recent_sessions.is_empty() {
+        vec![ListItem::new("No sessions available.")]
+    } else {
+        app.recent_sessions
+            .iter()
+            .enumerate()
+            .map(|(idx, session)| {
+                let style = if idx == app.resume_picker_idx {
+                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default()
+                };
+                let when = format!("updated_at={}", session.updated_at);
+                let preview = if session.preview.is_empty() {
+                    "(no preview)".to_string()
+                } else {
+                    session.preview.clone()
+                };
+                ListItem::new(vec![
+                    Line::from(format!(
+                        "{}  {} / {}  branch={}",
+                        session.session_id, session.provider, session.model, session.branch
+                    )),
+                    Line::from(format!("  {when}")),
+                    Line::from(format!("  {preview}")),
+                    Line::from(""),
+                ])
+                .style(style)
+            })
+            .collect::<Vec<_>>()
+    };
+    f.render_widget(
+        List::new(items).block(Block::default().borders(Borders::LEFT | Borders::RIGHT)),
+        chunks[1],
+    );
+    f.render_widget(
+        Paragraph::new("Esc close  Up/Down move  Enter restore")
             .alignment(Alignment::Center),
         chunks[2],
     );

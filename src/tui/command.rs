@@ -7,7 +7,7 @@ use super::state::{
     PROVIDER_FAMILIES,
 };
 
-pub const COMMAND_SPECS: [CommandSpec; 11] = [
+pub const COMMAND_SPECS: [CommandSpec; 12] = [
     CommandSpec {
         category: "Session",
         name: "help",
@@ -28,6 +28,13 @@ pub const COMMAND_SPECS: [CommandSpec; 11] = [
         usage: "/clear",
         summary: "Clear the visible transcript and keep the current backend.",
         detail: "Reset only the local transcript view. The current backend, session id, and active runtime remain unchanged.",
+    },
+    CommandSpec {
+        category: "Session",
+        name: "resume",
+        usage: "/resume",
+        summary: "Pick and restore a recent local session.",
+        detail: "Open the recent session picker backed by the local SQLite state DB and rollout artifacts. This restores committed turns, plan state, and interaction cards for the selected session.",
     },
     CommandSpec {
         category: "Session",
@@ -102,6 +109,7 @@ pub fn parse_local_command(input: &str) -> Option<LocalCommand> {
         "help" => LocalCommandKind::Help,
         "status" => LocalCommandKind::Status,
         "clear" => LocalCommandKind::Clear,
+        "resume" => LocalCommandKind::Resume,
         "plan" => LocalCommandKind::Plan,
         "approval" => LocalCommandKind::Approval,
         "search" => LocalCommandKind::Search,
@@ -141,7 +149,7 @@ pub fn recommended_commands(app: &TuiApp) -> Vec<&'static CommandSpec> {
     let names: &[&str] = if app.is_busy() {
         &["status", "help", "clear"]
     } else {
-        &["search", "plan", "approval", "model", "base-url", "status", "help", "clear", "setup"]
+        &["search", "resume", "plan", "approval", "model", "base-url", "status", "help", "clear", "setup"]
     };
     names
         .iter()
@@ -233,7 +241,7 @@ pub fn help_text() -> String {
         .collect::<Vec<_>>()
         .join("\n");
     format!(
-        "Built-in commands:\n{}\n\nExplore:\n  /search    run local grep in the workspace or a subpath\n\nModes:\n  /plan      toggle read-only planning mode\n  /approval  toggle bash approval mode\n\nEditing:\n  apply_patch  preferred for editing existing files\n  write_file   use for new files or full rewrites\n  replace      simple fallback for unique string replacement\n\nKeyboard:\n  Enter submit\n  Esc close current overlay\n  S open setup\n\nExit:\n  /quit\n  /exit\n\nModel switching:\n  /model\n\nProvider URL:\n  /base-url",
+        "Built-in commands:\n{}\n\nExplore:\n  /search    run local grep in the workspace or a subpath\n\nSessions:\n  /resume    reopen a recent local session\n\nModes:\n  /plan      toggle read-only planning mode\n  /approval  toggle bash approval mode\n\nEditing:\n  apply_patch  preferred for editing existing files\n  write_file   use for new files or full rewrites\n  replace      simple fallback for unique string replacement\n\nKeyboard:\n  Enter submit\n  Esc close current overlay\n  S open setup\n\nExit:\n  /quit\n  /exit\n\nModel switching:\n  /model\n\nProvider URL:\n  /base-url",
         commands
     )
 }
@@ -299,11 +307,13 @@ pub fn status_resources_text(app: &TuiApp) -> String {
     } else {
         "-".to_string()
     };
+    let state_db = app.state_db_status.as_deref().unwrap_or("-");
     format!(
-        "tokens={} in / {} out\ncache={}",
+        "tokens={} in / {} out\ncache={}\nstate_db={}",
         app.snapshot.total_input_tokens,
         app.snapshot.total_output_tokens,
         cache,
+        state_db,
     )
 }
 
@@ -628,6 +638,12 @@ mod tests {
         let command = parse_local_command("/base-url").expect("command should parse");
         assert!(matches!(command.kind, LocalCommandKind::BaseUrl));
         assert_eq!(command.arg.as_deref(), None);
+    }
+
+    #[test]
+    fn parses_resume_command() {
+        let command = parse_local_command("/resume").expect("command should parse");
+        assert!(matches!(command.kind, LocalCommandKind::Resume));
     }
 
     #[test]

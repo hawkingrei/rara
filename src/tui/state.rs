@@ -1,9 +1,12 @@
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::task::JoinHandle;
 use std::time::Instant;
+use std::sync::Arc;
+use serde_json::json;
 
 use crate::agent::{Agent, AgentExecutionMode, BashApprovalMode};
 use crate::config::{ConfigManager, RaraConfig};
+use crate::state_db::{PersistedInteraction, PersistedPlanStep, PersistedSessionSummary, PersistedTurnEntry, StateDb};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum HelpTab {
@@ -20,6 +23,7 @@ pub enum Overlay {
     Setup,
     ProviderPicker,
     ModelPicker,
+    ResumePicker,
     BaseUrlEditor,
 }
 
@@ -34,6 +38,7 @@ pub enum LocalCommandKind {
     Help,
     Status,
     Clear,
+    Resume,
     Plan,
     Approval,
     Search,
@@ -184,8 +189,12 @@ pub struct TuiApp {
     pub command_palette_idx: usize,
     pub base_url_input: String,
     pub recent_commands: Vec<String>,
+    pub recent_sessions: Vec<PersistedSessionSummary>,
+    pub resume_picker_idx: usize,
     pub transcript_scroll: usize,
     pub terminal_focused: bool,
+    pub state_db: Option<Arc<StateDb>>,
+    pub state_db_status: Option<String>,
     pub running_task: Option<RunningTask>,
 }
 
@@ -219,8 +228,12 @@ impl TuiApp {
             command_palette_idx: 0,
             base_url_input: String::new(),
             recent_commands: Vec::new(),
+            recent_sessions: Vec::new(),
+            resume_picker_idx: 0,
             transcript_scroll: 0,
             terminal_focused: true,
+            state_db: None,
+            state_db_status: None,
             running_task: None,
         }
     }
@@ -314,6 +327,7 @@ impl TuiApp {
         };
         self.agent_execution_mode = agent.execution_mode;
         self.bash_approval_mode = agent.bash_approval_mode;
+        self.persist_runtime_state();
     }
 
     pub fn push_entry(&mut self, role: &'static str, message: impl Into<String>) {
@@ -387,6 +401,9 @@ impl TuiApp {
         }
         if matches!(overlay, Overlay::ProviderPicker) {
             self.provider_picker_idx = selected_provider_family_idx_for_config(&self.config);
+        }
+        if matches!(overlay, Overlay::ResumePicker) {
+            self.resume_picker_idx = 0;
         }
         if matches!(overlay, Overlay::ModelPicker) {
             self.model_picker_idx = self.selected_preset_idx();
@@ -462,12 +479,160 @@ impl TuiApp {
         if self.active_turn.entries.is_empty() {
             return;
         }
-        self.committed_turns.push(std::mem::take(&mut self.active_turn));
+        let turn = std::mem::take(&mut self.active_turn);
+        let ordinal = self.committed_turns.len();
+        self.persist_turn(ordinal, &turn);
+        self.committed_turns.push(turn);
         self.transcript_scroll = 0;
     }
 
     pub fn finalize_active_turn(&mut self) {
         self.commit_active_turn();
+    }
+
+    pub fn restore_committed_turns(&mut self, turns: Vec<TranscriptTurn>) {
+        self.committed_turns = turns;
+        self.active_turn.entries.clear();
+        self.inserted_turns = 0;
+        self.transcript_scroll = 0;
+    }
+
+    pub fn attach_state_db(&mut self, state_db: Arc<StateDb>) {
+        let status = state_db.path().display().to_string();
+        self.recent_sessions = state_db.list_recent_sessions(20).unwrap_or_default();
+        self.state_db = Some(state_db);
+        self.state_db_status = Some(status);
+        if !self.snapshot.session_id.is_empty() {
+            self.persist_runtime_state();
+        }
+    }
+
+    pub fn set_state_db_error(&mut self, error: String) {
+        self.state_db = None;
+        self.state_db_status = Some(format!("unavailable: {error}"));
+    }
+
+    fn persist_runtime_state(&mut self) {
+        let Some(state_db) = self.state_db.as_ref() else {
+            return;
+        };
+        if self.snapshot.session_id.is_empty() {
+            return;
+        }
+
+        if let Err(err) = state_db.upsert_session(
+            &self.snapshot.session_id,
+            &self.snapshot.cwd,
+            &self.snapshot.branch,
+            &self.config.provider,
+            self.current_model_label(),
+            self.config.base_url.as_deref(),
+            self.agent_execution_mode_label(),
+            self.bash_approval_mode_label(),
+            self.snapshot.plan_explanation.as_deref(),
+            self.snapshot.history_len,
+            self.transcript_entry_count(),
+        ) {
+            self.state_db_status = Some(format!("write failed: {err}"));
+            return;
+        }
+
+        let plan_steps = self
+            .snapshot
+            .plan_steps
+            .iter()
+            .enumerate()
+            .map(|(step_index, (status, step))| PersistedPlanStep {
+                step_index,
+                status: status.clone(),
+                step: step.clone(),
+            })
+            .collect::<Vec<_>>();
+        if let Err(err) = state_db.replace_plan_steps(&self.snapshot.session_id, &plan_steps) {
+            self.state_db_status = Some(format!("plan write failed: {err}"));
+            return;
+        }
+
+        let mut interactions = Vec::new();
+        if let Some((question, options, note)) = self.snapshot.pending_question.as_ref() {
+            let options_summary = options
+                .iter()
+                .map(|(label, _)| label.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            let summary = match note {
+                Some(note) if !note.is_empty() => format!("{options_summary} | {note}"),
+                _ => options_summary,
+            };
+            interactions.push(PersistedInteraction {
+                kind: "request_input".to_string(),
+                status: "pending".to_string(),
+                title: question.clone(),
+                summary,
+                payload: Some(json!({
+                    "question": question,
+                    "options": options,
+                    "note": note,
+                })),
+            });
+        }
+        if let Some(command) = self.snapshot.pending_approval_command.as_ref() {
+            interactions.push(PersistedInteraction {
+                kind: "approval".to_string(),
+                status: "pending".to_string(),
+                title: "Pending Approval".to_string(),
+                summary: command.clone(),
+                payload: Some(json!({
+                    "command": command,
+                })),
+            });
+        }
+        if let Some((title, summary)) = self.snapshot.completed_question.as_ref() {
+            interactions.push(PersistedInteraction {
+                kind: "request_input".to_string(),
+                status: "completed".to_string(),
+                title: title.clone(),
+                summary: summary.clone(),
+                payload: None,
+            });
+        }
+        if let Some((title, summary)) = self.snapshot.completed_approval.as_ref() {
+            interactions.push(PersistedInteraction {
+                kind: "approval".to_string(),
+                status: "completed".to_string(),
+                title: title.clone(),
+                summary: summary.clone(),
+                payload: None,
+            });
+        }
+
+        if let Err(err) = state_db.replace_interactions(&self.snapshot.session_id, &interactions) {
+            self.state_db_status = Some(format!("interaction write failed: {err}"));
+            return;
+        }
+
+        self.recent_sessions = state_db.list_recent_sessions(20).unwrap_or_default();
+        self.state_db_status = Some(state_db.path().display().to_string());
+    }
+
+    fn persist_turn(&mut self, ordinal: usize, turn: &TranscriptTurn) {
+        let Some(state_db) = self.state_db.as_ref() else {
+            return;
+        };
+        if self.snapshot.session_id.is_empty() {
+            return;
+        }
+        let entries = turn
+            .entries
+            .iter()
+            .map(|entry| PersistedTurnEntry {
+                role: entry.role.clone(),
+                message: entry.message.clone(),
+            })
+            .collect::<Vec<_>>();
+        if let Err(err) = state_db.persist_turn(&self.snapshot.session_id, ordinal, &entries) {
+            self.state_db_status = Some(format!("turn write failed: {err}"));
+        }
     }
 }
 

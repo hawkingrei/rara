@@ -30,6 +30,7 @@ regex = "1.11"
 uuid = { version = "1.11", features = ["v4"] }
 lancedb = "0.27"
 futures = "0.3"
+rusqlite = "0.32"
 agent-client-protocol = { version = "0.10", features = ["unstable"] }
 hf-hub = "0.4"
 tokenizers = { version = "0.22", default-features = false, features = ["onig"] }

@@ -24,7 +24,13 @@ use ratatui::{
 use tokio::time::{interval, Duration};
 
 use crate::agent::Agent;
+use crate::agent::CompletedInteraction;
+use crate::agent::PendingApproval;
+use crate::agent::PendingUserInput;
+use crate::agent::PlanStep;
+use crate::agent::PlanStepStatus;
 use crate::oauth::OAuthManager;
+use crate::state_db::StateDb;
 
 use self::app_event::AppEvent;
 use self::command::{palette_command_by_index, palette_commands, parse_local_command};
@@ -34,7 +40,7 @@ use self::runtime::{
     execute_local_command, finish_running_task_if_ready, start_oauth_task, start_pending_approval_task, start_query_task,
     start_rebuild_task,
 };
-use self::state::{current_model_presets, HelpTab, Overlay, PROVIDER_FAMILIES, TuiApp};
+use self::state::{current_model_presets, HelpTab, Overlay, PROVIDER_FAMILIES, TranscriptEntry, TranscriptTurn, TuiApp};
 use crate::agent::BashApprovalMode;
 
 pub async fn run_tui(agent: Agent, oauth_manager: OAuthManager) -> anyhow::Result<()> {
@@ -44,6 +50,14 @@ pub async fn run_tui(agent: Agent, oauth_manager: OAuthManager) -> anyhow::Resul
     let mut terminal = build_terminal()?;
     let mut app = TuiApp::new(crate::config::ConfigManager::new()?);
     let mut agent_slot = Some(agent);
+    match StateDb::new() {
+        Ok(state_db) => {
+            let state_db = Arc::new(state_db);
+            restore_latest_session(&state_db, &mut app, &mut agent_slot)?;
+            app.attach_state_db(state_db);
+        }
+        Err(err) => app.set_state_db_error(err.to_string()),
+    }
     let oauth_manager = Arc::new(oauth_manager);
     let mut events = EventStream::new();
     let mut tick = interval(Duration::from_millis(100));
@@ -157,6 +171,16 @@ fn map_key_to_event(key: KeyCode, app: &TuiApp) -> AppEvent {
             KeyCode::Enter => AppEvent::ApplyOverlaySelection,
             _ => AppEvent::Noop,
         },
+        Some(Overlay::ResumePicker) => match key {
+            KeyCode::Esc => AppEvent::CloseOverlay,
+            KeyCode::Up | KeyCode::Char('k') => AppEvent::MoveResumeSelection(-1),
+            KeyCode::Down | KeyCode::Char('j') => AppEvent::MoveResumeSelection(1),
+            KeyCode::Char('1') => AppEvent::SetResumeSelection(0),
+            KeyCode::Char('2') => AppEvent::SetResumeSelection(1),
+            KeyCode::Char('3') => AppEvent::SetResumeSelection(2),
+            KeyCode::Enter => AppEvent::ApplyOverlaySelection,
+            _ => AppEvent::Noop,
+        },
         Some(Overlay::ModelPicker) => match key {
             KeyCode::Esc => AppEvent::CloseOverlay,
             KeyCode::Up | KeyCode::Char('k') => AppEvent::MoveModelSelection(-1),
@@ -251,6 +275,13 @@ async fn dispatch_event(
                 .clamp(0, PROVIDER_FAMILIES.len() as i32 - 1);
             app.provider_picker_idx = next as usize;
         }
+        AppEvent::MoveResumeSelection(delta) => {
+            let len = app.recent_sessions.len();
+            if len > 0 {
+                let next = (app.resume_picker_idx as i32 + delta).clamp(0, len as i32 - 1);
+                app.resume_picker_idx = next as usize;
+            }
+        }
         AppEvent::MoveModelSelection(delta) => {
             let next = (app.model_picker_idx as i32 + delta)
                 .clamp(0, current_model_presets(app.provider_picker_idx).len() as i32 - 1);
@@ -259,6 +290,11 @@ async fn dispatch_event(
         AppEvent::SetProviderSelection(idx) => {
             app.provider_picker_idx = idx.min(PROVIDER_FAMILIES.len() - 1);
             app.model_picker_idx = 0;
+        }
+        AppEvent::SetResumeSelection(idx) => {
+            if !app.recent_sessions.is_empty() {
+                app.resume_picker_idx = idx.min(app.recent_sessions.len() - 1);
+            }
         }
         AppEvent::SetModelSelection(idx) => {
             app.model_picker_idx = idx.min(current_model_presets(app.provider_picker_idx).len() - 1);
@@ -335,6 +371,18 @@ async fn dispatch_event(
                     app.push_notice("A task is already running. Wait for it to finish.");
                 } else {
                     app.open_overlay(Overlay::ModelPicker);
+                }
+            }
+            Some(Overlay::ResumePicker) => {
+                if app.is_busy() {
+                    app.push_notice("A task is already running. Wait for it to finish.");
+                } else if let Some(session_id) = app
+                    .recent_sessions
+                    .get(app.resume_picker_idx)
+                    .map(|session| session.session_id.clone())
+                {
+                    restore_session_by_id(session_id.as_str(), app, agent_slot)?;
+                    app.close_overlay();
                 }
             }
             Some(Overlay::BaseUrlEditor) => {
@@ -446,6 +494,142 @@ fn flush_committed_history(
         }
         app.inserted_turns += 1;
     }
+    Ok(())
+}
+
+fn restore_latest_session(
+    state_db: &Arc<StateDb>,
+    app: &mut TuiApp,
+    agent_slot: &mut Option<Agent>,
+) -> anyhow::Result<()> {
+    let Some(session_id) = state_db.latest_session_id()? else {
+        return Ok(());
+    };
+    restore_session_by_id(session_id.as_str(), app, agent_slot)
+}
+
+fn restore_session_by_id(
+    session_id: &str,
+    app: &mut TuiApp,
+    agent_slot: &mut Option<Agent>,
+) -> anyhow::Result<()> {
+    let Some(agent) = agent_slot.as_mut() else {
+        return Ok(());
+    };
+    let Some(state_db) = app.state_db.as_ref() else {
+        return Ok(());
+    };
+    if let Ok(history) = agent.session_manager.load_session(session_id) {
+        agent.history = history;
+        agent.session_id = session_id.to_string();
+    }
+    let persisted_steps = state_db.load_plan_steps(session_id)?;
+    if !persisted_steps.is_empty() {
+        agent.current_plan = persisted_steps
+            .into_iter()
+            .map(|step| PlanStep {
+                step: step.step,
+                status: match step.status.as_str() {
+                    "completed" => PlanStepStatus::Completed,
+                    "in_progress" => PlanStepStatus::InProgress,
+                    _ => PlanStepStatus::Pending,
+                },
+            })
+            .collect();
+    } else {
+        agent.current_plan.clear();
+    }
+    agent.plan_explanation = state_db.load_session_plan_explanation(session_id)?;
+    agent.pending_user_input = None;
+    agent.pending_approval = None;
+    agent.completed_user_input = None;
+    agent.completed_approval = None;
+    let interactions = state_db.load_interactions(session_id)?;
+    for interaction in interactions {
+        match (interaction.kind.as_str(), interaction.status.as_str()) {
+            ("request_input", "pending") => {
+                let Some(payload) = interaction.payload.as_ref() else {
+                    continue;
+                };
+                let options = payload
+                    .get("options")
+                    .and_then(|value| value.as_array())
+                    .map(|items| {
+                        items
+                            .iter()
+                            .filter_map(|item| {
+                                let pair = item.as_array()?;
+                                let label = pair.first()?.as_str()?.to_string();
+                                let detail = pair.get(1)?.as_str()?.to_string();
+                                Some((label, detail))
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                agent.pending_user_input = Some(PendingUserInput {
+                    question: payload
+                        .get("question")
+                        .and_then(|value| value.as_str())
+                        .unwrap_or(&interaction.title)
+                        .to_string(),
+                    options,
+                    note: payload
+                        .get("note")
+                        .and_then(|value| value.as_str())
+                        .map(str::to_string),
+                });
+            }
+            ("approval", "pending") => {
+                let command = interaction
+                    .payload
+                    .as_ref()
+                    .and_then(|payload| payload.get("command"))
+                    .and_then(|value| value.as_str())
+                    .unwrap_or(&interaction.summary)
+                    .to_string();
+                agent.pending_approval = Some(PendingApproval {
+                    tool_use_id: "restored".to_string(),
+                    command,
+                    allow_net: false,
+                });
+            }
+            ("request_input", "completed") => {
+                agent.completed_user_input = Some(CompletedInteraction {
+                    title: interaction.title,
+                    summary: interaction.summary,
+                });
+            }
+            ("approval", "completed") => {
+                agent.completed_approval = Some(CompletedInteraction {
+                    title: interaction.title,
+                    summary: interaction.summary,
+                });
+            }
+            _ => {}
+        }
+    }
+    let summaries = state_db.load_turn_summaries(session_id)?;
+    let mut turns = Vec::with_capacity(summaries.len());
+    for summary in summaries {
+        let entries = state_db
+            .load_turn_entries(session_id, summary.ordinal)?
+            .into_iter()
+            .map(|entry| TranscriptEntry {
+                role: entry.role,
+                message: entry.message,
+            })
+            .collect::<Vec<_>>();
+        if !entries.is_empty() {
+            turns.push(TranscriptTurn { entries });
+        }
+    }
+    if !turns.is_empty() {
+        app.restore_committed_turns(turns);
+    } else {
+        app.reset_transcript();
+    }
+    app.sync_snapshot(agent);
+    app.notice = Some(format!("Resumed session {session_id}."));
     Ok(())
 }
 

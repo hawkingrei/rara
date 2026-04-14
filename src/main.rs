@@ -7,6 +7,7 @@ mod oauth;
 mod sandbox;
 mod session;
 mod skill;
+mod state_db;
 mod tool;
 mod tool_result;
 mod tools;

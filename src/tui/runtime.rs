@@ -43,6 +43,7 @@ pub async fn execute_local_command(
         LocalCommandKind::Help => "help",
         LocalCommandKind::Status => "status",
         LocalCommandKind::Clear => "clear",
+        LocalCommandKind::Resume => "resume",
         LocalCommandKind::Plan => "plan",
         LocalCommandKind::Approval => "approval",
         LocalCommandKind::Search => "search",
@@ -64,6 +65,10 @@ pub async fn execute_local_command(
         LocalCommandKind::Clear => {
             app.set_runtime_phase(RuntimePhase::LocalCommand, Some("clearing transcript".into()));
             app.reset_transcript();
+        }
+        LocalCommandKind::Resume => {
+            app.set_runtime_phase(RuntimePhase::LocalCommand, Some("opening resume picker".into()));
+            app.open_overlay(Overlay::ResumePicker);
         }
         LocalCommandKind::Plan => {
             let next_mode = if matches!(app.agent_execution_mode, AgentExecutionMode::Plan) {
