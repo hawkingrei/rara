@@ -480,6 +480,15 @@ fn flush_committed_history(
     terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
     app: &mut TuiApp,
 ) -> anyhow::Result<()> {
+    if !app.startup_card_inserted {
+        let lines = startup_card_lines(app);
+        if !lines.is_empty() {
+            terminal.insert_before(lines.len() as u16, |buf| {
+                Paragraph::new(lines).render(buf.area, buf);
+            })?;
+        }
+        app.startup_card_inserted = true;
+    }
     while app.inserted_turns < app.committed_turns.len() {
         let turn = &app.committed_turns[app.inserted_turns];
         let mut lines = committed_turn_lines(turn.entries.as_slice());
@@ -495,6 +504,53 @@ fn flush_committed_history(
         app.inserted_turns += 1;
     }
     Ok(())
+}
+
+fn startup_card_lines(app: &TuiApp) -> Vec<ratatui::text::Line<'static>> {
+    vec![
+        ratatui::text::Line::from("╭──────────────────────────────────────────────╮"),
+        ratatui::text::Line::from("│ >_ RARA                                      │"),
+        ratatui::text::Line::from("│                                              │"),
+        ratatui::text::Line::from(format!(
+            "│ model:     {:<25} /model to change │",
+            truncate_for_startup_card(app.current_model_label(), 25)
+        )),
+        ratatui::text::Line::from(format!(
+            "│ directory: {:<32} │",
+            truncate_for_startup_card(&display_directory_for_startup(app), 32)
+        )),
+        ratatui::text::Line::from("╰──────────────────────────────────────────────╯"),
+        ratatui::text::Line::from(""),
+    ]
+}
+
+fn display_directory_for_startup(app: &TuiApp) -> String {
+    let cwd = if app.snapshot.cwd.is_empty() {
+        std::env::current_dir()
+            .ok()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| ".".to_string())
+    } else {
+        app.snapshot.cwd.clone()
+    };
+    if let Ok(home) = std::env::var("HOME") {
+        if let Some(stripped) = cwd.strip_prefix(&home) {
+            return format!("~{stripped}");
+        }
+    }
+    cwd
+}
+
+fn truncate_for_startup_card(value: &str, width: usize) -> String {
+    let chars = value.chars().collect::<Vec<_>>();
+    if chars.len() <= width {
+        return value.to_string();
+    }
+    if width <= 1 {
+        return "…".to_string();
+    }
+    let kept = chars.into_iter().take(width - 1).collect::<String>();
+    format!("{kept}…")
 }
 
 fn restore_latest_session(

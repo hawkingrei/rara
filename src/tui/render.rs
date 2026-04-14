@@ -19,10 +19,7 @@ use super::state::{
 pub fn render(f: &mut Frame, app: &TuiApp) {
     let layout = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Min(8),
-            Constraint::Length(5),
-        ])
+        .constraints([Constraint::Min(8), Constraint::Length(5)])
         .split(f.area());
 
     render_transcript(f, app, layout[0]);
@@ -45,6 +42,10 @@ fn render_bottom_pane(f: &mut Frame, app: &TuiApp, area: Rect) {
 
 fn render_transcript(f: &mut Frame, app: &TuiApp, area: Rect) {
     if !app.has_any_transcript() {
+        if app.startup_card_inserted {
+            f.render_widget(Paragraph::new(Vec::<Line<'static>>::new()), area);
+            return;
+        }
         let lines = vec![
             Line::from(Span::styled(
                 "Ready.",
@@ -85,28 +86,55 @@ fn render_transcript(f: &mut Frame, app: &TuiApp, area: Rect) {
 
 pub fn committed_turn_lines(entries: &[TranscriptEntry]) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
-    for entry in entries
-        .iter()
-        .filter(|entry| matches!(entry.role.as_str(), "You" | "Agent" | "System"))
-    {
-        lines.push(Line::from(role_badge_span(&entry.role)));
-        let max_lines = if entry.role == "Agent" { 8 } else { 4 };
-        let message_lines = entry.message.lines().collect::<Vec<_>>();
-        if message_lines.is_empty() {
-            lines.push(Line::from("  "));
-        } else {
-            for line in message_lines.iter().take(max_lines) {
-                lines.push(Line::from(format!("  {line}")));
-            }
-            if message_lines.len() > max_lines {
-                lines.push(Line::from(Span::styled(
-                    format!("  ... {} more line(s)", message_lines.len() - max_lines),
-                    Style::default().fg(Color::DarkGray),
-                )));
-            }
-        }
+    if let Some(user) = entries.iter().find(|entry| entry.role == "You") {
+        lines.push(Line::from(role_badge_span("You")));
+        push_message_lines(&mut lines, &user.message, 4);
         lines.push(Line::from(""));
     }
+
+    let entry_refs = entries.iter().collect::<Vec<_>>();
+    let has_tool_activity = entry_refs.iter().any(|entry| {
+        matches!(
+            entry.role.as_str(),
+            "Tool" | "Tool Result" | "Tool Error"
+        )
+    });
+    if let Some(summary) = current_turn_exploration_summary_from_entries(entry_refs.as_slice(), false, None) {
+        lines.push(Line::from(section_span("Explored", Color::Rgb(231, 201, 92))));
+        lines.extend(summary.lines().map(|line| Line::from(format!("  {line}"))));
+        lines.push(Line::from(""));
+    }
+
+    if let Some(summary) = current_turn_tool_summary(entry_refs.as_slice()) {
+        lines.push(Line::from(section_span("Actions", Color::LightYellow)));
+        lines.extend(summary.lines().map(|line| Line::from(format!("  {line}"))));
+        lines.push(Line::from(""));
+    }
+
+    let tail_entries: Vec<&TranscriptEntry> = if has_tool_activity {
+        entries
+            .iter()
+            .rev()
+            .filter(|entry| matches!(entry.role.as_str(), "Agent" | "System"))
+            .take(1)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect()
+    } else {
+        entries
+            .iter()
+            .filter(|entry| matches!(entry.role.as_str(), "Agent" | "System"))
+            .collect()
+    };
+
+    for entry in tail_entries {
+        lines.push(Line::from(role_badge_span(&entry.role)));
+        let max_lines = if entry.role == "Agent" { 8 } else { 4 };
+        push_message_lines(&mut lines, &entry.message, max_lines);
+        lines.push(Line::from(""));
+    }
+
     while matches!(lines.last(), Some(line) if line.spans.iter().all(|span| span.content == ""))
     {
         lines.pop();
@@ -117,11 +145,14 @@ pub fn committed_turn_lines(entries: &[TranscriptEntry]) -> Vec<Line<'static>> {
 fn current_turn_lines(app: &TuiApp) -> Vec<Line<'static>> {
     let current_turn = app.active_turn.entries.iter().collect::<Vec<_>>();
     if current_turn.is_empty() {
-        return vec![
-            Line::from(section_span("Ready", Color::Green)),
-            Line::from("  No active turn."),
-        ];
+        return Vec::new();
     }
+    let has_tool_activity = current_turn.iter().any(|entry| {
+        matches!(
+            entry.role.as_str(),
+            "Tool" | "Tool Result" | "Tool Error"
+        )
+    });
     let user_message = current_turn
         .iter()
         .find(|entry| entry.role == "You")
@@ -206,7 +237,14 @@ fn current_turn_lines(app: &TuiApp) -> Vec<Line<'static>> {
         lines.push(Line::from(""));
     }
 
-    if let Some(agent_message) = latest_agent {
+    let suppress_intermediate_agent = app.is_busy()
+        && has_tool_activity
+        && matches!(
+            app.runtime_phase,
+            super::state::RuntimePhase::RunningTool | super::state::RuntimePhase::SendingPrompt
+        );
+
+    if let Some(agent_message) = latest_agent.filter(|_| !suppress_intermediate_agent) {
         lines.push(Line::from(role_badge_span("Agent")));
         for line in agent_message.lines() {
             lines.push(Line::from(format!("  {line}")));
@@ -242,6 +280,18 @@ fn current_turn_exploration_summary(
     current_turn: &[&TranscriptEntry],
     prefer_live_label: bool,
 ) -> Option<String> {
+    current_turn_exploration_summary_from_entries(
+        current_turn,
+        app.is_busy() && prefer_live_label,
+        app.runtime_phase_detail.as_deref(),
+    )
+}
+
+fn current_turn_exploration_summary_from_entries(
+    current_turn: &[&TranscriptEntry],
+    show_live_detail: bool,
+    live_detail: Option<&str>,
+) -> Option<String> {
     let mut actions = Vec::new();
     for entry in current_turn {
         if entry.role != "Tool" {
@@ -260,12 +310,10 @@ fn current_turn_exploration_summary(
         .map(|action| format!("└ {action}"))
         .collect::<Vec<_>>();
 
-    if app.is_busy() && prefer_live_label {
+    if show_live_detail {
         lines.push(format!(
             "└ {}",
-            app.runtime_phase_detail
-                .as_deref()
-                .unwrap_or("waiting for more exploration output")
+            live_detail.unwrap_or("waiting for more exploration output")
         ));
     }
 
@@ -299,6 +347,23 @@ fn current_turn_tool_summary(current_turn: &[&TranscriptEntry]) -> Option<String
         parts.push(format!("Recorded {} tool result(s).", results));
     }
     Some(parts.join("\n"))
+}
+
+fn push_message_lines(lines: &mut Vec<Line<'static>>, message: &str, max_lines: usize) {
+    let message_lines = message.lines().collect::<Vec<_>>();
+    if message_lines.is_empty() {
+        lines.push(Line::from("  "));
+        return;
+    }
+    for line in message_lines.iter().take(max_lines) {
+        lines.push(Line::from(format!("  {line}")));
+    }
+    if message_lines.len() > max_lines {
+        lines.push(Line::from(Span::styled(
+            format!("  ... {} more line(s)", message_lines.len() - max_lines),
+            Style::default().fg(Color::DarkGray),
+        )));
+    }
 }
 
 fn is_exploration_tool(name: &str) -> bool {
