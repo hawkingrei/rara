@@ -75,8 +75,15 @@ pub async fn run_tui(agent: Agent, oauth_manager: OAuthManager) -> anyhow::Resul
         let size = terminal_size()?;
         let desired_height = desired_viewport_height(&app, size.0, size.1);
         if desired_height != viewport_height {
-            viewport_height = desired_height;
-            terminal = build_terminal(viewport_height)?;
+            match build_terminal(desired_height) {
+                Ok(new_terminal) => {
+                    viewport_height = desired_height;
+                    terminal = new_terminal;
+                }
+                Err(err) => {
+                    app.push_notice(format!("Skipped viewport rebuild: {err}"));
+                }
+            }
         }
         flush_committed_history(&mut terminal, &mut app)?;
         terminal.draw(|f| render(f, &app))?;
@@ -93,8 +100,16 @@ pub async fn run_tui(agent: Agent, oauth_manager: OAuthManager) -> anyhow::Resul
                         }
                         Some(UiEvent::Draw) => {
                             let size = terminal_size()?;
-                            viewport_height = desired_viewport_height(&app, size.0, size.1);
-                            terminal = build_terminal(viewport_height)?;
+                            let desired_height = desired_viewport_height(&app, size.0, size.1);
+                            match build_terminal(desired_height) {
+                                Ok(new_terminal) => {
+                                    viewport_height = desired_height;
+                                    terminal = new_terminal;
+                                }
+                                Err(err) => {
+                                    app.push_notice(format!("Skipped terminal redraw rebuild: {err}"));
+                                }
+                            }
                         }
                         Some(UiEvent::Paste(text)) => {
                             handle_paste(text, &mut app);
@@ -135,13 +150,21 @@ fn handle_paste(text: String, app: &mut TuiApp) {
 }
 
 fn build_terminal(viewport_height: u16) -> anyhow::Result<Terminal<CrosstermBackend<std::io::Stdout>>> {
-    let terminal = Terminal::with_options(
+    match Terminal::with_options(
         CrosstermBackend::new(io::stdout()),
         TerminalOptions {
             viewport: Viewport::Inline(viewport_height.max(1)),
         },
-    )?;
-    Ok(terminal)
+    ) {
+        Ok(terminal) => Ok(terminal),
+        Err(inline_err) => {
+            let terminal = Terminal::new(CrosstermBackend::new(io::stdout()))
+                .map_err(|fallback_err| anyhow::anyhow!(
+                    "failed to build inline terminal: {inline_err}; fullscreen fallback also failed: {fallback_err}"
+                ))?;
+            Ok(terminal)
+        }
+    }
 }
 
 fn map_key_to_event(key: KeyCode, app: &TuiApp) -> AppEvent {
