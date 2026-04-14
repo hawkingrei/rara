@@ -36,7 +36,7 @@ use crate::state_db::StateDb;
 use self::app_event::AppEvent;
 use self::command::{palette_command_by_index, palette_commands, parse_local_command};
 use self::event_stream::{translate_event, UiEvent};
-use self::render::{committed_turn_lines, render};
+use self::render::{committed_turn_lines, desired_viewport_height, render};
 use self::runtime::{
     execute_local_command, finish_running_task_if_ready, start_oauth_task, start_pending_approval_task, start_query_task,
     start_rebuild_task,
@@ -48,8 +48,10 @@ pub async fn run_tui(agent: Agent, oauth_manager: OAuthManager) -> anyhow::Resul
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, Hide)?;
-    let mut terminal = build_terminal()?;
+    let initial_size = terminal_size()?;
     let mut app = TuiApp::new(crate::config::ConfigManager::new()?);
+    let mut viewport_height = desired_viewport_height(&app, initial_size.0, initial_size.1);
+    let mut terminal = build_terminal(viewport_height)?;
     let mut agent_slot = Some(agent);
     match StateDb::new() {
         Ok(state_db) => {
@@ -70,6 +72,12 @@ pub async fn run_tui(agent: Agent, oauth_manager: OAuthManager) -> anyhow::Resul
     let result = loop {
         finish_running_task_if_ready(&mut app, &mut agent_slot).await?;
         clamp_command_palette_selection(&mut app);
+        let size = terminal_size()?;
+        let desired_height = desired_viewport_height(&app, size.0, size.1);
+        if desired_height != viewport_height {
+            viewport_height = desired_height;
+            terminal = build_terminal(viewport_height)?;
+        }
         flush_committed_history(&mut terminal, &mut app)?;
         terminal.draw(|f| render(f, &app))?;
 
@@ -84,7 +92,9 @@ pub async fn run_tui(agent: Agent, oauth_manager: OAuthManager) -> anyhow::Resul
                             }
                         }
                         Some(UiEvent::Draw) => {
-                            terminal = build_terminal()?;
+                            let size = terminal_size()?;
+                            viewport_height = desired_viewport_height(&app, size.0, size.1);
+                            terminal = build_terminal(viewport_height)?;
                         }
                         Some(UiEvent::Paste(text)) => {
                             handle_paste(text, &mut app);
@@ -124,13 +134,11 @@ fn handle_paste(text: String, app: &mut TuiApp) {
     }
 }
 
-fn build_terminal() -> anyhow::Result<Terminal<CrosstermBackend<std::io::Stdout>>> {
-    let (_, rows) = terminal_size()?;
-    let viewport_height = rows.max(1);
+fn build_terminal(viewport_height: u16) -> anyhow::Result<Terminal<CrosstermBackend<std::io::Stdout>>> {
     let terminal = Terminal::with_options(
         CrosstermBackend::new(io::stdout()),
         TerminalOptions {
-            viewport: Viewport::Inline(viewport_height),
+            viewport: Viewport::Inline(viewport_height.max(1)),
         },
     )?;
     Ok(terminal)
