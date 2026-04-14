@@ -108,6 +108,7 @@ pub enum AgentOutputMode {
 pub enum AgentEvent {
     Status(String),
     AssistantText(String),
+    AssistantDelta(String),
     ToolUse { name: String, input: Value },
     ToolResult {
         name: String,
@@ -339,7 +340,7 @@ impl Agent {
         mut report: F,
     ) -> Result<()>
     where
-        F: FnMut(AgentEvent),
+        F: FnMut(AgentEvent) + Send,
     {
         let pending = self
             .pending_approval
@@ -399,7 +400,7 @@ impl Agent {
 
     pub async fn compact_if_needed_with_reporter<F>(&mut self, mut report: F) -> Result<()>
     where
-        F: FnMut(AgentEvent),
+        F: FnMut(AgentEvent) + Send,
     {
         let bpe = tiktoken_rs::cl100k_base().unwrap();
         let current_tokens: usize = self.history.iter().map(|m| {
@@ -437,7 +438,7 @@ impl Agent {
         mut report: F,
     ) -> Result<()>
     where
-        F: FnMut(AgentEvent),
+        F: FnMut(AgentEvent) + Send,
     {
         let turn_start_idx = self.history.len();
         let mut tool_rounds = 0usize;
@@ -480,7 +481,7 @@ impl Agent {
         report: &mut F,
     ) -> Result<TurnOutput>
     where
-        F: FnMut(AgentEvent),
+        F: FnMut(AgentEvent) + Send,
     {
         report(AgentEvent::Status("Sending prompt to model.".to_string()));
         let mut messages = self.history.clone();
@@ -494,7 +495,9 @@ impl Agent {
 
         let response = self
             .llm_backend
-            .ask(&messages, &self.visible_tool_schemas())
+            .ask_streaming(&messages, &self.visible_tool_schemas(), &mut |delta| {
+                report(AgentEvent::AssistantDelta(delta));
+            })
             .await?;
 
         if let Some(usage) = &response.usage {
@@ -508,7 +511,9 @@ impl Agent {
         for block in &response.content {
             match block {
                 ContentBlock::Text { text } => {
-                    report(AgentEvent::AssistantText(text.clone()));
+                    if assistant_text.is_empty() {
+                        report(AgentEvent::AssistantText(text.clone()));
+                    }
                     if !assistant_text.is_empty() {
                         assistant_text.push('\n');
                     }
@@ -547,7 +552,7 @@ impl Agent {
 
     async fn run_agent_loop<F>(&mut self, output_mode: AgentOutputMode, report: &mut F) -> Result<()>
     where
-        F: FnMut(AgentEvent),
+        F: FnMut(AgentEvent) + Send,
     {
         let mut tool_rounds = 0usize;
         let mut plan_continuations = 0usize;
@@ -571,7 +576,7 @@ impl Agent {
         execute_continuations: &mut usize,
     ) -> Result<()>
     where
-        F: FnMut(AgentEvent),
+        F: FnMut(AgentEvent) + Send,
     {
         loop {
             self.ensure_active_plan_step();
@@ -637,7 +642,7 @@ impl Agent {
         report: &mut F,
     ) -> Result<Vec<Message>>
     where
-        F: FnMut(AgentEvent),
+        F: FnMut(AgentEvent) + Send,
     {
         let mut tool_results = Vec::new();
         for tool_call in tool_calls {
@@ -751,7 +756,7 @@ impl Agent {
         report: &mut F,
     ) -> Result<()>
     where
-        F: FnMut(AgentEvent),
+        F: FnMut(AgentEvent) + Send,
     {
         let input = json!({
             "command": pending.command,
@@ -808,7 +813,7 @@ impl Agent {
 
     fn extend_history_for_next_turn<F>(&mut self, tool_results: Vec<Message>, report: &mut F)
     where
-        F: FnMut(AgentEvent),
+        F: FnMut(AgentEvent) + Send,
     {
         self.history.extend(tool_results);
         report(AgentEvent::Status(

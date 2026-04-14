@@ -342,6 +342,17 @@ impl TuiApp {
         self.transcript_scroll = 0;
     }
 
+    pub fn append_to_latest_entry(&mut self, role: &'static str, delta: &str) {
+        if let Some(last) = self.active_turn.entries.last_mut() {
+            if last.role == role {
+                last.message.push_str(delta);
+                self.transcript_scroll = 0;
+                return;
+            }
+        }
+        self.push_entry(role, delta.to_string());
+    }
+
     pub fn push_notice(&mut self, message: impl Into<String>) {
         let message = message.into();
         self.notice = Some(message.clone());

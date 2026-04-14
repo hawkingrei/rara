@@ -1,12 +1,22 @@
 use async_trait::async_trait;
 use anyhow::{Result, anyhow};
 use crate::agent::{Message, AnthropicResponse, ContentBlock};
+use futures::StreamExt;
 use serde_json::{json, Value};
 use std::collections::HashMap;
+use url::Url;
 
 #[async_trait]
 pub trait LlmBackend: Send + Sync {
     async fn ask(&self, messages: &[Message], tools: &[Value]) -> Result<AnthropicResponse>;
+    async fn ask_streaming(
+        &self,
+        messages: &[Message],
+        tools: &[Value],
+        _on_text_delta: &mut (dyn FnMut(String) + Send),
+    ) -> Result<AnthropicResponse> {
+        self.ask(messages, tools).await
+    }
     async fn embed(&self, text: &str) -> Result<Vec<f32>>;
     async fn summarize(&self, messages: &[Message]) -> Result<String>;
 }
@@ -47,7 +57,7 @@ pub struct OllamaBackend {
 #[async_trait]
 impl LlmBackend for OpenAiCompatibleBackend {
     async fn ask(&self, messages: &[Message], tools: &[Value]) -> Result<AnthropicResponse> {
-        let client = reqwest::Client::new();
+        let client = http_client_for_target(&self.base_url)?;
         let openai_messages = to_openai_messages(messages);
         let openai_tools: Vec<Value> = tools.iter().map(|t| json!({
             "type": "function", "function": { "name": t["name"], "description": t["description"], "parameters": t["input_schema"] }
@@ -92,7 +102,7 @@ impl LlmBackend for OpenAiCompatibleBackend {
     }
 
     async fn embed(&self, text: &str) -> Result<Vec<f32>> {
-        let client = reqwest::Client::new();
+        let client = http_client_for_target(&self.base_url)?;
         let body = json!({ "model": "text-embedding-3-small", "input": text });
         let mut request = client.post(&format!("{}/v1/embeddings", self.base_url.trim_end_matches('/')));
         if !self.api_key.is_empty() {
@@ -107,7 +117,7 @@ impl LlmBackend for OpenAiCompatibleBackend {
     }
 
     async fn summarize(&self, messages: &[Message]) -> Result<String> {
-        let client = reqwest::Client::new();
+        let client = http_client_for_target(&self.base_url)?;
         let mut msgs = messages.to_vec();
         msgs.push(Message { role: "user".to_string(), content: json!("Summarize concisely.") });
         let body = json!({ "model": self.model, "messages": to_openai_messages(&msgs) });
@@ -270,7 +280,7 @@ fn parse_tool_arguments(arguments: &Value) -> Result<Value> {
 #[async_trait]
 impl LlmBackend for OllamaBackend {
     async fn ask(&self, messages: &[Message], tools: &[Value]) -> Result<AnthropicResponse> {
-        let client = reqwest::Client::new();
+        let client = http_client_for_target(&self.base_url)?;
         let endpoint = format!("{}/api/chat", self.base_url.trim_end_matches('/'));
         let mut body = json!({
             "model": self.model,
@@ -349,6 +359,115 @@ impl LlmBackend for OllamaBackend {
         })
     }
 
+    async fn ask_streaming(
+        &self,
+        messages: &[Message],
+        tools: &[Value],
+        on_text_delta: &mut (dyn FnMut(String) + Send),
+    ) -> Result<AnthropicResponse> {
+        let client = http_client_for_target(&self.base_url)?;
+        let endpoint = format!("{}/api/chat", self.base_url.trim_end_matches('/'));
+        let mut body = json!({
+            "model": self.model,
+            "messages": to_ollama_messages(messages),
+            "stream": true,
+            "think": self.thinking,
+        });
+        if let Some(options) = build_ollama_options(messages, tools, self.thinking, self.num_ctx) {
+            body["options"] = options;
+        }
+        if !tools.is_empty() {
+            body["tools"] = Value::Array(
+                tools.iter()
+                    .map(|tool| {
+                        json!({
+                            "type": "function",
+                            "function": {
+                                "name": tool["name"],
+                                "description": tool["description"],
+                                "parameters": tool["input_schema"],
+                            }
+                        })
+                    })
+                    .collect(),
+            );
+        }
+
+        let res = client.post(&endpoint).json(&body).send().await?;
+        if !res.status().is_success() {
+            return Err(anyhow!("API Error at {}: {}", endpoint, res.text().await?));
+        }
+
+        let mut stream = res.bytes_stream();
+        let mut buffer = Vec::new();
+        let mut streamed_text = String::new();
+        let mut streamed_tool_calls = Vec::new();
+        let mut stop_reason = None;
+        let mut input_tokens = 0u32;
+        let mut output_tokens = 0u32;
+
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk?;
+            buffer.extend_from_slice(&chunk);
+
+            while let Some(pos) = buffer.iter().position(|byte| *byte == b'\n') {
+                let line = buffer.drain(..=pos).collect::<Vec<_>>();
+                let payload = normalize_ollama_stream_line(&line);
+                if payload.is_empty() {
+                    continue;
+                }
+                let event: Value = serde_json::from_slice(&payload)?;
+                apply_ollama_stream_event(
+                    &event,
+                    &mut streamed_text,
+                    &mut streamed_tool_calls,
+                    &mut stop_reason,
+                    &mut input_tokens,
+                    &mut output_tokens,
+                    on_text_delta,
+                )?;
+            }
+        }
+
+        let payload = normalize_ollama_stream_line(&buffer);
+        if !payload.is_empty() {
+            let event: Value = serde_json::from_slice(&payload)?;
+            apply_ollama_stream_event(
+                &event,
+                &mut streamed_text,
+                &mut streamed_tool_calls,
+                &mut stop_reason,
+                &mut input_tokens,
+                &mut output_tokens,
+                on_text_delta,
+            )?;
+        }
+
+        let mut content = Vec::new();
+        if !streamed_text.trim().is_empty() {
+            content.push(ContentBlock::Text { text: streamed_text });
+        }
+        for (idx, call) in streamed_tool_calls.iter().enumerate() {
+            content.push(ContentBlock::ToolUse {
+                id: format!("ollama-tool-{}", idx + 1),
+                name: call["function"]["name"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string(),
+                input: parse_tool_arguments(&call["function"]["arguments"])?,
+            });
+        }
+
+        Ok(AnthropicResponse {
+            content,
+            stop_reason,
+            usage: Some(crate::agent::TokenUsage {
+                input_tokens,
+                output_tokens,
+            }),
+        })
+    }
+
     async fn embed(&self, text: &str) -> Result<Vec<f32>> {
         Ok(hashed_embedding(text, 256))
     }
@@ -371,6 +490,76 @@ impl LlmBackend for OllamaBackend {
             .join("\n\n");
         Ok(text)
     }
+}
+
+fn http_client_for_target(base_url: &str) -> Result<reqwest::Client> {
+    let mut builder = reqwest::Client::builder();
+    if should_bypass_proxy(base_url) {
+        builder = builder.no_proxy();
+    }
+    builder.build().map_err(Into::into)
+}
+
+fn should_bypass_proxy(base_url: &str) -> bool {
+    let Ok(url) = Url::parse(base_url) else {
+        return false;
+    };
+    matches!(url.host_str(), Some("localhost") | Some("127.0.0.1"))
+}
+
+fn normalize_ollama_stream_line(line: &[u8]) -> Vec<u8> {
+    line.iter()
+        .copied()
+        .filter(|byte| *byte != b'\n' && *byte != b'\r')
+        .collect()
+}
+
+fn apply_ollama_stream_event(
+    event: &Value,
+    streamed_text: &mut String,
+    streamed_tool_calls: &mut Vec<Value>,
+    stop_reason: &mut Option<String>,
+    input_tokens: &mut u32,
+    output_tokens: &mut u32,
+    on_text_delta: &mut (dyn FnMut(String) + Send),
+) -> Result<()> {
+    if let Some(delta) = event
+        .get("message")
+        .and_then(|message| message.get("content"))
+        .and_then(Value::as_str)
+    {
+        if !delta.is_empty() {
+            on_text_delta(delta.to_string());
+            streamed_text.push_str(delta);
+        }
+    }
+
+    if let Some(tool_calls) = event
+        .get("message")
+        .and_then(|message| message.get("tool_calls"))
+        .and_then(Value::as_array)
+    {
+        if !tool_calls.is_empty() {
+            streamed_tool_calls.extend(tool_calls.iter().cloned());
+        }
+    }
+
+    if event.get("done").and_then(Value::as_bool).unwrap_or(false) {
+        *stop_reason = event
+            .get("done_reason")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        *input_tokens = event
+            .get("prompt_eval_count")
+            .and_then(Value::as_u64)
+            .unwrap_or(0) as u32;
+        *output_tokens = event
+            .get("eval_count")
+            .and_then(Value::as_u64)
+            .unwrap_or(0) as u32;
+    }
+
+    Ok(())
 }
 
 fn to_ollama_messages(messages: &[Message]) -> Vec<Value> {
@@ -593,8 +782,9 @@ impl LlmBackend for GeminiBackend {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_ollama_options, extract_message_text, parse_tool_arguments, suggest_ollama_num_ctx,
-        to_ollama_messages, to_openai_messages, Message,
+        apply_ollama_stream_event, build_ollama_options, extract_message_text,
+        parse_tool_arguments, suggest_ollama_num_ctx, to_ollama_messages, to_openai_messages,
+        should_bypass_proxy, Message,
     };
     use serde_json::json;
 
@@ -708,6 +898,62 @@ mod tests {
 
         let options = build_ollama_options(&messages, &[], true, Some(65536)).unwrap();
         assert_eq!(options["num_ctx"], json!(65536));
+    }
+
+    #[test]
+    fn applies_ollama_stream_event_deltas_and_tool_calls() {
+        let mut text = String::new();
+        let mut tool_calls = Vec::new();
+        let mut stop_reason = None;
+        let mut input_tokens = 0u32;
+        let mut output_tokens = 0u32;
+        let mut deltas = Vec::new();
+
+        apply_ollama_stream_event(
+            &json!({"message":{"content":"Hello"}}),
+            &mut text,
+            &mut tool_calls,
+            &mut stop_reason,
+            &mut input_tokens,
+            &mut output_tokens,
+            &mut |delta| deltas.push(delta),
+        )
+        .unwrap();
+
+        apply_ollama_stream_event(
+            &json!({
+                "message":{
+                    "content":" world",
+                    "tool_calls":[{"function":{"name":"read_file","arguments":{"path":"Cargo.toml"}}}]
+                },
+                "done": true,
+                "done_reason": "stop",
+                "prompt_eval_count": 12,
+                "eval_count": 6
+            }),
+            &mut text,
+            &mut tool_calls,
+            &mut stop_reason,
+            &mut input_tokens,
+            &mut output_tokens,
+            &mut |delta| deltas.push(delta),
+        )
+        .unwrap();
+
+        assert_eq!(text, "Hello world");
+        assert_eq!(deltas, vec!["Hello".to_string(), " world".to_string()]);
+        assert_eq!(tool_calls.len(), 1);
+        assert_eq!(tool_calls[0]["function"]["name"], "read_file");
+        assert_eq!(stop_reason, Some("stop".to_string()));
+        assert_eq!(input_tokens, 12);
+        assert_eq!(output_tokens, 6);
+    }
+
+    #[test]
+    fn bypasses_proxy_for_local_ollama_hosts() {
+        assert!(should_bypass_proxy("http://localhost:11434"));
+        assert!(should_bypass_proxy("http://127.0.0.1:11434"));
+        assert!(!should_bypass_proxy("https://openrouter.ai/api/v1"));
     }
 
 }

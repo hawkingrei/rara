@@ -499,6 +499,13 @@ fn apply_tui_event(app: &mut TuiApp, event: TuiEvent) {
                     Some(message.lines().next().unwrap_or(role).trim().to_string()),
                 );
                 return;
+            } else if role == "Agent Delta" {
+                app.set_runtime_phase(
+                    RuntimePhase::ProcessingResponse,
+                    Some("streaming model output".into()),
+                );
+                app.append_to_latest_entry("Agent", &message);
+                return;
             } else if role == "Tool" || role == "Tool Result" || role == "Tool Error" {
                 app.set_runtime_phase(
                     RuntimePhase::RunningTool,
@@ -539,6 +546,10 @@ fn convert_agent_event(event: AgentEvent) -> TuiEvent {
         },
         AgentEvent::AssistantText(text) => TuiEvent::Transcript {
             role: "Agent",
+            message: text,
+        },
+        AgentEvent::AssistantDelta(text) => TuiEvent::Transcript {
+            role: "Agent Delta",
             message: text,
         },
         AgentEvent::ToolUse { name, input } => TuiEvent::Transcript {
