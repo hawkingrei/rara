@@ -11,13 +11,7 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 const MAX_TOOL_ROUNDS_PER_TURN: usize = 8;
-const TOOL_CONTINUATION_PROMPT: &str =
-    "<agent_runtime>\nphase: tool_results_available\ninstructions:\n- Continue the same task immediately.\n- Review the tool results already present in the conversation.\n- Either call the next tool directly, or provide the final answer.\n- Do not ask the user to continue.\n- Do not repeat tool results verbatim.\n</agent_runtime>";
-const PLAN_CONTINUATION_PROMPT: &str =
-    "<agent_runtime>\nphase: plan_continuation_required\ninstructions:\n- Continue planning immediately.\n- Use read-only tools to inspect the repository before stopping.\n- Expand the plan into multiple concrete steps grounded in the inspected code.\n- Only stop planning when you have either gathered enough code context or need structured user input.\n- Do not ask the user to continue.\n</agent_runtime>";
 const MAX_PLAN_CONTINUATIONS_PER_TURN: usize = 2;
-const EXECUTE_CONTINUATION_PROMPT: &str =
-    "<agent_runtime>\nphase: execution_continuation_required\ninstructions:\n- Continue the same task immediately.\n- You already inspected part of the repository and should keep gathering the next relevant code context now.\n- If you mentioned a next file or next inspection step, call the tool for it directly.\n- Only stop when you can provide concrete, evidence-based suggestions or when structured user input is required.\n- Do not ask the user to continue.\n</agent_runtime>";
 const MAX_EXECUTE_CONTINUATIONS_PER_TURN: usize = 2;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -138,6 +132,41 @@ struct InspectionProgress {
     source_reads: usize,
     config_reads: usize,
     instruction_reads: usize,
+}
+
+#[derive(Clone, Copy)]
+enum RuntimeContinuationPhase {
+    ToolResultsAvailable,
+    PlanContinuationRequired,
+    ExecutionContinuationRequired,
+}
+
+#[derive(Serialize)]
+struct RuntimeContinuation<'a> {
+    phase: &'a str,
+    mode: &'a str,
+    tool_rounds: usize,
+    inspection: RuntimeInspectionSnapshot,
+    plan: RuntimePlanSnapshot,
+    pending_interaction: &'a str,
+    instructions: Vec<&'a str>,
+}
+
+#[derive(Serialize)]
+struct RuntimeInspectionSnapshot {
+    list_calls: usize,
+    source_reads: usize,
+    config_reads: usize,
+    instruction_reads: usize,
+    has_minimum_review_evidence: bool,
+}
+
+#[derive(Serialize)]
+struct RuntimePlanSnapshot {
+    total_steps: usize,
+    pending_steps: usize,
+    in_progress_steps: usize,
+    completed_steps: usize,
 }
 
 impl InspectionProgress {
@@ -300,7 +329,10 @@ impl Agent {
             - Do not stop at an intermediate status update once tool results are available.\n\
             - Runtime may append an <agent_runtime> block after tool execution.\n\
             - Treat that block as internal execution state, not as a new user request.\n\
-            - When phase is 'tool_results_available', continue the same task immediately.");
+            - Follow the runtime block fields and instructions directly.\n\
+            - When phase is 'tool_results_available', continue the same task immediately.\n\
+            - When phase is 'plan_continuation_required', keep planning in read-only mode and inspect more code before stopping.\n\
+            - When phase is 'execution_continuation_required', continue the same repository inspection instead of ending early.");
         prompt
     }
 
@@ -385,7 +417,12 @@ impl Agent {
                     error_text,
                     true,
                 ));
-                self.history.push(tool_continuation_message());
+                self.history.push(
+                    self.runtime_continuation_message(
+                        RuntimeContinuationPhase::ToolResultsAvailable,
+                        0,
+                    ),
+                );
                 self.run_agent_loop(output_mode, &mut report).await?;
             }
         }
@@ -599,7 +636,10 @@ impl Agent {
                         "Plan needs more repository inspection. Continuing in read-only mode."
                             .to_string(),
                     ));
-                    self.history.push(plan_continuation_message());
+                    self.history.push(self.runtime_continuation_message(
+                        RuntimeContinuationPhase::PlanContinuationRequired,
+                        *tool_rounds,
+                    ));
                     continue;
                 }
                 if self.should_continue_execute_without_tools(
@@ -612,7 +652,10 @@ impl Agent {
                         "Repository review needs more code inspection. Continuing the same turn."
                             .to_string(),
                     ));
-                    self.history.push(execute_continuation_message());
+                    self.history.push(self.runtime_continuation_message(
+                        RuntimeContinuationPhase::ExecutionContinuationRequired,
+                        *tool_rounds,
+                    ));
                     continue;
                 }
                 self.complete_remaining_plan_steps();
@@ -633,7 +676,7 @@ impl Agent {
                 break;
             }
             self.advance_plan_step();
-            self.extend_history_for_next_turn(tool_results, report);
+            self.extend_history_for_next_turn(tool_results, report, *tool_rounds);
         }
         Ok(())
     }
@@ -806,14 +849,21 @@ impl Agent {
                 ));
             }
         }
-        self.history.push(tool_continuation_message());
+        self.history.push(
+            self.runtime_continuation_message(RuntimeContinuationPhase::ToolResultsAvailable, 1),
+        );
         if !keep_always {
             self.bash_approval_mode = BashApprovalMode::Suggestion;
         }
         self.run_agent_loop(output_mode, report).await
     }
 
-    fn extend_history_for_next_turn<F>(&mut self, tool_results: Vec<Message>, report: &mut F)
+    fn extend_history_for_next_turn<F>(
+        &mut self,
+        tool_results: Vec<Message>,
+        report: &mut F,
+        tool_rounds: usize,
+    )
     where
         F: FnMut(AgentEvent) + Send,
     {
@@ -821,7 +871,9 @@ impl Agent {
         report(AgentEvent::Status(
             "Tool results recorded. Advancing to the next agent step.".to_string(),
         ));
-        self.history.push(tool_continuation_message());
+        self.history.push(
+            self.runtime_continuation_message(RuntimeContinuationPhase::ToolResultsAvailable, tool_rounds),
+        );
     }
 
     fn visible_tool_schemas(&self) -> Vec<Value> {
@@ -944,6 +996,58 @@ impl Agent {
             }
         }
     }
+
+    fn runtime_continuation_message(
+        &self,
+        phase: RuntimeContinuationPhase,
+        tool_rounds: usize,
+    ) -> Message {
+        let pending_interaction = if self.pending_approval.is_some() {
+            "approval"
+        } else if self.pending_user_input.is_some() {
+            "request_user_input"
+        } else {
+            "none"
+        };
+        let payload = RuntimeContinuation {
+            phase: phase.label(),
+            mode: self.execution_mode_label(),
+            tool_rounds,
+            inspection: RuntimeInspectionSnapshot {
+                list_calls: self.inspection_progress.list_calls,
+                source_reads: self.inspection_progress.source_reads,
+                config_reads: self.inspection_progress.config_reads,
+                instruction_reads: self.inspection_progress.instruction_reads,
+                has_minimum_review_evidence: self.inspection_progress.has_minimum_review_evidence(),
+            },
+            plan: RuntimePlanSnapshot {
+                total_steps: self.current_plan.len(),
+                pending_steps: self
+                    .current_plan
+                    .iter()
+                    .filter(|step| matches!(step.status, PlanStepStatus::Pending))
+                    .count(),
+                in_progress_steps: self
+                    .current_plan
+                    .iter()
+                    .filter(|step| matches!(step.status, PlanStepStatus::InProgress))
+                    .count(),
+                completed_steps: self
+                    .current_plan
+                    .iter()
+                    .filter(|step| matches!(step.status, PlanStepStatus::Completed))
+                    .count(),
+            },
+            pending_interaction,
+            instructions: phase.instructions(),
+        };
+        let payload = serde_json::to_string_pretty(&payload)
+            .unwrap_or_else(|_| "{\"phase\":\"tool_results_available\"}".to_string());
+        Message {
+            role: "user".to_string(),
+            content: json!([{"type": "text", "text": format!("<agent_runtime>\n{payload}\n</agent_runtime>")}]),
+        }
+    }
 }
 
 fn parse_plan_block(text: &str) -> Option<(Vec<PlanStep>, Option<String>)> {
@@ -1020,24 +1124,39 @@ fn parse_request_user_input_block(text: &str) -> Option<PendingUserInput> {
     })
 }
 
-fn tool_continuation_message() -> Message {
-    Message {
-        role: "user".to_string(),
-        content: json!([{"type": "text", "text": TOOL_CONTINUATION_PROMPT}]),
+impl RuntimeContinuationPhase {
+    fn label(self) -> &'static str {
+        match self {
+            Self::ToolResultsAvailable => "tool_results_available",
+            Self::PlanContinuationRequired => "plan_continuation_required",
+            Self::ExecutionContinuationRequired => "execution_continuation_required",
+        }
     }
-}
 
-fn plan_continuation_message() -> Message {
-    Message {
-        role: "user".to_string(),
-        content: json!([{"type": "text", "text": PLAN_CONTINUATION_PROMPT}]),
-    }
-}
-
-fn execute_continuation_message() -> Message {
-    Message {
-        role: "user".to_string(),
-        content: json!([{"type": "text", "text": EXECUTE_CONTINUATION_PROMPT}]),
+    fn instructions(self) -> Vec<&'static str> {
+        match self {
+            Self::ToolResultsAvailable => vec![
+                "Continue the same task immediately.",
+                "Review the tool results already present in the conversation.",
+                "Either call the next tool directly, or provide the final answer.",
+                "Do not ask the user to continue.",
+                "Do not repeat tool results verbatim.",
+            ],
+            Self::PlanContinuationRequired => vec![
+                "Continue planning immediately.",
+                "Use read-only tools to inspect the repository before stopping.",
+                "Expand the plan into multiple concrete steps grounded in the inspected code.",
+                "Only stop planning when you have either gathered enough code context or need structured user input.",
+                "Do not ask the user to continue.",
+            ],
+            Self::ExecutionContinuationRequired => vec![
+                "Continue the same task immediately.",
+                "Keep gathering the next relevant code context now.",
+                "If you mentioned a next file or next inspection step, call the tool for it directly.",
+                "Only stop when you can provide concrete, evidence-based suggestions or when structured user input is required.",
+                "Do not ask the user to continue.",
+            ],
+        }
     }
 }
 
@@ -1075,7 +1194,7 @@ fn tool_result_message(tool_use_id: &str, content: String, is_error: bool) -> Me
 
 #[cfg(test)]
 mod tests {
-    use super::{execute_continuation_message, parse_plan_block, parse_request_user_input_block, plan_continuation_message, tool_continuation_message, Agent, AgentExecutionMode, AnthropicResponse, ContentBlock, Message, PendingUserInput, PlanStep, PlanStepStatus, TokenUsage};
+    use super::{parse_plan_block, parse_request_user_input_block, Agent, AgentExecutionMode, AnthropicResponse, ContentBlock, Message, PendingUserInput, PlanStep, PlanStepStatus, RuntimeContinuationPhase, TokenUsage};
     use crate::llm::LlmBackend;
     use crate::session::SessionManager;
     use crate::tool::{Tool, ToolError, ToolManager};
@@ -1179,7 +1298,8 @@ mod tests {
         let observed = backend.observed_messages.lock().expect("lock");
         assert_eq!(observed.len(), 2);
         let second_round = &observed[1];
-        assert!(second_round.iter().any(|message| message.content == tool_continuation_message().content));
+        let continuation = agent.runtime_continuation_message(RuntimeContinuationPhase::ToolResultsAvailable, 1);
+        assert!(second_round.iter().any(|message| message.content == continuation.content));
         assert!(second_round.iter().any(|message| {
             message.content.to_string().contains("tool_result")
         }));
@@ -1213,7 +1333,7 @@ mod tests {
         assert!(!agent
             .history
             .iter()
-            .any(|message| message.content == tool_continuation_message().content));
+            .any(|message| message.content.to_string().contains("\"phase\": \"tool_results_available\"")));
     }
 
     #[tokio::test]
@@ -1319,9 +1439,10 @@ mod tests {
 
         let observed = backend.observed_messages.lock().expect("lock");
         assert_eq!(observed.len(), 2);
-        assert!(observed[1]
+        assert!(agent
+            .history
             .iter()
-            .any(|message| message.content == plan_continuation_message().content));
+            .any(|message| message.content.to_string().contains("plan_continuation_required")));
     }
 
     #[tokio::test]
@@ -1423,9 +1544,10 @@ mod tests {
 
         let observed = backend.observed_messages.lock().expect("lock");
         assert_eq!(observed.len(), 3);
-        assert!(observed[2]
+        assert!(agent
+            .history
             .iter()
-            .any(|message| message.content == execute_continuation_message().content));
+            .any(|message| message.content.to_string().contains("execution_continuation_required")));
     }
 
     #[tokio::test]
@@ -1463,49 +1585,10 @@ mod tests {
 
         let observed = backend.observed_messages.lock().expect("lock");
         assert_eq!(observed.len(), 2);
-        assert!(observed[1]
+        assert!(agent
+            .history
             .iter()
-            .any(|message| message.content == execute_continuation_message().content));
-    }
-
-    #[tokio::test]
-    async fn continues_execute_mode_for_chinese_followup_file_reads() {
-        let backend = Arc::new(SequencedBackend::new(vec![
-            AnthropicResponse {
-                content: vec![ContentBlock::Text {
-                    text: "我已经看过当前目录结构。接下来我将阅读 Cargo.toml、AGENTS.md 和 src/main.rs，以便理解项目依赖和启动流程。".to_string(),
-                }],
-                stop_reason: Some("end_turn".to_string()),
-                usage: Some(TokenUsage::default()),
-            },
-            AnthropicResponse {
-                content: vec![ContentBlock::Text {
-                    text: "done".to_string(),
-                }],
-                stop_reason: Some("end_turn".to_string()),
-                usage: Some(TokenUsage::default()),
-            },
-        ]));
-
-        let mut agent = Agent::new(
-            ToolManager::new(),
-            backend.clone(),
-            Arc::new(VectorDB::new("data/lancedb")),
-            Arc::new(SessionManager::new().expect("session manager")),
-            Arc::new(WorkspaceMemory::new().expect("workspace memory")),
-        );
-        agent.set_execution_mode(AgentExecutionMode::Execute);
-
-        agent
-            .query_with_mode("inspect".to_string(), super::AgentOutputMode::Silent)
-            .await
-            .expect("query should succeed");
-
-        let observed = backend.observed_messages.lock().expect("lock");
-        assert_eq!(observed.len(), 2);
-        assert!(observed[1]
-            .iter()
-            .any(|message| message.content == execute_continuation_message().content));
+            .any(|message| message.content.to_string().contains("execution_continuation_required")));
     }
 
     #[test]

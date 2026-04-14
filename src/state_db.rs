@@ -560,14 +560,26 @@ mod tests {
         )?;
 
         let verify = Connection::open(db.path())?;
-        let session_count: i64 =
-            verify.query_row("SELECT COUNT(*) FROM sessions", [], |row| row.get(0))?;
-        let turn_count: i64 =
-            verify.query_row("SELECT COUNT(*) FROM turns", [], |row| row.get(0))?;
-        let plan_count: i64 =
-            verify.query_row("SELECT COUNT(*) FROM plan_steps", [], |row| row.get(0))?;
-        let interaction_count: i64 =
-            verify.query_row("SELECT COUNT(*) FROM interactions", [], |row| row.get(0))?;
+        let session_count: i64 = verify.query_row(
+            "SELECT COUNT(*) FROM sessions WHERE id = 'session-1'",
+            [],
+            |row| row.get(0),
+        )?;
+        let turn_count: i64 = verify.query_row(
+            "SELECT COUNT(*) FROM turns WHERE session_id = 'session-1'",
+            [],
+            |row| row.get(0),
+        )?;
+        let plan_count: i64 = verify.query_row(
+            "SELECT COUNT(*) FROM plan_steps WHERE session_id = 'session-1'",
+            [],
+            |row| row.get(0),
+        )?;
+        let interaction_count: i64 = verify.query_row(
+            "SELECT COUNT(*) FROM interactions WHERE session_id = 'session-1'",
+            [],
+            |row| row.get(0),
+        )?;
 
         assert_eq!(session_count, 1);
         assert_eq!(turn_count, 1);
@@ -582,6 +594,48 @@ mod tests {
         assert!(artifact.exists());
         let loaded = db.load_turn_entries("session-1", 0)?;
         assert_eq!(loaded.len(), 2);
+        Ok(())
+    }
+
+    #[test]
+    fn persists_interaction_payloads_for_restore() -> Result<()> {
+        let temp = tempdir()?;
+        std::env::set_current_dir(temp.path())?;
+        let db = StateDb::new()?;
+        db.upsert_session(
+            "session-2",
+            "/tmp/workspace",
+            "main",
+            "ollama",
+            "gemma4",
+            Some("http://localhost:11434"),
+            "execute",
+            "suggestion",
+            None,
+            2,
+            1,
+        )?;
+        db.replace_interactions(
+            "session-2",
+            &[PersistedInteraction {
+                kind: "approval".to_string(),
+                status: "pending".to_string(),
+                title: "Pending Approval".to_string(),
+                summary: "cargo test".to_string(),
+                payload: Some(serde_json::json!({
+                    "tool_use_id": "tool-42",
+                    "command": "cargo test",
+                    "allow_net": true
+                })),
+            }],
+        )?;
+
+        let interactions = db.load_interactions("session-2")?;
+        assert_eq!(interactions.len(), 1);
+        let payload = interactions[0].payload.as_ref().expect("payload");
+        assert_eq!(payload.get("tool_use_id").and_then(|v| v.as_str()), Some("tool-42"));
+        assert_eq!(payload.get("command").and_then(|v| v.as_str()), Some("cargo test"));
+        assert_eq!(payload.get("allow_net").and_then(|v| v.as_bool()), Some(true));
         Ok(())
     }
 }

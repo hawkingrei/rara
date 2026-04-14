@@ -96,9 +96,16 @@ pub struct RuntimeSnapshot {
     pub plan_steps: Vec<(String, String)>,
     pub plan_explanation: Option<String>,
     pub pending_question: Option<(String, Vec<(String, String)>, Option<String>)>,
-    pub pending_approval_command: Option<String>,
+    pub pending_approval: Option<PendingApprovalSnapshot>,
     pub completed_question: Option<(String, String)>,
     pub completed_approval: Option<(String, String)>,
+}
+
+#[derive(Default, Clone)]
+pub struct PendingApprovalSnapshot {
+    pub tool_use_id: String,
+    pub command: String,
+    pub allow_net: bool,
 }
 
 pub enum TaskKind {
@@ -336,10 +343,11 @@ impl TuiApp {
                     question.note.clone(),
                 )
             }),
-            pending_approval_command: agent
-                .pending_approval
-                .as_ref()
-                .map(|pending| pending.command.clone()),
+            pending_approval: agent.pending_approval.as_ref().map(|pending| PendingApprovalSnapshot {
+                tool_use_id: pending.tool_use_id.clone(),
+                command: pending.command.clone(),
+                allow_net: pending.allow_net,
+            }),
             completed_question: agent
                 .completed_user_input
                 .as_ref()
@@ -481,7 +489,7 @@ impl TuiApp {
     }
 
     pub fn has_pending_approval(&self) -> bool {
-        self.snapshot.pending_approval_command.is_some()
+        self.snapshot.pending_approval.is_some()
     }
 
     pub fn close_overlay(&mut self) {
@@ -611,14 +619,16 @@ impl TuiApp {
                 })),
             });
         }
-        if let Some(command) = self.snapshot.pending_approval_command.as_ref() {
+        if let Some(approval) = self.snapshot.pending_approval.as_ref() {
             interactions.push(PersistedInteraction {
                 kind: "approval".to_string(),
                 status: "pending".to_string(),
                 title: "Pending Approval".to_string(),
-                summary: command.clone(),
+                summary: approval.command.clone(),
                 payload: Some(json!({
-                    "command": command,
+                    "tool_use_id": approval.tool_use_id,
+                    "command": approval.command,
+                    "allow_net": approval.allow_net,
                 })),
             });
         }

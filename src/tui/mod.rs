@@ -580,17 +580,23 @@ fn restore_session_by_id(
                 });
             }
             ("approval", "pending") => {
-                let command = interaction
-                    .payload
-                    .as_ref()
+                let payload = interaction.payload.as_ref();
+                let command = payload
                     .and_then(|payload| payload.get("command"))
                     .and_then(|value| value.as_str())
                     .unwrap_or(&interaction.summary)
                     .to_string();
                 agent.pending_approval = Some(PendingApproval {
-                    tool_use_id: "restored".to_string(),
+                    tool_use_id: payload
+                        .and_then(|payload| payload.get("tool_use_id"))
+                        .and_then(|value| value.as_str())
+                        .unwrap_or("restored")
+                        .to_string(),
                     command,
-                    allow_net: false,
+                    allow_net: payload
+                        .and_then(|payload| payload.get("allow_net"))
+                        .and_then(|value| value.as_bool())
+                        .unwrap_or(false),
                 });
             }
             ("request_input", "completed") => {
