@@ -19,7 +19,7 @@ use super::state::{
 pub fn render(f: &mut Frame, app: &TuiApp) {
     let layout = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(8), Constraint::Length(5)])
+        .constraints([Constraint::Fill(1), Constraint::Length(5)])
         .split(f.area());
 
     render_transcript(f, app, layout[0]);
@@ -38,15 +38,13 @@ pub fn desired_viewport_height(app: &TuiApp, width: u16, rows: u16) -> u16 {
     let bottom_pane_height = 5u16;
     let transcript_width = width.max(20) as usize;
     let transcript_lines = if app.active_turn.entries.is_empty() {
-        1
+        0
     } else {
         estimate_wrapped_line_count(&current_turn_lines(app), transcript_width).max(1) as u16
     };
 
-    let desired = bottom_pane_height
-        .saturating_add(transcript_lines)
-        .saturating_add(1);
-    desired.clamp(bottom_pane_height.saturating_add(1), rows.max(1))
+    let desired = bottom_pane_height.saturating_add(transcript_lines);
+    desired.clamp(bottom_pane_height, rows.max(1))
 }
 
 fn render_bottom_pane(f: &mut Frame, app: &TuiApp, area: Rect) {
