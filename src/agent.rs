@@ -493,9 +493,11 @@ impl Agent {
             },
         );
 
+        let mut streamed_any_delta = false;
         let response = self
             .llm_backend
             .ask_streaming(&messages, &self.visible_tool_schemas(), &mut |delta| {
+                streamed_any_delta = true;
                 report(AgentEvent::AssistantDelta(delta));
             })
             .await?;
@@ -511,7 +513,7 @@ impl Agent {
         for block in &response.content {
             match block {
                 ContentBlock::Text { text } => {
-                    if assistant_text.is_empty() {
+                    if !streamed_any_delta {
                         report(AgentEvent::AssistantText(text.clone()));
                     }
                     if !assistant_text.is_empty() {

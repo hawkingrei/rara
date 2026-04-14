@@ -120,7 +120,7 @@ fn handle_paste(text: String, app: &mut TuiApp) {
 
 fn build_terminal() -> anyhow::Result<Terminal<CrosstermBackend<std::io::Stdout>>> {
     let (_, rows) = terminal_size()?;
-    let viewport_height = rows.saturating_sub(1).max(14);
+    let viewport_height = rows.max(1);
     let terminal = Terminal::with_options(
         CrosstermBackend::new(io::stdout()),
         TerminalOptions {
