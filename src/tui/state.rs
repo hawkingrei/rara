@@ -25,6 +25,8 @@ pub enum Overlay {
     ModelPicker,
     ResumePicker,
     BaseUrlEditor,
+    CodexAuthGuide,
+    ApiKeyEditor,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -208,6 +210,7 @@ pub struct TuiApp {
     pub model_picker_idx: usize,
     pub command_palette_idx: usize,
     pub base_url_input: String,
+    pub api_key_input: String,
     pub recent_commands: Vec<String>,
     pub recent_sessions: Vec<PersistedSessionSummary>,
     pub resume_picker_idx: usize,
@@ -222,7 +225,11 @@ impl TuiApp {
     pub fn new(cm: ConfigManager) -> Self {
         let cfg = cm.load();
         let overlay = if cfg.api_key.is_none() && super::provider_requires_api_key(&cfg.provider) {
-            Some(Overlay::Setup)
+            if cfg.provider == "codex" {
+                Some(Overlay::CodexAuthGuide)
+            } else {
+                Some(Overlay::Setup)
+            }
         } else {
             None
         };
@@ -248,6 +255,7 @@ impl TuiApp {
             model_picker_idx,
             command_palette_idx: 0,
             base_url_input: String::new(),
+            api_key_input: String::new(),
             recent_commands: Vec::new(),
             recent_sessions: Vec::new(),
             resume_picker_idx: 0,
@@ -460,6 +468,9 @@ impl TuiApp {
                 .clone()
                 .unwrap_or_else(|| "http://localhost:11434".to_string());
         }
+        if matches!(overlay, Overlay::ApiKeyEditor) {
+            self.api_key_input = self.config.api_key.clone().unwrap_or_default();
+        }
         self.overlay = Some(overlay);
     }
 
@@ -497,6 +508,8 @@ impl TuiApp {
     pub fn close_overlay(&mut self) {
         self.overlay = match self.overlay {
             Some(Overlay::BaseUrlEditor) => Some(Overlay::ModelPicker),
+            Some(Overlay::ApiKeyEditor) => Some(Overlay::CodexAuthGuide),
+            Some(Overlay::CodexAuthGuide) => Some(Overlay::ModelPicker),
             _ => None,
         };
     }

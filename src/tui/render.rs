@@ -519,6 +519,8 @@ fn render_overlay(f: &mut Frame, app: &TuiApp, overlay: Overlay) {
         Overlay::ResumePicker => render_resume_picker_modal(f, app, popup),
         Overlay::ModelPicker => render_model_picker_modal(f, app, popup),
         Overlay::BaseUrlEditor => render_base_url_editor_modal(f, app, popup),
+        Overlay::CodexAuthGuide => render_codex_auth_guide_modal(f, app, popup),
+        Overlay::ApiKeyEditor => render_api_key_editor_modal(f, app, popup),
     }
 }
 
@@ -897,7 +899,7 @@ fn render_provider_picker_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
         chunks[1],
     );
     f.render_widget(
-        Paragraph::new("1/2 select  Up/Down move  Enter continue  Esc close")
+        Paragraph::new("1/2/3 select  Up/Down move  Enter continue  Esc close")
             .alignment(Alignment::Center),
         chunks[2],
     );
@@ -999,11 +1001,16 @@ fn render_model_picker_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(3), Constraint::Min(6), Constraint::Length(2)])
         .split(area);
-    f.render_widget(
-        Paragraph::new(format!(
+    let help = if provider_label == "Codex" && api_key_status(&app.config) == "missing" {
+        "Provider: Codex\nAuthentication is required before this preset can be used.\nEnter opens the Codex login guide."
+    } else {
+        &format!(
             "Provider: {provider_label}\nBase URL: {}\nSelect a concrete model preset. Enter applies immediately.",
             app.config.base_url.as_deref().unwrap_or("http://localhost:11434"),
-        ))
+        )
+    };
+    f.render_widget(
+        Paragraph::new(help)
             .block(Block::default().borders(Borders::ALL).title(" Model Picker ")),
         chunks[0],
     );
@@ -1012,7 +1019,11 @@ fn render_model_picker_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
         chunks[1],
     );
     f.render_widget(
-        Paragraph::new("1/2/3 apply directly  Up/Down move  B edit base URL  Enter apply  Esc close")
+        Paragraph::new(if provider_label == "Codex" {
+            "1/2 choose  Up/Down move  Enter continue  Esc close"
+        } else {
+            "1/2/3 apply directly  Up/Down move  B edit base URL  Enter apply  Esc close"
+        })
             .alignment(Alignment::Center),
         chunks[2],
     );
@@ -1030,6 +1041,65 @@ fn render_base_url_editor_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
     let editor = Paragraph::new(app.base_url_input.as_str())
         .block(Block::default().borders(Borders::ALL).title(" Value "));
     let footer = Paragraph::new("Enter save  Esc back to model picker")
+        .alignment(Alignment::Center);
+    f.render_widget(intro, chunks[0]);
+    f.render_widget(editor, chunks[1]);
+    f.render_widget(footer, chunks[2]);
+}
+
+fn render_codex_auth_guide_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(8), Constraint::Min(6), Constraint::Length(2)])
+        .split(area);
+    let ssh_hint = if std::env::var_os("SSH_CONNECTION").is_some() || std::env::var_os("SSH_TTY").is_some() {
+        "\n\nSSH session detected. Browser OAuth on a remote shell usually cannot complete the localhost callback. Use API key in SSH/headless sessions."
+    } else {
+        ""
+    };
+    let intro = format!(
+        "Codex needs authentication before this preset can be used.\n\n\
+         [1] OAuth login\n\
+         [2] API key\n\n\
+         OAuth matches the Codex desktop flow when this TUI is running locally.{ssh_hint}"
+    );
+    f.render_widget(
+        Paragraph::new(intro)
+            .block(Block::default().borders(Borders::ALL).title(" Codex Login "))
+            .wrap(Wrap { trim: false }),
+        chunks[0],
+    );
+
+    let body = Paragraph::new(format!(
+        "Current model: {}\nProvider: codex\nKey status: {}\n\n\
+         Pick OAuth for local desktop login, or API key for headless / SSH usage.",
+        app.current_model_label(),
+        api_key_status(&app.config),
+    ))
+    .block(Block::default().borders(Borders::LEFT | Borders::RIGHT).title(" Details "))
+    .wrap(Wrap { trim: false });
+    f.render_widget(body, chunks[1]);
+
+    f.render_widget(
+        Paragraph::new("1 OAuth  2 API key  Enter OAuth  Esc back")
+            .alignment(Alignment::Center),
+        chunks[2],
+    );
+}
+
+fn render_api_key_editor_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(4), Constraint::Length(3), Constraint::Length(2)])
+        .split(area);
+    let intro = Paragraph::new(
+        "Paste a Codex-compatible API key. This is the recommended path for SSH/headless sessions.",
+    )
+    .block(Block::default().borders(Borders::ALL).title(" Codex API Key "))
+    .wrap(Wrap { trim: false });
+    let editor = Paragraph::new(app.api_key_input.as_str())
+        .block(Block::default().borders(Borders::ALL).title(" Value "));
+    let footer = Paragraph::new("Enter save and rebuild  Esc back to login guide")
         .alignment(Alignment::Center);
     f.render_widget(intro, chunks[0]);
     f.render_widget(editor, chunks[1]);

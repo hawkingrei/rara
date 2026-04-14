@@ -433,13 +433,15 @@ pub async fn finish_running_task_if_ready(
                 app.setup_status = Some("Saved OAuth token.".into());
                 app.notice = app.setup_status.clone();
                 app.set_runtime_phase(RuntimePhase::OAuthSaved, Some("oauth token saved".into()));
-                app.close_overlay();
+                app.overlay = None;
                 app.push_entry("Runtime", "Saved OAuth token.");
-                app.finalize_active_turn();
+                start_rebuild_task(app);
             }
             Err(err) => {
                 app.set_runtime_phase(RuntimePhase::Failed, Some("oauth failed".into()));
-                app.push_notice(format!("OAuth failed:\n{}", format_error_chain(&err)));
+                let message = format!("OAuth failed:\n{}", format_error_chain(&err));
+                app.push_entry("System", message.clone());
+                app.push_notice(message);
             }
         },
     }
@@ -697,11 +699,24 @@ async fn run_oauth_login(
 ) -> anyhow::Result<String> {
     let (verifier, challenge) = oauth_manager.generate_pkce();
     let (port, receiver) = oauth_manager.start_callback_server().await?;
+    let auth_url = oauth_manager.get_authorize_url(&challenge, port);
+    let is_ssh = std::env::var_os("SSH_CONNECTION").is_some() || std::env::var_os("SSH_TTY").is_some();
     let _ = sender.send(TuiEvent::Transcript {
         role: "Runtime",
-        message: format!("Opened OAuth flow on localhost:{port}."),
+        message: if is_ssh {
+            format!(
+                "SSH session detected. OAuth browser login is not reliable from a remote shell because the callback listens on localhost:{port}.\nUse Codex API key instead, or open this URL from the same machine running the TUI:\n{auth_url}"
+            )
+        } else {
+            format!("Starting OAuth flow.\nOpen this URL if the browser does not launch automatically:\n{auth_url}")
+        },
     });
-    let _ = open::that(oauth_manager.get_authorize_url(&challenge, port));
+    if is_ssh {
+        return Err(anyhow!(
+            "OAuth browser login is unavailable in SSH/headless sessions; use Codex API key instead"
+        ));
+    }
+    let _ = open::that(&auth_url);
 
     let code = receiver.await?;
     let _ = sender.send(TuiEvent::Transcript {

@@ -18,6 +18,7 @@ use crossterm::{
 use futures::StreamExt;
 use ratatui::{
     backend::CrosstermBackend,
+    text::{Line, Span},
     widgets::{Paragraph, Widget},
     Terminal, TerminalOptions, Viewport,
 };
@@ -110,6 +111,11 @@ fn handle_paste(text: String, app: &mut TuiApp) {
         return;
     }
 
+    if matches!(app.overlay, Some(Overlay::ApiKeyEditor)) {
+        app.api_key_input.push_str(&text);
+        return;
+    }
+
     app.input.push_str(&text);
     if app.input.trim_start().starts_with('/') {
         app.open_overlay(Overlay::CommandPalette);
@@ -194,9 +200,23 @@ fn map_key_to_event(key: KeyCode, app: &TuiApp) -> AppEvent {
             KeyCode::Enter => AppEvent::ApplyOverlaySelection,
             _ => AppEvent::Noop,
         },
+        Some(Overlay::CodexAuthGuide) => match key {
+            KeyCode::Esc => AppEvent::CloseOverlay,
+            KeyCode::Char('1') | KeyCode::Char('o') => AppEvent::StartOAuth,
+            KeyCode::Char('2') | KeyCode::Char('a') => AppEvent::OpenOverlay(Overlay::ApiKeyEditor),
+            KeyCode::Enter => AppEvent::StartOAuth,
+            _ => AppEvent::Noop,
+        },
         Some(Overlay::BaseUrlEditor) => match key {
             KeyCode::Esc => AppEvent::CloseOverlay,
             KeyCode::Enter => AppEvent::SaveBaseUrlInput,
+            KeyCode::Backspace => AppEvent::Backspace,
+            KeyCode::Char(c) => AppEvent::InputChar(c),
+            _ => AppEvent::Noop,
+        },
+        Some(Overlay::ApiKeyEditor) => match key {
+            KeyCode::Esc => AppEvent::CloseOverlay,
+            KeyCode::Enter => AppEvent::SaveApiKeyInput,
             KeyCode::Backspace => AppEvent::Backspace,
             KeyCode::Char(c) => AppEvent::InputChar(c),
             _ => AppEvent::Noop,
@@ -243,6 +263,8 @@ async fn dispatch_event(
         AppEvent::InputChar(c) => {
             if matches!(app.overlay, Some(Overlay::BaseUrlEditor)) {
                 app.base_url_input.push(c);
+            } else if matches!(app.overlay, Some(Overlay::ApiKeyEditor)) {
+                app.api_key_input.push(c);
             } else {
                 app.input.push(c);
                 if app.input.trim_start().starts_with('/') {
@@ -255,6 +277,8 @@ async fn dispatch_event(
         AppEvent::Backspace => {
             if matches!(app.overlay, Some(Overlay::BaseUrlEditor)) {
                 app.base_url_input.pop();
+            } else if matches!(app.overlay, Some(Overlay::ApiKeyEditor)) {
+                app.api_key_input.pop();
             } else {
                 app.input.pop();
             }
@@ -301,8 +325,13 @@ async fn dispatch_event(
             if matches!(app.overlay, Some(Overlay::Setup)) {
                 app.select_local_model(app.model_picker_idx);
             } else if matches!(app.overlay, Some(Overlay::ModelPicker)) && !app.is_busy() {
-                app.select_local_model(app.model_picker_idx);
-                start_rebuild_task(app);
+                if should_open_codex_auth_guide(app) {
+                    app.select_local_model(app.model_picker_idx);
+                    app.open_overlay(Overlay::CodexAuthGuide);
+                } else {
+                    app.select_local_model(app.model_picker_idx);
+                    start_rebuild_task(app);
+                }
             }
         }
         AppEvent::SelectPendingOption(idx) => {
@@ -345,12 +374,32 @@ async fn dispatch_event(
             ));
             app.close_overlay();
         }
+        AppEvent::SaveApiKeyInput => {
+            let value = app.api_key_input.trim();
+            if value.is_empty() {
+                app.push_notice("Enter a Codex API key or press Esc to go back.");
+            } else if app.is_busy() {
+                app.push_notice("Wait for the current task before saving the API key.");
+            } else {
+                app.config.api_key = Some(value.to_string());
+                app.config.provider = "codex".into();
+                if app.config.model.is_none() {
+                    app.config.model = Some("codex".into());
+                }
+                app.config_manager.save(&app.config)?;
+                app.notice = Some("Saved Codex API key. Rebuilding backend.".into());
+                app.overlay = None;
+                start_rebuild_task(app);
+            }
+        }
         AppEvent::SelectHelpTab(tab) => {
             app.open_overlay(Overlay::Help(tab));
         }
         AppEvent::StartOAuth => {
             if app.is_busy() {
                 app.push_notice("Wait for the current task before starting login.");
+            } else if is_ssh_session() {
+                app.push_notice("OAuth browser login is unavailable in SSH/headless sessions. Use Codex API key instead.");
             } else {
                 start_oauth_task(app, Arc::clone(oauth_manager));
             }
@@ -404,7 +453,11 @@ async fn dispatch_event(
                     app.push_notice("A task is already running. Wait for it to finish.");
                 } else {
                     app.select_local_model(app.model_picker_idx);
-                    start_rebuild_task(app);
+                    if should_open_codex_auth_guide(app) {
+                        app.open_overlay(Overlay::CodexAuthGuide);
+                    } else {
+                        start_rebuild_task(app);
+                    }
                 }
             }
             Some(Overlay::Setup) => {
@@ -412,6 +465,15 @@ async fn dispatch_event(
                     app.push_notice("A task is already running. Wait for it to finish.");
                 } else {
                     start_rebuild_task(app);
+                }
+            }
+            Some(Overlay::CodexAuthGuide) => {
+                if app.is_busy() {
+                    app.push_notice("A task is already running. Wait for it to finish.");
+                } else if is_ssh_session() {
+                    app.push_notice("OAuth browser login is unavailable in SSH/headless sessions. Use Codex API key instead.");
+                } else {
+                    start_oauth_task(app, Arc::clone(oauth_manager));
                 }
             }
             _ => {}
@@ -481,10 +543,13 @@ fn flush_committed_history(
     app: &mut TuiApp,
 ) -> anyhow::Result<()> {
     if !app.startup_card_inserted {
-        let lines = startup_card_lines(app);
+        let width = terminal_size()?.0;
+        let lines = startup_card_lines(app, width);
         if !lines.is_empty() {
             terminal.insert_before(lines.len() as u16, |buf| {
-                Paragraph::new(lines).render(buf.area, buf);
+                Paragraph::new(lines)
+                    .wrap(ratatui::widgets::Wrap { trim: false })
+                    .render(buf.area, buf);
             })?;
         }
         app.startup_card_inserted = true;
@@ -498,7 +563,9 @@ fn flush_committed_history(
         if !lines.is_empty() {
             let line_count = lines.len() as u16;
             terminal.insert_before(line_count, |buf| {
-                Paragraph::new(lines).render(buf.area, buf);
+                Paragraph::new(lines)
+                    .wrap(ratatui::widgets::Wrap { trim: false })
+                    .render(buf.area, buf);
             })?;
         }
         app.inserted_turns += 1;
@@ -506,22 +573,51 @@ fn flush_committed_history(
     Ok(())
 }
 
-fn startup_card_lines(app: &TuiApp) -> Vec<ratatui::text::Line<'static>> {
-    vec![
-        ratatui::text::Line::from("╭──────────────────────────────────────────────╮"),
-        ratatui::text::Line::from("│ >_ RARA                                      │"),
-        ratatui::text::Line::from("│                                              │"),
-        ratatui::text::Line::from(format!(
-            "│ model:     {:<25} /model to change │",
-            truncate_for_startup_card(app.current_model_label(), 25)
-        )),
-        ratatui::text::Line::from(format!(
-            "│ directory: {:<32} │",
-            truncate_for_startup_card(&display_directory_for_startup(app), 32)
-        )),
-        ratatui::text::Line::from("╰──────────────────────────────────────────────╯"),
-        ratatui::text::Line::from(""),
-    ]
+fn startup_card_lines(app: &TuiApp, width: u16) -> Vec<Line<'static>> {
+    let Some(inner_width) = startup_card_inner_width(width) else {
+        return Vec::new();
+    };
+
+    let model_label = "model:";
+    let directory_label = "directory:";
+    let label_width = directory_label.len();
+    let model_prefix = format!("{model_label:<label_width$} ");
+    let hint = "/model to change";
+    let hint_width = display_width(hint);
+    let model_prefix_width = display_width(&model_prefix);
+    let model_available_width = inner_width
+        .saturating_sub(model_prefix_width)
+        .saturating_sub(1)
+        .saturating_sub(hint_width);
+    let model_value = truncate_for_startup_card(app.current_model_label(), model_available_width);
+    let model_value_width = display_width(&model_value);
+    let gap_width = inner_width
+        .saturating_sub(model_prefix_width)
+        .saturating_sub(model_value_width)
+        .saturating_sub(hint_width)
+        .max(1);
+    let directory_prefix = format!("{directory_label:<label_width$} ");
+    let directory_max_width = inner_width.saturating_sub(display_width(&directory_prefix));
+
+    let lines = vec![
+        Line::from(vec![Span::from(">_ "), Span::from("RARA")]),
+        Line::from(""),
+        Line::from(vec![
+            Span::from(model_prefix),
+            Span::from(model_value),
+            Span::from(" ".repeat(gap_width)),
+            Span::from(hint),
+        ]),
+        Line::from(vec![
+            Span::from(directory_prefix),
+            Span::from(truncate_path_middle(
+                &display_directory_for_startup(app),
+                directory_max_width,
+            )),
+        ]),
+    ];
+
+    with_border(lines, inner_width)
 }
 
 fn display_directory_for_startup(app: &TuiApp) -> String {
@@ -542,15 +638,75 @@ fn display_directory_for_startup(app: &TuiApp) -> String {
 }
 
 fn truncate_for_startup_card(value: &str, width: usize) -> String {
-    let chars = value.chars().collect::<Vec<_>>();
-    if chars.len() <= width {
+    if display_width(value) <= width {
         return value.to_string();
     }
     if width <= 1 {
         return "…".to_string();
     }
-    let kept = chars.into_iter().take(width - 1).collect::<String>();
+    let kept = value.chars().take(width - 1).collect::<String>();
     format!("{kept}…")
+}
+
+fn truncate_path_middle(value: &str, width: usize) -> String {
+    if display_width(value) <= width {
+        return value.to_string();
+    }
+    if width <= 1 {
+        return "…".to_string();
+    }
+    if width <= 5 {
+        return truncate_for_startup_card(value, width);
+    }
+
+    let keep_left = (width - 1) / 2;
+    let keep_right = width - 1 - keep_left;
+    let chars = value.chars().collect::<Vec<_>>();
+    let left = chars.iter().take(keep_left).collect::<String>();
+    let right = chars
+        .iter()
+        .rev()
+        .take(keep_right)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect::<String>();
+    format!("{left}…{right}")
+}
+
+fn startup_card_inner_width(width: u16) -> Option<usize> {
+    if width < 8 {
+        return None;
+    }
+    Some(std::cmp::min(width.saturating_sub(4) as usize, 56))
+}
+
+fn with_border(lines: Vec<Line<'static>>, inner_width: usize) -> Vec<Line<'static>> {
+    let mut out = Vec::with_capacity(lines.len() + 3);
+    let border_inner_width = inner_width + 2;
+    out.push(Line::from(format!("╭{}╮", "─".repeat(border_inner_width))));
+
+    for line in lines {
+        let used_width = line
+            .iter()
+            .map(|span| display_width(span.content.as_ref()))
+            .sum::<usize>();
+        let mut spans = Vec::with_capacity(line.spans.len() + 3);
+        spans.push(Span::from("│ "));
+        spans.extend(line.into_iter());
+        if used_width < inner_width {
+            spans.push(Span::from(" ".repeat(inner_width - used_width)));
+        }
+        spans.push(Span::from(" │"));
+        out.push(Line::from(spans));
+    }
+
+    out.push(Line::from(format!("╰{}╯", "─".repeat(border_inner_width))));
+    out
+}
+
+fn display_width(value: &str) -> usize {
+    value.chars().count()
 }
 
 fn restore_latest_session(
@@ -700,4 +856,16 @@ pub(crate) fn provider_requires_api_key(provider: &str) -> bool {
         provider,
         "mock" | "local" | "local-candle" | "gemma4" | "qwen3" | "qwn3" | "ollama"
     )
+}
+
+fn should_open_codex_auth_guide(app: &TuiApp) -> bool {
+    let presets = current_model_presets(app.provider_picker_idx);
+    let Some((_, provider, _)) = presets.get(app.model_picker_idx) else {
+        return false;
+    };
+    *provider == "codex" && app.config.api_key.as_deref().is_none_or(str::is_empty)
+}
+
+fn is_ssh_session() -> bool {
+    std::env::var_os("SSH_CONNECTION").is_some() || std::env::var_os("SSH_TTY").is_some()
 }
