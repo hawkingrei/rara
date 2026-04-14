@@ -425,7 +425,10 @@ pub async fn finish_running_task_if_ready(
         TaskCompletion::OAuth { result } => match result {
             Ok(access_token) => {
                 app.config.api_key = Some(access_token);
-                app.config.provider = "codex_oauth".into();
+                app.config.provider = "codex".into();
+                if app.config.model.is_none() {
+                    app.config.model = Some("codex".into());
+                }
                 app.config_manager.save(&app.config)?;
                 app.setup_status = Some("Saved OAuth token.".into());
                 app.notice = app.setup_status.clone();

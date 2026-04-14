@@ -29,6 +29,7 @@ pub enum Overlay {
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ProviderFamily {
+    Codex,
     CandleLocal,
     Ollama,
 }
@@ -134,6 +135,11 @@ pub struct RunningTask {
     pub next_heartbeat_after_secs: u64,
 }
 
+pub const CODEX_MODEL_PRESETS: [(&str, &str, &str); 2] = [
+    ("Codex (OAuth)", "codex", "codex"),
+    ("Codex (API Key)", "codex", "codex"),
+];
+
 pub const LOCAL_MODEL_PRESETS: [(&str, &str, &str); 3] = [
     ("Gemma 4 E4B (Experimental)", "gemma4", "gemma4-e4b"),
     ("Gemma 4 E2B (Experimental)", "gemma4", "gemma4-e2b"),
@@ -146,7 +152,12 @@ pub const OLLAMA_MODEL_PRESETS: [(&str, &str, &str); 3] = [
     ("Gemma 4 E2B", "ollama", "gemma4:e2b"),
 ];
 
-pub const PROVIDER_FAMILIES: [(ProviderFamily, &str, &str); 2] = [
+pub const PROVIDER_FAMILIES: [(ProviderFamily, &str, &str); 3] = [
+    (
+        ProviderFamily::Codex,
+        "Codex",
+        "Use the Codex-compatible API with either OAuth login or an API key.",
+    ),
     (
         ProviderFamily::CandleLocal,
         "Candle Local",
@@ -272,6 +283,18 @@ impl TuiApp {
                 .is_none()
             {
                 self.config.base_url = Some("http://localhost:11434".to_string());
+            }
+        } else if provider == "codex" {
+            self.config.revision = None;
+            if self
+                .config
+                .base_url
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .is_none()
+            {
+                self.config.base_url = Some("http://localhost:8080".to_string());
             }
         } else {
             self.config.revision = Some("main".to_string());
@@ -650,13 +673,15 @@ impl TuiApp {
 
 pub fn selected_provider_family_idx_for_config(config: &RaraConfig) -> usize {
     match config.provider.as_str() {
-        "ollama" => 1,
-        _ => 0,
+        "codex" => 0,
+        "ollama" => 2,
+        _ => 1,
     }
 }
 
 pub fn current_model_presets(provider_picker_idx: usize) -> &'static [(&'static str, &'static str, &'static str)] {
     match PROVIDER_FAMILIES[provider_picker_idx].0 {
+        ProviderFamily::Codex => &CODEX_MODEL_PRESETS,
         ProviderFamily::CandleLocal => &LOCAL_MODEL_PRESETS,
         ProviderFamily::Ollama => &OLLAMA_MODEL_PRESETS,
     }

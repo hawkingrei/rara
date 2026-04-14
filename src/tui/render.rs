@@ -783,6 +783,7 @@ fn render_setup_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
          Presets:\n{}\n\n\
          [1/2/3] Select preset\n[M] Cycle preset\n[Enter] Apply and rebuild\n[L] OAuth login\n[Esc] Close\n\n\
          Use /model for the full provider menu.\n\
+         Codex supports both OAuth login and API key auth.\n\
          Recommended: Qwn3 8B for stable local use.",
         app.config.provider,
         app.current_model_label(),
@@ -822,7 +823,7 @@ fn render_provider_picker_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
         .constraints([Constraint::Length(3), Constraint::Min(6), Constraint::Length(2)])
         .split(area);
     f.render_widget(
-        Paragraph::new("Select a provider family first, then choose a concrete model.")
+        Paragraph::new("Select a provider family first, then choose a concrete runtime or auth path.")
             .block(Block::default().borders(Borders::ALL).title(" Provider Menu ")),
         chunks[0],
     );

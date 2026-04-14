@@ -566,6 +566,7 @@ pub fn model_help_text(app: &TuiApp) -> String {
                         " "
                     };
                     let shortcut = match family {
+                        ProviderFamily::Codex => (idx + 1).to_string(),
                         ProviderFamily::CandleLocal => (idx + 1).to_string(),
                         ProviderFamily::Ollama => model.to_string(),
                     };
