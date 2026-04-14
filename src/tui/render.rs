@@ -30,21 +30,17 @@ pub fn render(f: &mut Frame, app: &TuiApp) {
     }
 }
 
-pub fn desired_viewport_height(app: &TuiApp, width: u16, rows: u16) -> u16 {
+pub fn desired_viewport_height(app: &TuiApp, _width: u16, rows: u16) -> u16 {
     if app.overlay.is_some() {
         return rows.max(1);
     }
 
     let bottom_pane_height = 5u16;
-    let transcript_width = width.max(20) as usize;
-    let transcript_lines = if app.active_turn.entries.is_empty() {
-        0
-    } else {
-        estimate_wrapped_line_count(&current_turn_lines(app), transcript_width).max(1) as u16
-    };
-
-    let desired = bottom_pane_height.saturating_add(transcript_lines);
-    desired.clamp(bottom_pane_height, rows.max(1))
+    let has_active_content = !app.active_turn.entries.is_empty();
+    if !has_active_content {
+        return bottom_pane_height.clamp(1, rows.max(1));
+    }
+    rows.max(1)
 }
 
 fn render_bottom_pane(f: &mut Frame, app: &TuiApp, area: Rect) {
@@ -99,21 +95,6 @@ fn render_transcript(f: &mut Frame, app: &TuiApp, area: Rect) {
             .scroll((app.transcript_scroll as u16, 0)),
         area,
     );
-}
-
-fn estimate_wrapped_line_count(lines: &[Line<'static>], width: usize) -> usize {
-    let width = width.max(1);
-    lines.iter()
-        .map(|line| {
-            let content_width = line
-                .spans
-                .iter()
-                .map(|span| span.content.chars().count())
-                .sum::<usize>()
-                .max(1);
-            content_width.div_ceil(width)
-        })
-        .sum()
 }
 
 pub fn committed_turn_lines(entries: &[TranscriptEntry]) -> Vec<Line<'static>> {
