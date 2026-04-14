@@ -140,7 +140,8 @@ pub const LOCAL_MODEL_PRESETS: [(&str, &str, &str); 3] = [
     ("Qwn3 8B", "qwn3", "qwn3-8b"),
 ];
 
-pub const OLLAMA_MODEL_PRESETS: [(&str, &str, &str); 2] = [
+pub const OLLAMA_MODEL_PRESETS: [(&str, &str, &str); 3] = [
+    ("Gemma 4", "ollama", "gemma4"),
     ("Gemma 4 E4B", "ollama", "gemma4:e4b"),
     ("Gemma 4 E2B", "ollama", "gemma4:e2b"),
 ];

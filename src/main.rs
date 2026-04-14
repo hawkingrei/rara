@@ -225,7 +225,7 @@ pub(crate) async fn build_backend_with_progress(
                 .base_url
                 .clone()
                 .unwrap_or_else(|| "http://localhost:11434".to_string()),
-            model: config.model.clone().unwrap_or_else(|| "gemma4:e4b".to_string()),
+            model: config.model.clone().unwrap_or_else(|| "gemma4".to_string()),
             thinking: config.thinking.unwrap_or(true),
             num_ctx: config.num_ctx,
         })),
@@ -235,7 +235,7 @@ pub(crate) async fn build_backend_with_progress(
                 .base_url
                 .clone()
                 .unwrap_or_else(|| "http://localhost:11434".to_string()),
-            model: config.model.clone().unwrap_or_else(|| "gemma4:e4b".to_string()),
+            model: config.model.clone().unwrap_or_else(|| "gemma4".to_string()),
         })),
         "gemini" => Ok(Box::new(GeminiBackend {
             api_key: config.api_key.clone().expect("API key required for Gemini"),
