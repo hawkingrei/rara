@@ -100,8 +100,7 @@ fn render_transcript(f: &mut Frame, app: &TuiApp, area: Rect) {
 pub fn committed_turn_lines(entries: &[TranscriptEntry]) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     if let Some(user) = entries.iter().find(|entry| entry.role == "You") {
-        lines.push(Line::from(role_badge_span("You")));
-        push_message_lines(&mut lines, &user.message, 4);
+        lines.extend(prefixed_message_lines("You", &user.message, 4));
         lines.push(Line::from(""));
     }
 
@@ -118,8 +117,8 @@ pub fn committed_turn_lines(entries: &[TranscriptEntry]) -> Vec<Line<'static>> {
         lines.push(Line::from(""));
     }
 
-    if let Some(summary) = current_turn_tool_summary(entry_refs.as_slice()) {
-        lines.push(Line::from(section_span("Actions", Color::LightYellow)));
+    if let Some(summary) = current_turn_tool_summary(entry_refs.as_slice(), false, None) {
+        lines.push(Line::from(section_span("Ran", Color::LightYellow)));
         lines.extend(summary.lines().map(|line| Line::from(format!("  {line}"))));
         lines.push(Line::from(""));
     }
@@ -142,9 +141,8 @@ pub fn committed_turn_lines(entries: &[TranscriptEntry]) -> Vec<Line<'static>> {
     };
 
     for entry in tail_entries {
-        lines.push(Line::from(role_badge_span(&entry.role)));
         let max_lines = if entry.role == "Agent" { 8 } else { 4 };
-        push_message_lines(&mut lines, &entry.message, max_lines);
+        lines.extend(prefixed_message_lines(&entry.role, &entry.message, max_lines));
         lines.push(Line::from(""));
     }
 
@@ -189,8 +187,7 @@ fn current_turn_lines(app: &TuiApp) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
 
     if !user_message.is_empty() {
-        lines.push(Line::from(role_badge_span("You")));
-        lines.push(Line::from(format!("  {}", user_message)));
+        lines.extend(prefixed_message_lines("You", user_message, 4));
         lines.push(Line::from(""));
     }
 
@@ -210,8 +207,17 @@ fn current_turn_lines(app: &TuiApp) -> Vec<Line<'static>> {
         lines.push(Line::from(""));
     }
 
-    if let Some(summary) = current_turn_tool_summary(current_turn.as_slice()) {
-        lines.push(Line::from(section_span("Actions", Color::LightYellow)));
+    if let Some(summary) = current_turn_tool_summary(
+        current_turn.as_slice(),
+        app.is_busy() && latest_agent.is_none(),
+        app.runtime_phase_detail.as_deref(),
+    ) {
+        let (title, color) = if app.is_busy() && latest_agent.is_none() {
+            ("Running", Color::Yellow)
+        } else {
+            ("Ran", Color::LightYellow)
+        };
+        lines.push(Line::from(section_span(title, color)));
         lines.extend(summary.lines().map(|line| Line::from(format!("  {line}"))));
         lines.push(Line::from(""));
     }
@@ -258,20 +264,11 @@ fn current_turn_lines(app: &TuiApp) -> Vec<Line<'static>> {
         );
 
     if let Some(agent_message) = latest_agent.filter(|_| !suppress_intermediate_agent) {
-        lines.push(Line::from(role_badge_span("Agent")));
-        for line in agent_message.lines() {
-            lines.push(Line::from(format!("  {line}")));
-        }
+        lines.extend(prefixed_message_lines("Agent", agent_message, usize::MAX));
     } else if let Some(system_message) = latest_system {
-        lines.push(Line::from(role_badge_span("System")));
-        for line in system_message.lines().take(14) {
-            lines.push(Line::from(format!("  {line}")));
-        }
+        lines.extend(prefixed_message_lines("System", system_message, 14));
     } else if let Some((role, tool_result)) = latest_tool_result {
-        lines.push(Line::from(role_badge_span(role)));
-        for line in tool_result.lines().take(14) {
-            lines.push(Line::from(format!("  {line}")));
-        }
+        lines.extend(prefixed_message_lines(role, tool_result, 14));
     } else if app.is_busy() {
         lines.push(Line::from(section_span("Working", Color::Yellow)));
         lines.push(Line::from(format!(
@@ -280,9 +277,6 @@ fn current_turn_lines(app: &TuiApp) -> Vec<Line<'static>> {
                 .as_deref()
                 .unwrap_or("waiting for the current turn to finish")
         )));
-    } else {
-        lines.push(Line::from(section_span("Ready", Color::Green)));
-        lines.push(Line::from("  No final answer yet."));
     }
 
     lines
@@ -333,50 +327,65 @@ fn current_turn_exploration_summary_from_entries(
     Some(lines.join("\n"))
 }
 
-fn current_turn_tool_summary(current_turn: &[&TranscriptEntry]) -> Option<String> {
-    let tools = current_turn
+fn current_turn_tool_summary(
+    current_turn: &[&TranscriptEntry],
+    show_live_detail: bool,
+    live_detail: Option<&str>,
+) -> Option<String> {
+    let actions = current_turn
         .iter()
         .filter_map(|entry| {
             if entry.role != "Tool" {
                 return None;
             }
-            let name = entry.message.split_whitespace().next()?;
-            if is_exploration_tool(name) {
-                return None;
-            }
-            Some(name.to_string())
+            tool_action_label(&entry.message)
         })
         .collect::<Vec<_>>();
-    if tools.is_empty() {
+    if actions.is_empty() {
         return None;
     }
 
-    let mut parts = vec![format!("Used {} tool call(s): {}", tools.len(), tools.join(", "))];
-    let results = current_turn
-        .iter()
-        .filter(|entry| entry.role == "Tool Result" || entry.role == "Tool Error")
-        .count();
-    if results > 0 {
-        parts.push(format!("Recorded {} tool result(s).", results));
+    let mut lines = actions
+        .into_iter()
+        .map(|action| format!("└ {action}"))
+        .collect::<Vec<_>>();
+
+    if show_live_detail {
+        lines.push(format!(
+            "└ {}",
+            live_detail.unwrap_or("waiting for tool output")
+        ));
     }
-    Some(parts.join("\n"))
+
+    Some(lines.join("\n"))
 }
 
-fn push_message_lines(lines: &mut Vec<Line<'static>>, message: &str, max_lines: usize) {
+fn prefixed_message_lines(role: &str, message: &str, max_lines: usize) -> Vec<Line<'static>> {
     let message_lines = message.lines().collect::<Vec<_>>();
     if message_lines.is_empty() {
-        lines.push(Line::from("  "));
-        return;
+        return vec![Line::from(format!("{role}:"))];
     }
-    for line in message_lines.iter().take(max_lines) {
+
+    let capped = if max_lines == usize::MAX {
+        message_lines.len()
+    } else {
+        max_lines
+    };
+
+    let mut lines = Vec::new();
+    if let Some(first) = message_lines.first() {
+        lines.push(Line::from(format!("{role}: {first}")));
+    }
+    for line in message_lines.iter().skip(1).take(capped.saturating_sub(1)) {
         lines.push(Line::from(format!("  {line}")));
     }
-    if message_lines.len() > max_lines {
+    if message_lines.len() > capped {
         lines.push(Line::from(Span::styled(
-            format!("  ... {} more line(s)", message_lines.len() - max_lines),
+            format!("  ... {} more line(s)", message_lines.len() - capped),
             Style::default().fg(Color::DarkGray),
         )));
     }
+    lines
 }
 
 fn is_exploration_tool(name: &str) -> bool {
@@ -394,6 +403,24 @@ fn exploration_action_label(message: &str) -> Option<String> {
         "grep" => Some(format!("Search {}", if rest.is_empty() { "workspace" } else { rest.as_str() })),
         "search_files" => Some(format!("Search files {}", if rest.is_empty() { "workspace" } else { rest.as_str() })),
         _ => None,
+    }
+}
+
+fn tool_action_label(message: &str) -> Option<String> {
+    let mut parts = message.split_whitespace();
+    let name = parts.next()?;
+    if is_exploration_tool(name) {
+        return None;
+    }
+
+    let rest = parts.collect::<Vec<_>>().join(" ");
+    match name {
+        "bash" => Some(format!("Run {}", if rest.is_empty() { "command" } else { rest.as_str() })),
+        "apply_patch" => Some("Apply patch".to_string()),
+        "write_file" => Some(format!("Write {}", if rest.is_empty() { "file" } else { rest.as_str() })),
+        "replace" => Some(format!("Edit {}", if rest.is_empty() { "file" } else { rest.as_str() })),
+        "web_fetch" => Some(format!("Fetch {}", if rest.is_empty() { "resource" } else { rest.as_str() })),
+        other => Some(format!("Run {}", if rest.is_empty() { other } else { message })),
     }
 }
 
@@ -496,7 +523,7 @@ fn render_composer(f: &mut Frame, app: &TuiApp, area: Rect) {
     } else if app.agent_execution_mode_label() == "plan" {
         "plan mode  /plan return to execute"
     } else {
-        "/search grep  terminal scrollback for history  /plan toggle  /quit exit"
+        "/search grep  /compact summarize history  /plan toggle  /quit exit"
     };
     f.render_widget(
         Paragraph::new(Span::styled(hint, Style::default().fg(Color::Gray))).alignment(Alignment::Left),
@@ -505,13 +532,22 @@ fn render_composer(f: &mut Frame, app: &TuiApp, area: Rect) {
 }
 
 fn render_footer(f: &mut Frame, app: &TuiApp, area: Rect) {
+    let context = match app.snapshot.context_window_tokens {
+        Some(window) => format!(
+            "ctx~={}/{}",
+            app.snapshot.estimated_history_tokens,
+            window
+        ),
+        None => format!("ctx~={}", app.snapshot.estimated_history_tokens),
+    };
     let summary = format!(
-        "key={}  history={}  local={}  tokens={} in / {} out",
+        "key={}  history={}  local={}  tokens={} in / {} out  {}",
         api_key_status(&app.config),
         app.snapshot.history_len,
         app.transcript_entry_count(),
         app.snapshot.total_input_tokens,
         app.snapshot.total_output_tokens,
+        context,
     );
     f.render_widget(
         Paragraph::new(Line::from(Span::styled(summary, Style::default().fg(Color::DarkGray))))
@@ -1142,25 +1178,6 @@ fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
 
 fn command_preview_text(spec: &super::state::CommandSpec) -> String {
     format!("{}\n\n{}", spec.usage, spec.summary)
-}
-
-fn role_badge_span(role: &str) -> Span<'static> {
-    let (fg, bg) = match role {
-        "You" => (Color::Black, Color::LightBlue),
-        "Agent" => (Color::Black, Color::White),
-        "Tool" => (Color::Black, Color::Rgb(231, 201, 92)),
-        "Tool Result" => (Color::Black, Color::LightGreen),
-        "Tool Error" => (Color::White, Color::Red),
-        "Download" => (Color::Black, Color::LightBlue),
-        "Runtime" => (Color::Black, Color::LightBlue),
-        "Status" => (Color::White, Color::DarkGray),
-        "System" => (Color::Black, Color::Magenta),
-        _ => (Color::White, Color::DarkGray),
-    };
-    Span::styled(
-        format!(" {} ", role),
-        Style::default().fg(fg).bg(bg).add_modifier(Modifier::BOLD),
-    )
 }
 
 fn section_span<'a>(title: &'a str, color: Color) -> Span<'a> {

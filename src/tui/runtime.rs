@@ -47,6 +47,7 @@ pub async fn execute_local_command(
         LocalCommandKind::Plan => "plan",
         LocalCommandKind::Approval => "approval",
         LocalCommandKind::Search => "search",
+        LocalCommandKind::Compact => "compact",
         LocalCommandKind::Setup => "setup",
         LocalCommandKind::Model => "model",
         LocalCommandKind::BaseUrl => "base-url",
@@ -112,6 +113,13 @@ pub async fn execute_local_command(
             app.push_notice(notice);
         }
         LocalCommandKind::Search => handle_search_command(command.arg.as_deref(), app).await?,
+        LocalCommandKind::Compact => {
+            if let Some(agent) = agent_slot.take() {
+                start_compact_task(app, agent);
+            } else {
+                app.push_notice("No active agent available for compaction.");
+            }
+        }
         LocalCommandKind::Setup => {
             app.set_runtime_phase(RuntimePhase::LocalCommand, Some("opening setup".into()));
             app.open_overlay(Overlay::Setup);
@@ -229,7 +237,9 @@ pub fn start_query_task(app: &mut TuiApp, prompt: String, mut agent: Agent) {
         let tx = sender.clone();
         let result = agent
             .query_with_mode_and_events(prompt, AgentOutputMode::Silent, move |event| {
-                let _ = tx.send(convert_agent_event(event));
+                if let Some(event) = convert_agent_event(event) {
+                    let _ = tx.send(event);
+                }
             })
             .await;
         TaskCompletion::Query { agent, result }
@@ -237,6 +247,35 @@ pub fn start_query_task(app: &mut TuiApp, prompt: String, mut agent: Agent) {
 
     app.running_task = Some(RunningTask {
         kind: TaskKind::Query,
+        receiver,
+        handle,
+        started_at: Instant::now(),
+        next_heartbeat_after_secs: 2,
+    });
+}
+
+pub fn start_compact_task(app: &mut TuiApp, mut agent: Agent) {
+    let (sender, receiver) = mpsc::unbounded_channel();
+    agent.set_execution_mode(app.agent_execution_mode);
+    agent.set_bash_approval_mode(app.bash_approval_mode);
+    app.notice = Some("Compacting conversation history.".into());
+    app.set_runtime_phase(RuntimePhase::ProcessingResponse, Some("compacting history".into()));
+    app.push_entry("You", "/compact");
+
+    let handle = tokio::spawn(async move {
+        let tx = sender.clone();
+        let result = agent
+            .compact_now_with_reporter(move |event| {
+                if let Some(event) = convert_agent_event(event) {
+                    let _ = tx.send(event);
+                }
+            })
+            .await;
+        TaskCompletion::Compact { agent, result }
+    });
+
+    app.running_task = Some(RunningTask {
+        kind: TaskKind::Compact,
         receiver,
         handle,
         started_at: Instant::now(),
@@ -262,7 +301,9 @@ pub fn start_pending_approval_task(
         let tx = sender.clone();
         let result = agent
             .answer_pending_approval_with_events(selection, AgentOutputMode::Silent, move |event| {
-                let _ = tx.send(convert_agent_event(event));
+                if let Some(event) = convert_agent_event(event) {
+                    let _ = tx.send(event);
+                }
             })
             .await;
         TaskCompletion::Query { agent, result }
@@ -385,6 +426,45 @@ pub async fn finish_running_task_if_ready(
                             .unwrap_or("http://localhost:11434");
                         message.push_str(&format!("\nbase_url={base_url}"));
                     }
+                    app.push_entry("System", message.clone());
+                    app.push_notice(message);
+                }
+            }
+        }
+        TaskCompletion::Compact { agent, result } => {
+            *agent_slot = Some(agent);
+            if let Some(agent) = agent_slot.as_ref() {
+                app.sync_snapshot(agent);
+            }
+            match result {
+                Ok(true) => {
+                    if let Some((before, after)) = app
+                        .snapshot
+                        .last_compaction_before_tokens
+                        .zip(app.snapshot.last_compaction_after_tokens)
+                    {
+                        let message = format!(
+                            "Conversation compacted.\nEstimated history tokens: {before} -> {after}"
+                        );
+                        app.push_entry("Agent", message.clone());
+                        app.push_notice(message);
+                    } else {
+                        app.push_entry("Agent", "Conversation compacted.");
+                        app.push_notice("Conversation compacted.");
+                    }
+                    app.finalize_active_turn();
+                    app.set_runtime_phase(RuntimePhase::Idle, Some("history compacted".into()));
+                }
+                Ok(false) => {
+                    let message = "Conversation history did not need compaction.";
+                    app.push_entry("Agent", message);
+                    app.push_notice(message);
+                    app.finalize_active_turn();
+                    app.set_runtime_phase(RuntimePhase::Idle, Some("compact skipped".into()));
+                }
+                Err(err) => {
+                    app.set_runtime_phase(RuntimePhase::Failed, Some("compact failed".into()));
+                    let message = format!("Compaction failed: {err}");
                     app.push_entry("System", message.clone());
                     app.push_notice(message);
                 }
@@ -543,33 +623,42 @@ fn apply_tui_event(app: &mut TuiApp, event: TuiEvent) {
     }
 }
 
-fn convert_agent_event(event: AgentEvent) -> TuiEvent {
+fn convert_agent_event(event: AgentEvent) -> Option<TuiEvent> {
     match event {
-        AgentEvent::Status(message) => TuiEvent::Transcript {
+        AgentEvent::Status(message) => Some(TuiEvent::Transcript {
             role: "Status",
             message,
-        },
-        AgentEvent::AssistantText(text) => TuiEvent::Transcript {
+        }),
+        AgentEvent::AssistantText(text) => Some(TuiEvent::Transcript {
             role: "Agent",
             message: text,
-        },
-        AgentEvent::AssistantDelta(text) => TuiEvent::Transcript {
+        }),
+        AgentEvent::AssistantDelta(text) => Some(TuiEvent::Transcript {
             role: "Agent Delta",
             message: text,
-        },
-        AgentEvent::ToolUse { name, input } => TuiEvent::Transcript {
+        }),
+        AgentEvent::ToolUse { name, input } => Some(TuiEvent::Transcript {
             role: "Tool",
             message: format_tool_use(&name, &input),
-        },
+        }),
         AgentEvent::ToolResult {
             name,
             content,
             is_error,
-        } => TuiEvent::Transcript {
+        } => {
+            if is_exploration_tool_name(&name) {
+                return None;
+            }
+            Some(TuiEvent::Transcript {
             role: if is_error { "Tool Error" } else { "Tool Result" },
             message: format_tool_result(&name, &content),
-        },
+            })
+        }
     }
+}
+
+fn is_exploration_tool_name(name: &str) -> bool {
+    matches!(name, "list_files" | "read_file" | "glob" | "grep" | "search_files")
 }
 
 fn format_tool_use(name: &str, input: &serde_json::Value) -> String {

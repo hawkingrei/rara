@@ -45,6 +45,7 @@ pub enum LocalCommandKind {
     Plan,
     Approval,
     Search,
+    Compact,
     Setup,
     Model,
     BaseUrl,
@@ -95,6 +96,13 @@ pub struct RuntimeSnapshot {
     pub history_len: usize,
     pub total_input_tokens: u32,
     pub total_output_tokens: u32,
+    pub estimated_history_tokens: usize,
+    pub context_window_tokens: Option<usize>,
+    pub compact_threshold_tokens: usize,
+    pub reserved_output_tokens: usize,
+    pub compaction_count: usize,
+    pub last_compaction_before_tokens: Option<usize>,
+    pub last_compaction_after_tokens: Option<usize>,
     pub plan_steps: Vec<(String, String)>,
     pub plan_explanation: Option<String>,
     pub pending_question: Option<(String, Vec<(String, String)>, Option<String>)>,
@@ -112,6 +120,7 @@ pub struct PendingApprovalSnapshot {
 
 pub enum TaskKind {
     Query,
+    Compact,
     Rebuild,
     OAuth,
 }
@@ -120,6 +129,10 @@ pub enum TaskCompletion {
     Query {
         agent: Agent,
         result: anyhow::Result<()>,
+    },
+    Compact {
+        agent: Agent,
+        result: anyhow::Result<bool>,
     },
     Rebuild {
         result: anyhow::Result<Agent>,
@@ -333,6 +346,13 @@ impl TuiApp {
             history_len: agent.history.len(),
             total_input_tokens: agent.total_input_tokens,
             total_output_tokens: agent.total_output_tokens,
+            estimated_history_tokens: agent.compact_state.estimated_history_tokens,
+            context_window_tokens: agent.compact_state.context_window_tokens,
+            compact_threshold_tokens: agent.compact_state.compact_threshold_tokens,
+            reserved_output_tokens: agent.compact_state.reserved_output_tokens,
+            compaction_count: agent.compact_state.compaction_count,
+            last_compaction_before_tokens: agent.compact_state.last_compaction_before_tokens,
+            last_compaction_after_tokens: agent.compact_state.last_compaction_after_tokens,
             plan_steps: agent
                 .current_plan
                 .iter()
