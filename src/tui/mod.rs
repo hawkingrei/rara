@@ -577,7 +577,8 @@ fn flush_committed_history(
         let width = terminal_size()?.0;
         let lines = startup_card_lines(app, width);
         if !lines.is_empty() {
-            terminal.insert_before(lines.len() as u16, |buf| {
+            let line_count = wrapped_history_line_count(lines.as_slice(), width);
+            terminal.insert_before(line_count, |buf| {
                 Paragraph::new(lines)
                     .wrap(ratatui::widgets::Wrap { trim: false })
                     .render(buf.area, buf);
@@ -592,7 +593,8 @@ fn flush_committed_history(
             lines.insert(0, ratatui::text::Line::from(""));
         }
         if !lines.is_empty() {
-            let line_count = lines.len() as u16;
+            let width = terminal_size()?.0;
+            let line_count = wrapped_history_line_count(lines.as_slice(), width);
             terminal.insert_before(line_count, |buf| {
                 Paragraph::new(lines)
                     .wrap(ratatui::widgets::Wrap { trim: false })
@@ -602,6 +604,15 @@ fn flush_committed_history(
         app.inserted_turns += 1;
     }
     Ok(())
+}
+
+fn wrapped_history_line_count(lines: &[Line<'static>], width: u16) -> u16 {
+    let wrap_width = usize::from(width.max(1));
+    lines
+        .iter()
+        .map(|line| line.width().max(1).div_ceil(wrap_width))
+        .sum::<usize>()
+        .max(1) as u16
 }
 
 fn startup_card_lines(app: &TuiApp, width: u16) -> Vec<Line<'static>> {
