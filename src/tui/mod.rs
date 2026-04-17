@@ -36,7 +36,10 @@ use self::runtime::{
 };
 use self::session_restore::{provider_requires_api_key, restore_latest_session, restore_session_by_id};
 use self::state::{current_model_presets, HelpTab, Overlay, PROVIDER_FAMILIES, TuiApp};
-use self::terminal_ui::{build_terminal, flush_committed_history, handle_paste, is_ssh_session, teardown_terminal};
+use self::terminal_ui::{
+    build_terminal, clear_terminal_surface, flush_committed_history, handle_paste, is_ssh_session,
+    teardown_terminal,
+};
 use crate::agent::BashApprovalMode;
 
 pub async fn run_tui(agent: Agent, oauth_manager: OAuthManager) -> anyhow::Result<()> {
@@ -70,6 +73,11 @@ pub async fn run_tui(agent: Agent, oauth_manager: OAuthManager) -> anyhow::Resul
         if desired_height != viewport_height {
             match build_terminal(desired_height) {
                 Ok(new_terminal) => {
+                    if desired_height > viewport_height {
+                        clear_terminal_surface()?;
+                        app.startup_card_inserted = false;
+                        app.inserted_turns = 0;
+                    }
                     viewport_height = desired_height;
                     terminal = new_terminal;
                 }
@@ -96,6 +104,11 @@ pub async fn run_tui(agent: Agent, oauth_manager: OAuthManager) -> anyhow::Resul
                             let desired_height = desired_viewport_height(&app, size.0, size.1);
                             match build_terminal(desired_height) {
                                 Ok(new_terminal) => {
+                                    if desired_height > viewport_height {
+                                        clear_terminal_surface()?;
+                                        app.startup_card_inserted = false;
+                                        app.inserted_turns = 0;
+                                    }
                                     viewport_height = desired_height;
                                     terminal = new_terminal;
                                 }

@@ -1,7 +1,11 @@
 use std::io;
 
 use anyhow::Result;
-use crossterm::{cursor::Show, execute, terminal::disable_raw_mode, terminal::size as terminal_size};
+use crossterm::{
+    cursor::{MoveTo, Show},
+    execute,
+    terminal::{disable_raw_mode, size as terminal_size, Clear, ClearType},
+};
 use ratatui::{
     backend::CrosstermBackend,
     text::{Line, Span},
@@ -49,6 +53,12 @@ pub(super) fn build_terminal(
             Ok(terminal)
         }
     }
+}
+
+pub(super) fn clear_terminal_surface() -> Result<()> {
+    let mut stdout = io::stdout();
+    execute!(stdout, Clear(ClearType::All), MoveTo(0, 0))?;
+    Ok(())
 }
 
 pub(super) fn teardown_terminal(
