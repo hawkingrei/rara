@@ -453,10 +453,7 @@ mod tests {
         let _ = fs::create_dir_all(&rara_dir);
         fs::write(root.join("AGENTS.md"), "project rules").expect("write");
         fs::write(rara_dir.join("memory.md"), "project memory").expect("write");
-        let workspace = WorkspaceMemory {
-            root: root.clone(),
-            rara_dir,
-        };
+        let workspace = WorkspaceMemory::from_paths(root.clone(), rara_dir);
         let runtime = PromptRuntimeConfig {
             append_system_prompt: Some("extra tail".to_string()),
             ..Default::default()
@@ -480,7 +477,7 @@ mod tests {
             std::env::temp_dir().join(format!("rara-workspace-plan-{}", std::process::id()));
         let rara_dir = root.join(".rara");
         let _ = fs::create_dir_all(&rara_dir);
-        let workspace = WorkspaceMemory { root, rara_dir };
+        let workspace = WorkspaceMemory::from_paths(root, rara_dir);
         let prompt =
             build_system_prompt(&workspace, &PromptRuntimeConfig::default(), PromptMode::Plan);
         assert!(prompt.contains("Current Execution Mode"));
@@ -510,7 +507,7 @@ mod tests {
         let rara_dir = root.join(".rara");
         let _ = fs::create_dir_all(&rara_dir);
         fs::write(root.join("AGENTS.md"), "workspace rules").expect("write");
-        let workspace = WorkspaceMemory { root, rara_dir };
+        let workspace = WorkspaceMemory::from_paths(root, rara_dir);
         let runtime = PromptRuntimeConfig {
             system_prompt: Some("custom base prompt".to_string()),
             ..Default::default()
@@ -528,7 +525,7 @@ mod tests {
             std::env::temp_dir().join(format!("rara-workspace-observe-{}", std::process::id()));
         let rara_dir = root.join(".rara");
         let _ = fs::create_dir_all(&rara_dir);
-        let workspace = WorkspaceMemory { root, rara_dir };
+        let workspace = WorkspaceMemory::from_paths(root, rara_dir);
         let runtime = PromptRuntimeConfig {
             append_system_prompt: Some("tail".to_string()),
             ..Default::default()
