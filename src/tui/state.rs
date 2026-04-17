@@ -1,3 +1,5 @@
+mod state_presets;
+
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::task::JoinHandle;
 use std::time::Instant;
@@ -11,6 +13,9 @@ use crate::config::{ConfigManager, RaraConfig};
 use crate::state_db::{PersistedInteraction, PersistedPlanStep, PersistedSessionSummary, PersistedTurnEntry, StateDb};
 use super::markdown;
 use super::markdown_stream::MarkdownStreamCollector;
+pub use self::state_presets::{
+    current_model_presets, selected_preset_idx_for_config, selected_provider_family_idx_for_config,
+};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum HelpTab {
@@ -160,23 +165,6 @@ pub struct RunningTask {
     pub started_at: Instant,
     pub next_heartbeat_after_secs: u64,
 }
-
-pub const CODEX_MODEL_PRESETS: [(&str, &str, &str); 2] = [
-    ("Codex (OAuth)", "codex", "codex"),
-    ("Codex (API Key)", "codex", "codex"),
-];
-
-pub const LOCAL_MODEL_PRESETS: [(&str, &str, &str); 3] = [
-    ("Gemma 4 E4B (Experimental)", "gemma4", "gemma4-e4b"),
-    ("Gemma 4 E2B (Experimental)", "gemma4", "gemma4-e2b"),
-    ("Qwn3 8B", "qwn3", "qwn3-8b"),
-];
-
-pub const OLLAMA_MODEL_PRESETS: [(&str, &str, &str); 3] = [
-    ("Gemma 4", "ollama", "gemma4"),
-    ("Gemma 4 E4B", "ollama", "gemma4:e4b"),
-    ("Gemma 4 E2B", "ollama", "gemma4:e2b"),
-];
 
 pub const PROVIDER_FAMILIES: [(ProviderFamily, &str, &str); 3] = [
     (
@@ -796,29 +784,4 @@ impl TuiApp {
             self.state_db_status = Some(format!("turn write failed: {err}"));
         }
     }
-}
-
-pub fn selected_provider_family_idx_for_config(config: &RaraConfig) -> usize {
-    match config.provider.as_str() {
-        "codex" => 0,
-        "ollama" => 2,
-        _ => 1,
-    }
-}
-
-pub fn current_model_presets(provider_picker_idx: usize) -> &'static [(&'static str, &'static str, &'static str)] {
-    match PROVIDER_FAMILIES[provider_picker_idx].0 {
-        ProviderFamily::Codex => &CODEX_MODEL_PRESETS,
-        ProviderFamily::CandleLocal => &LOCAL_MODEL_PRESETS,
-        ProviderFamily::Ollama => &OLLAMA_MODEL_PRESETS,
-    }
-}
-
-pub fn selected_preset_idx_for_config(config: &RaraConfig, provider_picker_idx: usize) -> usize {
-    current_model_presets(provider_picker_idx)
-        .iter()
-        .position(|(_, provider, model)| {
-            config.provider == *provider && config.model.as_deref() == Some(*model)
-        })
-        .unwrap_or(0)
 }
