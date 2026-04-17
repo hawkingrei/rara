@@ -254,11 +254,7 @@ async fn dispatch_event(
                 app.api_key_input.push(c);
             } else {
                 app.input.push(c);
-                if app.input.trim_start().starts_with('/') {
-                    app.open_overlay(Overlay::CommandPalette);
-                } else if matches!(app.overlay, Some(Overlay::CommandPalette)) {
-                    app.close_overlay();
-                }
+                app.sync_command_palette_with_input();
             }
         }
         AppEvent::Backspace => {
@@ -268,9 +264,7 @@ async fn dispatch_event(
                 app.api_key_input.pop();
             } else {
                 app.input.pop();
-            }
-            if app.input.trim().is_empty() && matches!(app.overlay, Some(Overlay::CommandPalette)) {
-                app.close_overlay();
+                app.sync_command_palette_with_input();
             }
         }
         AppEvent::ScrollTranscript(delta) => app.scroll_transcript(delta),

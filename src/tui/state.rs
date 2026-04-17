@@ -267,6 +267,10 @@ pub struct TuiApp {
     pub running_task: Option<RunningTask>,
 }
 
+pub fn input_requests_command_palette(input: &str) -> bool {
+    input.trim_start().starts_with('/')
+}
+
 impl TuiApp {
     pub fn new(cm: ConfigManager) -> Self {
         let cfg = cm.load();
@@ -584,6 +588,16 @@ impl TuiApp {
         self.overlay = Some(overlay);
     }
 
+    pub fn sync_command_palette_with_input(&mut self) {
+        if input_requests_command_palette(self.input.as_str()) {
+            if matches!(self.overlay, None | Some(Overlay::CommandPalette)) {
+                self.open_overlay(Overlay::CommandPalette);
+            }
+        } else if matches!(self.overlay, Some(Overlay::CommandPalette)) {
+            self.overlay = None;
+        }
+    }
+
     pub fn set_agent_execution_mode(&mut self, mode: AgentExecutionMode) {
         self.agent_execution_mode = mode;
     }
@@ -828,5 +842,20 @@ impl TuiApp {
         if let Err(err) = state_db.persist_turn(&self.snapshot.session_id, ordinal, &entries) {
             self.state_db_status = Some(format!("turn write failed: {err}"));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::input_requests_command_palette;
+
+    #[test]
+    fn detects_slash_command_input() {
+        assert!(input_requests_command_palette("/"));
+        assert!(input_requests_command_palette("/help"));
+        assert!(input_requests_command_palette("   /help"));
+        assert!(!input_requests_command_palette(""));
+        assert!(!input_requests_command_palette("help"));
+        assert!(!input_requests_command_palette("   help"));
     }
 }

@@ -8,6 +8,7 @@ use ratatui::{
     widgets::{Paragraph, Wrap},
     Frame,
 };
+use unicode_width::UnicodeWidthStr;
 use std::path::Path;
 
 use super::line_utils::prefix_lines;
@@ -76,12 +77,35 @@ fn render_transcript(f: &mut Frame, app: &TuiApp, area: Rect) {
 
     let mut lines = Vec::new();
     lines.extend(current_turn_lines(app));
+    let scroll_y = bottom_anchored_scroll(lines.as_slice(), area, app.transcript_scroll);
     f.render_widget(
         Paragraph::new(lines)
             .wrap(Wrap { trim: false })
-            .scroll((app.transcript_scroll as u16, 0)),
+            .scroll((scroll_y, 0)),
         area,
     );
+}
+
+fn bottom_anchored_scroll(lines: &[Line<'static>], area: Rect, scroll_from_bottom: usize) -> u16 {
+    if area.width == 0 || area.height == 0 {
+        return 0;
+    }
+
+    let wrap_width = area.width as usize;
+    let total_rows = lines
+        .iter()
+        .map(|line| {
+            let width = line
+                .spans
+                .iter()
+                .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
+                .sum::<usize>()
+                .max(1);
+            width.div_ceil(wrap_width)
+        })
+        .sum::<usize>();
+    let max_scroll = total_rows.saturating_sub(area.height as usize);
+    max_scroll.saturating_sub(scroll_from_bottom) as u16
 }
 
 pub fn committed_turn_lines(entries: &[TranscriptEntry], cwd: Option<&Path>) -> Vec<Line<'static>> {

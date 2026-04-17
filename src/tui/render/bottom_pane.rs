@@ -17,6 +17,10 @@ pub(crate) fn desired_viewport_height(app: &TuiApp, _width: u16, rows: u16) -> u
         return rows.max(1);
     }
 
+    if app.has_any_transcript() {
+        return rows.max(1);
+    }
+
     let bottom_pane_height = 5u16;
     let has_active_content = !app.active_turn.entries.is_empty();
     if !has_active_content {

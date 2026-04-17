@@ -25,11 +25,7 @@ pub(super) fn handle_paste(text: String, app: &mut TuiApp) {
     }
 
     app.input.push_str(&text);
-    if app.input.trim_start().starts_with('/') {
-        app.open_overlay(super::state::Overlay::CommandPalette);
-    } else if matches!(app.overlay, Some(super::state::Overlay::CommandPalette)) {
-        app.close_overlay();
-    }
+    app.sync_command_palette_with_input();
 }
 
 pub(super) fn build_terminal(
