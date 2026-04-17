@@ -411,11 +411,13 @@ pub async fn finish_running_task_if_ready(
             }
             match result {
                 Ok(_) => {
+                    app.finalize_agent_stream(None);
                     app.finalize_active_turn();
                     app.notice = Some("Prompt finished.".into());
                     app.set_runtime_phase(RuntimePhase::Idle, Some("prompt finished".into()));
                 }
                 Err(err) => {
+                    app.finalize_agent_stream(None);
                     app.set_runtime_phase(RuntimePhase::Failed, Some("query failed".into()));
                     let mut message = format!("Query failed: {err}");
                     if app.config.provider == "ollama" {
@@ -589,7 +591,7 @@ fn apply_tui_event(app: &mut TuiApp, event: TuiEvent) {
                     RuntimePhase::ProcessingResponse,
                     Some("streaming model output".into()),
                 );
-                app.append_to_latest_entry("Agent", &message);
+                app.append_agent_delta(&message);
                 return;
             } else if role == "Tool" || role == "Tool Result" || role == "Tool Error" {
                 app.set_runtime_phase(
@@ -601,6 +603,8 @@ fn apply_tui_event(app: &mut TuiApp, event: TuiEvent) {
                     RuntimePhase::ProcessingResponse,
                     Some("receiving model output".into()),
                 );
+                app.finalize_agent_stream(Some(message));
+                return;
             } else if role == "Download" {
                 let detail = message.lines().next().unwrap_or(role).trim().to_string();
                 if detail.starts_with("Ready ·") {

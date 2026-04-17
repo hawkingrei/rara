@@ -2,11 +2,15 @@ use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::task::JoinHandle;
 use std::time::Instant;
 use std::sync::Arc;
+use std::path::PathBuf;
 use serde_json::json;
+use ratatui::text::Line;
 
 use crate::agent::{Agent, AgentExecutionMode, BashApprovalMode};
 use crate::config::{ConfigManager, RaraConfig};
 use crate::state_db::{PersistedInteraction, PersistedPlanStep, PersistedSessionSummary, PersistedTurnEntry, StateDb};
+use super::markdown;
+use super::markdown_stream::MarkdownStreamCollector;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum HelpTab {
@@ -203,6 +207,40 @@ pub struct TranscriptTurn {
     pub entries: Vec<TranscriptEntry>,
 }
 
+pub struct AgentMarkdownStreamState {
+    raw_text: String,
+    cwd: PathBuf,
+    collector: MarkdownStreamCollector,
+    committed_lines: Vec<Line<'static>>,
+    display_lines: Vec<Line<'static>>,
+}
+
+impl AgentMarkdownStreamState {
+    fn new(cwd: PathBuf) -> Self {
+        Self {
+            raw_text: String::new(),
+            collector: MarkdownStreamCollector::new(None, &cwd),
+            committed_lines: Vec::new(),
+            display_lines: Vec::new(),
+            cwd,
+        }
+    }
+
+    fn push_delta(&mut self, delta: &str) {
+        self.raw_text.push_str(delta);
+        self.collector.push_delta(delta);
+        self.committed_lines
+            .extend(self.collector.commit_complete_lines());
+        self.display_lines.clear();
+        markdown::append_markdown(
+            &self.raw_text,
+            None,
+            Some(self.cwd.as_path()),
+            &mut self.display_lines,
+        );
+    }
+}
+
 pub struct TuiApp {
     pub input: String,
     pub committed_turns: Vec<TranscriptTurn>,
@@ -228,6 +266,7 @@ pub struct TuiApp {
     pub recent_sessions: Vec<PersistedSessionSummary>,
     pub resume_picker_idx: usize,
     pub transcript_scroll: usize,
+    pub agent_markdown_stream: Option<AgentMarkdownStreamState>,
     pub terminal_focused: bool,
     pub state_db: Option<Arc<StateDb>>,
     pub state_db_status: Option<String>,
@@ -273,6 +312,7 @@ impl TuiApp {
             recent_sessions: Vec::new(),
             resume_picker_idx: 0,
             transcript_scroll: 0,
+            agent_markdown_stream: None,
             terminal_focused: true,
             state_db: None,
             state_db_status: None,
@@ -414,6 +454,45 @@ impl TuiApp {
         self.push_entry(role, delta.to_string());
     }
 
+    pub fn append_agent_delta(&mut self, delta: &str) {
+        let cwd = if !self.snapshot.cwd.is_empty() {
+            PathBuf::from(self.snapshot.cwd.as_str())
+        } else {
+            std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+        };
+        let stream = self
+            .agent_markdown_stream
+            .get_or_insert_with(|| AgentMarkdownStreamState::new(cwd));
+        stream.push_delta(delta);
+        self.transcript_scroll = 0;
+    }
+
+    pub fn agent_stream_lines(&self) -> Option<&[Line<'static>]> {
+        self.agent_markdown_stream
+            .as_ref()
+            .map(|stream| stream.display_lines.as_slice())
+    }
+
+    pub fn finalize_agent_stream(&mut self, final_message: Option<String>) {
+        let fallback = self
+            .agent_markdown_stream
+            .take()
+            .map(|stream| stream.raw_text)
+            .filter(|text| !text.is_empty());
+        let Some(message) = final_message.or(fallback) else {
+            return;
+        };
+
+        if let Some(last) = self.active_turn.entries.last_mut() {
+            if last.role == "Agent" {
+                last.message = message;
+                self.transcript_scroll = 0;
+                return;
+            }
+        }
+        self.push_entry("Agent", message);
+    }
+
     pub fn push_notice(&mut self, message: impl Into<String>) {
         let message = message.into();
         self.notice = Some(message.clone());
@@ -425,6 +504,7 @@ impl TuiApp {
         self.active_turn.entries.clear();
         self.inserted_turns = 0;
         self.transcript_scroll = 0;
+        self.agent_markdown_stream = None;
         self.notice = Some("Cleared local transcript view.".into());
     }
 
@@ -554,6 +634,7 @@ impl TuiApp {
     }
 
     fn commit_active_turn(&mut self) {
+        self.finalize_agent_stream(None);
         if self.active_turn.entries.is_empty() {
             return;
         }
@@ -573,6 +654,7 @@ impl TuiApp {
         self.active_turn.entries.clear();
         self.inserted_turns = 0;
         self.transcript_scroll = 0;
+        self.agent_markdown_stream = None;
     }
 
     pub fn attach_state_db(&mut self, state_db: Arc<StateDb>) {

@@ -1,6 +1,11 @@
 mod app_event;
 mod command;
 mod event_stream;
+mod highlight;
+mod line_utils;
+mod markdown;
+mod markdown_render;
+mod markdown_stream;
 mod render;
 mod runtime;
 mod state;
@@ -9,7 +14,7 @@ use std::io;
 use std::sync::Arc;
 
 use crossterm::{
-    cursor::{Hide, Show},
+    cursor::Show,
     event::{EventStream, KeyCode},
     execute,
     terminal::size as terminal_size,
@@ -46,8 +51,6 @@ use crate::agent::BashApprovalMode;
 
 pub async fn run_tui(agent: Agent, oauth_manager: OAuthManager) -> anyhow::Result<()> {
     enable_raw_mode()?;
-    let mut stdout = io::stdout();
-    execute!(stdout, Hide)?;
     let initial_size = terminal_size()?;
     let mut app = TuiApp::new(crate::config::ConfigManager::new()?);
     let mut viewport_height = desired_viewport_height(&app, initial_size.0, initial_size.1);
@@ -588,7 +591,8 @@ fn flush_committed_history(
     }
     while app.inserted_turns < app.committed_turns.len() {
         let turn = &app.committed_turns[app.inserted_turns];
-        let mut lines = committed_turn_lines(turn.entries.as_slice());
+        let cwd = (!app.snapshot.cwd.is_empty()).then(|| std::path::Path::new(app.snapshot.cwd.as_str()));
+        let mut lines = committed_turn_lines(turn.entries.as_slice(), cwd);
         if app.inserted_turns > 0 && !lines.is_empty() {
             lines.insert(0, ratatui::text::Line::from(""));
         }

@@ -5,6 +5,9 @@ use ratatui::{
     widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Tabs, Wrap},
     Frame,
 };
+use std::path::Path;
+use textwrap::Options;
+use unicode_width::UnicodeWidthStr;
 
 use super::command::{
     api_key_status, command_detail_text, command_spec_by_index, general_help_text, help_text,
@@ -12,6 +15,7 @@ use super::command::{
     palette_commands, quick_actions_text, recent_transcript_preview, status_prompt_sources_text,
     status_plan_text, status_request_user_input_text, status_resources_text, status_runtime_text, status_workspace_text,
 };
+use super::line_utils::prefix_lines;
 use super::state::{
     current_model_presets, HelpTab, Overlay, PROVIDER_FAMILIES, TaskKind, TranscriptEntry, TuiApp,
 };
@@ -23,10 +27,14 @@ pub fn render(f: &mut Frame, app: &TuiApp) {
         .split(f.area());
 
     render_transcript(f, app, layout[0]);
-    render_bottom_pane(f, app, layout[1]);
+    let mut cursor = render_bottom_pane(f, app, layout[1]);
 
     if let Some(overlay) = app.overlay {
-        render_overlay(f, app, overlay);
+        cursor = render_overlay(f, app, overlay).or(cursor);
+    }
+
+    if let Some((x, y)) = cursor {
+        f.set_cursor_position((x, y));
     }
 }
 
@@ -43,14 +51,15 @@ pub fn desired_viewport_height(app: &TuiApp, _width: u16, rows: u16) -> u16 {
     rows.max(1)
 }
 
-fn render_bottom_pane(f: &mut Frame, app: &TuiApp, area: Rect) {
+fn render_bottom_pane(f: &mut Frame, app: &TuiApp, area: Rect) -> Option<(u16, u16)> {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(1), Constraint::Min(3), Constraint::Length(1)])
         .split(area);
     render_activity_bar(f, app, chunks[0]);
-    render_composer(f, app, chunks[1]);
+    let cursor = render_composer(f, app, chunks[1]);
     render_footer(f, app, chunks[2]);
+    cursor
 }
 
 fn render_transcript(f: &mut Frame, app: &TuiApp, area: Rect) {
@@ -97,7 +106,7 @@ fn render_transcript(f: &mut Frame, app: &TuiApp, area: Rect) {
     );
 }
 
-pub fn committed_turn_lines(entries: &[TranscriptEntry]) -> Vec<Line<'static>> {
+pub fn committed_turn_lines(entries: &[TranscriptEntry], cwd: Option<&Path>) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     if let Some(user) = entries.iter().find(|entry| entry.role == "You") {
         lines.extend(prefixed_message_lines("You", &user.message, 4));
@@ -142,7 +151,12 @@ pub fn committed_turn_lines(entries: &[TranscriptEntry]) -> Vec<Line<'static>> {
 
     for entry in tail_entries {
         let max_lines = if entry.role == "Agent" { 8 } else { 4 };
-        lines.extend(prefixed_message_lines(&entry.role, &entry.message, max_lines));
+        lines.extend(formatted_message_lines(
+            &entry.role,
+            &entry.message,
+            max_lines,
+            cwd,
+        ));
         lines.push(Line::from(""));
     }
 
@@ -174,6 +188,7 @@ fn current_turn_lines(app: &TuiApp) -> Vec<Line<'static>> {
         .rev()
         .find(|entry| entry.role == "Agent")
         .map(|entry| entry.message.as_str());
+    let streaming_agent_lines = app.agent_stream_lines();
     let latest_system = current_turn
         .iter()
         .rev()
@@ -185,6 +200,7 @@ fn current_turn_lines(app: &TuiApp) -> Vec<Line<'static>> {
         .find(|entry| entry.role == "Tool Result" || entry.role == "Tool Error")
         .map(|entry| (entry.role.as_str(), entry.message.as_str()));
     let mut lines = Vec::new();
+    let cwd = (!app.snapshot.cwd.is_empty()).then(|| Path::new(app.snapshot.cwd.as_str()));
 
     if !user_message.is_empty() {
         lines.extend(prefixed_message_lines("You", user_message, 4));
@@ -263,10 +279,12 @@ fn current_turn_lines(app: &TuiApp) -> Vec<Line<'static>> {
             super::state::RuntimePhase::RunningTool | super::state::RuntimePhase::SendingPrompt
         );
 
-    if let Some(agent_message) = latest_agent.filter(|_| !suppress_intermediate_agent) {
-        lines.extend(prefixed_message_lines("Agent", agent_message, usize::MAX));
+    if let Some(stream_lines) = streaming_agent_lines.filter(|_| !suppress_intermediate_agent) {
+        lines.extend(rendered_markdown_lines("Agent", stream_lines, usize::MAX));
+    } else if let Some(agent_message) = latest_agent.filter(|_| !suppress_intermediate_agent) {
+        lines.extend(formatted_message_lines("Agent", agent_message, usize::MAX, cwd));
     } else if let Some(system_message) = latest_system {
-        lines.extend(prefixed_message_lines("System", system_message, 14));
+        lines.extend(formatted_message_lines("System", system_message, 14, cwd));
     } else if let Some((role, tool_result)) = latest_tool_result {
         lines.extend(prefixed_message_lines(role, tool_result, 14));
     } else if app.is_busy() {
@@ -388,6 +406,86 @@ fn prefixed_message_lines(role: &str, message: &str, max_lines: usize) -> Vec<Li
     lines
 }
 
+fn formatted_message_lines(
+    role: &str,
+    message: &str,
+    max_lines: usize,
+    cwd: Option<&Path>,
+) -> Vec<Line<'static>> {
+    if matches!(role, "Agent" | "System") {
+        return markdown_message_lines(role, message, max_lines, cwd);
+    }
+    prefixed_message_lines(role, message, max_lines)
+}
+
+fn markdown_message_lines(
+    role: &str,
+    message: &str,
+    max_lines: usize,
+    cwd: Option<&Path>,
+) -> Vec<Line<'static>> {
+    let mut rendered = Vec::new();
+    super::markdown::append_markdown(message, None, cwd, &mut rendered);
+    let rendered_len = rendered.len();
+
+    if rendered.is_empty() {
+        return vec![Line::from(role.to_string())];
+    }
+
+    let capped = if max_lines == usize::MAX {
+        rendered.len()
+    } else {
+        max_lines.min(rendered.len())
+    };
+
+    let mut lines = vec![Line::from(role.to_string())];
+    let prefixed = prefix_lines(
+        rendered.into_iter().take(capped).collect(),
+        Span::raw("  "),
+        Span::raw("  "),
+    );
+    lines.extend(prefixed);
+    if capped < rendered_len {
+        lines.push(Line::from(Span::styled(
+            format!("  ... {} more line(s)", rendered_len - capped),
+            Style::default().fg(Color::DarkGray),
+        )));
+    }
+    lines
+}
+
+fn rendered_markdown_lines(
+    role: &str,
+    rendered: &[Line<'static>],
+    max_lines: usize,
+) -> Vec<Line<'static>> {
+    if rendered.is_empty() {
+        return vec![Line::from(role.to_string())];
+    }
+
+    let rendered_len = rendered.len();
+    let capped = if max_lines == usize::MAX {
+        rendered_len
+    } else {
+        max_lines.min(rendered_len)
+    };
+
+    let mut lines = vec![Line::from(role.to_string())];
+    let prefixed = prefix_lines(
+        rendered.iter().take(capped).cloned().collect(),
+        Span::raw("  "),
+        Span::raw("  "),
+    );
+    lines.extend(prefixed);
+    if capped < rendered_len {
+        lines.push(Line::from(Span::styled(
+            format!("  ... {} more line(s)", rendered_len - capped),
+            Style::default().fg(Color::DarkGray),
+        )));
+    }
+    lines
+}
+
 fn is_exploration_tool(name: &str) -> bool {
     matches!(name, "list_files" | "read_file" | "glob" | "grep" | "search_files")
 }
@@ -474,7 +572,7 @@ fn animated_activity_label(app: &TuiApp, label: &str) -> String {
     format!("{label}{dots}")
 }
 
-fn render_composer(f: &mut Frame, app: &TuiApp, area: Rect) {
+fn render_composer(f: &mut Frame, app: &TuiApp, area: Rect) -> Option<(u16, u16)> {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(2), Constraint::Length(1)])
@@ -529,6 +627,7 @@ fn render_composer(f: &mut Frame, app: &TuiApp, area: Rect) {
         Paragraph::new(Span::styled(hint, Style::default().fg(Color::Gray))).alignment(Alignment::Left),
         chunks[1],
     );
+    Some(composer_cursor_position(app.input.as_str(), chunks[0]))
 }
 
 fn render_footer(f: &mut Frame, app: &TuiApp, area: Rect) {
@@ -556,19 +655,43 @@ fn render_footer(f: &mut Frame, app: &TuiApp, area: Rect) {
     );
 }
 
-fn render_overlay(f: &mut Frame, app: &TuiApp, overlay: Overlay) {
+fn render_overlay(f: &mut Frame, app: &TuiApp, overlay: Overlay) -> Option<(u16, u16)> {
     let popup = centered_rect(78, 70, f.area());
     f.render_widget(Clear, popup);
     match overlay {
-        Overlay::Help(tab) => render_help_modal(f, app, popup, tab),
-        Overlay::CommandPalette => render_command_palette(f, app, popup),
-        Overlay::Status => render_status_modal(f, app, popup),
-        Overlay::Setup => render_setup_modal(f, app, popup),
-        Overlay::ProviderPicker => render_provider_picker_modal(f, app, popup),
-        Overlay::ResumePicker => render_resume_picker_modal(f, app, popup),
-        Overlay::ModelPicker => render_model_picker_modal(f, app, popup),
+        Overlay::Help(tab) => {
+            render_help_modal(f, app, popup, tab);
+            None
+        }
+        Overlay::CommandPalette => {
+            render_command_palette(f, app, popup);
+            None
+        }
+        Overlay::Status => {
+            render_status_modal(f, app, popup);
+            None
+        }
+        Overlay::Setup => {
+            render_setup_modal(f, app, popup);
+            None
+        }
+        Overlay::ProviderPicker => {
+            render_provider_picker_modal(f, app, popup);
+            None
+        }
+        Overlay::ResumePicker => {
+            render_resume_picker_modal(f, app, popup);
+            None
+        }
+        Overlay::ModelPicker => {
+            render_model_picker_modal(f, app, popup);
+            None
+        }
         Overlay::BaseUrlEditor => render_base_url_editor_modal(f, app, popup),
-        Overlay::CodexAuthGuide => render_codex_auth_guide_modal(f, app, popup),
+        Overlay::CodexAuthGuide => {
+            render_codex_auth_guide_modal(f, app, popup);
+            None
+        }
         Overlay::ApiKeyEditor => render_api_key_editor_modal(f, app, popup),
     }
 }
@@ -1078,7 +1201,7 @@ fn render_model_picker_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
     );
 }
 
-fn render_base_url_editor_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
+fn render_base_url_editor_modal(f: &mut Frame, app: &TuiApp, area: Rect) -> Option<(u16, u16)> {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(4), Constraint::Length(3), Constraint::Length(2)])
@@ -1094,6 +1217,7 @@ fn render_base_url_editor_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
     f.render_widget(intro, chunks[0]);
     f.render_widget(editor, chunks[1]);
     f.render_widget(footer, chunks[2]);
+    Some(editor_cursor_position(app.base_url_input.as_str(), chunks[1]))
 }
 
 fn render_codex_auth_guide_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
@@ -1136,7 +1260,7 @@ fn render_codex_auth_guide_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
     );
 }
 
-fn render_api_key_editor_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
+fn render_api_key_editor_modal(f: &mut Frame, app: &TuiApp, area: Rect) -> Option<(u16, u16)> {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(4), Constraint::Length(3), Constraint::Length(2)])
@@ -1153,6 +1277,70 @@ fn render_api_key_editor_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
     f.render_widget(intro, chunks[0]);
     f.render_widget(editor, chunks[1]);
     f.render_widget(footer, chunks[2]);
+    Some(editor_cursor_position(app.api_key_input.as_str(), chunks[1]))
+}
+
+fn composer_cursor_position(input: &str, area: Rect) -> (u16, u16) {
+    wrapped_text_cursor_position(input, area, Some("› "), None)
+}
+
+fn editor_cursor_position(input: &str, area: Rect) -> (u16, u16) {
+    wrapped_text_cursor_position(input, inner_rect(area), None, None)
+}
+
+fn inner_rect(area: Rect) -> Rect {
+    Rect {
+        x: area.x.saturating_add(1),
+        y: area.y.saturating_add(1),
+        width: area.width.saturating_sub(2),
+        height: area.height.saturating_sub(2),
+    }
+}
+
+fn wrapped_text_cursor_position(
+    input: &str,
+    area: Rect,
+    initial_indent: Option<&str>,
+    subsequent_indent: Option<&str>,
+) -> (u16, u16) {
+    if area.width == 0 || area.height == 0 {
+        return (area.x, area.y);
+    }
+
+    let initial_indent = initial_indent.unwrap_or("");
+    let subsequent_indent = subsequent_indent.unwrap_or("");
+    let mut wrapped_rows: Vec<String> = Vec::new();
+
+    if input.is_empty() {
+        wrapped_rows.push(initial_indent.to_string());
+    } else {
+        for logical_line in input.split('\n') {
+            let options = Options::new(area.width as usize)
+                .initial_indent(initial_indent)
+                .subsequent_indent(subsequent_indent)
+                .break_words(false);
+            let wraps = textwrap::wrap(logical_line, options);
+            if wraps.is_empty() {
+                wrapped_rows.push(initial_indent.to_string());
+            } else {
+                wrapped_rows.extend(wraps.into_iter().map(|line| line.into_owned()));
+            }
+        }
+    }
+
+    let last_row = wrapped_rows
+        .last()
+        .cloned()
+        .unwrap_or_else(|| initial_indent.to_string());
+    let row_index = wrapped_rows.len().saturating_sub(1);
+    let cursor_y = area
+        .y
+        .saturating_add(row_index.min(area.height.saturating_sub(1) as usize) as u16);
+    let display_width = UnicodeWidthStr::width(last_row.as_str()) as u16;
+    let max_x_offset = area.width.saturating_sub(1);
+    let cursor_x = area.x.saturating_add(display_width.min(max_x_offset));
+
+    (cursor_x, cursor_y)
 }
 
 fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
