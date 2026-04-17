@@ -1225,7 +1225,7 @@ fn render_codex_auth_guide_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(8), Constraint::Min(6), Constraint::Length(2)])
         .split(area);
-    let ssh_hint = if std::env::var_os("SSH_CONNECTION").is_some() || std::env::var_os("SSH_TTY").is_some() {
+    let ssh_hint = if super::is_ssh_session() {
         "\n\nSSH session detected. Browser OAuth on a remote shell usually cannot complete the localhost callback. Use API key in SSH/headless sessions."
     } else {
         ""

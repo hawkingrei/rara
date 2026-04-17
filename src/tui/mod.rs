@@ -28,6 +28,7 @@ use ratatui::{
     Terminal, TerminalOptions, Viewport,
 };
 use tokio::time::{interval, Duration};
+use unicode_width::UnicodeWidthStr;
 
 use crate::agent::Agent;
 use crate::agent::CompletedInteraction;
@@ -752,7 +753,7 @@ fn with_border(lines: Vec<Line<'static>>, inner_width: usize) -> Vec<Line<'stati
 }
 
 fn display_width(value: &str) -> usize {
-    value.chars().count()
+    UnicodeWidthStr::width(value)
 }
 
 fn restore_latest_session(
@@ -912,6 +913,6 @@ fn should_open_codex_auth_guide(app: &TuiApp) -> bool {
     *provider == "codex" && app.config.api_key.as_deref().is_none_or(str::is_empty)
 }
 
-fn is_ssh_session() -> bool {
+pub(crate) fn is_ssh_session() -> bool {
     std::env::var_os("SSH_CONNECTION").is_some() || std::env::var_os("SSH_TTY").is_some()
 }

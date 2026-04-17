@@ -793,7 +793,7 @@ async fn run_oauth_login(
     let (verifier, challenge) = oauth_manager.generate_pkce();
     let (port, receiver) = oauth_manager.start_callback_server().await?;
     let auth_url = oauth_manager.get_authorize_url(&challenge, port);
-    let is_ssh = std::env::var_os("SSH_CONNECTION").is_some() || std::env::var_os("SSH_TTY").is_some();
+    let is_ssh = super::is_ssh_session();
     let _ = sender.send(TuiEvent::Transcript {
         role: "Runtime",
         message: if is_ssh {
