@@ -113,6 +113,10 @@ pub struct RuntimeSnapshot {
     pub pending_approval: Option<PendingApprovalSnapshot>,
     pub completed_question: Option<(String, String)>,
     pub completed_approval: Option<(String, String)>,
+    pub prompt_base_kind: String,
+    pub prompt_section_keys: Vec<String>,
+    pub prompt_source_status_lines: Vec<String>,
+    pub prompt_warnings: Vec<String>,
 }
 
 #[derive(Default, Clone)]
@@ -379,6 +383,7 @@ impl TuiApp {
 
     pub fn sync_snapshot(&mut self, agent: &Agent) {
         let (cwd, branch) = agent.workspace.get_env_info();
+        let effective_prompt = agent.effective_prompt();
         self.snapshot = RuntimeSnapshot {
             cwd,
             branch,
@@ -426,6 +431,18 @@ impl TuiApp {
                 .completed_approval
                 .as_ref()
                 .map(|item| (item.title.clone(), item.summary.clone())),
+            prompt_base_kind: effective_prompt.base_prompt_kind.label().to_string(),
+            prompt_section_keys: effective_prompt
+                .section_keys
+                .iter()
+                .map(|key| (*key).to_string())
+                .collect(),
+            prompt_source_status_lines: effective_prompt
+                .sources
+                .iter()
+                .map(|source| source.status_line())
+                .collect(),
+            prompt_warnings: agent.prompt_config().warnings.clone(),
         };
         self.agent_execution_mode = agent.execution_mode;
         self.bash_approval_mode = agent.bash_approval_mode;

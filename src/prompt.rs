@@ -95,23 +95,33 @@ pub struct PromptRuntimeConfig {
     pub system_prompt: Option<String>,
     pub append_system_prompt: Option<String>,
     pub compact_prompt: Option<String>,
+    pub warnings: Vec<String>,
 }
 
 impl PromptRuntimeConfig {
     pub fn from_config(config: &RaraConfig) -> Self {
+        let (system_prompt, mut warnings) = resolve_prompt_text(
+            config.system_prompt.as_deref(),
+            config.system_prompt_file.as_deref(),
+            "system prompt",
+        );
+        let (append_system_prompt, append_warnings) = resolve_prompt_text(
+            config.append_system_prompt.as_deref(),
+            config.append_system_prompt_file.as_deref(),
+            "append system prompt",
+        );
+        warnings.extend(append_warnings);
+        let (compact_prompt, compact_warnings) = resolve_prompt_text(
+            config.compact_prompt.as_deref(),
+            config.compact_prompt_file.as_deref(),
+            "compact prompt",
+        );
+        warnings.extend(compact_warnings);
         Self {
-            system_prompt: resolve_prompt_text(
-                config.system_prompt.as_deref(),
-                config.system_prompt_file.as_deref(),
-            ),
-            append_system_prompt: resolve_prompt_text(
-                config.append_system_prompt.as_deref(),
-                config.append_system_prompt_file.as_deref(),
-            ),
-            compact_prompt: resolve_prompt_text(
-                config.compact_prompt.as_deref(),
-                config.compact_prompt_file.as_deref(),
-            ),
+            system_prompt,
+            append_system_prompt,
+            compact_prompt,
+            warnings,
         }
     }
 
@@ -175,22 +185,25 @@ pub fn build_effective_prompt(
     mode: PromptMode,
 ) -> EffectivePrompt {
     let sources = discover_prompt_sources(workspace, runtime);
-    let static_sections = default_system_prompt_sections();
     let dynamic_sections = dynamic_system_prompt_sections(workspace, &sources, mode);
-    let default_prompt = resolve_sections(static_sections.clone()).join("\n\n");
+    let (base_prompt_kind, base_prompt_text, mut section_keys) =
+        if let Some(custom_prompt) = &runtime.system_prompt {
+            (
+                BasePromptKind::Custom,
+                custom_prompt.clone(),
+                vec!["custom_base_prompt"],
+            )
+        } else {
+            let static_sections = default_system_prompt_sections();
+            let section_keys = static_sections.iter().map(|section| section.key).collect();
+            (
+                BasePromptKind::Default,
+                resolve_sections(static_sections).join("\n\n"),
+                section_keys,
+            )
+        };
 
-    let base_prompt_kind = if runtime.system_prompt.is_some() {
-        BasePromptKind::Custom
-    } else {
-        BasePromptKind::Default
-    };
-
-    let mut final_sections = vec![runtime.system_prompt.clone().unwrap_or(default_prompt)];
-    let mut section_keys = match base_prompt_kind {
-        BasePromptKind::Default => static_sections.iter().map(|section| section.key).collect(),
-        BasePromptKind::Custom => vec!["custom_base_prompt"],
-    };
-
+    let mut final_sections = vec![base_prompt_text];
     section_keys.extend(
         dynamic_sections
             .iter()
@@ -212,15 +225,36 @@ pub fn build_effective_prompt(
     }
 }
 
-fn resolve_prompt_text(inline: Option<&str>, file: Option<&str>) -> Option<String> {
+fn resolve_prompt_text(
+    inline: Option<&str>,
+    file: Option<&str>,
+    kind: &str,
+) -> (Option<String>, Vec<String>) {
     if let Some(value) = inline.map(str::trim).filter(|value| !value.is_empty()) {
-        return Some(value.to_string());
+        return (Some(value.to_string()), Vec::new());
     }
-    let path = file.map(str::trim).filter(|value| !value.is_empty())?;
-    fs::read_to_string(Path::new(path))
-        .ok()
-        .map(|content| content.trim().to_string())
-        .filter(|content| !content.is_empty())
+    let Some(path) = file.map(str::trim).filter(|value| !value.is_empty()) else {
+        return (None, Vec::new());
+    };
+    match fs::read_to_string(Path::new(path)) {
+        Ok(content) => {
+            let trimmed = content.trim().to_string();
+            if trimmed.is_empty() {
+                (
+                    None,
+                    vec![format!(
+                        "configured {kind} file is empty and was ignored: {path}"
+                    )],
+                )
+            } else {
+                (Some(trimmed), Vec::new())
+            }
+        }
+        Err(err) => {
+            let message = format!("failed to read configured {kind} file '{path}': {err}");
+            (None, vec![message])
+        }
+    }
 }
 
 fn default_system_prompt() -> String {

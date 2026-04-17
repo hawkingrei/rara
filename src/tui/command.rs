@@ -1,7 +1,4 @@
 use crate::config::RaraConfig;
-use crate::agent::AgentExecutionMode;
-use crate::prompt::{self, PromptRuntimeConfig};
-use crate::workspace::WorkspaceMemory;
 
 use super::state::{
     current_model_presets, CommandSpec, LocalCommand, LocalCommandKind, ProviderFamily, TuiApp,
@@ -351,30 +348,25 @@ pub fn status_resources_text(app: &TuiApp) -> String {
 }
 
 pub fn status_prompt_sources_text(app: &TuiApp) -> String {
-    let workspace = match WorkspaceMemory::new() {
-        Ok(workspace) => workspace,
-        Err(_) => return "No prompt sources discovered.".to_string(),
-    };
-    let runtime = PromptRuntimeConfig::from_config(&app.config);
-    let effective = prompt::build_effective_prompt(
-        &workspace,
-        &runtime,
-        match app.agent_execution_mode {
-            AgentExecutionMode::Execute => prompt::PromptMode::Execute,
-            AgentExecutionMode::Plan => prompt::PromptMode::Plan,
-        },
-    );
     let mut lines = vec![
-        format!("base prompt: {}", effective.base_prompt_kind.label()),
-        format!("active sections: {}", effective.section_keys.join(", ")),
+        format!("base prompt: {}", app.snapshot.prompt_base_kind),
+        format!("active sections: {}", app.snapshot.prompt_section_keys.join(", ")),
         String::new(),
     ];
-    let mut sources = effective
-        .sources
-        .into_iter()
-        .map(|source| source.status_line())
-        .collect::<Vec<_>>();
+    let mut sources = app.snapshot.prompt_source_status_lines.clone();
     lines.append(&mut sources);
+    if !app.snapshot.prompt_warnings.is_empty() {
+        if lines.len() > 3 {
+            lines.push(String::new());
+        }
+        lines.push("warnings:".to_string());
+        lines.extend(
+            app.snapshot
+                .prompt_warnings
+                .iter()
+                .map(|warning| format!("- {warning}")),
+        );
+    }
     if lines.len() == 3 {
         "No prompt sources discovered.".to_string()
     } else {
