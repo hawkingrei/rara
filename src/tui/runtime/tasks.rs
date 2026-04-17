@@ -1,0 +1,488 @@
+use std::sync::Arc;
+use std::time::Instant;
+
+use anyhow::anyhow;
+use tokio::sync::mpsc;
+
+use crate::agent::{Agent, AgentOutputMode, BashApprovalMode};
+use crate::llm::LlmBackend;
+use crate::oauth::OAuthManager;
+use crate::sandbox::SandboxManager;
+use crate::session::SessionManager;
+use crate::skill::SkillManager;
+use crate::tool::ToolManager;
+use crate::tools::agent::{AgentTool, TeamCreateTool};
+use crate::tools::bash::BashTool;
+use crate::tools::context::RetrieveSessionContextTool;
+use crate::tools::file::{
+    ListFilesTool, ReadFileTool, ReplaceTool, SearchFilesTool, WriteFileTool,
+};
+use crate::tools::patch::ApplyPatchTool;
+use crate::tools::search::{GlobTool, GrepTool};
+use crate::tools::skill::SkillTool;
+use crate::tools::vector::{RememberExperienceTool, RetrieveExperienceTool};
+use crate::tools::web::WebFetchTool;
+use crate::tools::workspace::UpdateProjectMemoryTool;
+use crate::vectordb::VectorDB;
+use crate::workspace::WorkspaceMemory;
+
+use super::super::state::{RunningTask, RuntimePhase, TaskCompletion, TaskKind, TuiApp, TuiEvent};
+use super::events::{apply_tui_event, convert_agent_event, format_error_chain};
+
+pub(super) fn start_query_task(app: &mut TuiApp, prompt: String, mut agent: Agent) {
+    let (sender, receiver) = mpsc::unbounded_channel();
+    agent.set_execution_mode(app.agent_execution_mode);
+    agent.set_bash_approval_mode(app.bash_approval_mode);
+    app.notice = Some("Running prompt.".into());
+    app.set_runtime_phase(RuntimePhase::SendingPrompt, Some("sending prompt".into()));
+    app.push_entry("You", prompt.clone());
+
+    let handle = tokio::spawn(async move {
+        let tx = sender.clone();
+        let result = agent
+            .query_with_mode_and_events(prompt, AgentOutputMode::Silent, move |event| {
+                if let Some(event) = convert_agent_event(event) {
+                    let _ = tx.send(event);
+                }
+            })
+            .await;
+        TaskCompletion::Query { agent, result }
+    });
+
+    app.running_task = Some(RunningTask {
+        kind: TaskKind::Query,
+        receiver,
+        handle,
+        started_at: Instant::now(),
+        next_heartbeat_after_secs: 2,
+    });
+}
+
+pub(super) fn start_compact_task(app: &mut TuiApp, mut agent: Agent) {
+    let (sender, receiver) = mpsc::unbounded_channel();
+    agent.set_execution_mode(app.agent_execution_mode);
+    agent.set_bash_approval_mode(app.bash_approval_mode);
+    app.notice = Some("Compacting conversation history.".into());
+    app.set_runtime_phase(RuntimePhase::ProcessingResponse, Some("compacting history".into()));
+    app.push_entry("You", "/compact");
+
+    let handle = tokio::spawn(async move {
+        let tx = sender.clone();
+        let result = agent
+            .compact_now_with_reporter(move |event| {
+                if let Some(event) = convert_agent_event(event) {
+                    let _ = tx.send(event);
+                }
+            })
+            .await;
+        TaskCompletion::Compact { agent, result }
+    });
+
+    app.running_task = Some(RunningTask {
+        kind: TaskKind::Compact,
+        receiver,
+        handle,
+        started_at: Instant::now(),
+        next_heartbeat_after_secs: 2,
+    });
+}
+
+pub(super) fn start_pending_approval_task(
+    app: &mut TuiApp,
+    selection: BashApprovalMode,
+    mut agent: Agent,
+) {
+    let (sender, receiver) = mpsc::unbounded_channel();
+    let selection_label = match selection {
+        BashApprovalMode::Once => "run once",
+        BashApprovalMode::Always => "always allow bash",
+        BashApprovalMode::Suggestion => "suggestion only",
+    };
+    app.notice = Some(format!("Answering approval request: {selection_label}."));
+    app.set_runtime_phase(RuntimePhase::ProcessingResponse, Some("resuming after approval".into()));
+
+    let handle = tokio::spawn(async move {
+        let tx = sender.clone();
+        let result = agent
+            .answer_pending_approval_with_events(selection, AgentOutputMode::Silent, move |event| {
+                if let Some(event) = convert_agent_event(event) {
+                    let _ = tx.send(event);
+                }
+            })
+            .await;
+        TaskCompletion::Query { agent, result }
+    });
+
+    app.running_task = Some(RunningTask {
+        kind: TaskKind::Query,
+        receiver,
+        handle,
+        started_at: Instant::now(),
+        next_heartbeat_after_secs: 2,
+    });
+}
+
+pub(super) fn start_rebuild_task(app: &mut TuiApp) {
+    let (sender, receiver) = mpsc::unbounded_channel();
+    let config = app.config.clone();
+    let provider = config.provider.clone();
+    let model = config.model.clone().unwrap_or_else(|| "-".to_string());
+    app.notice = Some(format!("Rebuilding backend for {provider} / {model}."));
+    app.set_runtime_phase(
+        RuntimePhase::RebuildingBackend,
+        Some(format!("preparing {provider} / {model}")),
+    );
+    app.push_entry("Download", format!("Preparing {} / {}", provider, model));
+
+    let handle = tokio::spawn(async move {
+        let tx = sender.clone();
+        let progress: crate::local_backend::LocalProgressReporter = Arc::new(move |message| {
+            let _ = tx.send(TuiEvent::Transcript {
+                role: "Download",
+                message,
+            });
+        });
+        let result = rebuild_agent_with_progress(&config, Some(progress)).await;
+        TaskCompletion::Rebuild { result }
+    });
+
+    app.running_task = Some(RunningTask {
+        kind: TaskKind::Rebuild,
+        receiver,
+        handle,
+        started_at: Instant::now(),
+        next_heartbeat_after_secs: u64::MAX,
+    });
+}
+
+pub(super) fn start_oauth_task(app: &mut TuiApp, oauth_manager: Arc<OAuthManager>) {
+    let (sender, receiver) = mpsc::unbounded_channel();
+    app.notice = Some("Starting OAuth login.".into());
+    app.set_runtime_phase(RuntimePhase::OAuthStarting, Some("starting oauth".into()));
+    app.push_entry("Runtime", "Starting OAuth login flow.");
+
+    let handle = tokio::spawn(async move {
+        let result = run_oauth_login(oauth_manager, sender.clone()).await;
+        TaskCompletion::OAuth { result }
+    });
+
+    app.running_task = Some(RunningTask {
+        kind: TaskKind::OAuth,
+        receiver,
+        handle,
+        started_at: Instant::now(),
+        next_heartbeat_after_secs: u64::MAX,
+    });
+}
+
+pub(super) async fn finish_running_task_if_ready(
+    app: &mut TuiApp,
+    agent_slot: &mut Option<Agent>,
+) -> anyhow::Result<()> {
+    if app.running_task.is_none() {
+        return Ok(());
+    }
+
+    let (pending_events, is_finished) = {
+        let task = app.running_task.as_mut().expect("task should exist");
+        let mut pending_events = Vec::new();
+        while let Ok(event) = task.receiver.try_recv() {
+            pending_events.push(event);
+        }
+        let is_finished = task.handle.is_finished();
+        (pending_events, is_finished)
+    };
+
+    for event in pending_events {
+        apply_tui_event(app, event);
+    }
+
+    if !is_finished {
+        emit_query_heartbeat(app);
+        return Ok(());
+    }
+
+    let mut task = app.running_task.take().expect("task should exist");
+    let completion = task.handle.await?;
+    while let Ok(event) = task.receiver.try_recv() {
+        apply_tui_event(app, event);
+    }
+    match completion {
+        TaskCompletion::Query { agent, result } => {
+            *agent_slot = Some(agent);
+            if let Some(agent) = agent_slot.as_ref() {
+                app.sync_snapshot(agent);
+            }
+            match result {
+                Ok(_) => {
+                    app.finalize_agent_stream(None);
+                    app.finalize_active_turn();
+                    app.notice = Some("Prompt finished.".into());
+                    app.set_runtime_phase(RuntimePhase::Idle, Some("prompt finished".into()));
+                }
+                Err(err) => {
+                    app.finalize_agent_stream(None);
+                    app.set_runtime_phase(RuntimePhase::Failed, Some("query failed".into()));
+                    let mut message = format!("Query failed: {err}");
+                    if app.config.provider == "ollama" {
+                        let base_url = app
+                            .config
+                            .base_url
+                            .as_deref()
+                            .unwrap_or("http://localhost:11434");
+                        message.push_str(&format!("\nbase_url={base_url}"));
+                    }
+                    app.push_entry("System", message.clone());
+                    app.push_notice(message);
+                }
+            }
+        }
+        TaskCompletion::Compact { agent, result } => {
+            *agent_slot = Some(agent);
+            if let Some(agent) = agent_slot.as_ref() {
+                app.sync_snapshot(agent);
+            }
+            match result {
+                Ok(true) => {
+                    if let Some((before, after)) = app
+                        .snapshot
+                        .last_compaction_before_tokens
+                        .zip(app.snapshot.last_compaction_after_tokens)
+                    {
+                        let message = format!(
+                            "Conversation compacted.\nEstimated history tokens: {before} -> {after}"
+                        );
+                        app.push_entry("Agent", message.clone());
+                        app.push_notice(message);
+                    } else {
+                        app.push_entry("Agent", "Conversation compacted.");
+                        app.push_notice("Conversation compacted.");
+                    }
+                    app.finalize_active_turn();
+                    app.set_runtime_phase(RuntimePhase::Idle, Some("history compacted".into()));
+                }
+                Ok(false) => {
+                    let message = "Conversation history did not need compaction.";
+                    app.push_entry("Agent", message);
+                    app.push_notice(message);
+                    app.finalize_active_turn();
+                    app.set_runtime_phase(RuntimePhase::Idle, Some("compact skipped".into()));
+                }
+                Err(err) => {
+                    app.set_runtime_phase(RuntimePhase::Failed, Some("compact failed".into()));
+                    let message = format!("Compaction failed: {err}");
+                    app.push_entry("System", message.clone());
+                    app.push_notice(message);
+                }
+            }
+        }
+        TaskCompletion::Rebuild { result } => match result {
+            Ok(agent) => {
+                let mut agent = agent;
+                agent.set_execution_mode(app.agent_execution_mode);
+                agent.set_bash_approval_mode(app.bash_approval_mode);
+                app.config_manager.save(&app.config)?;
+                app.setup_status = Some(format!(
+                    "Applied {} / {}",
+                    app.config.provider,
+                    app.current_model_label()
+                ));
+                app.notice = app.setup_status.clone();
+                app.reset_transcript();
+                *agent_slot = Some(agent);
+                if let Some(agent) = agent_slot.as_ref() {
+                    app.sync_snapshot(agent);
+                }
+                app.close_overlay();
+                app.set_runtime_phase(RuntimePhase::BackendReady, Some("backend ready".into()));
+                app.push_entry("Runtime", app.setup_status.clone().unwrap_or_default());
+                app.finalize_active_turn();
+            }
+            Err(err) => {
+                app.set_runtime_phase(
+                    RuntimePhase::Failed,
+                    Some("backend rebuild failed".into()),
+                );
+                let message = format!("Failed to apply config:\n{}", format_error_chain(&err));
+                app.setup_status = Some(message.clone());
+                app.push_notice(message);
+            }
+        },
+        TaskCompletion::OAuth { result } => match result {
+            Ok(access_token) => {
+                app.config.api_key = Some(access_token);
+                app.config.provider = "codex".into();
+                if app.config.model.is_none() {
+                    app.config.model = Some("codex".into());
+                }
+                app.config_manager.save(&app.config)?;
+                app.setup_status = Some("Saved OAuth token.".into());
+                app.notice = app.setup_status.clone();
+                app.set_runtime_phase(RuntimePhase::OAuthSaved, Some("oauth token saved".into()));
+                app.overlay = None;
+                app.push_entry("Runtime", "Saved OAuth token.");
+                start_rebuild_task(app);
+            }
+            Err(err) => {
+                app.set_runtime_phase(RuntimePhase::Failed, Some("oauth failed".into()));
+                let message = format!("OAuth failed:\n{}", format_error_chain(&err));
+                app.push_entry("System", message.clone());
+                app.push_notice(message);
+            }
+        },
+    }
+
+    Ok(())
+}
+
+fn emit_query_heartbeat(app: &mut TuiApp) {
+    let Some(task) = app.running_task.as_mut() else {
+        return;
+    };
+    if !matches!(task.kind, TaskKind::Query) {
+        return;
+    }
+
+    let elapsed = task.started_at.elapsed().as_secs();
+    if elapsed < task.next_heartbeat_after_secs {
+        return;
+    }
+
+    let is_local = super::super::command::is_local_provider(&app.config.provider);
+    let detail = if is_local {
+        format!("local model is still generating · {}s elapsed", elapsed)
+    } else {
+        format!("waiting for model response · {}s elapsed", elapsed)
+    };
+    task.next_heartbeat_after_secs = elapsed.saturating_add(1);
+
+    app.set_runtime_phase(RuntimePhase::SendingPrompt, Some(detail.clone()));
+    app.notice = Some(if is_local {
+        format!("Working locally · {}s elapsed", elapsed)
+    } else {
+        format!("Waiting on {} · {}s elapsed", app.config.provider, elapsed)
+    });
+}
+
+async fn run_oauth_login(
+    oauth_manager: Arc<OAuthManager>,
+    sender: mpsc::UnboundedSender<TuiEvent>,
+) -> anyhow::Result<String> {
+    let (verifier, challenge) = oauth_manager.generate_pkce();
+    let (port, receiver) = oauth_manager.start_callback_server().await?;
+    let auth_url = oauth_manager.get_authorize_url(&challenge, port);
+    let is_ssh = super::super::is_ssh_session();
+    let _ = sender.send(TuiEvent::Transcript {
+        role: "Runtime",
+        message: if is_ssh {
+            format!(
+                "SSH session detected. OAuth browser login is not reliable from a remote shell because the callback listens on localhost:{port}.\nUse Codex API key instead, or open this URL from the same machine running the TUI:\n{auth_url}"
+            )
+        } else {
+            format!("Starting OAuth flow.\nOpen this URL if the browser does not launch automatically:\n{auth_url}")
+        },
+    });
+    if is_ssh {
+        return Err(anyhow!(
+            "OAuth browser login is unavailable in SSH/headless sessions; use Codex API key instead"
+        ));
+    }
+    let _ = open::that(&auth_url);
+
+    let code = receiver.await?;
+    let _ = sender.send(TuiEvent::Transcript {
+        role: "Runtime",
+        message: "Received OAuth callback, exchanging token.".into(),
+    });
+    let token = oauth_manager.exchange_code(&code, &verifier, port).await?;
+    Ok(token.access_token)
+}
+
+async fn rebuild_agent_with_progress(
+    config: &crate::config::RaraConfig,
+    progress: Option<crate::local_backend::LocalProgressReporter>,
+) -> anyhow::Result<Agent> {
+    let backend = crate::build_backend_with_progress(config, progress).await?;
+    let backend_arc: Arc<dyn LlmBackend> = backend.into();
+
+    let vdb = Arc::new(VectorDB::new("data/lancedb"));
+    let session_manager = Arc::new(SessionManager::new()?);
+    let workspace = Arc::new(WorkspaceMemory::new()?);
+    let sandbox_manager = Arc::new(SandboxManager::new()?);
+
+    let mut skill_manager = SkillManager::new();
+    let _ = skill_manager.load_all();
+    let skill_manager_arc = Arc::new(skill_manager);
+
+    let tool_manager = create_full_tool_manager(
+        backend_arc.clone(),
+        vdb.clone(),
+        session_manager.clone(),
+        workspace.clone(),
+        sandbox_manager.clone(),
+        skill_manager_arc,
+    );
+
+    Ok(Agent::new(
+        tool_manager,
+        backend_arc,
+        vdb,
+        session_manager,
+        workspace,
+    ))
+}
+
+fn create_full_tool_manager(
+    backend: Arc<dyn LlmBackend>,
+    vdb: Arc<VectorDB>,
+    session_manager: Arc<SessionManager>,
+    workspace: Arc<WorkspaceMemory>,
+    sandbox: Arc<SandboxManager>,
+    skill_manager: Arc<SkillManager>,
+) -> ToolManager {
+    let mut tm = ToolManager::new();
+    tm.register(Box::new(BashTool {
+        sandbox: sandbox.clone(),
+    }));
+    tm.register(Box::new(ReadFileTool));
+    tm.register(Box::new(ApplyPatchTool));
+    tm.register(Box::new(WriteFileTool));
+    tm.register(Box::new(ListFilesTool));
+    tm.register(Box::new(SearchFilesTool));
+    tm.register(Box::new(ReplaceTool));
+    tm.register(Box::new(WebFetchTool));
+    tm.register(Box::new(GlobTool));
+    tm.register(Box::new(GrepTool));
+    tm.register(Box::new(RememberExperienceTool {
+        backend: backend.clone(),
+        db_uri: "data/lancedb".into(),
+    }));
+    tm.register(Box::new(RetrieveExperienceTool {
+        backend: backend.clone(),
+        db_uri: "data/lancedb".into(),
+    }));
+    tm.register(Box::new(RetrieveSessionContextTool {
+        backend: backend.clone(),
+        vdb: vdb.clone(),
+        session_manager: session_manager.clone(),
+    }));
+    tm.register(Box::new(UpdateProjectMemoryTool {
+        workspace: workspace.clone(),
+    }));
+    tm.register(Box::new(SkillTool {
+        skill_manager: skill_manager.clone(),
+    }));
+    tm.register(Box::new(AgentTool {
+        backend: backend.clone(),
+        vdb: vdb.clone(),
+        session_manager: session_manager.clone(),
+        workspace: workspace.clone(),
+    }));
+    tm.register(Box::new(TeamCreateTool {
+        backend,
+        vdb,
+        session_manager,
+        workspace,
+    }));
+    tm
+}

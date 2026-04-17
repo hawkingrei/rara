@@ -1,3 +1,5 @@
+mod state_presets;
+
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::task::JoinHandle;
 use std::time::Instant;
@@ -9,8 +11,10 @@ use ratatui::text::Line;
 use crate::agent::{Agent, AgentExecutionMode, BashApprovalMode};
 use crate::config::{ConfigManager, RaraConfig};
 use crate::state_db::{PersistedInteraction, PersistedPlanStep, PersistedSessionSummary, PersistedTurnEntry, StateDb};
-use super::markdown;
 use super::markdown_stream::MarkdownStreamCollector;
+pub use self::state_presets::{
+    current_model_presets, selected_preset_idx_for_config, selected_provider_family_idx_for_config,
+};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum HelpTab {
@@ -166,23 +170,6 @@ pub struct RunningTask {
     pub next_heartbeat_after_secs: u64,
 }
 
-pub const CODEX_MODEL_PRESETS: [(&str, &str, &str); 2] = [
-    ("Codex (OAuth)", "codex", "codex"),
-    ("Codex (API Key)", "codex", "codex"),
-];
-
-pub const LOCAL_MODEL_PRESETS: [(&str, &str, &str); 3] = [
-    ("Gemma 4 E4B (Experimental)", "gemma4", "gemma4-e4b"),
-    ("Gemma 4 E2B (Experimental)", "gemma4", "gemma4-e2b"),
-    ("Qwn3 8B", "qwn3", "qwn3-8b"),
-];
-
-pub const OLLAMA_MODEL_PRESETS: [(&str, &str, &str); 3] = [
-    ("Gemma 4", "ollama", "gemma4"),
-    ("Gemma 4 E4B", "ollama", "gemma4:e4b"),
-    ("Gemma 4 E2B", "ollama", "gemma4:e2b"),
-];
-
 pub const PROVIDER_FAMILIES: [(ProviderFamily, &str, &str); 3] = [
     (
         ProviderFamily::Codex,
@@ -214,7 +201,6 @@ pub struct TranscriptTurn {
 
 pub struct AgentMarkdownStreamState {
     raw_text: String,
-    cwd: PathBuf,
     collector: MarkdownStreamCollector,
     committed_lines: Vec<Line<'static>>,
     display_lines: Vec<Line<'static>>,
@@ -227,7 +213,6 @@ impl AgentMarkdownStreamState {
             collector: MarkdownStreamCollector::new(None, &cwd),
             committed_lines: Vec::new(),
             display_lines: Vec::new(),
-            cwd,
         }
     }
 
@@ -236,13 +221,8 @@ impl AgentMarkdownStreamState {
         self.collector.push_delta(delta);
         self.committed_lines
             .extend(self.collector.commit_complete_lines());
-        self.display_lines.clear();
-        markdown::append_markdown(
-            &self.raw_text,
-            None,
-            Some(self.cwd.as_path()),
-            &mut self.display_lines,
-        );
+        self.display_lines = self.committed_lines.clone();
+        self.display_lines.extend(self.collector.preview_lines());
     }
 }
 
@@ -277,6 +257,10 @@ pub struct TuiApp {
     pub state_db: Option<Arc<StateDb>>,
     pub state_db_status: Option<String>,
     pub running_task: Option<RunningTask>,
+}
+
+pub fn input_requests_command_palette(input: &str) -> bool {
+    input.trim_start().starts_with('/')
 }
 
 impl TuiApp {
@@ -596,6 +580,16 @@ impl TuiApp {
         self.overlay = Some(overlay);
     }
 
+    pub fn sync_command_palette_with_input(&mut self) {
+        if input_requests_command_palette(self.input.as_str()) {
+            if matches!(self.overlay, None | Some(Overlay::CommandPalette)) {
+                self.open_overlay(Overlay::CommandPalette);
+            }
+        } else if matches!(self.overlay, Some(Overlay::CommandPalette)) {
+            self.overlay = None;
+        }
+    }
+
     pub fn set_agent_execution_mode(&mut self, mode: AgentExecutionMode) {
         self.agent_execution_mode = mode;
     }
@@ -843,27 +837,17 @@ impl TuiApp {
     }
 }
 
-pub fn selected_provider_family_idx_for_config(config: &RaraConfig) -> usize {
-    match config.provider.as_str() {
-        "codex" => 0,
-        "ollama" => 2,
-        _ => 1,
-    }
-}
+#[cfg(test)]
+mod tests {
+    use super::input_requests_command_palette;
 
-pub fn current_model_presets(provider_picker_idx: usize) -> &'static [(&'static str, &'static str, &'static str)] {
-    match PROVIDER_FAMILIES[provider_picker_idx].0 {
-        ProviderFamily::Codex => &CODEX_MODEL_PRESETS,
-        ProviderFamily::CandleLocal => &LOCAL_MODEL_PRESETS,
-        ProviderFamily::Ollama => &OLLAMA_MODEL_PRESETS,
+    #[test]
+    fn detects_slash_command_input() {
+        assert!(input_requests_command_palette("/"));
+        assert!(input_requests_command_palette("/help"));
+        assert!(input_requests_command_palette("   /help"));
+        assert!(!input_requests_command_palette(""));
+        assert!(!input_requests_command_palette("help"));
+        assert!(!input_requests_command_palette("   help"));
     }
-}
-
-pub fn selected_preset_idx_for_config(config: &RaraConfig, provider_picker_idx: usize) -> usize {
-    current_model_presets(provider_picker_idx)
-        .iter()
-        .position(|(_, provider, model)| {
-            config.provider == *provider && config.model.as_deref() == Some(*model)
-        })
-        .unwrap_or(0)
 }
