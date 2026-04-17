@@ -8,6 +8,7 @@ use tokio::sync::mpsc;
 use crate::agent::{Agent, AgentEvent, AgentExecutionMode, AgentOutputMode, BashApprovalMode};
 use crate::llm::LlmBackend;
 use crate::oauth::OAuthManager;
+use crate::prompt::PromptRuntimeConfig;
 use crate::sandbox::SandboxManager;
 use crate::session::SessionManager;
 use crate::skill::SkillManager;
@@ -845,13 +846,15 @@ async fn rebuild_agent_with_progress(
         skill_manager_arc,
     );
 
-    Ok(Agent::new(
+    let mut agent = Agent::new(
         tool_manager,
         backend_arc,
         vdb,
         session_manager,
         workspace,
-    ))
+    );
+    agent.set_prompt_config(PromptRuntimeConfig::from_config(config));
+    Ok(agent)
 }
 
 fn create_full_tool_manager(

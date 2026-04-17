@@ -4,6 +4,7 @@ mod config;
 mod local_backend;
 mod llm;
 mod oauth;
+mod prompt;
 mod sandbox;
 mod session;
 mod skill;
@@ -130,10 +131,12 @@ async fn main() -> Result<()> {
         }
         Commands::Ask { prompt } => {
             let mut agent = Agent::new(tool_manager, backend_arc, vdb, session_manager, workspace);
+            agent.set_prompt_config(prompt::PromptRuntimeConfig::from_config(&config));
             agent.query(prompt).await?;
         }
         Commands::Tui => {
-            let agent = Agent::new(tool_manager, backend_arc, vdb, session_manager, workspace);
+            let mut agent = Agent::new(tool_manager, backend_arc, vdb, session_manager, workspace);
+            agent.set_prompt_config(prompt::PromptRuntimeConfig::from_config(&config));
             crate::tui::run_tui(agent, oauth_manager).await?;
         }
     }

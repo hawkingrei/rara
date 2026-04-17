@@ -1,6 +1,7 @@
 use crate::config::RaraConfig;
-use std::fs;
-use std::path::PathBuf;
+use crate::agent::AgentExecutionMode;
+use crate::prompt::{self, PromptRuntimeConfig};
+use crate::workspace::WorkspaceMemory;
 
 use super::state::{
     current_model_presets, CommandSpec, LocalCommand, LocalCommandKind, ProviderFamily, TuiApp,
@@ -349,38 +350,35 @@ pub fn status_resources_text(app: &TuiApp) -> String {
     )
 }
 
-pub fn status_prompt_sources_text() -> String {
-    let root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let mut sources = Vec::new();
-
-    for name in ["AGENTS.md", "GEMINI.md", "CLAUDE.md"] {
-        let path = root.join(name);
-        if fs::metadata(&path).map(|meta| meta.is_file()).unwrap_or(false) {
-            sources.push(format!("project instruction: {}", name));
-        }
-    }
-
-    let rara_dir = root.join(".rara");
-    let local_instructions = rara_dir.join("instructions.md");
-    if fs::metadata(&local_instructions)
-        .map(|meta| meta.is_file())
-        .unwrap_or(false)
-    {
-        sources.push("local instruction: .rara/instructions.md".to_string());
-    }
-
-    let memory = rara_dir.join("memory.md");
-    if fs::metadata(&memory)
-        .map(|meta| meta.is_file())
-        .unwrap_or(false)
-    {
-        sources.push("local memory: .rara/memory.md".to_string());
-    }
-
-    if sources.is_empty() {
+pub fn status_prompt_sources_text(app: &TuiApp) -> String {
+    let workspace = match WorkspaceMemory::new() {
+        Ok(workspace) => workspace,
+        Err(_) => return "No prompt sources discovered.".to_string(),
+    };
+    let runtime = PromptRuntimeConfig::from_config(&app.config);
+    let effective = prompt::build_effective_prompt(
+        &workspace,
+        &runtime,
+        match app.agent_execution_mode {
+            AgentExecutionMode::Execute => prompt::PromptMode::Execute,
+            AgentExecutionMode::Plan => prompt::PromptMode::Plan,
+        },
+    );
+    let mut lines = vec![
+        format!("base prompt: {}", effective.base_prompt_kind.label()),
+        format!("active sections: {}", effective.section_keys.join(", ")),
+        String::new(),
+    ];
+    let mut sources = effective
+        .sources
+        .into_iter()
+        .map(|source| source.status_line())
+        .collect::<Vec<_>>();
+    lines.append(&mut sources);
+    if lines.len() == 3 {
         "No prompt sources discovered.".to_string()
     } else {
-        sources.join("\n")
+        lines.join("\n")
     }
 }
 

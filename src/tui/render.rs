@@ -785,7 +785,7 @@ fn render_help_modal(f: &mut Frame, app: &TuiApp, area: Rect, tab: HelpTab) {
                 left[1],
             );
             f.render_widget(
-                Paragraph::new(status_prompt_sources_text())
+                Paragraph::new(status_prompt_sources_text(app))
                 .block(Block::default().borders(Borders::LEFT | Borders::RIGHT).title(" Prompt Sources "))
                 .wrap(Wrap { trim: false }),
                 left[2],
@@ -944,7 +944,7 @@ fn render_status_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
         top[2],
     );
     f.render_widget(
-        Paragraph::new(status_prompt_sources_text())
+        Paragraph::new(status_prompt_sources_text(app))
             .block(Block::default().borders(Borders::ALL).title(" Prompt Sources "))
             .wrap(Wrap { trim: false }),
         chunks[1],

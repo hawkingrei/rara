@@ -1,6 +1,7 @@
+use crate::prompt::{PromptSource, PromptSourceKind};
+use anyhow::Result;
 use std::fs;
-use std::path::{PathBuf};
-use anyhow::{Result};
+use std::path::PathBuf;
 
 pub struct WorkspaceMemory {
     pub root: PathBuf,
@@ -29,19 +30,50 @@ impl WorkspaceMemory {
     }
 
     pub fn discover_instructions(&self) -> Vec<String> {
-        let mut instructions = Vec::new();
-        let root_files = ["CLAUDE.md", "GEMINI.md", "AGENTS.md"];
-        for file in root_files {
+        self.discover_prompt_sources()
+            .into_iter()
+            .filter(|source| {
+                matches!(
+                    source.kind,
+                    PromptSourceKind::ProjectInstruction | PromptSourceKind::LocalInstruction
+                )
+            })
+            .map(|source| format!("### {}:\n{}", source.label, source.content))
+            .collect()
+    }
+
+    pub fn discover_prompt_sources(&self) -> Vec<PromptSource> {
+        let mut sources = Vec::new();
+        for file in ["CLAUDE.md", "GEMINI.md", "AGENTS.md"] {
             let path = self.root.join(file);
-            if let Ok(content) = fs::read_to_string(path) {
-                instructions.push(format!("### Project Instruction ({}):\n{}", file, content));
+            if let Ok(content) = fs::read_to_string(&path) {
+                sources.push(PromptSource {
+                    kind: PromptSourceKind::ProjectInstruction,
+                    label: format!("Project Instruction ({file})"),
+                    display_path: file.to_string(),
+                    content,
+                });
             }
         }
         let rara_inst = self.rara_dir.join("instructions.md");
-        if let Ok(content) = fs::read_to_string(rara_inst) {
-            instructions.push(format!("### RARA Local Instruction:\n{}", content));
+        if let Ok(content) = fs::read_to_string(&rara_inst) {
+            sources.push(PromptSource {
+                kind: PromptSourceKind::LocalInstruction,
+                label: "RARA Local Instruction".to_string(),
+                display_path: ".rara/instructions.md".to_string(),
+                content,
+            });
         }
-        instructions
+        let memory = self.rara_dir.join("memory.md");
+        if let Ok(content) = fs::read_to_string(&memory) {
+            sources.push(PromptSource {
+                kind: PromptSourceKind::LocalMemory,
+                label: "Local Project Memory".to_string(),
+                display_path: ".rara/memory.md".to_string(),
+                content,
+            });
+        }
+        sources
     }
 
     pub fn get_env_info(&self) -> (String, String) {
