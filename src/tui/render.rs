@@ -290,7 +290,7 @@ fn current_turn_lines(app: &TuiApp) -> Vec<Line<'static>> {
         lines.push(Line::from(section_span("Working", Color::Yellow)));
         lines.push(Line::from(format!(
             "  {}",
-            app.runtime_phase_detail
+            summarize_live_detail(app.runtime_phase_detail.as_deref())
                 .as_deref()
                 .unwrap_or("waiting for the current turn to finish")
         )));
@@ -307,7 +307,7 @@ fn current_turn_exploration_summary(
     current_turn_exploration_summary_from_entries(
         current_turn,
         app.is_busy() && prefer_live_label,
-        app.runtime_phase_detail.as_deref(),
+        summarize_live_detail(app.runtime_phase_detail.as_deref()).as_deref(),
     )
 }
 
@@ -375,6 +375,24 @@ fn current_turn_tool_summary(
     }
 
     Some(lines.join("\n"))
+}
+
+fn summarize_live_detail(detail: Option<&str>) -> Option<String> {
+    let detail = detail?.trim();
+    if detail.is_empty() || looks_like_bottom_pane_chrome(detail) {
+        return None;
+    }
+    Some(detail.to_string())
+}
+
+fn looks_like_bottom_pane_chrome(detail: &str) -> bool {
+    detail.contains("/compact")
+        || detail.contains("/quit")
+        || detail.contains("/plan")
+        || detail.contains("key=")
+        || detail.contains("history=")
+        || detail.contains("tokens=")
+        || detail.contains("ctx~=")
 }
 
 fn prefixed_message_lines(role: &str, message: &str, max_lines: usize) -> Vec<Line<'static>> {
@@ -568,6 +586,22 @@ fn tool_action_label(message: &str) -> Option<String> {
             "Run {}",
             if rest.is_empty() { other } else { message }
         )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{looks_like_bottom_pane_chrome, summarize_live_detail};
+
+    #[test]
+    fn filters_bottom_pane_chrome_from_live_detail() {
+        assert!(summarize_live_detail(Some("/compact summarize history  /plan toggle  /quit exit")).is_none());
+        assert!(summarize_live_detail(Some("key=not-required  history=0  tokens=0 in / 0 out  ctx~=0")).is_none());
+        assert_eq!(
+            summarize_live_detail(Some("waiting for model response · 34s elapsed")).as_deref(),
+            Some("waiting for model response · 34s elapsed")
+        );
+        assert!(looks_like_bottom_pane_chrome("key=not-required  history=0"));
     }
 }
 
