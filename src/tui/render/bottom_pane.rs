@@ -151,9 +151,9 @@ fn render_composer(f: &mut Frame, app: &TuiApp, area: Rect) -> Option<(u16, u16)
     } else if app.snapshot.pending_question.is_some() {
         "question pending  press 1/2/3 or type a reply"
     } else if app.agent_execution_mode_label() == "plan" {
-        "plan mode  /plan return to execute"
+        "plan mode  next turn is read-only planning"
     } else {
-        "/search grep  /compact summarize history  /plan toggle  /quit exit"
+        "/search grep  /compact summarize history  /plan next turn  /quit exit"
     };
     f.render_widget(
         Paragraph::new(Span::styled(hint, Style::default().fg(Color::Gray)))

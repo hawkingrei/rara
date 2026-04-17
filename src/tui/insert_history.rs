@@ -151,7 +151,9 @@ where
         // ││                            ││
         // │╰────────────────────────────╯│
         // └──────────────────────────────┘
-        queue!(writer, SetScrollRegion(1..area.top()))?;
+        if area.top() > 0 {
+            queue!(writer, SetScrollRegion(1..area.top() + 1))?;
+        }
 
         // NB: we are using MoveTo instead of set_cursor_position here to avoid messing with the
         // terminal's last_known_cursor_position, which hopefully will still be accurate after we
@@ -163,7 +165,9 @@ where
             write_history_line(writer, line, wrap_width)?;
         }
 
-        queue!(writer, ResetScrollRegion)?;
+        if area.top() > 0 {
+            queue!(writer, ResetScrollRegion)?;
+        }
     }
 
     // Restore the cursor position to where it was before we started.

@@ -29,6 +29,13 @@ use crate::workspace::WorkspaceMemory;
 use super::super::state::{RunningTask, RuntimePhase, TaskCompletion, TaskKind, TuiApp, TuiEvent};
 use super::events::{apply_tui_event, convert_agent_event, format_error_chain};
 
+fn restore_execute_mode_after_plan_turn(app: &mut TuiApp, agent: &mut Agent) {
+    if matches!(app.agent_execution_mode, crate::agent::AgentExecutionMode::Plan) {
+        app.set_agent_execution_mode(crate::agent::AgentExecutionMode::Execute);
+        agent.set_execution_mode(crate::agent::AgentExecutionMode::Execute);
+    }
+}
+
 pub(super) fn start_query_task(app: &mut TuiApp, prompt: String, mut agent: Agent) {
     let (sender, receiver) = mpsc::unbounded_channel();
     agent.set_execution_mode(app.agent_execution_mode);
@@ -209,6 +216,8 @@ pub(super) async fn finish_running_task_if_ready(
     }
     match completion {
         TaskCompletion::Query { agent, result } => {
+            let mut agent = agent;
+            restore_execute_mode_after_plan_turn(app, &mut agent);
             *agent_slot = Some(agent);
             if let Some(agent) = agent_slot.as_ref() {
                 app.sync_snapshot(agent);
@@ -423,13 +432,15 @@ async fn rebuild_agent_with_progress(
         skill_manager_arc,
     );
 
-    Ok(Agent::new(
+    let mut agent = Agent::new(
         tool_manager,
         backend_arc,
         vdb,
         session_manager,
         workspace,
-    ))
+    );
+    agent.set_prompt_config(crate::prompt::PromptRuntimeConfig::from_config(config));
+    Ok(agent)
 }
 
 fn create_full_tool_manager(

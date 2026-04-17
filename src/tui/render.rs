@@ -596,7 +596,7 @@ mod tests {
 
     #[test]
     fn filters_bottom_pane_chrome_from_live_detail() {
-        assert!(summarize_live_detail(Some("/compact summarize history  /plan toggle  /quit exit")).is_none());
+        assert!(summarize_live_detail(Some("/compact summarize history  /plan next turn  /quit exit")).is_none());
         assert!(summarize_live_detail(Some("key=not-required  history=0  tokens=0 in / 0 out  ctx~=0")).is_none());
         assert_eq!(
             summarize_live_detail(Some("waiting for model response · 34s elapsed")).as_deref(),

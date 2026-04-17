@@ -14,16 +14,14 @@ Active backlog only. Keep this file small and current.
 
 ## LLM and Networking
 
-- [ ] Reuse shared `reqwest::Client` instances in `src/llm.rs` instead of constructing a new client per request.
 - [ ] Add explicit HTTP timeouts to all networked backends in `src/llm.rs` so provider calls fail predictably instead of hanging indefinitely.
 - [ ] Extract shared message-mapping helpers across OpenAI-compatible and Ollama backends to reduce duplication and keep tool-call behavior consistent.
 - [ ] Add clearer config/runtime feedback when provider setup is invalid instead of silently falling back to partial behavior.
 
 ## Memory and Retrieval
 
-- [ ] Replace the current setup-heavy TUI flow with a unified slash-command surface: `/help`, `/model`, `/status`, and `/clear` should work from the main input bar without forcing users through a separate setup screen for common actions.
 - [ ] Add a first-run onboarding flow that explains workspace, provider/model selection, local model download behavior, cache location, and tool loop expectations before the user lands in a blank chat.
-- [ ] Add a richer runtime status line to the TUI so provider, model, revision, workspace, download/inference state, and token usage remain visible during the session.
+- [ ] Continue aligning the TUI status and transcript surfaces with Codex/Claude so runtime state stays visible without leaking bottom-pane chrome into transcript history.
 - [ ] Harden local model prompting contracts for Gemma 4 and Qwen3: chat template handling, stop sequences, and tool-call JSON framing should be explicit and regression-tested.
 - [ ] Replace the current hash-based local embedding fallback with a real embedding backend so project memory retrieval quality is good enough for normal coding sessions.
 - [ ] Replace the mock `VectorDB` implementation in `src/vectordb.rs` with real LanceDB-backed search/upsert behavior, or feature-gate the memory tools until the backend is real.
@@ -41,7 +39,7 @@ Active backlog only. Keep this file small and current.
 
 ## Code Organization and Docs
 
-- [ ] Split oversized orchestration functions such as `create_full_tool_manager()` in `src/main.rs` and `dispatch_event()` in `src/tui/mod.rs` into smaller focused helpers.
+- [ ] Continue splitting remaining oversized TUI files such as `src/tui/state.rs` and `src/tui/markdown_render.rs` so the 800-line guideline holds across the main interaction path.
 - [ ] Add module-level documentation for the agent lifecycle, tool loop, plan/update flow, and sandbox model so the runtime architecture is easier to reason about.
 - [ ] Add a security section to `AGENTS.md` or a dedicated security doc covering sandbox expectations, command execution rules, and secret-handling standards.
 - [ ] Add comments around the non-obvious continuation / plan / current-turn rendering logic so future refactors do not regress the Codex-style workflow.
