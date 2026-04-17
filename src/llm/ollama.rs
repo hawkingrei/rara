@@ -13,16 +13,33 @@ use super::shared::{
 };
 
 pub struct OllamaBackend {
+    pub client: reqwest::Client,
     pub base_url: String,
     pub model: String,
     pub thinking: bool,
     pub num_ctx: Option<u32>,
 }
 
+impl OllamaBackend {
+    pub fn new(
+        base_url: String,
+        model: String,
+        thinking: bool,
+        num_ctx: Option<u32>,
+    ) -> Result<Self> {
+        Ok(Self {
+            client: http_client_for_target(&base_url)?,
+            base_url,
+            model,
+            thinking,
+            num_ctx,
+        })
+    }
+}
+
 #[async_trait]
 impl LlmBackend for OllamaBackend {
     async fn ask(&self, messages: &[Message], tools: &[Value]) -> Result<AnthropicResponse> {
-        let client = http_client_for_target(&self.base_url)?;
         let endpoint = format!("{}/api/chat", self.base_url.trim_end_matches('/'));
         let mut body = json!({
             "model": self.model,
@@ -50,7 +67,7 @@ impl LlmBackend for OllamaBackend {
             );
         }
 
-        let res = client.post(&endpoint).json(&body).send().await?;
+        let res = self.client.post(&endpoint).json(&body).send().await?;
 
         if !res.status().is_success() {
             return Err(anyhow!("API Error at {}: {}", endpoint, res.text().await?));
@@ -103,7 +120,6 @@ impl LlmBackend for OllamaBackend {
         tools: &[Value],
         on_text_delta: &mut (dyn FnMut(String) + Send),
     ) -> Result<AnthropicResponse> {
-        let client = http_client_for_target(&self.base_url)?;
         let endpoint = format!("{}/api/chat", self.base_url.trim_end_matches('/'));
         let mut body = json!({
             "model": self.model,
@@ -131,7 +147,7 @@ impl LlmBackend for OllamaBackend {
             );
         }
 
-        let res = client.post(&endpoint).json(&body).send().await?;
+        let res = self.client.post(&endpoint).json(&body).send().await?;
         if !res.status().is_success() {
             return Err(anyhow!("API Error at {}: {}", endpoint, res.text().await?));
         }

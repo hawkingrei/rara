@@ -10,15 +10,26 @@ use super::shared::{
 };
 
 pub struct OpenAiCompatibleBackend {
+    pub client: reqwest::Client,
     pub api_key: String,
     pub base_url: String,
     pub model: String,
 }
 
+impl OpenAiCompatibleBackend {
+    pub fn new(api_key: String, base_url: String, model: String) -> Result<Self> {
+        Ok(Self {
+            client: http_client_for_target(&base_url)?,
+            api_key,
+            base_url,
+            model,
+        })
+    }
+}
+
 #[async_trait]
 impl LlmBackend for OpenAiCompatibleBackend {
     async fn ask(&self, messages: &[Message], tools: &[Value]) -> Result<AnthropicResponse> {
-        let client = http_client_for_target(&self.base_url)?;
         let openai_messages = to_openai_messages(messages);
         let openai_tools: Vec<Value> = tools
             .iter()
@@ -39,7 +50,7 @@ impl LlmBackend for OpenAiCompatibleBackend {
             body["tools"] = json!(openai_tools);
         }
 
-        let mut request = client.post(&format!(
+        let mut request = self.client.post(&format!(
             "{}/v1/chat/completions",
             self.base_url.trim_end_matches('/')
         ));
@@ -85,9 +96,8 @@ impl LlmBackend for OpenAiCompatibleBackend {
     }
 
     async fn embed(&self, text: &str) -> Result<Vec<f32>> {
-        let client = http_client_for_target(&self.base_url)?;
         let body = json!({ "model": "text-embedding-3-small", "input": text });
-        let mut request = client.post(&format!(
+        let mut request = self.client.post(&format!(
             "{}/v1/embeddings",
             self.base_url.trim_end_matches('/')
         ));
@@ -106,14 +116,13 @@ impl LlmBackend for OpenAiCompatibleBackend {
     }
 
     async fn summarize(&self, messages: &[Message], instruction: &str) -> Result<String> {
-        let client = http_client_for_target(&self.base_url)?;
         let mut msgs = messages.to_vec();
         msgs.push(Message {
             role: "user".to_string(),
             content: json!(instruction),
         });
         let body = json!({ "model": self.model, "messages": to_openai_messages(&msgs) });
-        let mut request = client.post(&format!(
+        let mut request = self.client.post(&format!(
             "{}/v1/chat/completions",
             self.base_url.trim_end_matches('/')
         ));
@@ -222,50 +231,33 @@ fn extract_tool_result_message(content: &Value) -> Option<Value> {
 }
 
 pub struct CodexBackend {
-    pub api_key: String,
-    pub base_url: String,
-    pub model: String,
+    inner: OpenAiCompatibleBackend,
+}
+
+impl CodexBackend {
+    pub fn new(api_key: String, base_url: String, model: String) -> Result<Self> {
+        Ok(Self {
+            inner: OpenAiCompatibleBackend::new(api_key, base_url, model)?,
+        })
+    }
 }
 
 #[async_trait]
 impl LlmBackend for CodexBackend {
     async fn ask(&self, m: &[Message], t: &[Value]) -> Result<AnthropicResponse> {
-        OpenAiCompatibleBackend {
-            api_key: self.api_key.clone(),
-            base_url: self.base_url.clone(),
-            model: self.model.clone(),
-        }
-        .ask(m, t)
-        .await
+        self.inner.ask(m, t).await
     }
 
     async fn embed(&self, t: &str) -> Result<Vec<f32>> {
-        OpenAiCompatibleBackend {
-            api_key: self.api_key.clone(),
-            base_url: self.base_url.clone(),
-            model: self.model.clone(),
-        }
-        .embed(t)
-        .await
+        self.inner.embed(t).await
     }
 
     async fn summarize(&self, m: &[Message], instruction: &str) -> Result<String> {
-        OpenAiCompatibleBackend {
-            api_key: self.api_key.clone(),
-            base_url: self.base_url.clone(),
-            model: self.model.clone(),
-        }
-        .summarize(m, instruction)
-        .await
+        self.inner.summarize(m, instruction).await
     }
 
     fn context_budget(&self, messages: &[Message], tools: &[Value]) -> Option<ContextBudget> {
-        OpenAiCompatibleBackend {
-            api_key: self.api_key.clone(),
-            base_url: self.base_url.clone(),
-            model: self.model.clone(),
-        }
-        .context_budget(messages, tools)
+        self.inner.context_budget(messages, tools)
     }
 }
 

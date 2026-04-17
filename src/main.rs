@@ -207,39 +207,39 @@ pub(crate) async fn build_backend_with_progress(
     progress: Option<LocalProgressReporter>,
 ) -> Result<Box<dyn LlmBackend>> {
     match config.provider.as_str() {
-        "kimi" => Ok(Box::new(OpenAiCompatibleBackend {
-            api_key: config.api_key.clone().expect("API key required for Kimi"),
-            base_url: "https://api.moonshot.cn/v1".to_string(),
-            model: config
+        "kimi" => Ok(Box::new(OpenAiCompatibleBackend::new(
+            config.api_key.clone().expect("API key required for Kimi"),
+            "https://api.moonshot.cn/v1".to_string(),
+            config
                 .model
                 .clone()
                 .unwrap_or_else(|| "moonshot-v1-8k".to_string()),
-        })),
-        "codex" => Ok(Box::new(CodexBackend {
-            api_key: config.api_key.clone().unwrap_or_default(),
-            base_url: config
+        )?)),
+        "codex" => Ok(Box::new(CodexBackend::new(
+            config.api_key.clone().unwrap_or_default(),
+            config
                 .base_url
                 .clone()
                 .unwrap_or_else(|| "http://localhost:8080".to_string()),
-            model: config.model.clone().unwrap_or_else(|| "codex".to_string()),
-        })),
-        "ollama" | "ollama-native" => Ok(Box::new(OllamaBackend {
-            base_url: config
+            config.model.clone().unwrap_or_else(|| "codex".to_string()),
+        )?)),
+        "ollama" | "ollama-native" => Ok(Box::new(OllamaBackend::new(
+            config
                 .base_url
                 .clone()
                 .unwrap_or_else(|| "http://localhost:11434".to_string()),
-            model: config.model.clone().unwrap_or_else(|| "gemma4".to_string()),
-            thinking: config.thinking.unwrap_or(true),
-            num_ctx: config.num_ctx,
-        })),
-        "ollama-openai" => Ok(Box::new(OpenAiCompatibleBackend {
-            api_key: config.api_key.clone().unwrap_or_default(),
-            base_url: config
+            config.model.clone().unwrap_or_else(|| "gemma4".to_string()),
+            config.thinking.unwrap_or(true),
+            config.num_ctx,
+        )?)),
+        "ollama-openai" => Ok(Box::new(OpenAiCompatibleBackend::new(
+            config.api_key.clone().unwrap_or_default(),
+            config
                 .base_url
                 .clone()
                 .unwrap_or_else(|| "http://localhost:11434".to_string()),
-            model: config.model.clone().unwrap_or_else(|| "gemma4".to_string()),
-        })),
+            config.model.clone().unwrap_or_else(|| "gemma4".to_string()),
+        )?)),
         "gemini" => Ok(Box::new(GeminiBackend {
             api_key: config.api_key.clone().expect("API key required for Gemini"),
             model: config
