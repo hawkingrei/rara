@@ -6,11 +6,11 @@ use ratatui::{
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Paragraph, Wrap},
-    Frame,
 };
 use unicode_width::UnicodeWidthStr;
 use std::path::Path;
 
+use super::custom_terminal::Frame;
 use super::line_utils::prefix_lines;
 use super::state::{TranscriptEntry, TuiApp};
 pub(crate) use bottom_pane::desired_viewport_height;

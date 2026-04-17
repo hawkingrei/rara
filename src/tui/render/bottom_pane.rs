@@ -3,11 +3,11 @@ use ratatui::{
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Paragraph, Wrap},
-    Frame,
 };
 use textwrap::Options;
 use unicode_width::UnicodeWidthStr;
 
+use super::super::custom_terminal::Frame;
 use super::super::command::api_key_status;
 use super::super::state::{TaskKind, TuiApp};
 use super::badge;

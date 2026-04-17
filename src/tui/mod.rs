@@ -1,7 +1,9 @@
 mod app_event;
 mod command;
+mod custom_terminal;
 mod event_stream;
 mod highlight;
+mod insert_history;
 mod line_utils;
 mod markdown;
 mod markdown_render;
@@ -37,8 +39,8 @@ use self::runtime::{
 use self::session_restore::{provider_requires_api_key, restore_latest_session, restore_session_by_id};
 use self::state::{current_model_presets, HelpTab, Overlay, PROVIDER_FAMILIES, TuiApp};
 use self::terminal_ui::{
-    build_terminal, clear_terminal_surface, flush_committed_history, handle_paste, is_ssh_session,
-    teardown_terminal,
+    build_terminal, flush_committed_history, handle_paste, is_ssh_session, teardown_terminal,
+    update_terminal_viewport,
 };
 use crate::agent::BashApprovalMode;
 
@@ -71,19 +73,13 @@ pub async fn run_tui(agent: Agent, oauth_manager: OAuthManager) -> anyhow::Resul
         let size = terminal_size()?;
         let desired_height = desired_viewport_height(&app, size.0, size.1);
         if desired_height != viewport_height {
-            match build_terminal(desired_height) {
-                Ok(new_terminal) => {
-                    if desired_height > viewport_height {
-                        clear_terminal_surface()?;
-                        app.startup_card_inserted = false;
-                        app.inserted_turns = 0;
-                    }
+            match update_terminal_viewport(&mut terminal, desired_height) {
+                Ok(()) => {
                     viewport_height = desired_height;
-                    terminal = new_terminal;
+                    app.startup_card_inserted = false;
+                    app.inserted_turns = 0;
                 }
-                Err(err) => {
-                    app.push_notice(format!("Skipped viewport rebuild: {err}"));
-                }
+                Err(err) => app.push_notice(format!("Skipped viewport update: {err}")),
             }
         }
         flush_committed_history(&mut terminal, &mut app)?;
@@ -102,19 +98,13 @@ pub async fn run_tui(agent: Agent, oauth_manager: OAuthManager) -> anyhow::Resul
                         Some(UiEvent::Draw) => {
                             let size = terminal_size()?;
                             let desired_height = desired_viewport_height(&app, size.0, size.1);
-                            match build_terminal(desired_height) {
-                                Ok(new_terminal) => {
-                                    if desired_height > viewport_height {
-                                        clear_terminal_surface()?;
-                                        app.startup_card_inserted = false;
-                                        app.inserted_turns = 0;
-                                    }
+                            match update_terminal_viewport(&mut terminal, desired_height) {
+                                Ok(()) => {
                                     viewport_height = desired_height;
-                                    terminal = new_terminal;
+                                    app.startup_card_inserted = false;
+                                    app.inserted_turns = 0;
                                 }
-                                Err(err) => {
-                                    app.push_notice(format!("Skipped terminal redraw rebuild: {err}"));
-                                }
+                                Err(err) => app.push_notice(format!("Skipped viewport redraw update: {err}")),
                             }
                         }
                         Some(UiEvent::Paste(text)) => {

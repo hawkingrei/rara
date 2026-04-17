@@ -2,18 +2,19 @@ use std::io;
 
 use anyhow::Result;
 use crossterm::{
-    cursor::{MoveTo, Show},
+    cursor::Show,
     execute,
-    terminal::{disable_raw_mode, size as terminal_size, Clear, ClearType},
+    terminal::{disable_raw_mode, size as terminal_size},
 };
 use ratatui::{
     backend::CrosstermBackend,
+    layout::Rect,
     text::{Line, Span},
-    widgets::{Paragraph, Widget, Wrap},
-    Terminal, TerminalOptions, Viewport,
 };
 use unicode_width::UnicodeWidthStr;
 
+use super::custom_terminal::Terminal;
+use super::insert_history::insert_history_lines;
 use super::render::committed_turn_lines;
 use super::state::TuiApp;
 
@@ -35,29 +36,23 @@ pub(super) fn handle_paste(text: String, app: &mut TuiApp) {
 pub(super) fn build_terminal(
     viewport_height: u16,
 ) -> Result<Terminal<CrosstermBackend<std::io::Stdout>>> {
-    match Terminal::with_options(
-        CrosstermBackend::new(io::stdout()),
-        TerminalOptions {
-            viewport: Viewport::Inline(viewport_height.max(1)),
-        },
-    ) {
-        Ok(terminal) => Ok(terminal),
-        Err(inline_err) => {
-            let terminal = Terminal::new(CrosstermBackend::new(io::stdout())).map_err(
-                |fallback_err| {
-                    anyhow::anyhow!(
-                        "failed to build inline terminal: {inline_err}; fullscreen fallback also failed: {fallback_err}"
-                    )
-                },
-            )?;
-            Ok(terminal)
-        }
-    }
+    let mut terminal = Terminal::new(CrosstermBackend::new(io::stdout()))?;
+    let size = terminal.size()?;
+    terminal.set_viewport_area(viewport_area(size.width, size.height, viewport_height));
+    terminal.clear_visible_screen()?;
+    Ok(terminal)
 }
 
-pub(super) fn clear_terminal_surface() -> Result<()> {
-    let mut stdout = io::stdout();
-    execute!(stdout, Clear(ClearType::All), MoveTo(0, 0))?;
+pub(super) fn update_terminal_viewport(
+    terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
+    viewport_height: u16,
+) -> Result<()> {
+    let size = terminal.size()?;
+    let area = viewport_area(size.width, size.height, viewport_height);
+    if area != terminal.viewport_area {
+        terminal.clear_visible_screen()?;
+        terminal.set_viewport_area(area);
+    }
     Ok(())
 }
 
@@ -78,12 +73,7 @@ pub(super) fn flush_committed_history(
         let width = terminal_size()?.0;
         let lines = startup_card_lines(app, width);
         if !lines.is_empty() {
-            let line_count = wrapped_history_line_count(lines.as_slice(), width);
-            terminal.insert_before(line_count, |buf| {
-                Paragraph::new(lines)
-                    .wrap(Wrap { trim: false })
-                    .render(buf.area, buf);
-            })?;
+            insert_history_lines(terminal, lines)?;
         }
         app.startup_card_inserted = true;
     }
@@ -95,26 +85,16 @@ pub(super) fn flush_committed_history(
             lines.insert(0, Line::from(""));
         }
         if !lines.is_empty() {
-            let width = terminal_size()?.0;
-            let line_count = wrapped_history_line_count(lines.as_slice(), width);
-            terminal.insert_before(line_count, |buf| {
-                Paragraph::new(lines)
-                    .wrap(Wrap { trim: false })
-                    .render(buf.area, buf);
-            })?;
+            insert_history_lines(terminal, lines)?;
         }
         app.inserted_turns += 1;
     }
     Ok(())
 }
 
-fn wrapped_history_line_count(lines: &[Line<'static>], width: u16) -> u16 {
-    let wrap_width = usize::from(width.max(1));
-    lines
-        .iter()
-        .map(|line| line.width().max(1).div_ceil(wrap_width))
-        .sum::<usize>()
-        .max(1) as u16
+fn viewport_area(width: u16, height: u16, viewport_height: u16) -> Rect {
+    let viewport_height = viewport_height.max(1).min(height.max(1));
+    Rect::new(0, height.saturating_sub(viewport_height), width, viewport_height)
 }
 
 fn startup_card_lines(app: &TuiApp, width: u16) -> Vec<Line<'static>> {

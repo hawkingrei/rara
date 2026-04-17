@@ -3,9 +3,9 @@ use ratatui::{
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Tabs, Wrap},
-    Frame,
 };
 
+use super::super::custom_terminal::Frame;
 use super::super::command::{
     api_key_status, command_detail_text, command_spec_by_index, current_turn_preview,
     download_status_text, general_help_text, help_text, matching_commands, model_help_text,
