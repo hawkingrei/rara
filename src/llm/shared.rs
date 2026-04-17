@@ -24,7 +24,7 @@ pub trait LlmBackend: Send + Sync {
         self.ask(messages, tools).await
     }
     async fn embed(&self, text: &str) -> Result<Vec<f32>>;
-    async fn summarize(&self, messages: &[Message]) -> Result<String>;
+    async fn summarize(&self, messages: &[Message], instruction: &str) -> Result<String>;
     fn context_budget(&self, _messages: &[Message], _tools: &[Value]) -> Option<ContextBudget> {
         None
     }
@@ -61,7 +61,7 @@ impl LlmBackend for MockLlm {
         Ok(vec![0.1; 128])
     }
 
-    async fn summarize(&self, _messages: &[Message]) -> Result<String> {
+    async fn summarize(&self, _messages: &[Message], _instruction: &str) -> Result<String> {
         Ok("Mock summary".into())
     }
 }

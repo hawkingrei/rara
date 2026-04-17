@@ -62,7 +62,7 @@ impl LlmBackend for SequencedBackend {
         Ok(vec![0.0; 8])
     }
 
-    async fn summarize(&self, _messages: &[Message]) -> Result<String> {
+    async fn summarize(&self, _messages: &[Message], _instruction: &str) -> Result<String> {
         Ok("summary".to_string())
     }
 }

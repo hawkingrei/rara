@@ -105,12 +105,12 @@ impl LlmBackend for OpenAiCompatibleBackend {
         Ok(embedding)
     }
 
-    async fn summarize(&self, messages: &[Message]) -> Result<String> {
+    async fn summarize(&self, messages: &[Message], instruction: &str) -> Result<String> {
         let client = http_client_for_target(&self.base_url)?;
         let mut msgs = messages.to_vec();
         msgs.push(Message {
             role: "user".to_string(),
-            content: json!("Summarize concisely."),
+            content: json!(instruction),
         });
         let body = json!({ "model": self.model, "messages": to_openai_messages(&msgs) });
         let mut request = client.post(&format!(
@@ -249,13 +249,13 @@ impl LlmBackend for CodexBackend {
         .await
     }
 
-    async fn summarize(&self, m: &[Message]) -> Result<String> {
+    async fn summarize(&self, m: &[Message], instruction: &str) -> Result<String> {
         OpenAiCompatibleBackend {
             api_key: self.api_key.clone(),
             base_url: self.base_url.clone(),
             model: self.model.clone(),
         }
-        .summarize(m)
+        .summarize(m, instruction)
         .await
     }
 
@@ -284,7 +284,7 @@ impl LlmBackend for GeminiBackend {
         Err(anyhow!("Gemini pending"))
     }
 
-    async fn summarize(&self, _: &[Message]) -> Result<String> {
+    async fn summarize(&self, _: &[Message], _: &str) -> Result<String> {
         Err(anyhow!("Gemini pending"))
     }
 

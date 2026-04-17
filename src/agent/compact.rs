@@ -64,7 +64,13 @@ impl Agent {
 
         let split_idx = (self.history.len() as f64 * 0.8) as usize;
         let split_idx = split_idx.clamp(1, self.history.len().saturating_sub(1));
-        let summary = self.llm_backend.summarize(&self.history[..split_idx]).await?;
+        let summary = self
+            .llm_backend
+            .summarize(
+                &self.history[..split_idx],
+                &prompt::build_compact_instruction(&self.prompt_config),
+            )
+            .await?;
         let mut new_history = vec![Message {
             role: "system".to_string(),
             content: json!(format!("SUMMARY OF PREVIOUS CONVERSATION: {}", summary)),

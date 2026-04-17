@@ -12,6 +12,12 @@ pub struct RaraConfig {
     pub revision: Option<String>,
     pub thinking: Option<bool>,
     pub num_ctx: Option<u32>,
+    pub system_prompt: Option<String>,
+    pub system_prompt_file: Option<String>,
+    pub append_system_prompt: Option<String>,
+    pub append_system_prompt_file: Option<String>,
+    pub compact_prompt: Option<String>,
+    pub compact_prompt_file: Option<String>,
 }
 
 pub struct ConfigManager {

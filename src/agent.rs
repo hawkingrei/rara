@@ -5,6 +5,7 @@ mod prompting;
 mod tests;
 
 use crate::llm::LlmBackend;
+use crate::prompt::{self, PromptMode, PromptRuntimeConfig};
 use crate::session::SessionManager;
 use crate::tool::ToolManager;
 use crate::tool_result::{
@@ -128,6 +129,7 @@ pub struct Agent {
     pub completed_approval: Option<CompletedInteraction>,
     pub compact_state: CompactState,
     inspection_progress: InspectionProgress,
+    prompt_config: PromptRuntimeConfig,
 }
 
 impl Agent {
@@ -160,6 +162,7 @@ impl Agent {
             completed_approval: None,
             compact_state: CompactState::default(),
             inspection_progress: InspectionProgress::default(),
+            prompt_config: PromptRuntimeConfig::default(),
         }
     }
 

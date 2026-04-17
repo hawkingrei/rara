@@ -210,11 +210,11 @@ impl LlmBackend for OllamaBackend {
         Ok(hashed_embedding(text, 256))
     }
 
-    async fn summarize(&self, messages: &[Message]) -> Result<String> {
+    async fn summarize(&self, messages: &[Message], instruction: &str) -> Result<String> {
         let mut messages = messages.to_vec();
         messages.push(Message {
             role: "user".to_string(),
-            content: json!("Summarize concisely."),
+            content: json!(instruction),
         });
         let response = self.ask(&messages, &[]).await?;
         let text = response
