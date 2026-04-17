@@ -217,19 +217,41 @@ pub(super) async fn finish_running_task_if_ready(
     match completion {
         TaskCompletion::Query { agent, result } => {
             let mut agent = agent;
-            restore_execute_mode_after_plan_turn(app, &mut agent);
-            *agent_slot = Some(agent);
-            if let Some(agent) = agent_slot.as_ref() {
-                app.sync_snapshot(agent);
-            }
             match result {
                 Ok(_) => {
+                    let finished_plan_turn =
+                        matches!(app.agent_execution_mode, crate::agent::AgentExecutionMode::Plan);
+                    if finished_plan_turn {
+                        restore_execute_mode_after_plan_turn(app, &mut agent);
+                        app.set_pending_plan_approval(!agent.current_plan.is_empty());
+                    }
+                    *agent_slot = Some(agent);
+                    if let Some(agent) = agent_slot.as_ref() {
+                        app.sync_snapshot(agent);
+                    }
                     app.finalize_agent_stream(None);
-                    app.finalize_active_turn();
-                    app.notice = Some("Prompt finished.".into());
-                    app.set_runtime_phase(RuntimePhase::Idle, Some("prompt finished".into()));
+                    if finished_plan_turn && app.has_pending_plan_approval() {
+                        app.notice = Some("Plan ready for approval.".into());
+                        app.set_runtime_phase(
+                            RuntimePhase::Idle,
+                            Some("awaiting plan approval".into()),
+                        );
+                    } else {
+                        if finished_plan_turn {
+                            app.push_notice("Planning finished. Returned to execute mode.");
+                        }
+                        app.finalize_active_turn();
+                        app.notice = Some("Prompt finished.".into());
+                        app.set_runtime_phase(RuntimePhase::Idle, Some("prompt finished".into()));
+                    }
                 }
                 Err(err) => {
+                    restore_execute_mode_after_plan_turn(app, &mut agent);
+                    app.set_pending_plan_approval(false);
+                    *agent_slot = Some(agent);
+                    if let Some(agent) = agent_slot.as_ref() {
+                        app.sync_snapshot(agent);
+                    }
                     app.finalize_agent_stream(None);
                     app.set_runtime_phase(RuntimePhase::Failed, Some("query failed".into()));
                     let mut message = format!("Query failed: {err}");
