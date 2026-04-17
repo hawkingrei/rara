@@ -57,23 +57,3 @@ pub(super) fn extract_json_object(raw: &str) -> Option<&str> {
 
     None
 }
-
-pub(super) fn hashed_embedding(text: &str, dim: usize) -> Vec<f32> {
-    use sha2::{Digest, Sha256};
-
-    let mut values = vec![0f32; dim];
-    for token in text.split_whitespace() {
-        let digest = Sha256::digest(token.as_bytes());
-        let bucket = ((digest[0] as usize) << 8 | digest[1] as usize) % dim;
-        let sign = if digest[2] % 2 == 0 { 1.0 } else { -1.0 };
-        values[bucket] += sign;
-    }
-
-    let norm = values.iter().map(|v| v * v).sum::<f32>().sqrt();
-    if norm > 0.0 {
-        for value in &mut values {
-            *value /= norm;
-        }
-    }
-    values
-}

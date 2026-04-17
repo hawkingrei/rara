@@ -88,7 +88,8 @@ impl InspectionProgress {
                     .get("path")
                     .and_then(Value::as_str)
                     .unwrap_or_default()
-                    .to_ascii_lowercase();
+                    .to_ascii_lowercase()
+                    .replace('\\', "/");
                 if path.starts_with("src/") || path.ends_with(".rs") {
                     self.source_reads += 1;
                 } else if path.ends_with("cargo.toml")

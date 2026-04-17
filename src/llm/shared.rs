@@ -165,7 +165,7 @@ pub(super) fn model_context_budget(model: &str) -> Option<ContextBudget> {
     Some(context_budget_from_window(context_window_tokens))
 }
 
-pub(super) fn hashed_embedding(text: &str, dim: usize) -> Vec<f32> {
+pub(crate) fn hashed_embedding(text: &str, dim: usize) -> Vec<f32> {
     use sha2::{Digest, Sha256};
 
     let mut values = vec![0f32; dim];

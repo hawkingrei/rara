@@ -15,13 +15,13 @@ use serde_json::Value;
 
 use crate::agent::{AnthropicResponse, ContentBlock, Message, TokenUsage};
 use crate::config::RaraConfig;
-use crate::llm::LlmBackend;
+use crate::llm::{hashed_embedding, LlmBackend};
 
 use self::model::{
     build_hf_api, default_local_model_cache_dir as model_cache_dir, load_safetensors,
     preferred_dtype, select_device, LocalModelSpec, LocalTextModel,
 };
-use self::parser::{hashed_embedding, parse_tool_aware_reply};
+use self::parser::parse_tool_aware_reply;
 use self::prompt::{build_agent_prompt, render_messages, scenario_token_cap};
 
 pub use self::model::{default_local_model_cache_dir, local_runtime_target};
