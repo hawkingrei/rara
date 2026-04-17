@@ -5,6 +5,9 @@ use ratatui::{
     widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Tabs, Wrap},
     Frame,
 };
+use std::path::Path;
+use textwrap::Options;
+use unicode_width::UnicodeWidthStr;
 
 use super::command::{
     api_key_status, command_detail_text, command_spec_by_index, general_help_text, help_text,
@@ -12,6 +15,7 @@ use super::command::{
     palette_commands, quick_actions_text, recent_transcript_preview, status_prompt_sources_text,
     status_plan_text, status_request_user_input_text, status_resources_text, status_runtime_text, status_workspace_text,
 };
+use super::line_utils::prefix_lines;
 use super::state::{
     current_model_presets, HelpTab, Overlay, PROVIDER_FAMILIES, TaskKind, TranscriptEntry, TuiApp,
 };
@@ -19,25 +23,43 @@ use super::state::{
 pub fn render(f: &mut Frame, app: &TuiApp) {
     let layout = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(8), Constraint::Length(5)])
+        .constraints([Constraint::Fill(1), Constraint::Length(5)])
         .split(f.area());
 
     render_transcript(f, app, layout[0]);
-    render_bottom_pane(f, app, layout[1]);
+    let mut cursor = render_bottom_pane(f, app, layout[1]);
 
     if let Some(overlay) = app.overlay {
-        render_overlay(f, app, overlay);
+        cursor = render_overlay(f, app, overlay).or(cursor);
+    }
+
+    if let Some((x, y)) = cursor {
+        f.set_cursor_position((x, y));
     }
 }
 
-fn render_bottom_pane(f: &mut Frame, app: &TuiApp, area: Rect) {
+pub fn desired_viewport_height(app: &TuiApp, _width: u16, rows: u16) -> u16 {
+    if app.overlay.is_some() {
+        return rows.max(1);
+    }
+
+    let bottom_pane_height = 5u16;
+    let has_active_content = !app.active_turn.entries.is_empty();
+    if !has_active_content {
+        return bottom_pane_height.clamp(1, rows.max(1));
+    }
+    rows.max(1)
+}
+
+fn render_bottom_pane(f: &mut Frame, app: &TuiApp, area: Rect) -> Option<(u16, u16)> {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(1), Constraint::Min(3), Constraint::Length(1)])
         .split(area);
     render_activity_bar(f, app, chunks[0]);
-    render_composer(f, app, chunks[1]);
+    let cursor = render_composer(f, app, chunks[1]);
     render_footer(f, app, chunks[2]);
+    cursor
 }
 
 fn render_transcript(f: &mut Frame, app: &TuiApp, area: Rect) {
@@ -84,11 +106,10 @@ fn render_transcript(f: &mut Frame, app: &TuiApp, area: Rect) {
     );
 }
 
-pub fn committed_turn_lines(entries: &[TranscriptEntry]) -> Vec<Line<'static>> {
+pub fn committed_turn_lines(entries: &[TranscriptEntry], cwd: Option<&Path>) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     if let Some(user) = entries.iter().find(|entry| entry.role == "You") {
-        lines.push(Line::from(role_badge_span("You")));
-        push_message_lines(&mut lines, &user.message, 4);
+        lines.extend(prefixed_message_lines("You", &user.message, 4));
         lines.push(Line::from(""));
     }
 
@@ -105,8 +126,8 @@ pub fn committed_turn_lines(entries: &[TranscriptEntry]) -> Vec<Line<'static>> {
         lines.push(Line::from(""));
     }
 
-    if let Some(summary) = current_turn_tool_summary(entry_refs.as_slice()) {
-        lines.push(Line::from(section_span("Actions", Color::LightYellow)));
+    if let Some(summary) = current_turn_tool_summary(entry_refs.as_slice(), false, None) {
+        lines.push(Line::from(section_span("Ran", Color::LightYellow)));
         lines.extend(summary.lines().map(|line| Line::from(format!("  {line}"))));
         lines.push(Line::from(""));
     }
@@ -129,9 +150,13 @@ pub fn committed_turn_lines(entries: &[TranscriptEntry]) -> Vec<Line<'static>> {
     };
 
     for entry in tail_entries {
-        lines.push(Line::from(role_badge_span(&entry.role)));
         let max_lines = if entry.role == "Agent" { 8 } else { 4 };
-        push_message_lines(&mut lines, &entry.message, max_lines);
+        lines.extend(formatted_message_lines(
+            &entry.role,
+            &entry.message,
+            max_lines,
+            cwd,
+        ));
         lines.push(Line::from(""));
     }
 
@@ -163,6 +188,7 @@ fn current_turn_lines(app: &TuiApp) -> Vec<Line<'static>> {
         .rev()
         .find(|entry| entry.role == "Agent")
         .map(|entry| entry.message.as_str());
+    let streaming_agent_lines = app.agent_stream_lines();
     let latest_system = current_turn
         .iter()
         .rev()
@@ -174,10 +200,10 @@ fn current_turn_lines(app: &TuiApp) -> Vec<Line<'static>> {
         .find(|entry| entry.role == "Tool Result" || entry.role == "Tool Error")
         .map(|entry| (entry.role.as_str(), entry.message.as_str()));
     let mut lines = Vec::new();
+    let cwd = (!app.snapshot.cwd.is_empty()).then(|| Path::new(app.snapshot.cwd.as_str()));
 
     if !user_message.is_empty() {
-        lines.push(Line::from(role_badge_span("You")));
-        lines.push(Line::from(format!("  {}", user_message)));
+        lines.extend(prefixed_message_lines("You", user_message, 4));
         lines.push(Line::from(""));
     }
 
@@ -197,8 +223,17 @@ fn current_turn_lines(app: &TuiApp) -> Vec<Line<'static>> {
         lines.push(Line::from(""));
     }
 
-    if let Some(summary) = current_turn_tool_summary(current_turn.as_slice()) {
-        lines.push(Line::from(section_span("Actions", Color::LightYellow)));
+    if let Some(summary) = current_turn_tool_summary(
+        current_turn.as_slice(),
+        app.is_busy() && latest_agent.is_none(),
+        app.runtime_phase_detail.as_deref(),
+    ) {
+        let (title, color) = if app.is_busy() && latest_agent.is_none() {
+            ("Running", Color::Yellow)
+        } else {
+            ("Ran", Color::LightYellow)
+        };
+        lines.push(Line::from(section_span(title, color)));
         lines.extend(summary.lines().map(|line| Line::from(format!("  {line}"))));
         lines.push(Line::from(""));
     }
@@ -244,21 +279,14 @@ fn current_turn_lines(app: &TuiApp) -> Vec<Line<'static>> {
             super::state::RuntimePhase::RunningTool | super::state::RuntimePhase::SendingPrompt
         );
 
-    if let Some(agent_message) = latest_agent.filter(|_| !suppress_intermediate_agent) {
-        lines.push(Line::from(role_badge_span("Agent")));
-        for line in agent_message.lines() {
-            lines.push(Line::from(format!("  {line}")));
-        }
+    if let Some(stream_lines) = streaming_agent_lines.filter(|_| !suppress_intermediate_agent) {
+        lines.extend(rendered_markdown_lines("Agent", stream_lines, usize::MAX));
+    } else if let Some(agent_message) = latest_agent.filter(|_| !suppress_intermediate_agent) {
+        lines.extend(formatted_message_lines("Agent", agent_message, usize::MAX, cwd));
     } else if let Some(system_message) = latest_system {
-        lines.push(Line::from(role_badge_span("System")));
-        for line in system_message.lines().take(14) {
-            lines.push(Line::from(format!("  {line}")));
-        }
+        lines.extend(formatted_message_lines("System", system_message, 14, cwd));
     } else if let Some((role, tool_result)) = latest_tool_result {
-        lines.push(Line::from(role_badge_span(role)));
-        for line in tool_result.lines().take(14) {
-            lines.push(Line::from(format!("  {line}")));
-        }
+        lines.extend(prefixed_message_lines(role, tool_result, 14));
     } else if app.is_busy() {
         lines.push(Line::from(section_span("Working", Color::Yellow)));
         lines.push(Line::from(format!(
@@ -267,9 +295,6 @@ fn current_turn_lines(app: &TuiApp) -> Vec<Line<'static>> {
                 .as_deref()
                 .unwrap_or("waiting for the current turn to finish")
         )));
-    } else {
-        lines.push(Line::from(section_span("Ready", Color::Green)));
-        lines.push(Line::from("  No final answer yet."));
     }
 
     lines
@@ -320,50 +345,145 @@ fn current_turn_exploration_summary_from_entries(
     Some(lines.join("\n"))
 }
 
-fn current_turn_tool_summary(current_turn: &[&TranscriptEntry]) -> Option<String> {
-    let tools = current_turn
+fn current_turn_tool_summary(
+    current_turn: &[&TranscriptEntry],
+    show_live_detail: bool,
+    live_detail: Option<&str>,
+) -> Option<String> {
+    let actions = current_turn
         .iter()
         .filter_map(|entry| {
             if entry.role != "Tool" {
                 return None;
             }
-            let name = entry.message.split_whitespace().next()?;
-            if is_exploration_tool(name) {
-                return None;
-            }
-            Some(name.to_string())
+            tool_action_label(&entry.message)
         })
         .collect::<Vec<_>>();
-    if tools.is_empty() {
+    if actions.is_empty() {
         return None;
     }
 
-    let mut parts = vec![format!("Used {} tool call(s): {}", tools.len(), tools.join(", "))];
-    let results = current_turn
-        .iter()
-        .filter(|entry| entry.role == "Tool Result" || entry.role == "Tool Error")
-        .count();
-    if results > 0 {
-        parts.push(format!("Recorded {} tool result(s).", results));
+    let mut lines = actions
+        .into_iter()
+        .map(|action| format!("└ {action}"))
+        .collect::<Vec<_>>();
+
+    if show_live_detail {
+        lines.push(format!(
+            "└ {}",
+            live_detail.unwrap_or("waiting for tool output")
+        ));
     }
-    Some(parts.join("\n"))
+
+    Some(lines.join("\n"))
 }
 
-fn push_message_lines(lines: &mut Vec<Line<'static>>, message: &str, max_lines: usize) {
+fn prefixed_message_lines(role: &str, message: &str, max_lines: usize) -> Vec<Line<'static>> {
     let message_lines = message.lines().collect::<Vec<_>>();
     if message_lines.is_empty() {
-        lines.push(Line::from("  "));
-        return;
+        return vec![Line::from(format!("{role}:"))];
     }
-    for line in message_lines.iter().take(max_lines) {
+
+    let capped = if max_lines == usize::MAX {
+        message_lines.len()
+    } else {
+        max_lines
+    };
+
+    let mut lines = Vec::new();
+    if let Some(first) = message_lines.first() {
+        lines.push(Line::from(format!("{role}: {first}")));
+    }
+    for line in message_lines.iter().skip(1).take(capped.saturating_sub(1)) {
         lines.push(Line::from(format!("  {line}")));
     }
-    if message_lines.len() > max_lines {
+    if message_lines.len() > capped {
         lines.push(Line::from(Span::styled(
-            format!("  ... {} more line(s)", message_lines.len() - max_lines),
+            format!("  ... {} more line(s)", message_lines.len() - capped),
             Style::default().fg(Color::DarkGray),
         )));
     }
+    lines
+}
+
+fn formatted_message_lines(
+    role: &str,
+    message: &str,
+    max_lines: usize,
+    cwd: Option<&Path>,
+) -> Vec<Line<'static>> {
+    if matches!(role, "Agent" | "System") {
+        return markdown_message_lines(role, message, max_lines, cwd);
+    }
+    prefixed_message_lines(role, message, max_lines)
+}
+
+fn markdown_message_lines(
+    role: &str,
+    message: &str,
+    max_lines: usize,
+    cwd: Option<&Path>,
+) -> Vec<Line<'static>> {
+    let mut rendered = Vec::new();
+    super::markdown::append_markdown(message, None, cwd, &mut rendered);
+    let rendered_len = rendered.len();
+
+    if rendered.is_empty() {
+        return vec![Line::from(role.to_string())];
+    }
+
+    let capped = if max_lines == usize::MAX {
+        rendered.len()
+    } else {
+        max_lines.min(rendered.len())
+    };
+
+    let mut lines = vec![Line::from(role.to_string())];
+    let prefixed = prefix_lines(
+        rendered.into_iter().take(capped).collect(),
+        Span::raw("  "),
+        Span::raw("  "),
+    );
+    lines.extend(prefixed);
+    if capped < rendered_len {
+        lines.push(Line::from(Span::styled(
+            format!("  ... {} more line(s)", rendered_len - capped),
+            Style::default().fg(Color::DarkGray),
+        )));
+    }
+    lines
+}
+
+fn rendered_markdown_lines(
+    role: &str,
+    rendered: &[Line<'static>],
+    max_lines: usize,
+) -> Vec<Line<'static>> {
+    if rendered.is_empty() {
+        return vec![Line::from(role.to_string())];
+    }
+
+    let rendered_len = rendered.len();
+    let capped = if max_lines == usize::MAX {
+        rendered_len
+    } else {
+        max_lines.min(rendered_len)
+    };
+
+    let mut lines = vec![Line::from(role.to_string())];
+    let prefixed = prefix_lines(
+        rendered.iter().take(capped).cloned().collect(),
+        Span::raw("  "),
+        Span::raw("  "),
+    );
+    lines.extend(prefixed);
+    if capped < rendered_len {
+        lines.push(Line::from(Span::styled(
+            format!("  ... {} more line(s)", rendered_len - capped),
+            Style::default().fg(Color::DarkGray),
+        )));
+    }
+    lines
 }
 
 fn is_exploration_tool(name: &str) -> bool {
@@ -381,6 +501,24 @@ fn exploration_action_label(message: &str) -> Option<String> {
         "grep" => Some(format!("Search {}", if rest.is_empty() { "workspace" } else { rest.as_str() })),
         "search_files" => Some(format!("Search files {}", if rest.is_empty() { "workspace" } else { rest.as_str() })),
         _ => None,
+    }
+}
+
+fn tool_action_label(message: &str) -> Option<String> {
+    let mut parts = message.split_whitespace();
+    let name = parts.next()?;
+    if is_exploration_tool(name) {
+        return None;
+    }
+
+    let rest = parts.collect::<Vec<_>>().join(" ");
+    match name {
+        "bash" => Some(format!("Run {}", if rest.is_empty() { "command" } else { rest.as_str() })),
+        "apply_patch" => Some("Apply patch".to_string()),
+        "write_file" => Some(format!("Write {}", if rest.is_empty() { "file" } else { rest.as_str() })),
+        "replace" => Some(format!("Edit {}", if rest.is_empty() { "file" } else { rest.as_str() })),
+        "web_fetch" => Some(format!("Fetch {}", if rest.is_empty() { "resource" } else { rest.as_str() })),
+        other => Some(format!("Run {}", if rest.is_empty() { other } else { message })),
     }
 }
 
@@ -434,7 +572,7 @@ fn animated_activity_label(app: &TuiApp, label: &str) -> String {
     format!("{label}{dots}")
 }
 
-fn render_composer(f: &mut Frame, app: &TuiApp, area: Rect) {
+fn render_composer(f: &mut Frame, app: &TuiApp, area: Rect) -> Option<(u16, u16)> {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(2), Constraint::Length(1)])
@@ -483,22 +621,32 @@ fn render_composer(f: &mut Frame, app: &TuiApp, area: Rect) {
     } else if app.agent_execution_mode_label() == "plan" {
         "plan mode  /plan return to execute"
     } else {
-        "/search grep  terminal scrollback for history  /plan toggle  /quit exit"
+        "/search grep  /compact summarize history  /plan toggle  /quit exit"
     };
     f.render_widget(
         Paragraph::new(Span::styled(hint, Style::default().fg(Color::Gray))).alignment(Alignment::Left),
         chunks[1],
     );
+    Some(composer_cursor_position(app.input.as_str(), chunks[0]))
 }
 
 fn render_footer(f: &mut Frame, app: &TuiApp, area: Rect) {
+    let context = match app.snapshot.context_window_tokens {
+        Some(window) => format!(
+            "ctx~={}/{}",
+            app.snapshot.estimated_history_tokens,
+            window
+        ),
+        None => format!("ctx~={}", app.snapshot.estimated_history_tokens),
+    };
     let summary = format!(
-        "key={}  history={}  local={}  tokens={} in / {} out",
+        "key={}  history={}  local={}  tokens={} in / {} out  {}",
         api_key_status(&app.config),
         app.snapshot.history_len,
         app.transcript_entry_count(),
         app.snapshot.total_input_tokens,
         app.snapshot.total_output_tokens,
+        context,
     );
     f.render_widget(
         Paragraph::new(Line::from(Span::styled(summary, Style::default().fg(Color::DarkGray))))
@@ -507,18 +655,44 @@ fn render_footer(f: &mut Frame, app: &TuiApp, area: Rect) {
     );
 }
 
-fn render_overlay(f: &mut Frame, app: &TuiApp, overlay: Overlay) {
+fn render_overlay(f: &mut Frame, app: &TuiApp, overlay: Overlay) -> Option<(u16, u16)> {
     let popup = centered_rect(78, 70, f.area());
     f.render_widget(Clear, popup);
     match overlay {
-        Overlay::Help(tab) => render_help_modal(f, app, popup, tab),
-        Overlay::CommandPalette => render_command_palette(f, app, popup),
-        Overlay::Status => render_status_modal(f, app, popup),
-        Overlay::Setup => render_setup_modal(f, app, popup),
-        Overlay::ProviderPicker => render_provider_picker_modal(f, app, popup),
-        Overlay::ResumePicker => render_resume_picker_modal(f, app, popup),
-        Overlay::ModelPicker => render_model_picker_modal(f, app, popup),
+        Overlay::Help(tab) => {
+            render_help_modal(f, app, popup, tab);
+            None
+        }
+        Overlay::CommandPalette => {
+            render_command_palette(f, app, popup);
+            None
+        }
+        Overlay::Status => {
+            render_status_modal(f, app, popup);
+            None
+        }
+        Overlay::Setup => {
+            render_setup_modal(f, app, popup);
+            None
+        }
+        Overlay::ProviderPicker => {
+            render_provider_picker_modal(f, app, popup);
+            None
+        }
+        Overlay::ResumePicker => {
+            render_resume_picker_modal(f, app, popup);
+            None
+        }
+        Overlay::ModelPicker => {
+            render_model_picker_modal(f, app, popup);
+            None
+        }
         Overlay::BaseUrlEditor => render_base_url_editor_modal(f, app, popup),
+        Overlay::CodexAuthGuide => {
+            render_codex_auth_guide_modal(f, app, popup);
+            None
+        }
+        Overlay::ApiKeyEditor => render_api_key_editor_modal(f, app, popup),
     }
 }
 
@@ -897,7 +1071,7 @@ fn render_provider_picker_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
         chunks[1],
     );
     f.render_widget(
-        Paragraph::new("1/2 select  Up/Down move  Enter continue  Esc close")
+        Paragraph::new("1/2/3 select  Up/Down move  Enter continue  Esc close")
             .alignment(Alignment::Center),
         chunks[2],
     );
@@ -999,11 +1173,16 @@ fn render_model_picker_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(3), Constraint::Min(6), Constraint::Length(2)])
         .split(area);
-    f.render_widget(
-        Paragraph::new(format!(
+    let help = if provider_label == "Codex" && api_key_status(&app.config) == "missing" {
+        "Provider: Codex\nAuthentication is required before this preset can be used.\nEnter opens the Codex login guide."
+    } else {
+        &format!(
             "Provider: {provider_label}\nBase URL: {}\nSelect a concrete model preset. Enter applies immediately.",
             app.config.base_url.as_deref().unwrap_or("http://localhost:11434"),
-        ))
+        )
+    };
+    f.render_widget(
+        Paragraph::new(help)
             .block(Block::default().borders(Borders::ALL).title(" Model Picker ")),
         chunks[0],
     );
@@ -1012,13 +1191,17 @@ fn render_model_picker_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
         chunks[1],
     );
     f.render_widget(
-        Paragraph::new("1/2/3 apply directly  Up/Down move  B edit base URL  Enter apply  Esc close")
+        Paragraph::new(if provider_label == "Codex" {
+            "1/2 choose  Up/Down move  Enter continue  Esc close"
+        } else {
+            "1/2/3 apply directly  Up/Down move  B edit base URL  Enter apply  Esc close"
+        })
             .alignment(Alignment::Center),
         chunks[2],
     );
 }
 
-fn render_base_url_editor_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
+fn render_base_url_editor_modal(f: &mut Frame, app: &TuiApp, area: Rect) -> Option<(u16, u16)> {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(4), Constraint::Length(3), Constraint::Length(2)])
@@ -1034,6 +1217,130 @@ fn render_base_url_editor_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
     f.render_widget(intro, chunks[0]);
     f.render_widget(editor, chunks[1]);
     f.render_widget(footer, chunks[2]);
+    Some(editor_cursor_position(app.base_url_input.as_str(), chunks[1]))
+}
+
+fn render_codex_auth_guide_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(8), Constraint::Min(6), Constraint::Length(2)])
+        .split(area);
+    let ssh_hint = if super::is_ssh_session() {
+        "\n\nSSH session detected. Browser OAuth on a remote shell usually cannot complete the localhost callback. Use API key in SSH/headless sessions."
+    } else {
+        ""
+    };
+    let intro = format!(
+        "Codex needs authentication before this preset can be used.\n\n\
+         [1] OAuth login\n\
+         [2] API key\n\n\
+         OAuth matches the Codex desktop flow when this TUI is running locally.{ssh_hint}"
+    );
+    f.render_widget(
+        Paragraph::new(intro)
+            .block(Block::default().borders(Borders::ALL).title(" Codex Login "))
+            .wrap(Wrap { trim: false }),
+        chunks[0],
+    );
+
+    let body = Paragraph::new(format!(
+        "Current model: {}\nProvider: codex\nKey status: {}\n\n\
+         Pick OAuth for local desktop login, or API key for headless / SSH usage.",
+        app.current_model_label(),
+        api_key_status(&app.config),
+    ))
+    .block(Block::default().borders(Borders::LEFT | Borders::RIGHT).title(" Details "))
+    .wrap(Wrap { trim: false });
+    f.render_widget(body, chunks[1]);
+
+    f.render_widget(
+        Paragraph::new("1 OAuth  2 API key  Enter OAuth  Esc back")
+            .alignment(Alignment::Center),
+        chunks[2],
+    );
+}
+
+fn render_api_key_editor_modal(f: &mut Frame, app: &TuiApp, area: Rect) -> Option<(u16, u16)> {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(4), Constraint::Length(3), Constraint::Length(2)])
+        .split(area);
+    let intro = Paragraph::new(
+        "Paste a Codex-compatible API key. This is the recommended path for SSH/headless sessions.",
+    )
+    .block(Block::default().borders(Borders::ALL).title(" Codex API Key "))
+    .wrap(Wrap { trim: false });
+    let editor = Paragraph::new(app.api_key_input.as_str())
+        .block(Block::default().borders(Borders::ALL).title(" Value "));
+    let footer = Paragraph::new("Enter save and rebuild  Esc back to login guide")
+        .alignment(Alignment::Center);
+    f.render_widget(intro, chunks[0]);
+    f.render_widget(editor, chunks[1]);
+    f.render_widget(footer, chunks[2]);
+    Some(editor_cursor_position(app.api_key_input.as_str(), chunks[1]))
+}
+
+fn composer_cursor_position(input: &str, area: Rect) -> (u16, u16) {
+    wrapped_text_cursor_position(input, area, Some("› "), None)
+}
+
+fn editor_cursor_position(input: &str, area: Rect) -> (u16, u16) {
+    wrapped_text_cursor_position(input, inner_rect(area), None, None)
+}
+
+fn inner_rect(area: Rect) -> Rect {
+    Rect {
+        x: area.x.saturating_add(1),
+        y: area.y.saturating_add(1),
+        width: area.width.saturating_sub(2),
+        height: area.height.saturating_sub(2),
+    }
+}
+
+fn wrapped_text_cursor_position(
+    input: &str,
+    area: Rect,
+    initial_indent: Option<&str>,
+    subsequent_indent: Option<&str>,
+) -> (u16, u16) {
+    if area.width == 0 || area.height == 0 {
+        return (area.x, area.y);
+    }
+
+    let initial_indent = initial_indent.unwrap_or("");
+    let subsequent_indent = subsequent_indent.unwrap_or("");
+    let mut wrapped_rows: Vec<String> = Vec::new();
+
+    if input.is_empty() {
+        wrapped_rows.push(initial_indent.to_string());
+    } else {
+        for logical_line in input.split('\n') {
+            let options = Options::new(area.width as usize)
+                .initial_indent(initial_indent)
+                .subsequent_indent(subsequent_indent)
+                .break_words(false);
+            let wraps = textwrap::wrap(logical_line, options);
+            if wraps.is_empty() {
+                wrapped_rows.push(initial_indent.to_string());
+            } else {
+                wrapped_rows.extend(wraps.into_iter().map(|line| line.into_owned()));
+            }
+        }
+    }
+
+    let last_row = wrapped_rows
+        .last()
+        .cloned()
+        .unwrap_or_else(|| initial_indent.to_string());
+    let row_index = wrapped_rows.len().saturating_sub(1);
+    let cursor_y = area
+        .y
+        .saturating_add(row_index.min(area.height.saturating_sub(1) as usize) as u16);
+    let display_width = UnicodeWidthStr::width(last_row.as_str()) as u16;
+    let max_x_offset = area.width.saturating_sub(1);
+    let cursor_x = area.x.saturating_add(display_width.min(max_x_offset));
+
+    (cursor_x, cursor_y)
 }
 
 fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
@@ -1059,25 +1366,6 @@ fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
 
 fn command_preview_text(spec: &super::state::CommandSpec) -> String {
     format!("{}\n\n{}", spec.usage, spec.summary)
-}
-
-fn role_badge_span(role: &str) -> Span<'static> {
-    let (fg, bg) = match role {
-        "You" => (Color::Black, Color::LightBlue),
-        "Agent" => (Color::Black, Color::White),
-        "Tool" => (Color::Black, Color::Rgb(231, 201, 92)),
-        "Tool Result" => (Color::Black, Color::LightGreen),
-        "Tool Error" => (Color::White, Color::Red),
-        "Download" => (Color::Black, Color::LightBlue),
-        "Runtime" => (Color::Black, Color::LightBlue),
-        "Status" => (Color::White, Color::DarkGray),
-        "System" => (Color::Black, Color::Magenta),
-        _ => (Color::White, Color::DarkGray),
-    };
-    Span::styled(
-        format!(" {} ", role),
-        Style::default().fg(fg).bg(bg).add_modifier(Modifier::BOLD),
-    )
 }
 
 fn section_span<'a>(title: &'a str, color: Color) -> Span<'a> {

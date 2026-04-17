@@ -7,7 +7,7 @@ use super::state::{
     PROVIDER_FAMILIES,
 };
 
-pub const COMMAND_SPECS: [CommandSpec; 12] = [
+pub const COMMAND_SPECS: [CommandSpec; 13] = [
     CommandSpec {
         category: "Session",
         name: "help",
@@ -56,6 +56,13 @@ pub const COMMAND_SPECS: [CommandSpec; 12] = [
         usage: "/search <pattern> [in <path>]",
         summary: "Search the workspace with grep and keep the result in the current turn.",
         detail: "Run a local regex search without going through the model. Results show up in the current turn as an exploration step, which makes follow-up reads and review prompts feel more like Codex/Claude exploration.",
+    },
+    CommandSpec {
+        category: "Session",
+        name: "compact",
+        usage: "/compact",
+        summary: "Compact the current conversation history immediately.",
+        detail: "Force one explicit history compaction pass using the current backend summarizer. This keeps the current turn/session but replaces older history with a summary, closer to Codex manual compaction than a silent trim.",
     },
     CommandSpec {
         category: "Setup",
@@ -113,6 +120,7 @@ pub fn parse_local_command(input: &str) -> Option<LocalCommand> {
         "plan" => LocalCommandKind::Plan,
         "approval" => LocalCommandKind::Approval,
         "search" => LocalCommandKind::Search,
+        "compact" => LocalCommandKind::Compact,
         "setup" => LocalCommandKind::Setup,
         "model" => LocalCommandKind::Model,
         "base-url" => LocalCommandKind::BaseUrl,
@@ -149,7 +157,7 @@ pub fn recommended_commands(app: &TuiApp) -> Vec<&'static CommandSpec> {
     let names: &[&str] = if app.is_busy() {
         &["status", "help", "clear"]
     } else {
-        &["search", "resume", "plan", "approval", "model", "base-url", "status", "help", "clear", "setup"]
+        &["search", "compact", "resume", "plan", "approval", "model", "base-url", "status", "help", "clear", "setup"]
     };
     names
         .iter()
@@ -195,7 +203,7 @@ pub fn command_detail_text(spec: &CommandSpec) -> String {
 }
 
 pub fn general_help_text() -> &'static str {
-    "RARA uses a single composer as the control surface.\n\nNormal input goes to the current agent.\nSlash commands stay local and open overlays or update runtime state.\n\nExplore:\n  /search <pattern> [in <path>] runs local grep and keeps the result in the current turn\n\nModes:\n  /plan toggles read-only planning mode\n  /approval toggles bash approval between suggestion and always\n\nEditing:\n  apply_patch is the default tool for updating existing files\n  write_file is for new files or full rewrites\n  replace is only a simple fallback for unique string swaps\n\nKeyboard:\n  Enter submit current composer input\n  Esc close the current overlay only\n  Up/Down or j/k move inside lists\n  1/2/3 switch help tabs or choose guided model options\n\nExit:\n  /quit or /exit leave the TUI."
+    "RARA uses a single composer as the control surface.\n\nNormal input goes to the current agent.\nSlash commands stay local and open overlays or update runtime state.\n\nExplore:\n  /search <pattern> [in <path>] runs local grep and keeps the result in the current turn\n\nCompaction:\n  /compact forces one history compaction pass\n\nModes:\n  /plan toggles read-only planning mode\n  /approval toggles bash approval between suggestion and always\n\nEditing:\n  apply_patch is the default tool for updating existing files\n  write_file is for new files or full rewrites\n  replace is only a simple fallback for unique string swaps\n\nKeyboard:\n  Enter submit current composer input\n  Esc close the current overlay only\n  Up/Down or j/k move inside lists\n  1/2/3 switch help tabs or choose guided model options\n\nExit:\n  /quit or /exit leave the TUI."
 }
 
 fn command_score(spec: &CommandSpec, query: &str) -> Option<u8> {
@@ -241,7 +249,7 @@ pub fn help_text() -> String {
         .collect::<Vec<_>>()
         .join("\n");
     format!(
-        "Built-in commands:\n{}\n\nExplore:\n  /search    run local grep in the workspace or a subpath\n\nSessions:\n  /resume    reopen a recent local session\n\nModes:\n  /plan      toggle read-only planning mode\n  /approval  toggle bash approval mode\n\nEditing:\n  apply_patch  preferred for editing existing files\n  write_file   use for new files or full rewrites\n  replace      simple fallback for unique string replacement\n\nKeyboard:\n  Enter submit\n  Esc close current overlay\n  S open setup\n\nExit:\n  /quit\n  /exit\n\nModel switching:\n  /model\n\nProvider URL:\n  /base-url",
+        "Built-in commands:\n{}\n\nExplore:\n  /search    run local grep in the workspace or a subpath\n\nCompaction:\n  /compact   summarize older conversation history now\n\nSessions:\n  /resume    reopen a recent local session\n\nModes:\n  /plan      toggle read-only planning mode\n  /approval  toggle bash approval mode\n\nEditing:\n  apply_patch  preferred for editing existing files\n  write_file   use for new files or full rewrites\n  replace      simple fallback for unique string replacement\n\nKeyboard:\n  Enter submit\n  Esc close current overlay\n  S open setup\n\nExit:\n  /quit\n  /exit\n\nModel switching:\n  /model\n\nProvider URL:\n  /base-url",
         commands
     )
 }
@@ -308,10 +316,34 @@ pub fn status_resources_text(app: &TuiApp) -> String {
         "-".to_string()
     };
     let state_db = app.state_db_status.as_deref().unwrap_or("-");
+    let context = match app.snapshot.context_window_tokens {
+        Some(window) => format!(
+            "{} / {} (~auto @ {}, reserve {})",
+            app.snapshot.estimated_history_tokens,
+            window,
+            app.snapshot.compact_threshold_tokens,
+            app.snapshot.reserved_output_tokens
+        ),
+        None => format!(
+            "{} (~auto @ {})",
+            app.snapshot.estimated_history_tokens,
+            app.snapshot.compact_threshold_tokens
+        ),
+    };
+    let last_compact = match (
+        app.snapshot.last_compaction_before_tokens,
+        app.snapshot.last_compaction_after_tokens,
+    ) {
+        (Some(before), Some(after)) => format!("{before} -> {after}"),
+        _ => "-".to_string(),
+    };
     format!(
-        "tokens={} in / {} out\ncache={}\nstate_db={}",
+        "tokens={} in / {} out\ncontext_estimate={}\ncompactions={} (last: {})\ncache={}\nstate_db={}",
         app.snapshot.total_input_tokens,
         app.snapshot.total_output_tokens,
+        context,
+        app.snapshot.compaction_count,
+        last_compact,
         cache,
         state_db,
     )
@@ -664,6 +696,13 @@ mod tests {
         let command = parse_local_command("/search agent loop").expect("search should parse");
         assert!(matches!(command.kind, LocalCommandKind::Search));
         assert_eq!(command.arg.as_deref(), Some("agent loop"));
+    }
+
+    #[test]
+    fn parses_compact_command() {
+        let command = parse_local_command("/compact").expect("compact should parse");
+        assert!(matches!(command.kind, LocalCommandKind::Compact));
+        assert_eq!(command.arg.as_deref(), None);
     }
 
     #[test]

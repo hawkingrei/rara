@@ -6,6 +6,13 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use url::Url;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ContextBudget {
+    pub context_window_tokens: usize,
+    pub reserved_output_tokens: usize,
+    pub compact_threshold_tokens: usize,
+}
+
 #[async_trait]
 pub trait LlmBackend: Send + Sync {
     async fn ask(&self, messages: &[Message], tools: &[Value]) -> Result<AnthropicResponse>;
@@ -19,6 +26,9 @@ pub trait LlmBackend: Send + Sync {
     }
     async fn embed(&self, text: &str) -> Result<Vec<f32>>;
     async fn summarize(&self, messages: &[Message]) -> Result<String>;
+    fn context_budget(&self, _messages: &[Message], _tools: &[Value]) -> Option<ContextBudget> {
+        None
+    }
 }
 
 pub struct MockLlm;
@@ -128,6 +138,10 @@ impl LlmBackend for OpenAiCompatibleBackend {
         let res = request.json(&body).send().await?;
         let resp_json: Value = res.json().await?;
         Ok(extract_message_text(resp_json["choices"][0]["message"].get("content")).unwrap_or_default())
+    }
+
+    fn context_budget(&self, _messages: &[Message], _tools: &[Value]) -> Option<ContextBudget> {
+        model_context_budget(self.model.as_str())
     }
 }
 
@@ -490,6 +504,14 @@ impl LlmBackend for OllamaBackend {
             .join("\n\n");
         Ok(text)
     }
+
+    fn context_budget(&self, messages: &[Message], tools: &[Value]) -> Option<ContextBudget> {
+        let context_window_tokens = self
+            .num_ctx
+            .map(|value| value as usize)
+            .or_else(|| suggest_ollama_num_ctx(messages, tools, self.thinking).map(|value| value as usize))?;
+        Some(context_budget_from_window(context_window_tokens))
+    }
 }
 
 fn http_client_for_target(base_url: &str) -> Result<reqwest::Client> {
@@ -606,6 +628,34 @@ fn build_ollama_options(
     Some(json!({
         "num_ctx": num_ctx,
     }))
+}
+
+fn context_budget_from_window(context_window_tokens: usize) -> ContextBudget {
+    let reserved_output_tokens = (context_window_tokens / 8).clamp(1024, 4096);
+    let compact_threshold_tokens = context_window_tokens
+        .saturating_sub(reserved_output_tokens)
+        .saturating_sub(2048);
+    ContextBudget {
+        context_window_tokens,
+        reserved_output_tokens,
+        compact_threshold_tokens,
+    }
+}
+
+fn model_context_budget(model: &str) -> Option<ContextBudget> {
+    let canonical = model.trim().to_ascii_lowercase();
+    let context_window_tokens = if canonical.contains("gpt-5")
+        || canonical.contains("codex")
+        || canonical.contains("gpt-4.1")
+        || canonical.contains("gpt-4o")
+    {
+        200_000
+    } else if canonical.contains("gpt-4") {
+        128_000
+    } else {
+        return None;
+    };
+    Some(context_budget_from_window(context_window_tokens))
 }
 
 fn suggest_ollama_num_ctx(messages: &[Message], tools: &[Value], thinking: bool) -> Option<u32> {
@@ -769,6 +819,14 @@ impl LlmBackend for CodexBackend {
     async fn summarize(&self, m: &[Message]) -> Result<String> { 
         OpenAiCompatibleBackend { api_key: self.api_key.clone(), base_url: self.base_url.clone(), model: self.model.clone() }.summarize(m).await 
     }
+    fn context_budget(&self, messages: &[Message], tools: &[Value]) -> Option<ContextBudget> {
+        OpenAiCompatibleBackend {
+            api_key: self.api_key.clone(),
+            base_url: self.base_url.clone(),
+            model: self.model.clone(),
+        }
+        .context_budget(messages, tools)
+    }
 }
 
 pub struct GeminiBackend { pub api_key: String, pub model: String }
@@ -777,14 +835,17 @@ impl LlmBackend for GeminiBackend {
     async fn ask(&self, _: &[Message], _: &[Value]) -> Result<AnthropicResponse> { Err(anyhow!("Gemini pending")) }
     async fn embed(&self, _: &str) -> Result<Vec<f32>> { Err(anyhow!("Gemini pending")) }
     async fn summarize(&self, _: &[Message]) -> Result<String> { Err(anyhow!("Gemini pending")) }
+    fn context_budget(&self, _messages: &[Message], _tools: &[Value]) -> Option<ContextBudget> {
+        model_context_budget(self.model.as_str())
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
         apply_ollama_stream_event, build_ollama_options, extract_message_text,
-        parse_tool_arguments, suggest_ollama_num_ctx, to_ollama_messages, to_openai_messages,
-        should_bypass_proxy, Message,
+        model_context_budget, parse_tool_arguments, should_bypass_proxy, suggest_ollama_num_ctx,
+        to_ollama_messages, to_openai_messages, Message,
     };
     use serde_json::json;
 
@@ -898,6 +959,13 @@ mod tests {
 
         let options = build_ollama_options(&messages, &[], true, Some(65536)).unwrap();
         assert_eq!(options["num_ctx"], json!(65536));
+    }
+
+    #[test]
+    fn derives_context_budget_for_codex_like_models() {
+        let budget = model_context_budget("gpt-5.1-codex").expect("budget");
+        assert_eq!(budget.context_window_tokens, 200_000);
+        assert!(budget.compact_threshold_tokens < budget.context_window_tokens);
     }
 
     #[test]

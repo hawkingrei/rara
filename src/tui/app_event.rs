@@ -19,6 +19,7 @@ pub enum AppEvent {
     SelectPendingOption(usize),
     CycleModelSelection,
     SaveBaseUrlInput,
+    SaveApiKeyInput,
     SelectHelpTab(HelpTab),
     StartOAuth,
     ApplyOverlaySelection,
