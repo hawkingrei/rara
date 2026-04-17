@@ -122,13 +122,13 @@ pub fn committed_turn_lines(entries: &[TranscriptEntry], cwd: Option<&Path>) -> 
     if let Some(summary) =
         current_turn_exploration_summary_from_entries(entry_refs.as_slice(), false, None)
     {
-        lines.push(Line::from(section_span("Explored", Color::Rgb(231, 201, 92))));
+        lines.push(active_heading("Explored", Color::Rgb(231, 201, 92)));
         lines.extend(summary.lines().map(|line| Line::from(format!("  {line}"))));
         lines.push(Line::from(""));
     }
 
     if let Some(summary) = current_turn_tool_summary(entry_refs.as_slice(), false, None) {
-        lines.push(Line::from(section_span("Ran", Color::LightYellow)));
+        lines.push(active_heading("Ran", Color::LightYellow));
         lines.extend(summary.lines().map(|line| Line::from(format!("  {line}"))));
         lines.push(Line::from(""));
     }
@@ -157,6 +157,7 @@ pub fn committed_turn_lines(entries: &[TranscriptEntry], cwd: Option<&Path>) -> 
             &entry.message,
             max_lines,
             cwd,
+            false,
         ));
         lines.push(Line::from(""));
     }
@@ -205,7 +206,7 @@ fn current_turn_lines(app: &TuiApp) -> Vec<Line<'static>> {
     }
 
     if app.agent_execution_mode_label() == "plan" {
-        lines.push(Line::from(section_span("Plan Mode", Color::LightBlue)));
+        lines.push(active_heading("Plan Mode", Color::LightBlue));
         lines.push(Line::from(""));
     }
 
@@ -217,7 +218,7 @@ fn current_turn_lines(app: &TuiApp) -> Vec<Line<'static>> {
         } else {
             ("Explored", Color::Rgb(231, 201, 92))
         };
-        lines.push(Line::from(section_span(title, color)));
+        lines.push(active_heading(title, color));
         lines.extend(summary.lines().map(|line| Line::from(format!("  {line}"))));
         lines.push(Line::from(""));
     }
@@ -232,13 +233,13 @@ fn current_turn_lines(app: &TuiApp) -> Vec<Line<'static>> {
         } else {
             ("Ran", Color::LightYellow)
         };
-        lines.push(Line::from(section_span(title, color)));
+        lines.push(active_heading(title, color));
         lines.extend(summary.lines().map(|line| Line::from(format!("  {line}"))));
         lines.push(Line::from(""));
     }
 
     if !app.snapshot.plan_steps.is_empty() {
-        lines.push(Line::from(section_span("Plan", Color::LightBlue)));
+        lines.push(active_heading("Plan", Color::LightBlue));
         for line in super::command::status_plan_text(app).lines().take(8) {
             lines.push(Line::from(format!("  {line}")));
         }
@@ -251,7 +252,7 @@ fn current_turn_lines(app: &TuiApp) -> Vec<Line<'static>> {
         } else {
             ("Request Input", Color::LightGreen)
         };
-        lines.push(Line::from(section_span(title, color)));
+        lines.push(active_heading(title, color));
         for line in super::command::status_request_user_input_text(app).lines().take(8) {
             lines.push(Line::from(format!("  {line}")));
         }
@@ -260,13 +261,13 @@ fn current_turn_lines(app: &TuiApp) -> Vec<Line<'static>> {
     }
 
     if let Some((title, summary)) = app.snapshot.completed_approval.as_ref() {
-        lines.push(Line::from(section_span("Approval Completed", Color::LightGreen)));
+        lines.push(active_heading("Approval Completed", Color::LightGreen));
         lines.push(Line::from(format!("  {}: {}", title, summary)));
         lines.push(Line::from(""));
     }
 
     if let Some((title, summary)) = app.snapshot.completed_question.as_ref() {
-        lines.push(Line::from(section_span("Question Answered", Color::LightGreen)));
+        lines.push(active_heading("Question Answered", Color::LightGreen));
         lines.push(Line::from(format!("  {}: {}", title, summary)));
         lines.push(Line::from(""));
     }
@@ -279,15 +280,29 @@ fn current_turn_lines(app: &TuiApp) -> Vec<Line<'static>> {
         );
 
     if let Some(stream_lines) = streaming_agent_lines.filter(|_| !suppress_intermediate_agent) {
-        lines.extend(rendered_markdown_lines("Agent", stream_lines, usize::MAX));
+        let role = if app.is_busy() { "Responding" } else { "Agent" };
+        lines.extend(rendered_markdown_lines(role, stream_lines, usize::MAX, true));
     } else if let Some(agent_message) = latest_agent.filter(|_| !suppress_intermediate_agent) {
-        lines.extend(formatted_message_lines("Agent", agent_message, usize::MAX, cwd));
+        let role = if app.is_busy() { "Responding" } else { "Agent" };
+        lines.extend(formatted_message_lines(
+            role,
+            agent_message,
+            usize::MAX,
+            cwd,
+            true,
+        ));
     } else if let Some(system_message) = latest_system {
-        lines.extend(formatted_message_lines("System", system_message, 14, cwd));
+        lines.extend(formatted_message_lines(
+            "System",
+            system_message,
+            14,
+            cwd,
+            false,
+        ));
     } else if let Some((role, tool_result)) = latest_tool_result {
         lines.extend(prefixed_message_lines(role, tool_result, 14));
     } else if app.is_busy() {
-        lines.push(Line::from(section_span("Working", Color::Yellow)));
+        lines.push(active_heading("Working", Color::Yellow));
         lines.push(Line::from(format!(
             "  {}",
             summarize_live_detail(app.runtime_phase_detail.as_deref())
@@ -428,9 +443,10 @@ fn formatted_message_lines(
     message: &str,
     max_lines: usize,
     cwd: Option<&Path>,
+    active: bool,
 ) -> Vec<Line<'static>> {
     if matches!(role, "Agent" | "System") {
-        return markdown_message_lines(role, message, max_lines, cwd);
+        return markdown_message_lines(role, message, max_lines, cwd, active);
     }
     prefixed_message_lines(role, message, max_lines)
 }
@@ -440,44 +456,25 @@ fn markdown_message_lines(
     message: &str,
     max_lines: usize,
     cwd: Option<&Path>,
+    active: bool,
 ) -> Vec<Line<'static>> {
     let mut rendered = Vec::new();
     super::markdown::append_markdown(message, None, cwd, &mut rendered);
-    let rendered_len = rendered.len();
-
-    if rendered.is_empty() {
-        return vec![Line::from(role.to_string())];
-    }
-
-    let capped = if max_lines == usize::MAX {
-        rendered.len()
-    } else {
-        max_lines.min(rendered.len())
-    };
-
-    let mut lines = vec![Line::from(role.to_string())];
-    let prefixed = prefix_lines(
-        rendered.into_iter().take(capped).collect(),
-        Span::raw("  "),
-        Span::raw("  "),
-    );
-    lines.extend(prefixed);
-    if capped < rendered_len {
-        lines.push(Line::from(Span::styled(
-            format!("  ... {} more line(s)", rendered_len - capped),
-            Style::default().fg(Color::DarkGray),
-        )));
-    }
-    lines
+    rendered_markdown_lines(role, rendered.as_slice(), max_lines, active)
 }
 
 fn rendered_markdown_lines(
     role: &str,
     rendered: &[Line<'static>],
     max_lines: usize,
+    active: bool,
 ) -> Vec<Line<'static>> {
     if rendered.is_empty() {
-        return vec![Line::from(role.to_string())];
+        return vec![if active {
+            active_heading(role, Color::Cyan)
+        } else {
+            Line::from(role.to_string())
+        }];
     }
 
     let rendered_len = rendered.len();
@@ -487,7 +484,11 @@ fn rendered_markdown_lines(
         max_lines.min(rendered_len)
     };
 
-    let mut lines = vec![Line::from(role.to_string())];
+    let mut lines = vec![if active {
+        active_heading(role, Color::Cyan)
+    } else {
+        Line::from(role.to_string())
+    }];
     let prefixed = prefix_lines(
         rendered.iter().take(capped).cloned().collect(),
         Span::raw("  "),
@@ -605,14 +606,15 @@ mod tests {
     }
 }
 
-fn section_span<'a>(title: &'a str, color: Color) -> Span<'a> {
-    Span::styled(
-        format!(" {} ", title),
-        Style::default()
-            .fg(Color::Black)
-            .bg(color)
-            .add_modifier(Modifier::BOLD),
-    )
+fn active_heading(title: &str, color: Color) -> Line<'static> {
+    Line::from(vec![
+        Span::styled("•", Style::default().fg(color).add_modifier(Modifier::BOLD)),
+        Span::raw(" "),
+        Span::styled(
+            title.to_string(),
+            Style::default().fg(color).add_modifier(Modifier::BOLD),
+        ),
+    ])
 }
 
 fn badge<'a>(label: &'a str, value: &'a str, color: Color) -> Span<'a> {
