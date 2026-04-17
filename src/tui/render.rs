@@ -13,7 +13,8 @@ use super::command::{
     api_key_status, command_detail_text, command_spec_by_index, general_help_text, help_text,
     current_turn_preview, download_status_text, matching_commands, model_help_text, palette_command_by_index,
     palette_commands, quick_actions_text, recent_transcript_preview, status_prompt_sources_text,
-    status_plan_text, status_request_user_input_text, status_resources_text, status_runtime_text, status_workspace_text,
+    status_plan_approval_text, status_plan_text, status_request_user_input_text, status_resources_text,
+    status_runtime_text, status_workspace_text,
 };
 use super::line_utils::prefix_lines;
 use super::state::{
@@ -207,8 +208,8 @@ fn current_turn_lines(app: &TuiApp) -> Vec<Line<'static>> {
         lines.push(Line::from(""));
     }
 
-    if app.agent_execution_mode_label() == "plan" {
-        lines.push(Line::from(section_span("Plan Mode", Color::LightBlue)));
+    if let Some((title, color)) = current_turn_planning_stage(app) {
+        lines.push(Line::from(section_span(title, color)));
         lines.push(Line::from(""));
     }
 
@@ -243,6 +244,15 @@ fn current_turn_lines(app: &TuiApp) -> Vec<Line<'static>> {
         for line in status_plan_text(app).lines().take(8) {
             lines.push(Line::from(format!("  {line}")));
         }
+        lines.push(Line::from(""));
+    }
+
+    if app.has_pending_plan_approval() {
+        lines.push(Line::from(section_span("Awaiting Approval", Color::Yellow)));
+        for line in status_plan_approval_text(app).lines().take(10) {
+            lines.push(Line::from(format!("  {line}")));
+        }
+        lines.push(Line::from("  shortcuts: press 1 to implement, 2 to keep planning"));
         lines.push(Line::from(""));
     }
 
@@ -310,6 +320,17 @@ fn current_turn_exploration_summary(
         app.is_busy() && prefer_live_label,
         app.runtime_phase_detail.as_deref(),
     )
+}
+
+fn current_turn_planning_stage(app: &TuiApp) -> Option<(&'static str, Color)> {
+    if app.agent_execution_mode_label() != "plan" {
+        return None;
+    }
+    if app.snapshot.plan_steps.is_empty() {
+        Some(("Task Analysis", Color::LightBlue))
+    } else {
+        Some(("Plan Draft", Color::LightBlue))
+    }
 }
 
 fn current_turn_exploration_summary_from_entries(
@@ -616,12 +637,12 @@ fn render_composer(f: &mut Frame, app: &TuiApp, area: Rect) -> Option<(u16, u16)
         "busy  wait for the current task to finish"
     } else if app.has_pending_approval() {
         "approval pending  1 once  2 always  3 suggestion"
+    } else if app.has_pending_plan_approval() {
+        "plan ready  1 implement  2 keep planning"
     } else if app.snapshot.pending_question.is_some() {
         "question pending  press 1/2/3 or type a reply"
-    } else if app.agent_execution_mode_label() == "plan" {
-        "plan mode  /plan return to execute"
     } else {
-        "/search grep  /compact summarize history  /plan toggle  /quit exit"
+        "/search grep  /compact summarize history  /plan plan next turn  /quit exit"
     };
     f.render_widget(
         Paragraph::new(Span::styled(hint, Style::default().fg(Color::Gray))).alignment(Alignment::Left),
@@ -785,7 +806,7 @@ fn render_help_modal(f: &mut Frame, app: &TuiApp, area: Rect, tab: HelpTab) {
                 left[1],
             );
             f.render_widget(
-                Paragraph::new(status_prompt_sources_text())
+                Paragraph::new(status_prompt_sources_text(app))
                 .block(Block::default().borders(Borders::LEFT | Borders::RIGHT).title(" Prompt Sources "))
                 .wrap(Wrap { trim: false }),
                 left[2],
@@ -944,7 +965,7 @@ fn render_status_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
         top[2],
     );
     f.render_widget(
-        Paragraph::new(status_prompt_sources_text())
+        Paragraph::new(status_prompt_sources_text(app))
             .block(Block::default().borders(Borders::ALL).title(" Prompt Sources "))
             .wrap(Wrap { trim: false }),
         chunks[1],

@@ -25,7 +25,7 @@ pub trait LlmBackend: Send + Sync {
         self.ask(messages, tools).await
     }
     async fn embed(&self, text: &str) -> Result<Vec<f32>>;
-    async fn summarize(&self, messages: &[Message]) -> Result<String>;
+    async fn summarize(&self, messages: &[Message], instruction: &str) -> Result<String>;
     fn context_budget(&self, _messages: &[Message], _tools: &[Value]) -> Option<ContextBudget> {
         None
     }
@@ -48,7 +48,7 @@ impl LlmBackend for MockLlm {
         })
     }
     async fn embed(&self, _text: &str) -> Result<Vec<f32>> { Ok(vec![0.1; 128]) }
-    async fn summarize(&self, _messages: &[Message]) -> Result<String> { Ok("Mock summary".into()) }
+    async fn summarize(&self, _messages: &[Message], _instruction: &str) -> Result<String> { Ok("Mock summary".into()) }
 }
 
 pub struct OpenAiCompatibleBackend {
@@ -126,10 +126,13 @@ impl LlmBackend for OpenAiCompatibleBackend {
         Ok(embedding)
     }
 
-    async fn summarize(&self, messages: &[Message]) -> Result<String> {
+    async fn summarize(&self, messages: &[Message], instruction: &str) -> Result<String> {
         let client = http_client_for_target(&self.base_url)?;
         let mut msgs = messages.to_vec();
-        msgs.push(Message { role: "user".to_string(), content: json!("Summarize concisely.") });
+        msgs.push(Message {
+            role: "user".to_string(),
+            content: json!(instruction),
+        });
         let body = json!({ "model": self.model, "messages": to_openai_messages(&msgs) });
         let mut request = client.post(&format!("{}/v1/chat/completions", self.base_url.trim_end_matches('/')));
         if !self.api_key.is_empty() {
@@ -486,11 +489,11 @@ impl LlmBackend for OllamaBackend {
         Ok(hashed_embedding(text, 256))
     }
 
-    async fn summarize(&self, messages: &[Message]) -> Result<String> {
+    async fn summarize(&self, messages: &[Message], instruction: &str) -> Result<String> {
         let mut messages = messages.to_vec();
         messages.push(Message {
             role: "user".to_string(),
-            content: json!("Summarize concisely."),
+            content: json!(instruction),
         });
         let response = self.ask(&messages, &[]).await?;
         let text = response
@@ -816,8 +819,8 @@ impl LlmBackend for CodexBackend {
     async fn embed(&self, t: &str) -> Result<Vec<f32>> { 
         OpenAiCompatibleBackend { api_key: self.api_key.clone(), base_url: self.base_url.clone(), model: self.model.clone() }.embed(t).await 
     }
-    async fn summarize(&self, m: &[Message]) -> Result<String> { 
-        OpenAiCompatibleBackend { api_key: self.api_key.clone(), base_url: self.base_url.clone(), model: self.model.clone() }.summarize(m).await 
+    async fn summarize(&self, m: &[Message], instruction: &str) -> Result<String> { 
+        OpenAiCompatibleBackend { api_key: self.api_key.clone(), base_url: self.base_url.clone(), model: self.model.clone() }.summarize(m, instruction).await 
     }
     fn context_budget(&self, messages: &[Message], tools: &[Value]) -> Option<ContextBudget> {
         OpenAiCompatibleBackend {
@@ -834,7 +837,7 @@ pub struct GeminiBackend { pub api_key: String, pub model: String }
 impl LlmBackend for GeminiBackend {
     async fn ask(&self, _: &[Message], _: &[Value]) -> Result<AnthropicResponse> { Err(anyhow!("Gemini pending")) }
     async fn embed(&self, _: &str) -> Result<Vec<f32>> { Err(anyhow!("Gemini pending")) }
-    async fn summarize(&self, _: &[Message]) -> Result<String> { Err(anyhow!("Gemini pending")) }
+    async fn summarize(&self, _: &[Message], _: &str) -> Result<String> { Err(anyhow!("Gemini pending")) }
     fn context_budget(&self, _messages: &[Message], _tools: &[Value]) -> Option<ContextBudget> {
         model_context_budget(self.model.as_str())
     }

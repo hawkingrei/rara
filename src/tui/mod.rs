@@ -31,6 +31,7 @@ use tokio::time::{interval, Duration};
 use unicode_width::UnicodeWidthStr;
 
 use crate::agent::Agent;
+use crate::agent::AgentExecutionMode;
 use crate::agent::CompletedInteraction;
 use crate::agent::PendingApproval;
 use crate::agent::PendingUserInput;
@@ -263,6 +264,12 @@ fn map_key_to_event(key: KeyCode, app: &TuiApp) -> AppEvent {
             KeyCode::Down | KeyCode::Char('j') if app.input.is_empty() => AppEvent::ScrollTranscript(1),
             KeyCode::PageUp if app.input.is_empty() => AppEvent::ScrollTranscript(-8),
             KeyCode::PageDown if app.input.is_empty() => AppEvent::ScrollTranscript(8),
+            KeyCode::Char('1') if app.input.is_empty() && app.has_pending_plan_approval() => {
+                AppEvent::SelectPendingOption(0)
+            }
+            KeyCode::Char('2') if app.input.is_empty() && app.has_pending_plan_approval() => {
+                AppEvent::SelectPendingOption(1)
+            }
             KeyCode::Char('1') if app.input.is_empty() && app.snapshot.pending_question.is_some() => {
                 AppEvent::SelectPendingOption(0)
             }
@@ -372,6 +379,31 @@ async fn dispatch_event(
         AppEvent::SelectPendingOption(idx) => {
             if app.is_busy() {
                 app.push_notice("Wait for the current task before answering the structured question.");
+            } else if app.has_pending_plan_approval() {
+                match idx {
+                    0 => {
+                        if let Some(agent) = agent_slot.take() {
+                            let mut agent = agent;
+                            app.set_pending_plan_approval(false);
+                            app.set_agent_execution_mode(AgentExecutionMode::Execute);
+                            agent.set_execution_mode(AgentExecutionMode::Execute);
+                            start_query_task(
+                                app,
+                                "Implement the approved plan. Follow the current structured plan, make the required code changes, and validate the result.".to_string(),
+                                agent,
+                            );
+                            return Ok(true);
+                        }
+                    }
+                    _ => {
+                        if let Some(agent) = agent_slot.as_mut() {
+                            app.set_agent_execution_mode(AgentExecutionMode::Plan);
+                            agent.set_execution_mode(AgentExecutionMode::Plan);
+                        }
+                        app.set_pending_plan_approval(false);
+                        app.push_notice("Continue planning. Type feedback or follow-up instructions.");
+                    }
+                }
             } else if app.has_pending_approval() {
                 if let Some(agent) = agent_slot.take() {
                     let selection = match idx {
@@ -547,6 +579,11 @@ async fn handle_submit(
         app.push_notice(format!("Unknown command '{}'. Use /help.", input.trim()));
     } else if let Some(agent) = agent_slot.take() {
         let mut agent = agent;
+        if app.has_pending_plan_approval() {
+            app.set_pending_plan_approval(false);
+            app.set_agent_execution_mode(AgentExecutionMode::Plan);
+            agent.set_execution_mode(AgentExecutionMode::Plan);
+        }
         if app.snapshot.pending_question.is_some() {
             agent.consume_pending_user_input(input.trim());
         }
@@ -775,7 +812,7 @@ fn restore_session_by_id(
     let Some(agent) = agent_slot.as_mut() else {
         return Ok(());
     };
-    let Some(state_db) = app.state_db.as_ref() else {
+    let Some(state_db) = app.state_db.as_ref().cloned() else {
         return Ok(());
     };
     if let Ok(history) = agent.session_manager.load_session(session_id) {
@@ -783,6 +820,8 @@ fn restore_session_by_id(
         agent.session_id = session_id.to_string();
     }
     let persisted_steps = state_db.load_plan_steps(session_id)?;
+    let interactions = state_db.load_interactions(session_id)?;
+    let summaries = state_db.load_turn_summaries(session_id)?;
     if !persisted_steps.is_empty() {
         agent.current_plan = persisted_steps
             .into_iter()
@@ -803,7 +842,6 @@ fn restore_session_by_id(
     agent.pending_approval = None;
     agent.completed_user_input = None;
     agent.completed_approval = None;
-    let interactions = state_db.load_interactions(session_id)?;
     for interaction in interactions {
         match (interaction.kind.as_str(), interaction.status.as_str()) {
             ("request_input", "pending") => {
@@ -870,10 +908,12 @@ fn restore_session_by_id(
                     summary: interaction.summary,
                 });
             }
+            ("plan_approval", "pending") => {
+                app.set_pending_plan_approval(true);
+            }
             _ => {}
         }
     }
-    let summaries = state_db.load_turn_summaries(session_id)?;
     let mut turns = Vec::with_capacity(summaries.len());
     for summary in summaries {
         let entries = state_db

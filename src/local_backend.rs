@@ -223,14 +223,15 @@ impl LlmBackend for LocalLlmBackend {
         Ok(hashed_embedding(text, 256))
     }
 
-    async fn summarize(&self, messages: &[Message]) -> Result<String> {
+    async fn summarize(&self, messages: &[Message], instruction: &str) -> Result<String> {
         let runtime = Arc::clone(&self.runtime);
         let messages = messages.to_vec();
+        let instruction = instruction.to_string();
         tokio::task::spawn_blocking(move || {
             runtime
                 .lock()
                 .map_err(|_| anyhow!("local model runtime mutex poisoned"))?
-                .summarize(&messages)
+                .summarize(&messages, &instruction)
         })
         .await
         .context("local model summary task join failed")?
@@ -312,11 +313,10 @@ impl LocalRuntime {
         safe_budget.min(configured_cap).min(scenario_cap).max(48)
     }
 
-    fn summarize(&mut self, messages: &[Message]) -> Result<String> {
+    fn summarize(&mut self, messages: &[Message], instruction: &str) -> Result<String> {
         let prompt = format!(
-            "You are summarizing an agent conversation.\n\
-             Produce a concise summary in plain English with no markdown fence.\n\
-             Keep the result under 180 words.\n\n{}",
+            "{}\n\n{}",
+            instruction,
             render_messages(messages)
         );
         let prompt = self.spec.format_prompt(&prompt);

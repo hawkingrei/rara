@@ -44,6 +44,11 @@ The current product direction is to make local inference a first-class path inst
 
 ## 5. Documentation Rules
 
+- RARA follows `Specification-Driven Development (SDD)` for non-trivial work:
+  - define or update the relevant behavior/specification first;
+  - derive an implementation plan and concrete task breakdown from that specification;
+  - align implementation against that specification;
+  - record the resulting implementation checkpoint and any remaining follow-up work.
 - `docs/features/` stores stable engineering specs and contracts.
 - `docs/journal/` stores dated implementation notes and checkpoints.
 - `docs/todo.md` stores active follow-up work only.
