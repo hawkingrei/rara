@@ -126,7 +126,10 @@ where
     line_ends_with_local_link_target: bool,
     pending_local_link_soft_break: bool,
     current_line_content: Option<Line<'static>>,
+    current_initial_indent: Vec<Span<'static>>,
+    current_subsequent_indent: Vec<Span<'static>>,
     current_line_style: Style,
+    current_line_in_code_block: bool,
 }
 
 impl<'a, I> Writer<'a, I>
@@ -152,7 +155,10 @@ where
             line_ends_with_local_link_target: false,
             pending_local_link_soft_break: false,
             current_line_content: None,
+            current_initial_indent: Vec::new(),
+            current_subsequent_indent: Vec::new(),
             current_line_style: Style::default(),
+            current_line_in_code_block: false,
         }
     }
 
@@ -552,10 +558,13 @@ where
     fn flush_current_line(&mut self) {
         if let Some(line) = self.current_line_content.take() {
             let style = self.current_line_style;
-            let mut spans = self.prefix_spans(false);
+            let mut spans = self.current_initial_indent.clone();
             let mut line = line;
             spans.append(&mut line.spans);
             self.text.lines.push(Line::from_iter(spans).style(style));
+            self.current_initial_indent.clear();
+            self.current_subsequent_indent.clear();
+            self.current_line_in_code_block = false;
             self.line_ends_with_local_link_target = false;
         }
     }
@@ -571,7 +580,11 @@ where
         } else {
             line.style
         };
+        let was_pending = self.pending_marker_line;
+        self.current_initial_indent = self.prefix_spans(was_pending);
+        self.current_subsequent_indent = self.prefix_spans(false);
         self.current_line_content = Some(line);
+        self.current_line_in_code_block = self.in_code_block;
         self.pending_marker_line = false;
         self.line_ends_with_local_link_target = false;
     }
