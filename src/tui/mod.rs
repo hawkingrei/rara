@@ -76,8 +76,6 @@ pub async fn run_tui(agent: Agent, oauth_manager: OAuthManager) -> anyhow::Resul
             match update_terminal_viewport(&mut terminal, desired_height) {
                 Ok(()) => {
                     viewport_height = desired_height;
-                    app.startup_card_inserted = false;
-                    app.inserted_turns = 0;
                 }
                 Err(err) => app.push_notice(format!("Skipped viewport update: {err}")),
             }
@@ -101,8 +99,6 @@ pub async fn run_tui(agent: Agent, oauth_manager: OAuthManager) -> anyhow::Resul
                             match update_terminal_viewport(&mut terminal, desired_height) {
                                 Ok(()) => {
                                     viewport_height = desired_height;
-                                    app.startup_card_inserted = false;
-                                    app.inserted_turns = 0;
                                 }
                                 Err(err) => app.push_notice(format!("Skipped viewport redraw update: {err}")),
                             }

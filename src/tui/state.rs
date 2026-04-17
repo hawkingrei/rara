@@ -11,7 +11,6 @@ use ratatui::text::Line;
 use crate::agent::{Agent, AgentExecutionMode, BashApprovalMode};
 use crate::config::{ConfigManager, RaraConfig};
 use crate::state_db::{PersistedInteraction, PersistedPlanStep, PersistedSessionSummary, PersistedTurnEntry, StateDb};
-use super::markdown;
 use super::markdown_stream::MarkdownStreamCollector;
 pub use self::state_presets::{
     current_model_presets, selected_preset_idx_for_config, selected_provider_family_idx_for_config,
@@ -202,7 +201,6 @@ pub struct TranscriptTurn {
 
 pub struct AgentMarkdownStreamState {
     raw_text: String,
-    cwd: PathBuf,
     collector: MarkdownStreamCollector,
     committed_lines: Vec<Line<'static>>,
     display_lines: Vec<Line<'static>>,
@@ -215,7 +213,6 @@ impl AgentMarkdownStreamState {
             collector: MarkdownStreamCollector::new(None, &cwd),
             committed_lines: Vec::new(),
             display_lines: Vec::new(),
-            cwd,
         }
     }
 
@@ -224,13 +221,8 @@ impl AgentMarkdownStreamState {
         self.collector.push_delta(delta);
         self.committed_lines
             .extend(self.collector.commit_complete_lines());
-        self.display_lines.clear();
-        markdown::append_markdown(
-            &self.raw_text,
-            None,
-            Some(self.cwd.as_path()),
-            &mut self.display_lines,
-        );
+        self.display_lines = self.committed_lines.clone();
+        self.display_lines.extend(self.collector.preview_lines());
     }
 }
 
