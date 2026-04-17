@@ -524,6 +524,32 @@ pub fn status_plan_text(app: &TuiApp) -> String {
     }
 }
 
+pub fn status_plan_approval_text(app: &TuiApp) -> String {
+    let plan_summary = if app.snapshot.plan_steps.is_empty() {
+        "No structured plan captured yet.".to_string()
+    } else {
+        app.snapshot
+            .plan_steps
+            .iter()
+            .enumerate()
+            .take(5)
+            .map(|(idx, (_, step))| format!("{}. {}", idx + 1, step))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+
+    let explanation = app
+        .snapshot
+        .plan_explanation
+        .as_deref()
+        .unwrap_or("Review the proposed implementation plan before starting code changes.");
+
+    format!(
+        "ready to implement:\n{}\n\nsummary:\n{}\n\noptions:\n1. Start implementation now\n2. Continue planning",
+        plan_summary, explanation
+    )
+}
+
 pub fn status_request_user_input_text(app: &TuiApp) -> String {
     let Some((question, options, note)) = app.snapshot.pending_question.as_ref() else {
         return "No pending structured question.".to_string();

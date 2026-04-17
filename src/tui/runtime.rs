@@ -74,6 +74,7 @@ pub async fn execute_local_command(
         }
         LocalCommandKind::Plan => {
             app.set_runtime_phase(RuntimePhase::LocalCommand, Some("entering plan mode".into()));
+            app.set_pending_plan_approval(false);
             app.set_agent_execution_mode(AgentExecutionMode::Plan);
             if let Some(agent) = agent_slot.as_mut() {
                 agent.set_execution_mode(AgentExecutionMode::Plan);
@@ -397,18 +398,30 @@ pub async fn finish_running_task_if_ready(
             }
             match result {
                 Ok(_) => {
+                    let mut finished_plan_turn = false;
                     if let Some(agent) = agent_slot.as_mut() {
                         if matches!(agent.execution_mode, AgentExecutionMode::Plan) {
+                            finished_plan_turn = true;
                             agent.set_execution_mode(AgentExecutionMode::Execute);
                             app.set_agent_execution_mode(AgentExecutionMode::Execute);
+                            app.set_pending_plan_approval(!agent.current_plan.is_empty());
                             app.sync_snapshot(agent);
-                            app.push_notice("Plan finished. Returned to execute mode.");
+                            if agent.current_plan.is_empty() {
+                                app.push_notice("Planning finished. Returned to execute mode.");
+                            } else {
+                                app.push_notice("Plan ready. Review it before implementation.");
+                            }
                         }
                     }
                     app.finalize_agent_stream(None);
-                    app.finalize_active_turn();
-                    app.notice = Some("Prompt finished.".into());
-                    app.set_runtime_phase(RuntimePhase::Idle, Some("prompt finished".into()));
+                    if finished_plan_turn && app.has_pending_plan_approval() {
+                        app.notice = Some("Plan ready for approval.".into());
+                        app.set_runtime_phase(RuntimePhase::Idle, Some("awaiting plan approval".into()));
+                    } else {
+                        app.finalize_active_turn();
+                        app.notice = Some("Prompt finished.".into());
+                        app.set_runtime_phase(RuntimePhase::Idle, Some("prompt finished".into()));
+                    }
                 }
                 Err(err) => {
                     app.finalize_agent_stream(None);

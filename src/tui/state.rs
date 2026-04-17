@@ -111,6 +111,7 @@ pub struct RuntimeSnapshot {
     pub plan_explanation: Option<String>,
     pub pending_question: Option<(String, Vec<(String, String)>, Option<String>)>,
     pub pending_approval: Option<PendingApprovalSnapshot>,
+    pub pending_plan_approval: bool,
     pub completed_question: Option<(String, String)>,
     pub completed_approval: Option<(String, String)>,
     pub prompt_base_kind: String,
@@ -271,6 +272,7 @@ pub struct TuiApp {
     pub resume_picker_idx: usize,
     pub transcript_scroll: usize,
     pub agent_markdown_stream: Option<AgentMarkdownStreamState>,
+    pub pending_plan_approval: bool,
     pub terminal_focused: bool,
     pub state_db: Option<Arc<StateDb>>,
     pub state_db_status: Option<String>,
@@ -317,6 +319,7 @@ impl TuiApp {
             resume_picker_idx: 0,
             transcript_scroll: 0,
             agent_markdown_stream: None,
+            pending_plan_approval: false,
             terminal_focused: true,
             state_db: None,
             state_db_status: None,
@@ -423,6 +426,7 @@ impl TuiApp {
                 command: pending.command.clone(),
                 allow_net: pending.allow_net,
             }),
+            pending_plan_approval: self.pending_plan_approval,
             completed_question: agent
                 .completed_user_input
                 .as_ref()
@@ -522,6 +526,7 @@ impl TuiApp {
         self.inserted_turns = 0;
         self.transcript_scroll = 0;
         self.agent_markdown_stream = None;
+        self.pending_plan_approval = false;
         self.notice = Some("Cleared local transcript view.".into());
     }
 
@@ -620,6 +625,16 @@ impl TuiApp {
 
     pub fn has_pending_approval(&self) -> bool {
         self.snapshot.pending_approval.is_some()
+    }
+
+    pub fn has_pending_plan_approval(&self) -> bool {
+        self.pending_plan_approval
+    }
+
+    pub fn set_pending_plan_approval(&mut self, pending: bool) {
+        self.pending_plan_approval = pending;
+        self.snapshot.pending_plan_approval = pending;
+        self.persist_runtime_state();
     }
 
     pub fn close_overlay(&mut self) {
@@ -751,6 +766,19 @@ impl TuiApp {
                     "options": options,
                     "note": note,
                 })),
+            });
+        }
+        if self.snapshot.pending_plan_approval {
+            interactions.push(PersistedInteraction {
+                kind: "plan_approval".to_string(),
+                status: "pending".to_string(),
+                title: "Plan Ready".to_string(),
+                summary: self
+                    .snapshot
+                    .plan_explanation
+                    .clone()
+                    .unwrap_or_else(|| "Review the proposed plan before implementation.".to_string()),
+                payload: None,
             });
         }
         if let Some(approval) = self.snapshot.pending_approval.as_ref() {
