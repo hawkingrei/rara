@@ -1,4 +1,4 @@
-use crate::agent::{Agent, AgentExecutionMode, PlanStep};
+use crate::agent::{Agent, AgentExecutionMode, Message, PlanStep};
 use crate::llm::LlmBackend;
 use crate::prompt::PromptRuntimeConfig;
 use crate::session::SessionManager;
@@ -305,8 +305,8 @@ fn append_subagent_prompt(
     prompt_config
 }
 
-fn latest_assistant_text(agent: &Agent) -> Option<String> {
-    agent.history.iter().rev().find_map(|message| {
+fn latest_assistant_text_from_history(history: &[Message]) -> Option<String> {
+    history.iter().rev().find_map(|message| {
         if message.role != "assistant" {
             return None;
         }
@@ -333,6 +333,10 @@ fn latest_assistant_text(agent: &Agent) -> Option<String> {
     })
 }
 
+fn latest_assistant_text(agent: &Agent) -> Option<String> {
+    latest_assistant_text_from_history(&agent.history)
+}
+
 fn serialize_plan_steps(steps: &[PlanStep]) -> Vec<Value> {
     steps
         .iter()
@@ -351,15 +355,12 @@ fn serialize_plan_steps(steps: &[PlanStep]) -> Vec<Value> {
 
 #[cfg(test)]
 mod tests {
-    use super::{append_subagent_prompt, build_read_only_tool_manager, latest_assistant_text};
-    use crate::agent::{Agent, Message};
+    use super::{
+        append_subagent_prompt, build_read_only_tool_manager, latest_assistant_text_from_history,
+    };
+    use crate::agent::Message;
     use crate::prompt::PromptRuntimeConfig;
-    use crate::tool::ToolManager;
-    use crate::vectordb::VectorDB;
-    use crate::workspace::WorkspaceMemory;
-    use crate::{llm::MockLlm, session::SessionManager};
     use serde_json::json;
-    use std::sync::Arc;
 
     #[test]
     fn read_only_subagent_manager_excludes_mutating_tools() {
@@ -388,28 +389,13 @@ mod tests {
 
     #[test]
     fn latest_assistant_text_supports_string_content() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let session_manager = SessionManager {
-            storage_dir: temp.path().join(".rara").join("rollouts"),
-            legacy_storage_dir: temp.path().join(".rara").join("sessions"),
-        };
-        let mut agent = Agent::new(
-            ToolManager::new(),
-            Arc::new(MockLlm),
-            Arc::new(VectorDB::new("data/lancedb")),
-            Arc::new(session_manager),
-            Arc::new(WorkspaceMemory::from_paths(
-                temp.path().to_path_buf(),
-                temp.path().join(".rara"),
-            )),
-        );
-        agent.history.push(Message {
+        let history = vec![Message {
             role: "assistant".into(),
             content: json!("plain string assistant content"),
-        });
+        }];
 
         assert_eq!(
-            latest_assistant_text(&agent).as_deref(),
+            latest_assistant_text_from_history(&history).as_deref(),
             Some("plain string assistant content")
         );
     }
