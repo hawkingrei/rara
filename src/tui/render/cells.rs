@@ -8,7 +8,9 @@ use ratatui::{
 use crate::tui::command::{
     status_plan_text, status_planning_suggestion_text, status_request_user_input_text,
 };
-use crate::tui::state::{RuntimePhase, TranscriptEntry, TuiApp};
+use crate::tui::state::{
+    contains_structured_planning_output, RuntimePhase, TranscriptEntry, TuiApp,
+};
 
 use super::{
     current_turn_exploration_summary, current_turn_exploration_summary_from_entries,
@@ -129,6 +131,29 @@ impl PlanSummaryCell {
 }
 
 impl HistoryCell for PlanSummaryCell {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        self.inner.display_lines(width)
+    }
+}
+
+struct PlanningCell {
+    inner: SummaryCell,
+}
+
+impl PlanningCell {
+    fn new(summary: impl Into<String>, active: bool) -> Self {
+        let (title, color) = if active {
+            ("Planning", Color::LightBlue)
+        } else {
+            ("Planned", Color::LightBlue)
+        };
+        Self {
+            inner: SummaryCell::new(title, color, summary),
+        }
+    }
+}
+
+impl HistoryCell for PlanningCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
         self.inner.display_lines(width)
     }
@@ -590,6 +615,7 @@ impl ActiveCell for ActiveTurnCell<'_> {
         let mut cells: Vec<Box<dyn HistoryCell + '_>> = Vec::new();
         let has_live_exploration = !self.app.active_live.exploration_actions.is_empty()
             || !self.app.active_live.exploration_notes.is_empty();
+        let has_live_planning = !self.app.active_live.planning_actions.is_empty();
         let has_live_running = !self.app.active_live.running_actions.is_empty();
 
         if !user_message.is_empty() {
@@ -628,9 +654,35 @@ impl ActiveCell for ActiveTurnCell<'_> {
         } else {
             current_turn_exploration_summary(self.app, current_turn.as_slice(), turn_live)
         };
-        let exploration_active = turn_live && exploration_summary.is_some();
+        let has_exploration_summary = exploration_summary.is_some();
+        let exploration_active = turn_live && has_exploration_summary;
         if let Some(summary) = exploration_summary {
             cells.push(Box::new(ExploringCell::new(summary, exploration_active)));
+        }
+
+        let planning_summary = if has_live_planning {
+            let mut lines = self
+                .app
+                .active_live
+                .planning_actions
+                .iter()
+                .map(|action| format!("└ {action}"))
+                .collect::<Vec<_>>();
+            if turn_live {
+                lines.push(format!(
+                    "└ {}",
+                    self.app
+                        .runtime_phase_detail
+                        .as_deref()
+                        .unwrap_or("waiting for plan output")
+                ));
+            }
+            Some(lines.join("\n"))
+        } else {
+            None
+        };
+        if let Some(summary) = planning_summary {
+            cells.push(Box::new(PlanningCell::new(summary, turn_live)));
         }
 
         let running_summary = if has_live_running {
@@ -716,12 +768,24 @@ impl ActiveCell for ActiveTurnCell<'_> {
                 self.app.runtime_phase,
                 RuntimePhase::RunningTool | RuntimePhase::SendingPrompt
             );
+        let suppress_planning_chatter = matches!(
+            self.app.agent_execution_mode,
+            crate::agent::AgentExecutionMode::Plan
+        ) && has_exploration_summary
+            && latest_agent.is_some_and(|message| !contains_structured_planning_output(message))
+            && self.app.snapshot.plan_steps.is_empty()
+            && self.app.snapshot.pending_question.is_none()
+            && !self.app.has_pending_plan_approval();
 
         let responding_role = if turn_live { "Responding" } else { "Agent" };
 
-        if let Some(stream_lines) = streaming_agent_lines.filter(|_| !suppress_intermediate_agent) {
+        if let Some(stream_lines) = streaming_agent_lines
+            .filter(|_| !suppress_intermediate_agent && !suppress_planning_chatter)
+        {
             cells.push(Box::new(RespondingCell::from_stream(stream_lines)));
-        } else if let Some(agent_message) = latest_agent.filter(|_| !suppress_intermediate_agent) {
+        } else if let Some(agent_message) =
+            latest_agent.filter(|_| !suppress_intermediate_agent && !suppress_planning_chatter)
+        {
             cells.push(Box::new(RespondingCell::from_message(
                 responding_role,
                 agent_message,
@@ -980,6 +1044,44 @@ mod tests {
     }
 
     #[test]
+    fn active_turn_cell_suppresses_planning_chatter_when_exploring() {
+        let temp = tempdir().unwrap();
+        let mut app = TuiApp::new(ConfigManager {
+            path: temp.path().join("config.json"),
+        })
+        .expect("build tui app");
+        app.agent_execution_mode = crate::agent::AgentExecutionMode::Plan;
+        app.runtime_phase = RuntimePhase::ProcessingResponse;
+        app.active_turn = TranscriptTurn {
+            entries: vec![
+                TranscriptEntry {
+                    role: "You".into(),
+                    message: "Review this repository".into(),
+                },
+                TranscriptEntry {
+                    role: "Agent".into(),
+                    message:
+                        "I will now read crates/instructions/src/prompt.rs to continue the review."
+                            .into(),
+                },
+            ],
+        };
+        app.record_exploration_action("Read crates/instructions/src/lib.rs");
+
+        let rendered = ActiveTurnCell::new(&app, Some(Path::new(".")))
+            .display_lines(100)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(rendered.contains(" Plan Mode "));
+        assert!(rendered.contains(" Exploring "));
+        assert!(!rendered.contains("Responding"));
+        assert!(!rendered.contains("I will now read crates/instructions/src/prompt.rs"));
+    }
+
+    #[test]
     fn active_turn_cell_uses_responding_label_while_busy() {
         let temp = tempdir().unwrap();
         let mut app = TuiApp::new(ConfigManager {
@@ -1011,6 +1113,34 @@ mod tests {
 
         assert!(rendered.contains("Responding"));
         assert!(!rendered.contains("Agent\n  I have inspected"));
+    }
+
+    #[test]
+    fn active_turn_cell_shows_planning_section_for_plan_agent() {
+        let temp = tempdir().unwrap();
+        let mut app = TuiApp::new(ConfigManager {
+            path: temp.path().join("config.json"),
+        })
+        .expect("build tui app");
+        app.runtime_phase = RuntimePhase::RunningTool;
+        app.runtime_phase_detail = Some("plan_agent {\"instruction\":\"refine the plan\"}".into());
+        app.active_turn = TranscriptTurn {
+            entries: vec![TranscriptEntry {
+                role: "You".into(),
+                message: "Plan the refactor".into(),
+            }],
+        };
+        app.record_planning_action("Delegate plan refinement: refine the plan");
+
+        let rendered = ActiveTurnCell::new(&app, Some(Path::new(".")))
+            .display_lines(100)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(rendered.contains(" Planning "));
+        assert!(rendered.contains("Delegate plan refinement: refine the plan"));
     }
 
     #[test]

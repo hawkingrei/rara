@@ -30,7 +30,7 @@ use crate::sandbox::SandboxManager;
 use crate::session::SessionManager;
 use crate::skill::SkillManager;
 use crate::tool::ToolManager;
-use crate::tools::agent::{AgentTool, TeamCreateTool};
+use crate::tools::agent::{AgentTool, ExploreAgentTool, PlanAgentTool, TeamCreateTool};
 use crate::tools::bash::BashTool;
 use crate::tools::context::RetrieveSessionContextTool;
 use crate::tools::file::{
@@ -127,6 +127,7 @@ async fn main_impl() -> Result<()> {
         workspace.clone(),
         sandbox_manager.clone(),
         skill_manager_arc.clone(),
+        prompt::PromptRuntimeConfig::from_config(&config),
     );
 
     match cli.command.unwrap_or(Commands::Tui) {
@@ -159,6 +160,7 @@ fn create_full_tool_manager(
     workspace: Arc<WorkspaceMemory>,
     sandbox: Arc<SandboxManager>,
     skill_manager: Arc<SkillManager>,
+    prompt_config: prompt::PromptRuntimeConfig,
 ) -> ToolManager {
     let mut tm = ToolManager::new();
     tm.register(Box::new(BashTool {
@@ -197,6 +199,21 @@ fn create_full_tool_manager(
         vdb: vdb.clone(),
         session_manager: session_manager.clone(),
         workspace: workspace.clone(),
+        prompt_config: prompt_config.clone(),
+    }));
+    tm.register(Box::new(ExploreAgentTool {
+        backend: backend.clone(),
+        vdb: vdb.clone(),
+        session_manager: session_manager.clone(),
+        workspace: workspace.clone(),
+        prompt_config: prompt_config.clone(),
+    }));
+    tm.register(Box::new(PlanAgentTool {
+        backend: backend.clone(),
+        vdb: vdb.clone(),
+        session_manager: session_manager.clone(),
+        workspace: workspace.clone(),
+        prompt_config,
     }));
     tm.register(Box::new(TeamCreateTool {
         backend: backend.clone(),
