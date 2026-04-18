@@ -41,6 +41,18 @@ impl Tool for ListFilesStub {
     }
 }
 
+struct PlanAgentStub;
+
+#[async_trait]
+impl Tool for PlanAgentStub {
+    fn name(&self) -> &str { "plan_agent" }
+    fn description(&self) -> &str { "Return a delegated planning result" }
+    fn input_schema(&self) -> Value { json!({"type":"object"}) }
+    async fn call(&self, _input: Value) -> Result<Value, ToolError> {
+        Ok(json!({ "status": "ok", "summary": "delegated inspection complete" }))
+    }
+}
+
 struct SequencedBackend {
     responses: Mutex<Vec<AnthropicResponse>>,
     observed_messages: Mutex<Vec<Vec<Message>>>,
@@ -453,6 +465,55 @@ async fn continues_plan_mode_to_synthesize_plan_after_exploration_evidence() {
         .history
         .iter()
         .any(|message| message.content.to_string().contains("plan_continuation_required")));
+    assert_eq!(agent.current_plan.len(), 2);
+}
+
+#[tokio::test]
+async fn delegated_plan_agent_counts_as_planning_evidence() {
+    let backend = Arc::new(SequencedBackend::new(vec![
+        AnthropicResponse {
+            content: vec![ContentBlock::ToolUse {
+                id: "tool-1".to_string(),
+                name: "plan_agent".to_string(),
+                input: json!({ "task": "inspect planning flow" }),
+            }],
+            stop_reason: Some("tool_use".to_string()),
+            usage: Some(TokenUsage::default()),
+        },
+        AnthropicResponse {
+            content: vec![ContentBlock::Text {
+                text: "The delegated planning pass inspected enough code context.".to_string(),
+            }],
+            stop_reason: Some("end_turn".to_string()),
+            usage: Some(TokenUsage::default()),
+        },
+        AnthropicResponse {
+            content: vec![ContentBlock::Text {
+                text: "<plan>\n- [pending] Review delegated planning evidence\n- [pending] Finalize the top-level plan\n</plan>\nReady for approval.".to_string(),
+            }],
+            stop_reason: Some("end_turn".to_string()),
+            usage: Some(TokenUsage::default()),
+        },
+    ]));
+
+    let mut tool_manager = ToolManager::new();
+    tool_manager.register(Box::new(PlanAgentStub));
+    let mut agent = Agent::new(
+        tool_manager,
+        backend.clone(),
+        Arc::new(VectorDB::new("data/lancedb")),
+        Arc::new(SessionManager::new().expect("session manager")),
+        Arc::new(WorkspaceMemory::new().expect("workspace memory")),
+    );
+    agent.set_execution_mode(AgentExecutionMode::Plan);
+
+    agent
+        .query_with_mode("inspect".to_string(), super::AgentOutputMode::Silent)
+        .await
+        .expect("query should succeed");
+
+    let observed = backend.observed_messages.lock().expect("lock");
+    assert_eq!(observed.len(), 3);
     assert_eq!(agent.current_plan.len(), 2);
 }
 

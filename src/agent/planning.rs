@@ -40,6 +40,7 @@ pub(super) struct InspectionProgress {
     pub(super) source_reads: usize,
     pub(super) config_reads: usize,
     pub(super) instruction_reads: usize,
+    pub(super) delegated_inspections: usize,
 }
 
 #[derive(Clone, Copy)]
@@ -66,6 +67,7 @@ struct RuntimeInspectionSnapshot {
     source_reads: usize,
     config_reads: usize,
     instruction_reads: usize,
+    delegated_inspections: usize,
     has_minimum_review_evidence: bool,
 }
 
@@ -82,6 +84,9 @@ impl InspectionProgress {
         match name {
             "list_files" => {
                 self.list_calls += 1;
+            }
+            "explore_agent" | "plan_agent" => {
+                self.delegated_inspections += 1;
             }
             "read_file" => {
                 let path = input
@@ -122,6 +127,7 @@ impl InspectionProgress {
             || self.source_reads > 0
             || self.config_reads > 0
             || self.instruction_reads > 0
+            || self.delegated_inspections > 0
     }
 }
 
@@ -349,8 +355,7 @@ impl Agent {
             && !plan_updated
             && has_inspection_evidence
             && !self.inspection_progress.has_minimum_review_evidence();
-        let needs_plan_synthesis =
-            tool_rounds > 0 && has_inspection_evidence && self.current_plan.is_empty();
+        let needs_plan_synthesis = tool_rounds > 0 && has_inspection_evidence && !plan_updated;
         matches!(self.execution_mode, AgentExecutionMode::Plan)
             && (
                 continue_inspection
@@ -451,6 +456,7 @@ impl Agent {
                 source_reads: self.inspection_progress.source_reads,
                 config_reads: self.inspection_progress.config_reads,
                 instruction_reads: self.inspection_progress.instruction_reads,
+                delegated_inspections: self.inspection_progress.delegated_inspections,
                 has_minimum_review_evidence: self.inspection_progress.has_minimum_review_evidence(),
             },
             plan: RuntimePlanSnapshot {
