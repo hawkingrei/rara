@@ -1,0 +1,13 @@
+[package]
+name = "rara-skills"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+dirs.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

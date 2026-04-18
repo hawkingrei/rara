@@ -35,6 +35,8 @@ Active backlog only. Keep this file small and current.
 
 ## Code Organization and Docs
 
+- [ ] Continue the internal-crate rollout after `rara-config`, `rara-instructions`, and `rara-skills`: move more skill runtime behavior behind `rara-skills`, then extract the next stable boundary instead of growing the root crate back toward a monolith.
+- [ ] Refine instruction resolution so `AGENTS.md` / instruction files behave more like Codex and Claude Code: keep hierarchical lookup, then define clearer precedence and merge rules for nested project instructions versus local `.rara` instructions.
 - [ ] Continue splitting remaining oversized TUI files such as `src/tui/state.rs` and `src/tui/markdown_render.rs` so the 800-line guideline holds across the main interaction path.
 - [ ] Add module-level documentation for the agent lifecycle, tool loop, plan/update flow, and sandbox model so the runtime architecture is easier to reason about.
 - [ ] Add a security section to `AGENTS.md` or a dedicated security doc covering sandbox expectations, command execution rules, and secret-handling standards.
