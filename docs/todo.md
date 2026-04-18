@@ -13,6 +13,7 @@ Active backlog only. Keep this file small and current.
 
 - [ ] Add explicit HTTP timeouts to all networked backends in `src/llm.rs` so provider calls fail predictably instead of hanging indefinitely.
 - [ ] Extract shared message-mapping helpers across OpenAI-compatible and Ollama backends to reduce duplication and keep tool-call behavior consistent.
+- [ ] Add a real `team` runtime mode behind a CLI flag: in team mode, use a small model first for intent routing and only hand the task to the larger model when the intent is relevant to that worker, instead of sending every turn directly to the expensive model.
 
 ## Memory and Retrieval
 
