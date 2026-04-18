@@ -1,8 +1,8 @@
 mod acp;
 mod agent;
 mod config;
-mod local_backend;
 mod llm;
+mod local_backend;
 mod oauth;
 mod prompt;
 mod redaction;
@@ -44,7 +44,7 @@ use crate::tools::web::WebFetchTool;
 use crate::tools::workspace::UpdateProjectMemoryTool;
 use crate::vectordb::VectorDB;
 use crate::workspace::WorkspaceMemory;
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use std::sync::Arc;
 
@@ -89,7 +89,7 @@ async fn main() {
 async fn main_impl() -> Result<()> {
     let cli = Cli::parse();
     let config_manager = ConfigManager::new()?;
-    let mut config = config_manager.load();
+    let mut config = config_manager.load()?;
 
     if let Some(p) = cli.provider {
         config.provider = p;
@@ -295,6 +295,8 @@ mod tests {
             Err(err) => err,
         };
 
-        assert!(err.to_string().contains("Unsupported provider 'does-not-exist'"));
+        assert!(err
+            .to_string()
+            .contains("Unsupported provider 'does-not-exist'"));
     }
 }

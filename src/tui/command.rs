@@ -39,7 +39,7 @@ pub const COMMAND_SPECS: [CommandSpec; 13] = [
         name: "plan",
         usage: "/plan",
         summary: "Enter planning mode for the current task.",
-        detail: "Switch the agent into read-only planning mode. In planning mode, inspection tools stay available, but editing, shell execution, memory writes, and sub-agent launch tools are hidden and blocked. RARA can inspect the codebase, clarify constraints, refine the implementation approach, and only stop for approval once a concrete plan is ready.",
+        detail: "Switch the agent into read-only planning mode. In planning mode, inspection tools stay available, but editing, shell execution, memory writes, and sub-agent launch tools are hidden and blocked. RARA can inspect the codebase, clarify constraints, refine the implementation approach, and only stop for approval once a concrete plan is ready. For non-trivial tasks, RARA may also suggest entering planning mode before it starts execution.",
     },
     CommandSpec {
         category: "Session",
@@ -155,7 +155,10 @@ pub fn recommended_commands(app: &TuiApp) -> Vec<&'static CommandSpec> {
     let names: &[&str] = if app.is_busy() {
         &["status", "help", "clear"]
     } else {
-        &["search", "compact", "resume", "plan", "approval", "model", "base-url", "status", "help", "clear", "setup"]
+        &[
+            "search", "compact", "resume", "plan", "approval", "model", "base-url", "status",
+            "help", "clear", "setup",
+        ]
     };
     names
         .iter()
@@ -201,7 +204,7 @@ pub fn command_detail_text(spec: &CommandSpec) -> String {
 }
 
 pub fn general_help_text() -> &'static str {
-    "RARA uses a single composer as the control surface.\n\nNormal input goes to the current agent.\nSlash commands stay local and open overlays or update runtime state.\n\nExplore:\n  /search <pattern> [in <path>] runs local grep and keeps the result in the current turn\n\nCompaction:\n  /compact forces one history compaction pass\n\nModes:\n  /plan enters planning mode for the current task\n  /approval toggles bash approval between suggestion and always\n\nEditing:\n  apply_patch is the default tool for updating existing files\n  write_file is for new files or full rewrites\n  replace is only a simple fallback for unique string swaps\n\nKeyboard:\n  Enter submit current composer input\n  Esc close the current overlay only\n  Up/Down or j/k move inside lists\n  1/2/3 switch help tabs or choose guided model options\n\nExit:\n  /quit or /exit leave the TUI."
+    "RARA uses a single composer as the control surface.\n\nNormal input goes to the current agent.\nSlash commands stay local and open overlays or update runtime state.\n\nExplore:\n  /search <pattern> [in <path>] runs local grep and keeps the result in the current turn\n\nCompaction:\n  /compact forces one history compaction pass\n\nModes:\n  /plan enters planning mode for the current task\n  RARA may suggest planning mode first for non-trivial repository work\n  /approval toggles bash approval between suggestion and always\n\nEditing:\n  apply_patch is the default tool for updating existing files\n  write_file is for new files or full rewrites\n  replace is only a simple fallback for unique string swaps\n\nKeyboard:\n  Enter submit current composer input\n  Esc close the current overlay only\n  Up/Down or j/k move inside lists\n  1/2/3 switch help tabs or choose guided model options\n\nExit:\n  /quit or /exit leave the TUI."
 }
 
 fn command_score(spec: &CommandSpec, query: &str) -> Option<u8> {
@@ -247,7 +250,7 @@ pub fn help_text() -> String {
         .collect::<Vec<_>>()
         .join("\n");
     format!(
-        "Built-in commands:\n{}\n\nExplore:\n  /search    run local grep in the workspace or a subpath\n\nCompaction:\n  /compact   summarize older conversation history now\n\nSessions:\n  /resume    reopen a recent local session\n\nModes:\n  /plan      enter planning mode for the current task\n  /approval  toggle bash approval mode\n\nEditing:\n  apply_patch  preferred for editing existing files\n  write_file   use for new files or full rewrites\n  replace      simple fallback for unique string replacement\n\nKeyboard:\n  Enter submit\n  Esc close current overlay\n  S open setup\n\nExit:\n  /quit\n  /exit\n\nModel switching:\n  /model\n\nProvider URL:\n  /base-url",
+        "Built-in commands:\n{}\n\nExplore:\n  /search    run local grep in the workspace or a subpath\n\nCompaction:\n  /compact   summarize older conversation history now\n\nSessions:\n  /resume    reopen a recent local session\n\nModes:\n  /plan      enter planning mode for the current task\n  RARA may suggest planning mode for non-trivial tasks\n  /approval  toggle bash approval mode\n\nEditing:\n  apply_patch  preferred for editing existing files\n  write_file   use for new files or full rewrites\n  replace      simple fallback for unique string replacement\n\nKeyboard:\n  Enter submit\n  Esc close current overlay\n  S open setup\n\nExit:\n  /quit\n  /exit\n\nModel switching:\n  /model\n\nProvider URL:\n  /base-url",
         commands
     )
 }
@@ -324,8 +327,7 @@ pub fn status_resources_text(app: &TuiApp) -> String {
         ),
         None => format!(
             "{} (~auto @ {})",
-            app.snapshot.estimated_history_tokens,
-            app.snapshot.compact_threshold_tokens
+            app.snapshot.estimated_history_tokens, app.snapshot.compact_threshold_tokens
         ),
     };
     let last_compact = match (
@@ -350,7 +352,10 @@ pub fn status_resources_text(app: &TuiApp) -> String {
 pub fn status_prompt_sources_text(app: &TuiApp) -> String {
     let mut lines = vec![
         format!("base prompt: {}", app.snapshot.prompt_base_kind),
-        format!("active sections: {}", app.snapshot.prompt_section_keys.join(", ")),
+        format!(
+            "active sections: {}",
+            app.snapshot.prompt_section_keys.join(", ")
+        ),
         String::new(),
     ];
     let mut sources = app.snapshot.prompt_source_status_lines.clone();
@@ -550,6 +555,11 @@ pub fn status_plan_approval_text(app: &TuiApp) -> String {
     )
 }
 
+pub fn status_planning_suggestion_text(app: &TuiApp) -> String {
+    let _ = app.pending_planning_suggestion.as_deref();
+    "suggestion:\nThis looks like a non-trivial task. Enter planning mode first so RARA can analyze the repository, refine the approach, and only stop once a concrete plan is ready.\n\noptions:\n1. Enter planning mode\n2. Continue in execute mode".to_string()
+}
+
 pub fn status_request_user_input_text(app: &TuiApp) -> String {
     let Some((question, options, note)) = app.snapshot.pending_question.as_ref() else {
         return "No pending structured question.".to_string();
@@ -573,7 +583,10 @@ pub fn status_request_user_input_text(app: &TuiApp) -> String {
     };
 
     if let Some(note) = note {
-        format!("question:\n{}\n\noptions:\n{}\n\nnote:\n{}", question, options_text, note)
+        format!(
+            "question:\n{}\n\noptions:\n{}\n\nnote:\n{}",
+            question, options_text, note
+        )
     } else {
         format!("question:\n{}\n\noptions:\n{}", question, options_text)
     }
@@ -590,7 +603,11 @@ pub fn current_turn_preview(app: &TuiApp, limit: usize) -> String {
         .take(limit)
         .map(|entry| {
             let first_line = entry.message.lines().next().unwrap_or("").trim();
-            let preview = if first_line.is_empty() { "(empty)" } else { first_line };
+            let preview = if first_line.is_empty() {
+                "(empty)"
+            } else {
+                first_line
+            };
             format!("{}: {preview}", entry.role)
         })
         .collect::<Vec<_>>()
@@ -645,7 +662,10 @@ pub fn api_key_status(config: &RaraConfig) -> &'static str {
 }
 
 pub fn is_local_provider(provider: &str) -> bool {
-    matches!(provider, "local" | "local-candle" | "gemma4" | "qwen3" | "qwn3")
+    matches!(
+        provider,
+        "local" | "local-candle" | "gemma4" | "qwen3" | "qwn3"
+    )
 }
 
 #[cfg(test)]
@@ -659,7 +679,9 @@ pub fn normalize_command_token(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{matching_commands, normalize_command_token, parse_local_command, LocalCommandKind};
+    use super::{
+        matching_commands, normalize_command_token, parse_local_command, LocalCommandKind,
+    };
 
     #[test]
     fn parses_model_command_argument() {

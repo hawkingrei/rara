@@ -18,8 +18,8 @@ use std::sync::Arc;
 
 use crossterm::{
     event::{EventStream, KeyCode},
-    terminal::size as terminal_size,
     terminal::enable_raw_mode,
+    terminal::size as terminal_size,
 };
 use futures::StreamExt;
 use tokio::time::{interval, Duration};
@@ -33,22 +33,24 @@ use self::command::{palette_command_by_index, palette_commands, parse_local_comm
 use self::event_stream::{translate_event, UiEvent};
 use self::render::{desired_viewport_height, render};
 use self::runtime::{
-    execute_local_command, finish_running_task_if_ready, start_oauth_task, start_pending_approval_task, start_query_task,
-    start_rebuild_task,
+    execute_local_command, finish_running_task_if_ready, should_suggest_planning_mode,
+    start_oauth_task, start_pending_approval_task, start_query_task, start_rebuild_task,
 };
-use self::session_restore::{provider_requires_api_key, restore_latest_session, restore_session_by_id};
-use self::state::{current_model_presets, HelpTab, Overlay, PROVIDER_FAMILIES, TuiApp};
+use self::session_restore::{
+    provider_requires_api_key, restore_latest_session, restore_session_by_id,
+};
+use self::state::{current_model_presets, HelpTab, Overlay, TuiApp, PROVIDER_FAMILIES};
 use self::terminal_ui::{
     build_terminal, flush_committed_history, handle_paste, is_ssh_session, teardown_terminal,
     update_terminal_viewport,
 };
-use crate::agent::BashApprovalMode;
 use crate::agent::AgentExecutionMode;
+use crate::agent::BashApprovalMode;
 
 pub async fn run_tui(agent: Agent, oauth_manager: OAuthManager) -> anyhow::Result<()> {
     enable_raw_mode()?;
     let initial_size = terminal_size()?;
-    let mut app = TuiApp::new(crate::config::ConfigManager::new()?);
+    let mut app = TuiApp::new(crate::config::ConfigManager::new()?)?;
     let mut viewport_height = desired_viewport_height(&app, initial_size.0, initial_size.1);
     let mut terminal = build_terminal(viewport_height)?;
     let mut agent_slot = Some(agent);
@@ -211,17 +213,33 @@ fn map_key_to_event(key: KeyCode, app: &TuiApp) -> AppEvent {
         None => match key {
             KeyCode::Esc => AppEvent::Noop,
             KeyCode::Enter => AppEvent::SubmitComposer,
-            KeyCode::Up | KeyCode::Char('k') if app.input.is_empty() => AppEvent::ScrollTranscript(-1),
-            KeyCode::Down | KeyCode::Char('j') if app.input.is_empty() => AppEvent::ScrollTranscript(1),
+            KeyCode::Up | KeyCode::Char('k') if app.input.is_empty() => {
+                AppEvent::ScrollTranscript(-1)
+            }
+            KeyCode::Down | KeyCode::Char('j') if app.input.is_empty() => {
+                AppEvent::ScrollTranscript(1)
+            }
             KeyCode::PageUp if app.input.is_empty() => AppEvent::ScrollTranscript(-8),
             KeyCode::PageDown if app.input.is_empty() => AppEvent::ScrollTranscript(8),
-            KeyCode::Char('1') if app.input.is_empty() && app.snapshot.pending_question.is_some() => {
+            KeyCode::Char('1')
+                if app.input.is_empty()
+                    && (app.snapshot.pending_question.is_some()
+                        || app.has_pending_plan_approval()
+                        || app.has_pending_planning_suggestion()) =>
+            {
                 AppEvent::SelectPendingOption(0)
             }
-            KeyCode::Char('2') if app.input.is_empty() && app.snapshot.pending_question.is_some() => {
+            KeyCode::Char('2')
+                if app.input.is_empty()
+                    && (app.snapshot.pending_question.is_some()
+                        || app.has_pending_plan_approval()
+                        || app.has_pending_planning_suggestion()) =>
+            {
                 AppEvent::SelectPendingOption(1)
             }
-            KeyCode::Char('3') if app.input.is_empty() && app.snapshot.pending_question.is_some() => {
+            KeyCode::Char('3')
+                if app.input.is_empty() && app.snapshot.pending_question.is_some() =>
+            {
                 AppEvent::SelectPendingOption(2)
             }
             KeyCode::Char('s') => AppEvent::OpenOverlay(Overlay::Setup),
@@ -288,8 +306,10 @@ async fn dispatch_event(
             }
         }
         AppEvent::MoveModelSelection(delta) => {
-            let next = (app.model_picker_idx as i32 + delta)
-                .clamp(0, current_model_presets(app.provider_picker_idx).len() as i32 - 1);
+            let next = (app.model_picker_idx as i32 + delta).clamp(
+                0,
+                current_model_presets(app.provider_picker_idx).len() as i32 - 1,
+            );
             app.model_picker_idx = next as usize;
         }
         AppEvent::SetProviderSelection(idx) => {
@@ -302,7 +322,8 @@ async fn dispatch_event(
             }
         }
         AppEvent::SetModelSelection(idx) => {
-            app.model_picker_idx = idx.min(current_model_presets(app.provider_picker_idx).len() - 1);
+            app.model_picker_idx =
+                idx.min(current_model_presets(app.provider_picker_idx).len() - 1);
             if matches!(app.overlay, Some(Overlay::Setup)) {
                 app.select_local_model(app.model_picker_idx);
             } else if matches!(app.overlay, Some(Overlay::ModelPicker)) && !app.is_busy() {
@@ -317,7 +338,49 @@ async fn dispatch_event(
         }
         AppEvent::SelectPendingOption(idx) => {
             if app.is_busy() {
-                app.push_notice("Wait for the current task before answering the structured question.");
+                app.push_notice(
+                    "Wait for the current task before answering the structured question.",
+                );
+            } else if app.has_pending_planning_suggestion() {
+                match idx {
+                    0 => {
+                        let Some(prompt) = app.take_pending_planning_suggestion() else {
+                            return Ok(false);
+                        };
+                        app.set_agent_execution_mode(AgentExecutionMode::Plan);
+                        if let Some(agent) = agent_slot.as_mut() {
+                            agent.set_execution_mode(AgentExecutionMode::Plan);
+                        }
+                        if let Some(agent) = agent_slot.take() {
+                            start_query_task(app, prompt, agent);
+                        } else {
+                            app.queue_planning_suggestion(prompt);
+                            app.push_notice("No active agent is available to enter planning mode.");
+                        }
+                    }
+                    1 => {
+                        let Some(prompt) = app.take_pending_planning_suggestion() else {
+                            return Ok(false);
+                        };
+                        app.set_agent_execution_mode(AgentExecutionMode::Execute);
+                        if let Some(agent) = agent_slot.as_mut() {
+                            agent.set_execution_mode(AgentExecutionMode::Execute);
+                        }
+                        if let Some(agent) = agent_slot.take() {
+                            start_query_task(app, prompt, agent);
+                        } else {
+                            app.queue_planning_suggestion(prompt);
+                            app.push_notice(
+                                "No active agent is available to continue in execute mode.",
+                            );
+                        }
+                    }
+                    _ => {
+                        app.push_notice(
+                            "Select 1 to enter planning mode or 2 to continue in execute mode.",
+                        );
+                    }
+                }
             } else if app.has_pending_plan_approval() {
                 match idx {
                     0 => {
@@ -532,7 +595,14 @@ async fn handle_submit(
         if app.snapshot.pending_question.is_some() {
             agent.consume_pending_user_input(input.trim());
         }
-        start_query_task(app, input.trim().to_string(), agent);
+        let prompt = input.trim().to_string();
+        if should_suggest_planning_mode(app, prompt.as_str()) {
+            app.queue_planning_suggestion(prompt);
+            *agent_slot = Some(agent);
+        } else {
+            app.clear_pending_planning_suggestion();
+            start_query_task(app, prompt, agent);
+        }
     }
     Ok(false)
 }

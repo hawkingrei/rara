@@ -18,7 +18,8 @@ pub(crate) fn desired_viewport_height(app: &TuiApp, _width: u16, rows: u16) -> u
     }
 
     let bottom_pane_height = 5u16;
-    let has_active_content = !app.active_turn.entries.is_empty();
+    let has_active_content =
+        !app.active_turn.entries.is_empty() || app.has_pending_planning_suggestion();
     if !app.has_any_transcript() && !has_active_content {
         return bottom_pane_height.clamp(1, rows.max(1));
     }
@@ -148,6 +149,8 @@ fn render_composer(f: &mut Frame, app: &TuiApp, area: Rect) -> Option<(u16, u16)
         "busy  wait for the current task to finish"
     } else if app.has_pending_approval() {
         "approval pending  1 once  2 always  3 suggestion"
+    } else if app.has_pending_planning_suggestion() {
+        "planning suggested  1 enter planning mode  2 continue in execute mode"
     } else if app.snapshot.pending_question.is_some() {
         "question pending  press 1/2/3 or type a reply"
     } else if app.agent_execution_mode_label() == "plan" {

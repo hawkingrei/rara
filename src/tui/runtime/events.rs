@@ -20,11 +20,28 @@ pub(super) fn apply_tui_event(app: &mut TuiApp, event: TuiEvent) {
                 app.append_agent_delta(&message);
                 return;
             } else if role == "Tool" || role == "Tool Result" || role == "Tool Error" {
+                if role == "Tool" {
+                    if let Some(action) = exploration_action_label(&message) {
+                        app.record_exploration_action(action);
+                    } else if let Some(action) = tool_action_label(&message) {
+                        app.record_running_action(action);
+                    }
+                }
                 app.set_runtime_phase(
                     RuntimePhase::RunningTool,
                     Some(message.lines().next().unwrap_or(role).trim().to_string()),
                 );
             } else if role == "Agent" {
+                if !app.active_live.exploration_actions.is_empty()
+                    && matches!(
+                        app.runtime_phase,
+                        RuntimePhase::RunningTool | RuntimePhase::SendingPrompt
+                    )
+                {
+                    for note in exploration_note_lines(&message) {
+                        app.record_exploration_note(note);
+                    }
+                }
                 app.set_runtime_phase(
                     RuntimePhase::ProcessingResponse,
                     Some("receiving model output".into()),
@@ -80,7 +97,11 @@ pub(super) fn convert_agent_event(event: AgentEvent) -> Option<TuiEvent> {
                 return None;
             }
             Some(TuiEvent::Transcript {
-                role: if is_error { "Tool Error" } else { "Tool Result" },
+                role: if is_error {
+                    "Tool Error"
+                } else {
+                    "Tool Result"
+                },
                 message: format_tool_result(&name, &content),
             })
         }
@@ -88,7 +109,129 @@ pub(super) fn convert_agent_event(event: AgentEvent) -> Option<TuiEvent> {
 }
 
 fn is_exploration_tool_name(name: &str) -> bool {
-    matches!(name, "list_files" | "read_file" | "glob" | "grep" | "search_files")
+    matches!(
+        name,
+        "list_files" | "read_file" | "glob" | "grep" | "search_files"
+    )
+}
+
+fn exploration_action_label(message: &str) -> Option<String> {
+    let mut parts = message.split_whitespace();
+    let name = parts.next()?;
+    let rest = parts.collect::<Vec<_>>().join(" ");
+    match name {
+        "list_files" => Some(format!(
+            "List {}",
+            if rest.is_empty() { "." } else { rest.as_str() }
+        )),
+        "read_file" => Some(format!(
+            "Read {}",
+            if rest.is_empty() {
+                "file"
+            } else {
+                rest.as_str()
+            }
+        )),
+        "glob" => Some(format!(
+            "Glob {}",
+            if rest.is_empty() {
+                "workspace"
+            } else {
+                rest.as_str()
+            }
+        )),
+        "grep" => Some(format!(
+            "Search {}",
+            if rest.is_empty() {
+                "workspace"
+            } else {
+                rest.as_str()
+            }
+        )),
+        "search_files" => Some(format!(
+            "Search files {}",
+            if rest.is_empty() {
+                "workspace"
+            } else {
+                rest.as_str()
+            }
+        )),
+        _ => None,
+    }
+}
+
+fn tool_action_label(message: &str) -> Option<String> {
+    let mut parts = message.split_whitespace();
+    let name = parts.next()?;
+    if is_exploration_tool_name(name) {
+        return None;
+    }
+    let rest = parts.collect::<Vec<_>>().join(" ");
+    match name {
+        "bash" => Some(format!(
+            "Run {}",
+            if rest.is_empty() {
+                "command"
+            } else {
+                rest.as_str()
+            }
+        )),
+        "apply_patch" => Some("Apply patch".to_string()),
+        "write_file" => Some(format!(
+            "Write {}",
+            if rest.is_empty() {
+                "file"
+            } else {
+                rest.as_str()
+            }
+        )),
+        "replace" => Some(format!(
+            "Edit {}",
+            if rest.is_empty() {
+                "file"
+            } else {
+                rest.as_str()
+            }
+        )),
+        "web_fetch" => Some(format!(
+            "Fetch {}",
+            if rest.is_empty() {
+                "resource"
+            } else {
+                rest.as_str()
+            }
+        )),
+        other => Some(format!(
+            "Run {}",
+            if rest.is_empty() { other } else { message }
+        )),
+    }
+}
+
+fn exploration_note_lines(message: &str) -> Vec<String> {
+    let mut notes = Vec::new();
+    for line in message
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+    {
+        if line.starts_with("/search ")
+            || line.starts_with("/compact ")
+            || line.starts_with("/plan ")
+            || line.starts_with("/quit ")
+            || line.starts_with("key=")
+            || line.starts_with("history=")
+            || line.starts_with("tokens=")
+            || line.starts_with("ctx~=")
+            || line.starts_with("waiting for model response")
+        {
+            continue;
+        }
+        if !notes.iter().any(|existing| existing == line) {
+            notes.push(line.to_string());
+        }
+    }
+    notes
 }
 
 fn format_tool_use(name: &str, input: &serde_json::Value) -> String {

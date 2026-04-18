@@ -22,11 +22,11 @@ pub fn start_query_task(app: &mut TuiApp, prompt: String, agent: Agent) {
     tasks::start_query_task(app, prompt, agent);
 }
 
-pub fn start_pending_approval_task(
-    app: &mut TuiApp,
-    selection: BashApprovalMode,
-    agent: Agent,
-) {
+pub fn should_suggest_planning_mode(app: &TuiApp, prompt: &str) -> bool {
+    tasks::should_suggest_planning_mode(app, prompt)
+}
+
+pub fn start_pending_approval_task(app: &mut TuiApp, selection: BashApprovalMode, agent: Agent) {
     tasks::start_pending_approval_task(app, selection, agent);
 }
 

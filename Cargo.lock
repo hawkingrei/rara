@@ -5746,6 +5746,9 @@ dependencies = [
  "owo-colors",
  "pulldown-cmark",
  "rand 0.8.5",
+ "rara-config",
+ "rara-instructions",
+ "rara-skills",
  "ratatui",
  "regex",
  "regex-lite",
@@ -5768,6 +5771,36 @@ dependencies = [
  "urlencoding",
  "uuid",
  "walkdir",
+]
+
+[[package]]
+name = "rara-config"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "secrecy",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
+name = "rara-instructions"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "rara-config",
+ "tempfile",
+]
+
+[[package]]
+name = "rara-skills"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "dirs",
+ "serde",
+ "tempfile",
 ]
 
 [[package]]

@@ -1,5 +1,5 @@
-use std::sync::Arc;
 use secrecy::{ExposeSecret, SecretString};
+use std::sync::Arc;
 use std::time::Instant;
 
 use anyhow::anyhow;
@@ -8,11 +8,11 @@ use tokio::sync::mpsc;
 use crate::agent::{Agent, AgentOutputMode, BashApprovalMode};
 use crate::llm::LlmBackend;
 use crate::oauth::OAuthManager;
+use crate::redaction::sanitize_url_for_display;
 use crate::sandbox::SandboxManager;
 use crate::session::SessionManager;
 use crate::skill::SkillManager;
 use crate::tool::ToolManager;
-use crate::redaction::sanitize_url_for_display;
 use crate::tools::agent::{AgentTool, TeamCreateTool};
 use crate::tools::bash::BashTool;
 use crate::tools::context::RetrieveSessionContextTool;
@@ -32,7 +32,10 @@ use super::super::state::{RunningTask, RuntimePhase, TaskCompletion, TaskKind, T
 use super::events::{apply_tui_event, convert_agent_event, format_error_chain};
 
 fn restore_execute_mode_after_plan_turn(app: &mut TuiApp, agent: &mut Agent) {
-    if matches!(app.agent_execution_mode, crate::agent::AgentExecutionMode::Plan) {
+    if matches!(
+        app.agent_execution_mode,
+        crate::agent::AgentExecutionMode::Plan
+    ) {
         app.set_agent_execution_mode(crate::agent::AgentExecutionMode::Execute);
         agent.set_execution_mode(crate::agent::AgentExecutionMode::Execute);
     }
@@ -40,6 +43,8 @@ fn restore_execute_mode_after_plan_turn(app: &mut TuiApp, agent: &mut Agent) {
 
 pub(super) fn start_query_task(app: &mut TuiApp, prompt: String, mut agent: Agent) {
     let (sender, receiver) = mpsc::unbounded_channel();
+    app.clear_pending_planning_suggestion();
+    app.clear_active_live_sections();
     agent.set_execution_mode(app.agent_execution_mode);
     agent.set_bash_approval_mode(app.bash_approval_mode);
     app.notice = Some("Running prompt.".into());
@@ -67,12 +72,78 @@ pub(super) fn start_query_task(app: &mut TuiApp, prompt: String, mut agent: Agen
     });
 }
 
+pub(super) fn should_suggest_planning_mode(app: &TuiApp, prompt: &str) -> bool {
+    if app.is_busy()
+        || app.has_pending_plan_approval()
+        || app.has_pending_approval()
+        || app.snapshot.pending_question.is_some()
+        || matches!(
+            app.agent_execution_mode,
+            crate::agent::AgentExecutionMode::Plan
+        )
+    {
+        return false;
+    }
+
+    let trimmed = prompt.trim();
+    if trimmed.is_empty() || trimmed.lines().count() > 20 {
+        return false;
+    }
+
+    let lowered = trimmed.to_ascii_lowercase();
+    let strong_keywords = [
+        "review the code",
+        "review this repo",
+        "inspect the codebase",
+        "implementation plan",
+        "refactor",
+        "architecture",
+        "design proposal",
+        "migration plan",
+        "跨模块",
+        "重构",
+        "架构",
+        "设计方案",
+        "实现方案",
+        "修改建议",
+        "看一下代码",
+        "代码质量",
+    ];
+    if strong_keywords
+        .iter()
+        .any(|keyword| lowered.contains(keyword) || trimmed.contains(keyword))
+    {
+        return true;
+    }
+
+    let asks_for_analysis = lowered.contains("analyze")
+        || lowered.contains("analyse")
+        || lowered.contains("proposal")
+        || lowered.contains("suggest")
+        || lowered.contains("review")
+        || lowered.contains("plan")
+        || lowered.contains("design");
+    let mentions_codebase = lowered.contains("repo")
+        || lowered.contains("repository")
+        || lowered.contains("codebase")
+        || lowered.contains("module")
+        || lowered.contains("system")
+        || trimmed.contains("代码")
+        || trimmed.contains("仓库")
+        || trimmed.contains("项目");
+
+    asks_for_analysis && mentions_codebase
+}
+
 pub(super) fn start_compact_task(app: &mut TuiApp, mut agent: Agent) {
     let (sender, receiver) = mpsc::unbounded_channel();
     agent.set_execution_mode(app.agent_execution_mode);
     agent.set_bash_approval_mode(app.bash_approval_mode);
     app.notice = Some("Compacting conversation history.".into());
-    app.set_runtime_phase(RuntimePhase::ProcessingResponse, Some("compacting history".into()));
+    app.set_runtime_phase(
+        RuntimePhase::ProcessingResponse,
+        Some("compacting history".into()),
+    );
     app.push_entry("You", "/compact");
 
     let handle = tokio::spawn(async move {
@@ -108,7 +179,10 @@ pub(super) fn start_pending_approval_task(
         BashApprovalMode::Suggestion => "suggestion only",
     };
     app.notice = Some(format!("Answering approval request: {selection_label}."));
-    app.set_runtime_phase(RuntimePhase::ProcessingResponse, Some("resuming after approval".into()));
+    app.set_runtime_phase(
+        RuntimePhase::ProcessingResponse,
+        Some("resuming after approval".into()),
+    );
 
     let handle = tokio::spawn(async move {
         let tx = sender.clone();
@@ -221,8 +295,11 @@ pub(super) async fn finish_running_task_if_ready(
             let mut agent = agent;
             match result {
                 Ok(_) => {
-                    let finished_plan_turn =
-                        matches!(app.agent_execution_mode, crate::agent::AgentExecutionMode::Plan);
+                    let finished_plan_turn = matches!(
+                        app.agent_execution_mode,
+                        crate::agent::AgentExecutionMode::Plan
+                    );
+                    app.clear_active_live_sections();
                     if finished_plan_turn {
                         restore_execute_mode_after_plan_turn(app, &mut agent);
                         app.set_pending_plan_approval(
@@ -251,6 +328,7 @@ pub(super) async fn finish_running_task_if_ready(
                 }
                 Err(err) => {
                     restore_execute_mode_after_plan_turn(app, &mut agent);
+                    app.clear_active_live_sections();
                     app.set_pending_plan_approval(false);
                     *agent_slot = Some(agent);
                     if let Some(agent) = agent_slot.as_ref() {
@@ -282,6 +360,7 @@ pub(super) async fn finish_running_task_if_ready(
             }
             match result {
                 Ok(true) => {
+                    app.clear_active_live_sections();
                     if let Some((before, after)) = app
                         .snapshot
                         .last_compaction_before_tokens
@@ -300,6 +379,7 @@ pub(super) async fn finish_running_task_if_ready(
                     app.set_runtime_phase(RuntimePhase::Idle, Some("history compacted".into()));
                 }
                 Ok(false) => {
+                    app.clear_active_live_sections();
                     let message = "Conversation history did not need compaction.";
                     app.push_entry("Agent", message);
                     app.push_notice(message);
@@ -307,6 +387,7 @@ pub(super) async fn finish_running_task_if_ready(
                     app.set_runtime_phase(RuntimePhase::Idle, Some("compact skipped".into()));
                 }
                 Err(err) => {
+                    app.clear_active_live_sections();
                     app.set_runtime_phase(RuntimePhase::Failed, Some("compact failed".into()));
                     let message = format!("Compaction failed:\n{}", format_error_chain(&err));
                     app.push_entry("System", message.clone());
@@ -337,10 +418,7 @@ pub(super) async fn finish_running_task_if_ready(
                 app.finalize_active_turn();
             }
             Err(err) => {
-                app.set_runtime_phase(
-                    RuntimePhase::Failed,
-                    Some("backend rebuild failed".into()),
-                );
+                app.set_runtime_phase(RuntimePhase::Failed, Some("backend rebuild failed".into()));
                 let message = format!("Failed to apply config:\n{}", format_error_chain(&err));
                 app.setup_status = Some(message.clone());
                 app.push_notice(message);
@@ -348,7 +426,8 @@ pub(super) async fn finish_running_task_if_ready(
         },
         TaskCompletion::OAuth { result } => match result {
             Ok(access_token) => {
-                app.config.set_api_key(access_token.expose_secret().to_string());
+                app.config
+                    .set_api_key(access_token.expose_secret().to_string());
                 app.config.provider = "codex".into();
                 if app.config.model.is_none() {
                     app.config.model = Some("codex".into());
@@ -461,13 +540,7 @@ async fn rebuild_agent_with_progress(
         skill_manager_arc,
     );
 
-    let mut agent = Agent::new(
-        tool_manager,
-        backend_arc,
-        vdb,
-        session_manager,
-        workspace,
-    );
+    let mut agent = Agent::new(tool_manager, backend_arc, vdb, session_manager, workspace);
     agent.set_prompt_config(crate::prompt::PromptRuntimeConfig::from_config(config));
     Ok(agent)
 }
@@ -525,4 +598,47 @@ fn create_full_tool_manager(
         workspace,
     }));
     tm
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::config::ConfigManager;
+    use crate::tui::state::TuiApp;
+    use tempfile::tempdir;
+
+    use super::should_suggest_planning_mode;
+
+    #[test]
+    fn suggests_planning_for_repo_review_requests() {
+        let temp = tempdir().unwrap();
+        let app = TuiApp::new(ConfigManager {
+            path: temp.path().join("config.json"),
+        })
+        .expect("build tui app");
+        assert!(should_suggest_planning_mode(
+            &app,
+            "看一下代码，并提出修改建议"
+        ));
+        assert!(should_suggest_planning_mode(
+            &app,
+            "Review this repository and propose architectural improvements."
+        ));
+    }
+
+    #[test]
+    fn skips_planning_for_simple_requests() {
+        let temp = tempdir().unwrap();
+        let app = TuiApp::new(ConfigManager {
+            path: temp.path().join("config.json"),
+        })
+        .expect("build tui app");
+        assert!(!should_suggest_planning_mode(
+            &app,
+            "Fix the typo in README."
+        ));
+        assert!(!should_suggest_planning_mode(
+            &app,
+            "What does this function do?"
+        ));
+    }
 }
