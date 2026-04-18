@@ -106,7 +106,7 @@ struct TurnOutput {
     assistant_message: Message,
     tool_calls: Vec<ToolCall>,
     plan_updated: bool,
-    assistant_text: String,
+    continue_inspection: bool,
 }
 
 pub struct Agent {
@@ -257,24 +257,45 @@ impl Agent {
         let mut tool_calls = Vec::new();
         let mut plan_updated = false;
         let mut assistant_text = String::new();
+        let mut continue_inspection = false;
+        let mut sanitized_content = Vec::new();
         for block in &response.content {
             match block {
                 ContentBlock::Text { text } => {
-                    if !streamed_any_delta {
-                        report(AgentEvent::AssistantText(text.clone()));
+                    let (clean_text, block_requests_continue) =
+                        planning::strip_continue_inspection_control(text);
+                    continue_inspection |= block_requests_continue;
+                    if !clean_text.trim().is_empty() {
+                        sanitized_content.push(ContentBlock::Text {
+                            text: clean_text.clone(),
+                        });
                     }
-                    if !assistant_text.is_empty() {
+                    if !streamed_any_delta {
+                        if !clean_text.trim().is_empty() {
+                            report(AgentEvent::AssistantText(clean_text.clone()));
+                        }
+                    }
+                    if !clean_text.trim().is_empty() && !assistant_text.is_empty() {
                         assistant_text.push('\n');
                     }
-                    assistant_text.push_str(text);
+                    if !clean_text.trim().is_empty() {
+                        assistant_text.push_str(&clean_text);
+                    }
                     if matches!(self.execution_mode, AgentExecutionMode::Plan) {
-                        plan_updated = self.capture_plan_from_text(text) || plan_updated;
+                        plan_updated = self.capture_plan_from_text(&clean_text) || plan_updated;
                     }
                     if matches!(output_mode, AgentOutputMode::Terminal) {
-                        println!("Agent: {}", text);
+                        if !clean_text.trim().is_empty() {
+                            println!("Agent: {}", clean_text);
+                        }
                     }
                 }
                 ContentBlock::ToolUse { id, name, input } => {
+                    sanitized_content.push(ContentBlock::ToolUse {
+                        id: id.clone(),
+                        name: name.clone(),
+                        input: input.clone(),
+                    });
                     report(AgentEvent::ToolUse {
                         name: name.clone(),
                         input: input.clone(),
@@ -291,11 +312,11 @@ impl Agent {
         Ok(TurnOutput {
             assistant_message: Message {
                 role: "assistant".to_string(),
-                content: serde_json::to_value(&response.content)?,
+                content: serde_json::to_value(&sanitized_content)?,
             },
             tool_calls,
             plan_updated,
-            assistant_text,
+            continue_inspection,
         })
     }
 
@@ -338,7 +359,7 @@ impl Agent {
             if turn_output.tool_calls.is_empty() {
                 if self.should_continue_plan_without_tools(
                     turn_output.plan_updated,
-                    &turn_output.assistant_text,
+                    turn_output.continue_inspection,
                     *tool_rounds,
                     *plan_continuations,
                 ) {
@@ -354,9 +375,9 @@ impl Agent {
                     continue;
                 }
                 if self.should_continue_execute_without_tools(
-                    &turn_output.assistant_text,
                     *tool_rounds,
                     *execute_continuations,
+                    turn_output.continue_inspection,
                 ) {
                     *execute_continuations += 1;
                     report(AgentEvent::Status(

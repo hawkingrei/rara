@@ -339,7 +339,7 @@ impl Agent {
     pub(super) fn should_continue_plan_without_tools(
         &self,
         plan_updated: bool,
-        _assistant_text: &str,
+        continue_inspection: bool,
         tool_rounds: usize,
         plan_continuations: usize,
     ) -> bool {
@@ -348,26 +348,26 @@ impl Agent {
             && self.inspection_progress.has_any_evidence()
             && !self.inspection_progress.has_minimum_review_evidence();
         matches!(self.execution_mode, AgentExecutionMode::Plan)
-            && (shallow_initial_plan || still_missing_inspection_evidence)
+            && (continue_inspection || shallow_initial_plan || still_missing_inspection_evidence)
             && plan_continuations < MAX_PLAN_CONTINUATIONS_PER_TURN
             && self.pending_user_input.is_none()
-            && !self.current_plan.is_empty()
+            && self.pending_approval.is_none()
+            && (continue_inspection || !self.current_plan.is_empty())
     }
 
     pub(super) fn should_continue_execute_without_tools(
         &self,
-        assistant_text: &str,
         _tool_rounds: usize,
         execute_continuations: usize,
+        continue_inspection: bool,
     ) -> bool {
-        let inspection_intent =
-            self.inspection_progress.has_any_evidence() || text_mentions_local_file_targets(assistant_text);
+        let inspection_intent = continue_inspection || self.inspection_progress.has_any_evidence();
         matches!(self.execution_mode, AgentExecutionMode::Execute)
             && inspection_intent
             && execute_continuations < MAX_EXECUTE_CONTINUATIONS_PER_TURN
             && self.pending_user_input.is_none()
             && self.pending_approval.is_none()
-            && !self.inspection_progress.has_minimum_review_evidence()
+            && (continue_inspection || !self.inspection_progress.has_minimum_review_evidence())
     }
 
     pub(super) fn ensure_active_plan_step(&mut self) {
@@ -581,21 +581,15 @@ impl RuntimeContinuationPhase {
     }
 }
 
-fn text_mentions_local_file_targets(text: &str) -> bool {
-    let lower = text.to_ascii_lowercase();
-    [
-        "cargo.toml",
-        "cargo.lock",
-        "agents.md",
-        "readme.md",
-        "src/",
-        "src\\",
-        ".rs",
-        ".toml",
-        ".md",
-    ]
-    .iter()
-    .any(|needle| lower.contains(needle))
+pub(super) fn strip_continue_inspection_control(text: &str) -> (String, bool) {
+    const CONTINUE_INSPECTION_TAG: &str = "<continue_inspection/>";
+    let requested = text.contains(CONTINUE_INSPECTION_TAG);
+    if !requested {
+        return (text.to_string(), false);
+    }
+
+    let cleaned = text.replace(CONTINUE_INSPECTION_TAG, "");
+    (cleaned.trim().to_string(), true)
 }
 
 pub(super) fn tool_result_message(tool_use_id: &str, content: String, is_error: bool) -> Message {
