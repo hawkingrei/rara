@@ -256,7 +256,6 @@ impl Agent {
 
         let mut tool_calls = Vec::new();
         let mut plan_updated = false;
-        let mut assistant_text = String::new();
         let mut continue_inspection = false;
         let mut sanitized_content = Vec::new();
         for block in &response.content {
@@ -269,23 +268,13 @@ impl Agent {
                         sanitized_content.push(ContentBlock::Text {
                             text: clean_text.clone(),
                         });
-                    }
-                    if !streamed_any_delta {
-                        if !clean_text.trim().is_empty() {
+                        if !streamed_any_delta {
                             report(AgentEvent::AssistantText(clean_text.clone()));
                         }
-                    }
-                    if !clean_text.trim().is_empty() && !assistant_text.is_empty() {
-                        assistant_text.push('\n');
-                    }
-                    if !clean_text.trim().is_empty() {
-                        assistant_text.push_str(&clean_text);
-                    }
-                    if matches!(self.execution_mode, AgentExecutionMode::Plan) {
-                        plan_updated = self.capture_plan_from_text(&clean_text) || plan_updated;
-                    }
-                    if matches!(output_mode, AgentOutputMode::Terminal) {
-                        if !clean_text.trim().is_empty() {
+                        if matches!(self.execution_mode, AgentExecutionMode::Plan) {
+                            plan_updated |= self.capture_plan_from_text(&clean_text);
+                        }
+                        if matches!(output_mode, AgentOutputMode::Terminal) {
                             println!("Agent: {}", clean_text);
                         }
                     }

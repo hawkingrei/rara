@@ -476,7 +476,7 @@ fn strips_continue_inspection_control_tag() {
         "Need one more inspection pass.\n<continue_inspection/>",
     );
     assert!(requested);
-    assert_eq!(cleaned, "Need one more inspection pass.");
+    assert_eq!(cleaned, "Need one more inspection pass.\n");
 
     let (cleaned, requested) = strip_continue_inspection_control("Final answer");
     assert!(!requested);

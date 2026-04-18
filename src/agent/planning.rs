@@ -589,7 +589,7 @@ pub(super) fn strip_continue_inspection_control(text: &str) -> (String, bool) {
     }
 
     let cleaned = text.replace(CONTINUE_INSPECTION_TAG, "");
-    (cleaned.trim().to_string(), true)
+    (cleaned, true)
 }
 
 pub(super) fn tool_result_message(tool_use_id: &str, content: String, is_error: bool) -> Message {
