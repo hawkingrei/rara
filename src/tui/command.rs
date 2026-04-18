@@ -1,6 +1,4 @@
 use crate::config::RaraConfig;
-use std::fs;
-use std::path::PathBuf;
 
 use super::state::{
     current_model_presets, CommandSpec, LocalCommand, LocalCommandKind, ProviderFamily, TuiApp,
@@ -41,7 +39,7 @@ pub const COMMAND_SPECS: [CommandSpec; 13] = [
         name: "plan",
         usage: "/plan",
         summary: "Enter planning mode for the current task.",
-        detail: "Switch the agent into read-only planning mode. In planning mode RARA can inspect the codebase, clarify constraints, refine the implementation approach, and only stop for approval once a concrete plan is ready.",
+        detail: "Switch the agent into read-only planning mode. In planning mode, inspection tools stay available, but editing, shell execution, memory writes, and sub-agent launch tools are hidden and blocked. RARA can inspect the codebase, clarify constraints, refine the implementation approach, and only stop for approval once a concrete plan is ready.",
     },
     CommandSpec {
         category: "Session",
@@ -203,7 +201,7 @@ pub fn command_detail_text(spec: &CommandSpec) -> String {
 }
 
 pub fn general_help_text() -> &'static str {
-    "RARA uses a single composer as the control surface.\n\nNormal input goes to the current agent.\nSlash commands stay local and open overlays or update runtime state.\n\nExplore:\n  /search <pattern> [in <path>] runs local grep and keeps the result in the current turn\n\nCompaction:\n  /compact forces one history compaction pass\n\nModes:\n  /plan enters read-only planning mode for the current task\n  /approval toggles bash approval between suggestion and always\n\nEditing:\n  apply_patch is the default tool for updating existing files\n  write_file is for new files or full rewrites\n  replace is only a simple fallback for unique string swaps\n\nKeyboard:\n  Enter submit current composer input\n  Esc close the current overlay only\n  Up/Down or j/k move inside lists\n  1/2/3 switch help tabs or choose guided model options\n\nExit:\n  /quit or /exit leave the TUI."
+    "RARA uses a single composer as the control surface.\n\nNormal input goes to the current agent.\nSlash commands stay local and open overlays or update runtime state.\n\nExplore:\n  /search <pattern> [in <path>] runs local grep and keeps the result in the current turn\n\nCompaction:\n  /compact forces one history compaction pass\n\nModes:\n  /plan enters planning mode for the current task\n  /approval toggles bash approval between suggestion and always\n\nEditing:\n  apply_patch is the default tool for updating existing files\n  write_file is for new files or full rewrites\n  replace is only a simple fallback for unique string swaps\n\nKeyboard:\n  Enter submit current composer input\n  Esc close the current overlay only\n  Up/Down or j/k move inside lists\n  1/2/3 switch help tabs or choose guided model options\n\nExit:\n  /quit or /exit leave the TUI."
 }
 
 fn command_score(spec: &CommandSpec, query: &str) -> Option<u8> {
@@ -349,38 +347,30 @@ pub fn status_resources_text(app: &TuiApp) -> String {
     )
 }
 
-pub fn status_prompt_sources_text() -> String {
-    let root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let mut sources = Vec::new();
-
-    for name in ["AGENTS.md", "GEMINI.md", "CLAUDE.md"] {
-        let path = root.join(name);
-        if fs::metadata(&path).map(|meta| meta.is_file()).unwrap_or(false) {
-            sources.push(format!("project instruction: {}", name));
+pub fn status_prompt_sources_text(app: &TuiApp) -> String {
+    let mut lines = vec![
+        format!("base prompt: {}", app.snapshot.prompt_base_kind),
+        format!("active sections: {}", app.snapshot.prompt_section_keys.join(", ")),
+        String::new(),
+    ];
+    let mut sources = app.snapshot.prompt_source_status_lines.clone();
+    lines.append(&mut sources);
+    if !app.snapshot.prompt_warnings.is_empty() {
+        if lines.len() > 3 {
+            lines.push(String::new());
         }
+        lines.push("warnings:".to_string());
+        lines.extend(
+            app.snapshot
+                .prompt_warnings
+                .iter()
+                .map(|warning| format!("- {warning}")),
+        );
     }
-
-    let rara_dir = root.join(".rara");
-    let local_instructions = rara_dir.join("instructions.md");
-    if fs::metadata(&local_instructions)
-        .map(|meta| meta.is_file())
-        .unwrap_or(false)
-    {
-        sources.push("local instruction: .rara/instructions.md".to_string());
-    }
-
-    let memory = rara_dir.join("memory.md");
-    if fs::metadata(&memory)
-        .map(|meta| meta.is_file())
-        .unwrap_or(false)
-    {
-        sources.push("local memory: .rara/memory.md".to_string());
-    }
-
-    if sources.is_empty() {
+    if lines.len() == 3 {
         "No prompt sources discovered.".to_string()
     } else {
-        sources.join("\n")
+        lines.join("\n")
     }
 }
 
@@ -534,6 +524,32 @@ pub fn status_plan_text(app: &TuiApp) -> String {
     }
 }
 
+pub fn status_plan_approval_text(app: &TuiApp) -> String {
+    let plan_summary = if app.snapshot.plan_steps.is_empty() {
+        "No structured plan captured yet.".to_string()
+    } else {
+        app.snapshot
+            .plan_steps
+            .iter()
+            .enumerate()
+            .take(5)
+            .map(|(idx, (_, step))| format!("{}. {}", idx + 1, step))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+
+    let explanation = app
+        .snapshot
+        .plan_explanation
+        .as_deref()
+        .unwrap_or("Review the proposed implementation plan before starting code changes.");
+
+    format!(
+        "ready to implement:\n{}\n\nsummary:\n{}\n\noptions:\n1. Start implementation now\n2. Continue planning",
+        plan_summary, explanation
+    )
+}
+
 pub fn status_request_user_input_text(app: &TuiApp) -> String {
     let Some((question, options, note)) = app.snapshot.pending_question.as_ref() else {
         return "No pending structured question.".to_string();
@@ -621,7 +637,7 @@ pub fn model_help_text(app: &TuiApp) -> String {
 pub fn api_key_status(config: &RaraConfig) -> &'static str {
     if !super::provider_requires_api_key(&config.provider) {
         "not-required"
-    } else if config.api_key.as_ref().is_some() {
+    } else if config.has_api_key() {
         "configured"
     } else {
         "missing"

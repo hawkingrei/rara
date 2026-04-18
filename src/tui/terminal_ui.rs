@@ -1,0 +1,102 @@
+use std::io;
+
+use anyhow::Result;
+use crossterm::{
+    cursor::Show,
+    execute,
+    terminal::{disable_raw_mode, size as terminal_size},
+};
+use ratatui::{
+    backend::CrosstermBackend,
+    layout::Rect,
+    text::Line,
+};
+
+use super::custom_terminal::Terminal;
+use super::insert_history::insert_history_lines;
+use super::render::{committed_turn_lines, startup_card_lines};
+use super::state::TuiApp;
+
+pub(super) fn handle_paste(text: String, app: &mut TuiApp) {
+    if matches!(app.overlay, Some(super::state::Overlay::BaseUrlEditor)) {
+        app.base_url_input.push_str(&text);
+        return;
+    }
+
+    if matches!(app.overlay, Some(super::state::Overlay::ApiKeyEditor)) {
+        app.api_key_input.push_str(&text);
+        return;
+    }
+
+    app.input.push_str(&text);
+    app.sync_command_palette_with_input();
+}
+
+pub(super) fn build_terminal(
+    viewport_height: u16,
+) -> Result<Terminal<CrosstermBackend<std::io::Stdout>>> {
+    let mut terminal = Terminal::new(CrosstermBackend::new(io::stdout()))?;
+    let size = terminal.size()?;
+    terminal.set_viewport_area(viewport_area(size.width, size.height, viewport_height));
+    terminal.clear_visible_screen()?;
+    Ok(terminal)
+}
+
+pub(super) fn update_terminal_viewport(
+    terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
+    viewport_height: u16,
+) -> Result<()> {
+    let size = terminal.size()?;
+    let area = viewport_area(size.width, size.height, viewport_height);
+    if area != terminal.viewport_area {
+        terminal.clear_visible_screen()?;
+        terminal.set_viewport_area(area);
+    }
+    Ok(())
+}
+
+pub(super) fn teardown_terminal(
+    mut terminal: Terminal<CrosstermBackend<std::io::Stdout>>,
+) -> Result<()> {
+    disable_raw_mode()?;
+    execute!(terminal.backend_mut(), Show)?;
+    terminal.show_cursor()?;
+    Ok(())
+}
+
+pub(super) fn flush_committed_history(
+    terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
+    app: &mut TuiApp,
+) -> Result<()> {
+    if !app.startup_card_inserted {
+        let width = terminal_size()?.0;
+        let lines = startup_card_lines(app, width);
+        if !lines.is_empty() {
+            insert_history_lines(terminal, lines)?;
+        }
+        app.startup_card_inserted = true;
+    }
+    while app.inserted_turns < app.committed_turns.len() {
+        let turn = &app.committed_turns[app.inserted_turns];
+        let cwd = (!app.snapshot.cwd.is_empty()).then(|| std::path::Path::new(app.snapshot.cwd.as_str()));
+        let width = terminal.size()?.width;
+        let mut lines = committed_turn_lines(turn.entries.as_slice(), cwd, width);
+        if app.inserted_turns > 0 && !lines.is_empty() {
+            lines.insert(0, Line::from(""));
+        }
+        if !lines.is_empty() {
+            insert_history_lines(terminal, lines)?;
+        }
+        app.inserted_turns += 1;
+    }
+    Ok(())
+}
+
+fn viewport_area(width: u16, height: u16, viewport_height: u16) -> Rect {
+    let viewport_height = viewport_height.max(1).min(height.max(1));
+    Rect::new(0, height.saturating_sub(viewport_height), width, viewport_height)
+}
+
+pub(crate) fn is_ssh_session() -> bool {
+    std::env::var_os("SSH_CONNECTION").is_some() || std::env::var_os("SSH_TTY").is_some()
+}

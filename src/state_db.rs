@@ -638,4 +638,65 @@ mod tests {
         assert_eq!(payload.get("allow_net").and_then(|v| v.as_bool()), Some(true));
         Ok(())
     }
+
+    #[test]
+    fn persists_structured_approval_payloads_for_restore() -> Result<()> {
+        let temp = tempdir()?;
+        std::env::set_current_dir(temp.path())?;
+        let db = StateDb::new()?;
+        db.upsert_session(
+            "session-structured",
+            "/tmp/workspace",
+            "main",
+            "ollama",
+            "gemma4",
+            Some("http://localhost:11434"),
+            "execute",
+            "suggestion",
+            None,
+            2,
+            1,
+        )?;
+        db.replace_interactions(
+            "session-structured",
+            &[PersistedInteraction {
+                kind: "approval".to_string(),
+                status: "pending".to_string(),
+                title: "Pending Approval".to_string(),
+                summary: "cargo check --workspace".to_string(),
+                payload: Some(serde_json::json!({
+                    "tool_use_id": "tool-99",
+                    "program": "cargo",
+                    "args": ["check", "--workspace"],
+                    "cwd": "/tmp/workspace",
+                    "env": { "RUST_LOG": "debug" },
+                    "allow_net": false
+                })),
+            }],
+        )?;
+
+        let interactions = db.load_interactions("session-structured")?;
+        assert_eq!(interactions.len(), 1);
+        let payload = interactions[0].payload.as_ref().expect("payload");
+        assert_eq!(payload.get("tool_use_id").and_then(|v| v.as_str()), Some("tool-99"));
+        assert_eq!(payload.get("program").and_then(|v| v.as_str()), Some("cargo"));
+        assert_eq!(
+            payload
+                .get("args")
+                .and_then(|v| v.as_array())
+                .and_then(|v| v.first())
+                .and_then(|v| v.as_str()),
+            Some("check")
+        );
+        assert_eq!(payload.get("cwd").and_then(|v| v.as_str()), Some("/tmp/workspace"));
+        assert_eq!(
+            payload
+                .get("env")
+                .and_then(|v| v.get("RUST_LOG"))
+                .and_then(|v| v.as_str()),
+            Some("debug")
+        );
+        assert_eq!(payload.get("allow_net").and_then(|v| v.as_bool()), Some(false));
+        Ok(())
+    }
 }

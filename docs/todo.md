@@ -5,6 +5,8 @@ Active backlog only. Keep this file small and current.
 ## Security and Reliability
 
 - [ ] Replace the current string-based shell execution path in `src/tools/bash.rs` and `src/sandbox.rs` with a structured command model (`program`, `args`, `cwd`, `allow_net`) so `bash -c` / `sh -c` is no longer the default execution path.
+- [ ] Move API key handling in `src/llm.rs` and config paths to `secrecy::SecretString`, and audit error/reporting paths so secrets are never echoed in logs or panic messages.
+- [ ] Replace `.expect(...)` on provider credential/model setup with structured `anyhow::Context` errors that remain useful without leaking sensitive values.
 - [ ] Review path and command validation around `bash`, file tools, and sandbox handoff; define a stricter validation policy instead of relying on minimal escaping.
 
 ## LLM and Networking
@@ -15,6 +17,7 @@ Active backlog only. Keep this file small and current.
 ## Memory and Retrieval
 
 - [ ] Add a first-run onboarding flow that explains workspace, provider/model selection, local model download behavior, cache location, and tool loop expectations before the user lands in a blank chat.
+- [ ] Continue aligning the TUI status and transcript surfaces with Codex/Claude so runtime state stays visible without leaking bottom-pane chrome into transcript history.
 - [ ] Harden local model prompting contracts for Gemma 4 and Qwen3: chat template handling, stop sequences, and tool-call JSON framing should be explicit and regression-tested.
 - [ ] Replace the current hash-based local embedding fallback with a real embedding backend so project memory retrieval quality is good enough for normal coding sessions.
 - [ ] Replace the mock `VectorDB` implementation in `src/vectordb.rs` with real LanceDB-backed search/upsert behavior, or feature-gate the memory tools until the backend is real.
@@ -24,12 +27,6 @@ Active backlog only. Keep this file small and current.
 - [ ] Implement the vector memory tools against the real backend and LanceDB path instead of using placeholder save/retrieve responses.
 - [ ] Implement real parallel `team_create` execution instead of the current mocked result payload.
 
-## TUI and Workflow
-
-- [ ] Add lifecycle tests for planning and approval transitions, covering plan drafting, pending approval, approval -> execute, and continue-planning flows.
-- [ ] Persist plan-approval state across session restore so `Awaiting Approval` survives restarts the same way other interaction cards do.
-- [ ] Keep bottom-pane chrome fully isolated from transcript/history insertion during scrollback browsing and viewport transitions; continue aligning the active/committed cell model with Codex.
-
 ## Performance and Runtime
 
 - [ ] Rework token accounting in `src/agent.rs` so repeated checks do not need to re-encode the full history every time.
@@ -38,6 +35,7 @@ Active backlog only. Keep this file small and current.
 
 ## Code Organization and Docs
 
+- [ ] Continue splitting remaining oversized TUI files such as `src/tui/state.rs` and `src/tui/markdown_render.rs` so the 800-line guideline holds across the main interaction path.
 - [ ] Add module-level documentation for the agent lifecycle, tool loop, plan/update flow, and sandbox model so the runtime architecture is easier to reason about.
 - [ ] Add a security section to `AGENTS.md` or a dedicated security doc covering sandbox expectations, command execution rules, and secret-handling standards.
 - [ ] Add comments around the non-obvious continuation / plan / current-turn rendering logic so future refactors do not regress the Codex-style workflow.

@@ -52,6 +52,20 @@ impl MarkdownStreamCollector {
         out
     }
 
+    pub fn preview_lines(&self) -> Vec<Line<'static>> {
+        if self.buffer.is_empty() {
+            return Vec::new();
+        }
+
+        let mut rendered = Vec::new();
+        markdown::append_markdown(&self.buffer, self.width, Some(self.cwd.as_path()), &mut rendered);
+        if self.committed_line_count >= rendered.len() {
+            Vec::new()
+        } else {
+            rendered[self.committed_line_count..].to_vec()
+        }
+    }
+
     pub fn finalize_and_drain(&mut self) -> Vec<Line<'static>> {
         let mut source = self.buffer.clone();
         if !source.ends_with('\n') {
@@ -91,5 +105,15 @@ mod tests {
         let mut collector = MarkdownStreamCollector::new(None, &test_cwd());
         collector.push_delta("Partial");
         assert_eq!(collector.finalize_and_drain().len(), 1);
+    }
+
+    #[test]
+    fn preview_only_returns_uncommitted_tail() {
+        let mut collector = MarkdownStreamCollector::new(None, &test_cwd());
+        collector.push_delta("Hello\nWorld");
+        let committed = collector.commit_complete_lines();
+        assert_eq!(committed.len(), 1);
+        let preview = collector.preview_lines();
+        assert_eq!(preview.len(), 1);
     }
 }
