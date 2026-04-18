@@ -8,6 +8,7 @@ use super::{
 use crate::llm::LlmBackend;
 use crate::session::SessionManager;
 use crate::tool::{Tool, ToolError, ToolManager};
+use crate::tool_result::ToolResultStore;
 use crate::vectordb::VectorDB;
 use crate::workspace::WorkspaceMemory;
 use anyhow::Result;
@@ -279,7 +280,7 @@ async fn last_query_plan_updated_tracks_only_the_final_planning_turn() {
         storage_dir: rara_dir.join("rollouts"),
         legacy_storage_dir: rara_dir.join("sessions"),
     });
-    let workspace = Arc::new(WorkspaceMemory::from_paths(root, rara_dir));
+    let workspace = Arc::new(WorkspaceMemory::from_paths(root, rara_dir.clone()));
 
     let backend = Arc::new(SequencedBackend::new(vec![
         AnthropicResponse {
@@ -307,6 +308,7 @@ async fn last_query_plan_updated_tracks_only_the_final_planning_turn() {
         session_manager.clone(),
         workspace.clone(),
     );
+    agent.tool_result_store = ToolResultStore::new(rara_dir.join("tool-results")).expect("tool result store");
     agent.set_execution_mode(AgentExecutionMode::Plan);
 
     agent
@@ -333,6 +335,7 @@ async fn last_query_plan_updated_tracks_only_the_final_planning_turn() {
         session_manager,
         workspace,
     );
+    agent.tool_result_store = ToolResultStore::new(rara_dir.join("tool-results")).expect("tool result store");
     agent.set_execution_mode(AgentExecutionMode::Plan);
 
     agent
