@@ -126,6 +126,10 @@ impl InspectionProgress {
 }
 
 impl Agent {
+    pub fn last_query_produced_plan(&self) -> bool {
+        self.last_query_plan_updated
+    }
+
     pub fn set_execution_mode(&mut self, mode: AgentExecutionMode) {
         self.execution_mode = mode;
     }

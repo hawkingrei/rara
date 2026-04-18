@@ -52,12 +52,15 @@ pub(super) async fn execute_local_command(
             app.open_overlay(Overlay::ResumePicker);
         }
         LocalCommandKind::Plan => {
-            app.set_runtime_phase(RuntimePhase::LocalCommand, Some("scheduling plan turn".into()));
+            app.set_runtime_phase(RuntimePhase::LocalCommand, Some("entering planning mode".into()));
+            app.set_pending_plan_approval(false);
             app.set_agent_execution_mode(AgentExecutionMode::Plan);
             if let Some(agent) = agent_slot.as_mut() {
                 agent.set_execution_mode(AgentExecutionMode::Plan);
             }
-            app.push_notice("The next turn will run in read-only planning mode.");
+            app.push_notice(
+                "Planning mode enabled. Use the next prompt to analyze, refine, or finalize a plan.",
+            );
         }
         LocalCommandKind::Approval => {
             let next_mode = match app.bash_approval_mode {

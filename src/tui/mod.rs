@@ -43,6 +43,7 @@ use self::terminal_ui::{
     update_terminal_viewport,
 };
 use crate::agent::BashApprovalMode;
+use crate::agent::AgentExecutionMode;
 
 pub async fn run_tui(agent: Agent, oauth_manager: OAuthManager) -> anyhow::Result<()> {
     enable_raw_mode()?;
@@ -317,6 +318,42 @@ async fn dispatch_event(
         AppEvent::SelectPendingOption(idx) => {
             if app.is_busy() {
                 app.push_notice("Wait for the current task before answering the structured question.");
+            } else if app.has_pending_plan_approval() {
+                match idx {
+                    0 => {
+                        app.set_pending_plan_approval(false);
+                        app.set_agent_execution_mode(AgentExecutionMode::Execute);
+                        if let Some(agent) = agent_slot.as_mut() {
+                            agent.set_execution_mode(AgentExecutionMode::Execute);
+                        }
+                        if let Some(agent) = agent_slot.take() {
+                            start_query_task(
+                                app,
+                                "Implement the approved plan using the current repository state."
+                                    .to_string(),
+                                agent,
+                            );
+                        }
+                    }
+                    1 => {
+                        app.set_pending_plan_approval(false);
+                        app.set_agent_execution_mode(AgentExecutionMode::Plan);
+                        if let Some(agent) = agent_slot.as_mut() {
+                            agent.set_execution_mode(AgentExecutionMode::Plan);
+                        }
+                        if let Some(agent) = agent_slot.take() {
+                            start_query_task(
+                                app,
+                                "Continue refining the plan and fill in any missing implementation details."
+                                    .to_string(),
+                                agent,
+                            );
+                        }
+                    }
+                    _ => {
+                        app.push_notice("Select 1 to implement now or 2 to continue planning.");
+                    }
+                }
             } else if app.has_pending_approval() {
                 if let Some(agent) = agent_slot.take() {
                     let selection = match idx {

@@ -254,6 +254,70 @@ async fn continues_plan_mode_after_shallow_initial_plan() {
 }
 
 #[tokio::test]
+async fn last_query_plan_updated_tracks_only_the_final_planning_turn() {
+    let backend = Arc::new(SequencedBackend::new(vec![
+        AnthropicResponse {
+            content: vec![ContentBlock::Text {
+                text: "<plan>\n- [pending] Inspect the repository structure\n</plan>\nStart with the top-level layout.".to_string(),
+            }],
+            stop_reason: Some("end_turn".to_string()),
+            usage: Some(TokenUsage::default()),
+        },
+        AnthropicResponse {
+            content: vec![ContentBlock::Text {
+                text: "I inspected the top-level layout and need a bit more context before finalizing the plan.".to_string(),
+            }],
+            stop_reason: Some("end_turn".to_string()),
+            usage: Some(TokenUsage::default()),
+        },
+    ]));
+
+    let mut tool_manager = ToolManager::new();
+    tool_manager.register(Box::new(StubTool));
+    let mut agent = Agent::new(
+        tool_manager,
+        backend,
+        Arc::new(VectorDB::new("data/lancedb")),
+        Arc::new(SessionManager::new().expect("session manager")),
+        Arc::new(WorkspaceMemory::new().expect("workspace memory")),
+    );
+    agent.set_execution_mode(AgentExecutionMode::Plan);
+
+    agent
+        .query_with_mode("inspect".to_string(), super::AgentOutputMode::Silent)
+        .await
+        .expect("query should succeed");
+
+    assert!(!agent.last_query_produced_plan());
+
+    let backend = Arc::new(SequencedBackend::new(vec![AnthropicResponse {
+        content: vec![ContentBlock::Text {
+            text: "<plan>\n- [pending] Inspect the repository structure\n- [pending] Review src/main.rs bootstrap flow\n</plan>\nReady for approval.".to_string(),
+        }],
+        stop_reason: Some("end_turn".to_string()),
+        usage: Some(TokenUsage::default()),
+    }]));
+
+    let mut tool_manager = ToolManager::new();
+    tool_manager.register(Box::new(StubTool));
+    let mut agent = Agent::new(
+        tool_manager,
+        backend,
+        Arc::new(VectorDB::new("data/lancedb")),
+        Arc::new(SessionManager::new().expect("session manager")),
+        Arc::new(WorkspaceMemory::new().expect("workspace memory")),
+    );
+    agent.set_execution_mode(AgentExecutionMode::Plan);
+
+    agent
+        .query_with_mode("inspect".to_string(), super::AgentOutputMode::Silent)
+        .await
+        .expect("query should succeed");
+
+    assert!(agent.last_query_produced_plan());
+}
+
+#[tokio::test]
 async fn continues_plan_mode_after_exploration_if_assistant_still_signals_more_work() {
     let backend = Arc::new(SequencedBackend::new(vec![
         AnthropicResponse {

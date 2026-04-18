@@ -38,8 +38,8 @@ pub const COMMAND_SPECS: [CommandSpec; 13] = [
         category: "Session",
         name: "plan",
         usage: "/plan",
-        summary: "Enter read-only planning mode for the next turn.",
-        detail: "Run the next turn in read-only planning mode. In plan mode, inspection tools stay available, but editing, shell execution, memory writes, and sub-agent launch tools are hidden and blocked. After the planning turn finishes, RARA returns to execute mode automatically.",
+        summary: "Enter planning mode for the current task.",
+        detail: "Switch the agent into read-only planning mode. In planning mode, inspection tools stay available, but editing, shell execution, memory writes, and sub-agent launch tools are hidden and blocked. RARA can inspect the codebase, clarify constraints, refine the implementation approach, and only stop for approval once a concrete plan is ready.",
     },
     CommandSpec {
         category: "Session",
@@ -201,7 +201,7 @@ pub fn command_detail_text(spec: &CommandSpec) -> String {
 }
 
 pub fn general_help_text() -> &'static str {
-    "RARA uses a single composer as the control surface.\n\nNormal input goes to the current agent.\nSlash commands stay local and open overlays or update runtime state.\n\nExplore:\n  /search <pattern> [in <path>] runs local grep and keeps the result in the current turn\n\nCompaction:\n  /compact forces one history compaction pass\n\nModes:\n  /plan runs the next turn in read-only planning mode and then returns to execute mode automatically\n  /approval toggles bash approval between suggestion and always\n\nEditing:\n  apply_patch is the default tool for updating existing files\n  write_file is for new files or full rewrites\n  replace is only a simple fallback for unique string swaps\n\nKeyboard:\n  Enter submit current composer input\n  Esc close the current overlay only\n  Up/Down or j/k move inside lists\n  1/2/3 switch help tabs or choose guided model options\n\nExit:\n  /quit or /exit leave the TUI."
+    "RARA uses a single composer as the control surface.\n\nNormal input goes to the current agent.\nSlash commands stay local and open overlays or update runtime state.\n\nExplore:\n  /search <pattern> [in <path>] runs local grep and keeps the result in the current turn\n\nCompaction:\n  /compact forces one history compaction pass\n\nModes:\n  /plan enters planning mode for the current task\n  /approval toggles bash approval between suggestion and always\n\nEditing:\n  apply_patch is the default tool for updating existing files\n  write_file is for new files or full rewrites\n  replace is only a simple fallback for unique string swaps\n\nKeyboard:\n  Enter submit current composer input\n  Esc close the current overlay only\n  Up/Down or j/k move inside lists\n  1/2/3 switch help tabs or choose guided model options\n\nExit:\n  /quit or /exit leave the TUI."
 }
 
 fn command_score(spec: &CommandSpec, query: &str) -> Option<u8> {
@@ -247,7 +247,7 @@ pub fn help_text() -> String {
         .collect::<Vec<_>>()
         .join("\n");
     format!(
-        "Built-in commands:\n{}\n\nExplore:\n  /search    run local grep in the workspace or a subpath\n\nCompaction:\n  /compact   summarize older conversation history now\n\nSessions:\n  /resume    reopen a recent local session\n\nModes:\n  /plan      run the next turn in read-only planning mode\n  /approval  toggle bash approval mode\n\nEditing:\n  apply_patch  preferred for editing existing files\n  write_file   use for new files or full rewrites\n  replace      simple fallback for unique string replacement\n\nKeyboard:\n  Enter submit\n  Esc close current overlay\n  S open setup\n\nExit:\n  /quit\n  /exit\n\nModel switching:\n  /model\n\nProvider URL:\n  /base-url",
+        "Built-in commands:\n{}\n\nExplore:\n  /search    run local grep in the workspace or a subpath\n\nCompaction:\n  /compact   summarize older conversation history now\n\nSessions:\n  /resume    reopen a recent local session\n\nModes:\n  /plan      enter planning mode for the current task\n  /approval  toggle bash approval mode\n\nEditing:\n  apply_patch  preferred for editing existing files\n  write_file   use for new files or full rewrites\n  replace      simple fallback for unique string replacement\n\nKeyboard:\n  Enter submit\n  Esc close current overlay\n  S open setup\n\nExit:\n  /quit\n  /exit\n\nModel switching:\n  /model\n\nProvider URL:\n  /base-url",
         commands
     )
 }
@@ -459,7 +459,7 @@ pub fn quick_actions_text() -> &'static str {
      /model     open guided model switching\n\
      /base-url  open the provider URL editor\n\
      /status    inspect runtime and workspace\n\
-     /plan      run the next turn in read-only planning mode\n\
+     /plan      enter planning mode for the current task\n\
      /approval  toggle bash approval mode\n\
      /clear     reset the visible transcript\n\
      /setup     open fallback setup\n\

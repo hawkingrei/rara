@@ -225,7 +225,9 @@ pub(super) async fn finish_running_task_if_ready(
                         matches!(app.agent_execution_mode, crate::agent::AgentExecutionMode::Plan);
                     if finished_plan_turn {
                         restore_execute_mode_after_plan_turn(app, &mut agent);
-                        app.set_pending_plan_approval(!agent.current_plan.is_empty());
+                        app.set_pending_plan_approval(
+                            agent.last_query_produced_plan() && !agent.current_plan.is_empty(),
+                        );
                     }
                     *agent_slot = Some(agent);
                     if let Some(agent) = agent_slot.as_ref() {

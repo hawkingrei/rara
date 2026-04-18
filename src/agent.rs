@@ -130,6 +130,7 @@ pub struct Agent {
     pub completed_approval: Option<CompletedInteraction>,
     pub compact_state: CompactState,
     inspection_progress: InspectionProgress,
+    last_query_plan_updated: bool,
     prompt_config: PromptRuntimeConfig,
 }
 
@@ -163,6 +164,7 @@ impl Agent {
             completed_approval: None,
             compact_state: CompactState::default(),
             inspection_progress: InspectionProgress::default(),
+            last_query_plan_updated: false,
             prompt_config: PromptRuntimeConfig::default(),
         }
     }
@@ -189,6 +191,7 @@ impl Agent {
         let mut plan_continuations = 0usize;
         let mut execute_continuations = 0usize;
         self.inspection_progress = InspectionProgress::default();
+        self.last_query_plan_updated = false;
         self.compact_if_needed_with_reporter(&mut report).await?;
         self.history = repair_tool_result_history(&self.history);
         self.clear_completed_interactions();
@@ -329,6 +332,7 @@ impl Agent {
             let turn_output = self
                 .run_model_turn(output_mode, report)
                 .await?;
+            self.last_query_plan_updated = turn_output.plan_updated;
             self.history.push(turn_output.assistant_message);
 
             if turn_output.tool_calls.is_empty() {
