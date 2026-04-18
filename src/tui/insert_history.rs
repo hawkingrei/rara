@@ -77,6 +77,7 @@ where
 {
     let screen_size = terminal.backend().size().unwrap_or(Size::new(0, 0));
 
+    let original_viewport_y = terminal.viewport_area.y;
     let mut area = terminal.viewport_area;
     let mut should_update_area = false;
     let last_cursor_pos = terminal.last_known_cursor_pos;
@@ -170,8 +171,17 @@ where
         }
     }
 
-    // Restore the cursor position to where it was before we started.
-    queue!(writer, MoveTo(last_cursor_pos.x, last_cursor_pos.y))?;
+    // Restore the cursor position relative to the viewport. If history insertion
+    // shifted the viewport downward, the cursor must move down by the same delta
+    // so it stays attached to the active pane instead of landing in inserted history.
+    let cursor_y = if should_update_area {
+        last_cursor_pos
+            .y
+            .saturating_add(area.y.saturating_sub(original_viewport_y))
+    } else {
+        last_cursor_pos.y
+    };
+    queue!(writer, MoveTo(last_cursor_pos.x, cursor_y))?;
 
     let _ = writer;
     if should_update_area {
