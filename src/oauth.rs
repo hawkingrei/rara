@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use anyhow::{Result, anyhow};
+use secrecy::{ExposeSecret, SecretString};
 use std::path::PathBuf;
 use rand::{distributions::Alphanumeric, Rng};
 use sha2::{Digest, Sha256};
@@ -12,8 +13,52 @@ const TOKEN_URL: &str = "https://platform.ai-gateway.com/v1/oauth/token";
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct OAuthToken {
-    pub access_token: String,
-    pub refresh_token: Option<String>,
+    #[serde(
+        serialize_with = "serialize_secret",
+        deserialize_with = "deserialize_secret"
+    )]
+    pub access_token: SecretString,
+    #[serde(
+        default,
+        serialize_with = "serialize_secret_option",
+        deserialize_with = "deserialize_secret_option"
+    )]
+    pub refresh_token: Option<SecretString>,
+}
+
+fn serialize_secret<S>(value: &SecretString, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    serializer.serialize_str(value.expose_secret())
+}
+
+fn deserialize_secret<'de, D>(deserializer: D) -> Result<SecretString, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    String::deserialize(deserializer).map(SecretString::from)
+}
+
+fn serialize_secret_option<S>(
+    value: &Option<SecretString>,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    Option::<String>::serialize(
+        &value.as_ref().map(|secret| secret.expose_secret().to_string()),
+        serializer,
+    )
+}
+
+fn deserialize_secret_option<'de, D>(deserializer: D) -> Result<Option<SecretString>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<String>::deserialize(deserializer)?;
+    Ok(value.map(SecretString::from))
 }
 
 pub struct OAuthManager { pub config_dir: PathBuf }

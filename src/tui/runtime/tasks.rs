@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use secrecy::SecretString;
 use std::time::Instant;
 
 use anyhow::anyhow;
@@ -11,6 +12,7 @@ use crate::sandbox::SandboxManager;
 use crate::session::SessionManager;
 use crate::skill::SkillManager;
 use crate::tool::ToolManager;
+use crate::redaction::sanitize_url_for_display;
 use crate::tools::agent::{AgentTool, TeamCreateTool};
 use crate::tools::bash::BashTool;
 use crate::tools::context::RetrieveSessionContextTool;
@@ -254,14 +256,17 @@ pub(super) async fn finish_running_task_if_ready(
                     }
                     app.finalize_agent_stream(None);
                     app.set_runtime_phase(RuntimePhase::Failed, Some("query failed".into()));
-                    let mut message = format!("Query failed: {err}");
+                    let mut message = format!("Query failed:\n{}", format_error_chain(&err));
                     if app.config.provider == "ollama" {
                         let base_url = app
                             .config
                             .base_url
                             .as_deref()
                             .unwrap_or("http://localhost:11434");
-                        message.push_str(&format!("\nbase_url={base_url}"));
+                        message.push_str(&format!(
+                            "\nbase_url={}",
+                            sanitize_url_for_display(base_url)
+                        ));
                     }
                     app.push_entry("System", message.clone());
                     app.push_notice(message);
@@ -301,7 +306,7 @@ pub(super) async fn finish_running_task_if_ready(
                 }
                 Err(err) => {
                     app.set_runtime_phase(RuntimePhase::Failed, Some("compact failed".into()));
-                    let message = format!("Compaction failed: {err}");
+                    let message = format!("Compaction failed:\n{}", format_error_chain(&err));
                     app.push_entry("System", message.clone());
                     app.push_notice(message);
                 }
@@ -340,8 +345,8 @@ pub(super) async fn finish_running_task_if_ready(
             }
         },
         TaskCompletion::OAuth { result } => match result {
-            Ok(access_token) => {
-                app.config.api_key = Some(access_token);
+            Ok(_access_token) => {
+                app.config.clear_api_key();
                 app.config.provider = "codex".into();
                 if app.config.model.is_none() {
                     app.config.model = Some("codex".into());
@@ -398,7 +403,7 @@ fn emit_query_heartbeat(app: &mut TuiApp) {
 async fn run_oauth_login(
     oauth_manager: Arc<OAuthManager>,
     sender: mpsc::UnboundedSender<TuiEvent>,
-) -> anyhow::Result<String> {
+) -> anyhow::Result<SecretString> {
     let (verifier, challenge) = oauth_manager.generate_pkce();
     let (port, receiver) = oauth_manager.start_callback_server().await?;
     let auth_url = oauth_manager.get_authorize_url(&challenge, port);

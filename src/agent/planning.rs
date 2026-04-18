@@ -1,5 +1,6 @@
 use super::*;
 use anyhow::anyhow;
+use crate::tools::bash::BashCommandInput;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PlanStepStatus {
@@ -24,8 +25,7 @@ pub struct PendingUserInput {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PendingApproval {
     pub tool_use_id: String,
-    pub command: String,
-    pub allow_net: bool,
+    pub request: BashCommandInput,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -177,7 +177,7 @@ impl Agent {
             BashApprovalMode::Once => {
                 self.completed_approval = Some(CompletedInteraction {
                     title: "Bash approval".to_string(),
-                    summary: format!("Approved once for command: {}", pending.command),
+                    summary: format!("Approved once for command: {}", pending.request.summary()),
                 });
                 self.execute_pending_bash(pending, false, output_mode, &mut report)
                     .await?;
@@ -186,7 +186,7 @@ impl Agent {
                 self.bash_approval_mode = BashApprovalMode::Always;
                 self.completed_approval = Some(CompletedInteraction {
                     title: "Bash approval".to_string(),
-                    summary: format!("Approved for session: {}", pending.command),
+                    summary: format!("Approved for session: {}", pending.request.summary()),
                 });
                 self.execute_pending_bash(pending, true, output_mode, &mut report)
                     .await?;
@@ -194,7 +194,7 @@ impl Agent {
             BashApprovalMode::Suggestion => {
                 self.completed_approval = Some(CompletedInteraction {
                     title: "Bash approval".to_string(),
-                    summary: format!("Kept as suggestion only: {}", pending.command),
+                    summary: format!("Kept as suggestion only: {}", pending.request.summary()),
                 });
                 let error_text = "Bash command was not approved. Continue without shell execution and find a safer path.".to_string();
                 report(AgentEvent::ToolResult {
@@ -227,10 +227,7 @@ impl Agent {
     where
         F: FnMut(AgentEvent) + Send,
     {
-        let input = json!({
-            "command": pending.command,
-            "allow_net": pending.allow_net,
-        });
+        let input = pending.request.to_value();
         report(AgentEvent::ToolUse {
             name: "bash".to_string(),
             input: input.clone(),

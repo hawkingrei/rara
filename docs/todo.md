@@ -4,10 +4,7 @@ Active backlog only. Keep this file small and current.
 
 ## Security and Reliability
 
-- [ ] Block unsandboxed fallback on unknown platforms in `src/sandbox.rs`: unsupported hosts should fail closed instead of returning the original command unwrapped.
 - [ ] Replace the current string-based shell execution path in `src/tools/bash.rs` and `src/sandbox.rs` with a structured command model (`program`, `args`, `cwd`, `allow_net`) so `bash -c` / `sh -c` is no longer the default execution path.
-- [ ] Harden sandbox profile generation in `src/sandbox.rs`: avoid rewriting a shared `sandbox.sb` on every command by using per-command profiles or explicit locking.
-- [ ] Tighten Linux sandboxing in `src/sandbox.rs`: stop binding the entire filesystem by default and move to a minimal bind set for the workspace and required runtime paths.
 - [ ] Move API key handling in `src/llm.rs` and config paths to `secrecy::SecretString`, and audit error/reporting paths so secrets are never echoed in logs or panic messages.
 - [ ] Replace `.expect(...)` on provider credential/model setup with structured `anyhow::Context` errors that remain useful without leaking sensitive values.
 - [ ] Review path and command validation around `bash`, file tools, and sandbox handoff; define a stricter validation policy instead of relying on minimal escaping.
@@ -16,7 +13,6 @@ Active backlog only. Keep this file small and current.
 
 - [ ] Add explicit HTTP timeouts to all networked backends in `src/llm.rs` so provider calls fail predictably instead of hanging indefinitely.
 - [ ] Extract shared message-mapping helpers across OpenAI-compatible and Ollama backends to reduce duplication and keep tool-call behavior consistent.
-- [ ] Add clearer config/runtime feedback when provider setup is invalid instead of silently falling back to partial behavior.
 
 ## Memory and Retrieval
 

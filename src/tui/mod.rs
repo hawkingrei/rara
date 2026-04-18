@@ -361,7 +361,7 @@ async fn dispatch_event(
             } else if app.is_busy() {
                 app.push_notice("Wait for the current task before saving the API key.");
             } else {
-                app.config.api_key = Some(value.to_string());
+                app.config.set_api_key(value.to_string());
                 app.config.provider = "codex".into();
                 if app.config.model.is_none() {
                     app.config.model = Some("codex".into());
@@ -514,5 +514,5 @@ fn should_open_codex_auth_guide(app: &TuiApp) -> bool {
     let Some((_, provider, _)) = presets.get(app.model_picker_idx) else {
         return false;
     };
-    *provider == "codex" && app.config.api_key.as_deref().is_none_or(str::is_empty)
+    *provider == "codex" && !app.config.has_api_key()
 }
