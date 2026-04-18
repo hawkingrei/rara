@@ -80,7 +80,8 @@ pub(super) fn flush_committed_history(
     while app.inserted_turns < app.committed_turns.len() {
         let turn = &app.committed_turns[app.inserted_turns];
         let cwd = (!app.snapshot.cwd.is_empty()).then(|| std::path::Path::new(app.snapshot.cwd.as_str()));
-        let mut lines = committed_turn_lines(turn.entries.as_slice(), cwd);
+        let width = terminal.size()?.width;
+        let mut lines = committed_turn_lines(turn.entries.as_slice(), cwd, width);
         if app.inserted_turns > 0 && !lines.is_empty() {
             lines.insert(0, Line::from(""));
         }

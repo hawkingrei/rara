@@ -15,7 +15,7 @@ use super::custom_terminal::Frame;
 use super::state::{TranscriptEntry, TuiApp};
 pub(crate) use bottom_pane::desired_viewport_height;
 use bottom_pane::render_bottom_pane;
-use cells::{ActiveTurnCell, CommittedTurnCell, RenderCell};
+use cells::{ActiveCell as _, ActiveTurnCell, CellSection, CommittedTurnCell, HistoryCell as _};
 use overlay::render_overlay;
 
 pub fn render(f: &mut Frame, app: &TuiApp) {
@@ -76,7 +76,8 @@ fn render_transcript(f: &mut Frame, app: &TuiApp, area: Rect) {
         return;
     }
 
-    let lines = current_turn_cell(app).display_lines();
+    let cell = current_turn_cell(app);
+    let lines = cell.display_lines(area.width);
     let scroll_y = bottom_anchored_scroll(lines.as_slice(), area, app.transcript_scroll);
     f.render_widget(
         Paragraph::new(lines)
@@ -108,14 +109,18 @@ fn bottom_anchored_scroll(lines: &[Line<'static>], area: Rect, scroll_from_botto
     max_scroll.saturating_sub(scroll_from_bottom) as u16
 }
 
-pub fn committed_turn_lines(entries: &[TranscriptEntry], cwd: Option<&Path>) -> Vec<Line<'static>> {
-    committed_turn_cell(entries, cwd).display_lines()
+pub(crate) fn committed_turn_lines(
+    entries: &[TranscriptEntry],
+    cwd: Option<&Path>,
+    width: u16,
+) -> Vec<Line<'static>> {
+    committed_turn_cell(entries, cwd).display_lines(width)
 }
 
-fn committed_turn_cell(entries: &[TranscriptEntry], cwd: Option<&Path>) -> CommittedTurnCell {
+pub(crate) fn committed_turn_cell(entries: &[TranscriptEntry], cwd: Option<&Path>) -> CommittedTurnCell {
     let mut cell = CommittedTurnCell::new();
     if let Some(user) = entries.iter().find(|entry| entry.role == "You") {
-        cell.push(RenderCell::PrefixedMessage {
+        cell.push(CellSection::PrefixedMessage {
             role: "You".to_string(),
             message: user.message.clone(),
             max_lines: 4,
@@ -129,7 +134,7 @@ fn committed_turn_cell(entries: &[TranscriptEntry], cwd: Option<&Path>) -> Commi
     if let Some(summary) =
         current_turn_exploration_summary_from_entries(entry_refs.as_slice(), false, None)
     {
-        cell.push(RenderCell::Summary {
+        cell.push(CellSection::Summary {
             title: "Explored".to_string(),
             color: Color::Rgb(231, 201, 92),
             lines: summary.lines().map(str::to_string).collect(),
@@ -137,7 +142,7 @@ fn committed_turn_cell(entries: &[TranscriptEntry], cwd: Option<&Path>) -> Commi
     }
 
     if let Some(summary) = current_turn_tool_summary(entry_refs.as_slice(), false, None) {
-        cell.push(RenderCell::Summary {
+        cell.push(CellSection::Summary {
             title: "Ran".to_string(),
             color: Color::LightYellow,
             lines: summary.lines().map(str::to_string).collect(),
@@ -164,7 +169,7 @@ fn committed_turn_cell(entries: &[TranscriptEntry], cwd: Option<&Path>) -> Commi
     for entry in tail_entries {
         let max_lines = if entry.role == "Agent" { 8 } else { 4 };
         if matches!(entry.role.as_str(), "Agent" | "System") {
-            cell.push(RenderCell::MarkdownMessage {
+            cell.push(CellSection::MarkdownMessage {
                 role: entry.role.clone(),
                 message: entry.message.clone(),
                 max_lines,
@@ -172,7 +177,7 @@ fn committed_turn_cell(entries: &[TranscriptEntry], cwd: Option<&Path>) -> Commi
                 active: false,
             });
         } else {
-            cell.push(RenderCell::PrefixedMessage {
+            cell.push(CellSection::PrefixedMessage {
                 role: entry.role.clone(),
                 message: entry.message.clone(),
                 max_lines,
@@ -216,7 +221,7 @@ fn current_turn_cell(app: &TuiApp) -> ActiveTurnCell {
     let cwd = (!app.snapshot.cwd.is_empty()).then(|| Path::new(app.snapshot.cwd.as_str()));
 
     if !user_message.is_empty() {
-        cell.push(RenderCell::PrefixedMessage {
+        cell.push(CellSection::PrefixedMessage {
             role: "You".to_string(),
             message: user_message.to_string(),
             max_lines: 4,
@@ -224,7 +229,7 @@ fn current_turn_cell(app: &TuiApp) -> ActiveTurnCell {
     }
 
     if app.agent_execution_mode_label() == "plan" {
-        cell.push(RenderCell::Summary {
+        cell.push(CellSection::Summary {
             title: "Plan Mode".to_string(),
             color: Color::LightBlue,
             lines: Vec::new(),
@@ -239,7 +244,7 @@ fn current_turn_cell(app: &TuiApp) -> ActiveTurnCell {
         } else {
             ("Explored", Color::Rgb(231, 201, 92))
         };
-        cell.push(RenderCell::Summary {
+        cell.push(CellSection::Summary {
             title: title.to_string(),
             color,
             lines: summary.lines().map(str::to_string).collect(),
@@ -256,7 +261,7 @@ fn current_turn_cell(app: &TuiApp) -> ActiveTurnCell {
         } else {
             ("Ran", Color::LightYellow)
         };
-        cell.push(RenderCell::Summary {
+        cell.push(CellSection::Summary {
             title: title.to_string(),
             color,
             lines: summary.lines().map(str::to_string).collect(),
@@ -264,7 +269,7 @@ fn current_turn_cell(app: &TuiApp) -> ActiveTurnCell {
     }
 
     if !app.snapshot.plan_steps.is_empty() {
-        cell.push(RenderCell::Summary {
+        cell.push(CellSection::Summary {
             title: "Plan".to_string(),
             color: Color::LightBlue,
             lines: super::command::status_plan_text(app)
@@ -276,7 +281,7 @@ fn current_turn_cell(app: &TuiApp) -> ActiveTurnCell {
     }
 
     if app.has_pending_plan_approval() {
-        cell.push(RenderCell::Summary {
+        cell.push(CellSection::Summary {
             title: "Awaiting Approval".to_string(),
             color: Color::LightYellow,
             lines: super::command::status_plan_approval_text(app)
@@ -299,7 +304,7 @@ fn current_turn_cell(app: &TuiApp) -> ActiveTurnCell {
             .map(str::to_string)
             .collect::<Vec<_>>();
         summary_lines.push("shortcuts: press 1/2/3 to answer immediately".to_string());
-        cell.push(RenderCell::Summary {
+        cell.push(CellSection::Summary {
             title: title.to_string(),
             color,
             lines: summary_lines,
@@ -307,7 +312,7 @@ fn current_turn_cell(app: &TuiApp) -> ActiveTurnCell {
     }
 
     if let Some((title, summary)) = app.snapshot.completed_approval.as_ref() {
-        cell.push(RenderCell::Summary {
+        cell.push(CellSection::Summary {
             title: "Approval Completed".to_string(),
             color: Color::LightGreen,
             lines: vec![format!("{title}: {summary}")],
@@ -315,7 +320,7 @@ fn current_turn_cell(app: &TuiApp) -> ActiveTurnCell {
     }
 
     if let Some((title, summary)) = app.snapshot.completed_question.as_ref() {
-        cell.push(RenderCell::Summary {
+        cell.push(CellSection::Summary {
             title: "Question Answered".to_string(),
             color: Color::LightGreen,
             lines: vec![format!("{title}: {summary}")],
@@ -331,7 +336,7 @@ fn current_turn_cell(app: &TuiApp) -> ActiveTurnCell {
 
     if let Some(stream_lines) = streaming_agent_lines.filter(|_| !suppress_intermediate_agent) {
         let role = if app.is_busy() { "Responding" } else { "Agent" };
-        cell.push(RenderCell::RenderedMarkdown {
+        cell.push(CellSection::RenderedMarkdown {
             role: role.to_string(),
             rendered: stream_lines.to_vec(),
             max_lines: usize::MAX,
@@ -339,7 +344,7 @@ fn current_turn_cell(app: &TuiApp) -> ActiveTurnCell {
         });
     } else if let Some(agent_message) = latest_agent.filter(|_| !suppress_intermediate_agent) {
         let role = if app.is_busy() { "Responding" } else { "Agent" };
-        cell.push(RenderCell::MarkdownMessage {
+        cell.push(CellSection::MarkdownMessage {
             role: role.to_string(),
             message: agent_message.to_string(),
             max_lines: usize::MAX,
@@ -347,7 +352,7 @@ fn current_turn_cell(app: &TuiApp) -> ActiveTurnCell {
             active: true,
         });
     } else if let Some(system_message) = latest_system {
-        cell.push(RenderCell::MarkdownMessage {
+        cell.push(CellSection::MarkdownMessage {
             role: "System".to_string(),
             message: system_message.to_string(),
             max_lines: 14,
@@ -355,13 +360,13 @@ fn current_turn_cell(app: &TuiApp) -> ActiveTurnCell {
             active: false,
         });
     } else if let Some((role, tool_result)) = latest_tool_result {
-        cell.push(RenderCell::PrefixedMessage {
+        cell.push(CellSection::PrefixedMessage {
             role: role.to_string(),
             message: tool_result.to_string(),
             max_lines: 14,
         });
     } else if app.is_busy() {
-        cell.push(RenderCell::Summary {
+        cell.push(CellSection::Summary {
             title: "Working".to_string(),
             color: Color::Yellow,
             lines: vec![summarize_live_detail(app.runtime_phase_detail.as_deref())

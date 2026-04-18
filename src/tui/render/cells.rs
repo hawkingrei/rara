@@ -8,7 +8,7 @@ use ratatui::{
 use crate::tui::line_utils::prefix_lines;
 
 #[derive(Clone)]
-pub(crate) enum RenderCell {
+pub(crate) enum CellSection {
     PrefixedMessage {
         role: String,
         message: String,
@@ -34,9 +34,18 @@ pub(crate) enum RenderCell {
     },
 }
 
+pub(crate) trait HistoryCell {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>>;
+}
+
+pub(crate) trait ActiveCell {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>>;
+    fn is_empty(&self) -> bool;
+}
+
 #[derive(Clone, Default)]
 pub(crate) struct CommittedTurnCell {
-    cells: Vec<RenderCell>,
+    sections: Vec<CellSection>,
 }
 
 impl CommittedTurnCell {
@@ -44,18 +53,14 @@ impl CommittedTurnCell {
         Self::default()
     }
 
-    pub(crate) fn push(&mut self, cell: RenderCell) {
-        self.cells.push(cell);
-    }
-
-    pub(crate) fn display_lines(&self) -> Vec<Line<'static>> {
-        flatten_cells(self.cells.iter().cloned())
+    pub(crate) fn push(&mut self, section: CellSection) {
+        self.sections.push(section);
     }
 }
 
 #[derive(Clone, Default)]
 pub(crate) struct ActiveTurnCell {
-    cells: Vec<RenderCell>,
+    sections: Vec<CellSection>,
 }
 
 impl ActiveTurnCell {
@@ -63,16 +68,28 @@ impl ActiveTurnCell {
         Self::default()
     }
 
-    pub(crate) fn push(&mut self, cell: RenderCell) {
-        self.cells.push(cell);
-    }
-
-    pub(crate) fn display_lines(&self) -> Vec<Line<'static>> {
-        flatten_cells(self.cells.iter().cloned())
+    pub(crate) fn push(&mut self, section: CellSection) {
+        self.sections.push(section);
     }
 }
 
-impl RenderCell {
+impl HistoryCell for CommittedTurnCell {
+    fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
+        flatten_sections(self.sections.iter().cloned())
+    }
+}
+
+impl ActiveCell for ActiveTurnCell {
+    fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
+        flatten_sections(self.sections.iter().cloned())
+    }
+
+    fn is_empty(&self) -> bool {
+        self.sections.is_empty()
+    }
+}
+
+impl CellSection {
     pub(crate) fn lines(&self) -> Vec<Line<'static>> {
         match self {
             Self::PrefixedMessage {
@@ -106,14 +123,14 @@ impl RenderCell {
     }
 }
 
-pub(crate) fn flatten_cells(cells: impl IntoIterator<Item = RenderCell>) -> Vec<Line<'static>> {
+fn flatten_sections(sections: impl IntoIterator<Item = CellSection>) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
-    for cell in cells {
-        let mut cell_lines = cell.lines();
-        if cell_lines.is_empty() {
+    for section in sections {
+        let mut section_lines = section.lines();
+        if section_lines.is_empty() {
             continue;
         }
-        lines.append(&mut cell_lines);
+        lines.append(&mut section_lines);
         lines.push(Line::from(""));
     }
     while matches!(lines.last(), Some(line) if line.spans.iter().all(|span| span.content == "")) {
