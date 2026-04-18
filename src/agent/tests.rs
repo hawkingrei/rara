@@ -8,12 +8,14 @@ use super::{
 use crate::llm::LlmBackend;
 use crate::session::SessionManager;
 use crate::tool::{Tool, ToolError, ToolManager};
+use crate::tool_result::ToolResultStore;
 use crate::vectordb::VectorDB;
 use crate::workspace::WorkspaceMemory;
 use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::{json, Value};
 use std::sync::{Arc, Mutex};
+use tempfile::tempdir;
 
 struct StubTool;
 
@@ -24,6 +26,30 @@ impl Tool for StubTool {
     fn input_schema(&self) -> Value { json!({"type":"object"}) }
     async fn call(&self, _input: Value) -> Result<Value, ToolError> {
         Ok(json!({ "status": "ok", "value": 42 }))
+    }
+}
+
+struct ListFilesStub;
+
+#[async_trait]
+impl Tool for ListFilesStub {
+    fn name(&self) -> &str { "list_files" }
+    fn description(&self) -> &str { "Return a simple list result" }
+    fn input_schema(&self) -> Value { json!({"type":"object"}) }
+    async fn call(&self, _input: Value) -> Result<Value, ToolError> {
+        Ok(json!({ "path": ".", "entries": [] }))
+    }
+}
+
+struct PlanAgentStub;
+
+#[async_trait]
+impl Tool for PlanAgentStub {
+    fn name(&self) -> &str { "plan_agent" }
+    fn description(&self) -> &str { "Return a delegated planning result" }
+    fn input_schema(&self) -> Value { json!({"type":"object"}) }
+    async fn call(&self, _input: Value) -> Result<Value, ToolError> {
+        Ok(json!({ "status": "ok", "summary": "delegated inspection complete" }))
     }
 }
 
@@ -257,6 +283,17 @@ async fn continues_plan_mode_after_shallow_initial_plan() {
 
 #[tokio::test]
 async fn last_query_plan_updated_tracks_only_the_final_planning_turn() {
+    let temp = tempdir().expect("tempdir");
+    let root = temp.path().to_path_buf();
+    let rara_dir = root.join(".rara");
+    std::fs::create_dir_all(rara_dir.join("rollouts")).expect("rollouts");
+    std::fs::create_dir_all(rara_dir.join("sessions")).expect("sessions");
+    let session_manager = Arc::new(SessionManager {
+        storage_dir: rara_dir.join("rollouts"),
+        legacy_storage_dir: rara_dir.join("sessions"),
+    });
+    let workspace = Arc::new(WorkspaceMemory::from_paths(root, rara_dir.clone()));
+
     let backend = Arc::new(SequencedBackend::new(vec![
         AnthropicResponse {
             content: vec![ContentBlock::Text {
@@ -280,9 +317,10 @@ async fn last_query_plan_updated_tracks_only_the_final_planning_turn() {
         tool_manager,
         backend,
         Arc::new(VectorDB::new("data/lancedb")),
-        Arc::new(SessionManager::new().expect("session manager")),
-        Arc::new(WorkspaceMemory::new().expect("workspace memory")),
+        session_manager.clone(),
+        workspace.clone(),
     );
+    agent.tool_result_store = ToolResultStore::new(rara_dir.join("tool-results")).expect("tool result store");
     agent.set_execution_mode(AgentExecutionMode::Plan);
 
     agent
@@ -306,9 +344,10 @@ async fn last_query_plan_updated_tracks_only_the_final_planning_turn() {
         tool_manager,
         backend,
         Arc::new(VectorDB::new("data/lancedb")),
-        Arc::new(SessionManager::new().expect("session manager")),
-        Arc::new(WorkspaceMemory::new().expect("workspace memory")),
+        session_manager,
+        workspace,
     );
+    agent.tool_result_store = ToolResultStore::new(rara_dir.join("tool-results")).expect("tool result store");
     agent.set_execution_mode(AgentExecutionMode::Plan);
 
     agent
@@ -374,6 +413,108 @@ async fn continues_plan_mode_after_exploration_if_assistant_still_signals_more_w
         .history
         .iter()
         .any(|message| message.content.to_string().contains("plan_continuation_required")));
+}
+
+#[tokio::test]
+async fn continues_plan_mode_to_synthesize_plan_after_exploration_evidence() {
+    let backend = Arc::new(SequencedBackend::new(vec![
+        AnthropicResponse {
+            content: vec![ContentBlock::ToolUse {
+                id: "tool-1".to_string(),
+                name: "list_files".to_string(),
+                input: json!({}),
+            }],
+            stop_reason: Some("tool_use".to_string()),
+            usage: Some(TokenUsage::default()),
+        },
+        AnthropicResponse {
+            content: vec![ContentBlock::Text {
+                text: "I inspected the repository structure and the current planning flow.".to_string(),
+            }],
+            stop_reason: Some("end_turn".to_string()),
+            usage: Some(TokenUsage::default()),
+        },
+        AnthropicResponse {
+            content: vec![ContentBlock::Text {
+                text: "<plan>\n- [pending] Review planning continuation state\n- [pending] Tighten plan completion rules\n</plan>\nThe first pass exposed enough evidence to finalize the plan.".to_string(),
+            }],
+            stop_reason: Some("end_turn".to_string()),
+            usage: Some(TokenUsage::default()),
+        },
+    ]));
+
+    let mut tool_manager = ToolManager::new();
+    tool_manager.register(Box::new(ListFilesStub));
+    let mut agent = Agent::new(
+        tool_manager,
+        backend.clone(),
+        Arc::new(VectorDB::new("data/lancedb")),
+        Arc::new(SessionManager::new().expect("session manager")),
+        Arc::new(WorkspaceMemory::new().expect("workspace memory")),
+    );
+    agent.set_execution_mode(AgentExecutionMode::Plan);
+
+    agent
+        .query_with_mode("inspect".to_string(), super::AgentOutputMode::Silent)
+        .await
+        .expect("query should succeed");
+
+    let observed = backend.observed_messages.lock().expect("lock");
+    assert_eq!(observed.len(), 3);
+    assert!(agent
+        .history
+        .iter()
+        .any(|message| message.content.to_string().contains("plan_continuation_required")));
+    assert_eq!(agent.current_plan.len(), 2);
+}
+
+#[tokio::test]
+async fn delegated_plan_agent_counts_as_planning_evidence() {
+    let backend = Arc::new(SequencedBackend::new(vec![
+        AnthropicResponse {
+            content: vec![ContentBlock::ToolUse {
+                id: "tool-1".to_string(),
+                name: "plan_agent".to_string(),
+                input: json!({ "task": "inspect planning flow" }),
+            }],
+            stop_reason: Some("tool_use".to_string()),
+            usage: Some(TokenUsage::default()),
+        },
+        AnthropicResponse {
+            content: vec![ContentBlock::Text {
+                text: "The delegated planning pass inspected enough code context.".to_string(),
+            }],
+            stop_reason: Some("end_turn".to_string()),
+            usage: Some(TokenUsage::default()),
+        },
+        AnthropicResponse {
+            content: vec![ContentBlock::Text {
+                text: "<plan>\n- [pending] Review delegated planning evidence\n- [pending] Finalize the top-level plan\n</plan>\nReady for approval.".to_string(),
+            }],
+            stop_reason: Some("end_turn".to_string()),
+            usage: Some(TokenUsage::default()),
+        },
+    ]));
+
+    let mut tool_manager = ToolManager::new();
+    tool_manager.register(Box::new(PlanAgentStub));
+    let mut agent = Agent::new(
+        tool_manager,
+        backend.clone(),
+        Arc::new(VectorDB::new("data/lancedb")),
+        Arc::new(SessionManager::new().expect("session manager")),
+        Arc::new(WorkspaceMemory::new().expect("workspace memory")),
+    );
+    agent.set_execution_mode(AgentExecutionMode::Plan);
+
+    agent
+        .query_with_mode("inspect".to_string(), super::AgentOutputMode::Silent)
+        .await
+        .expect("query should succeed");
+
+    let observed = backend.observed_messages.lock().expect("lock");
+    assert_eq!(observed.len(), 3);
+    assert_eq!(agent.current_plan.len(), 2);
 }
 
 
