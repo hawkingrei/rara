@@ -389,11 +389,15 @@ mod tests {
     #[test]
     fn latest_assistant_text_supports_string_content() {
         let temp = tempfile::tempdir().expect("tempdir");
+        let session_manager = SessionManager {
+            storage_dir: temp.path().join(".rara").join("rollouts"),
+            legacy_storage_dir: temp.path().join(".rara").join("sessions"),
+        };
         let mut agent = Agent::new(
             ToolManager::new(),
             Arc::new(MockLlm),
             Arc::new(VectorDB::new("data/lancedb")),
-            Arc::new(SessionManager::new().expect("session manager")),
+            Arc::new(session_manager),
             Arc::new(WorkspaceMemory::from_paths(
                 temp.path().to_path_buf(),
                 temp.path().join(".rara"),
