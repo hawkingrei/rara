@@ -156,7 +156,7 @@ fn render_composer(f: &mut Frame, app: &TuiApp, area: Rect) -> Option<(u16, u16)
     } else if app.agent_execution_mode_label() == "plan" {
         "planning mode  analyze, refine, or finalize a plan"
     } else {
-        "/search grep  /compact summarize history  /plan enter planning mode  /quit exit"
+        "/compact summarize history  /plan enter planning mode  /quit exit"
     };
     f.render_widget(
         Paragraph::new(Span::styled(hint, Style::default().fg(Color::Gray)))

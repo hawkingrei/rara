@@ -23,6 +23,8 @@ pub(super) fn apply_tui_event(app: &mut TuiApp, event: TuiEvent) {
                 if role == "Tool" {
                     if let Some(action) = exploration_action_label(&message) {
                         app.record_exploration_action(action);
+                    } else if let Some(action) = planning_action_label(&message) {
+                        app.record_planning_action(action);
                     } else if let Some(action) = tool_action_label(&message) {
                         app.record_running_action(action);
                     }
@@ -32,13 +34,15 @@ pub(super) fn apply_tui_event(app: &mut TuiApp, event: TuiEvent) {
                     Some(message.lines().next().unwrap_or(role).trim().to_string()),
                 );
             } else if role == "Agent" {
+                let planning_mode = matches!(app.agent_execution_mode, crate::agent::AgentExecutionMode::Plan);
+                let has_live_exploration = !app.active_live.exploration_actions.is_empty();
                 if !app.active_live.exploration_actions.is_empty()
                     && matches!(
                         app.runtime_phase,
                         RuntimePhase::RunningTool | RuntimePhase::SendingPrompt
                     )
                 {
-                    for note in exploration_note_lines(&message) {
+                    for note in exploration_note_lines(&message, planning_mode) {
                         app.record_exploration_note(note);
                     }
                 }
@@ -46,6 +50,13 @@ pub(super) fn apply_tui_event(app: &mut TuiApp, event: TuiEvent) {
                     RuntimePhase::ProcessingResponse,
                     Some("receiving model output".into()),
                 );
+                if planning_mode
+                    && has_live_exploration
+                    && !contains_structured_planning_output(&message)
+                {
+                    app.agent_markdown_stream = None;
+                    return;
+                }
                 app.finalize_agent_stream(Some(message));
                 return;
             } else if role == "Download" {
@@ -156,6 +167,21 @@ fn exploration_action_label(message: &str) -> Option<String> {
                 rest.as_str()
             }
         )),
+        "explore_agent" => Some("Delegate repository exploration".to_string()),
+        _ => None,
+    }
+}
+
+fn planning_action_label(message: &str) -> Option<String> {
+    let mut parts = message.split_whitespace();
+    let name = parts.next()?;
+    let rest = parts.collect::<Vec<_>>().join(" ");
+    match name {
+        "plan_agent" => Some(if rest.is_empty() {
+            "Delegate plan refinement".to_string()
+        } else {
+            format!("Delegate plan refinement: {rest}")
+        }),
         _ => None,
     }
 }
@@ -208,7 +234,7 @@ fn tool_action_label(message: &str) -> Option<String> {
     }
 }
 
-fn exploration_note_lines(message: &str) -> Vec<String> {
+fn exploration_note_lines(message: &str, planning_mode: bool) -> Vec<String> {
     let mut notes = Vec::new();
     for line in message
         .lines()
@@ -227,11 +253,28 @@ fn exploration_note_lines(message: &str) -> Vec<String> {
         {
             continue;
         }
+        if planning_mode && is_planning_chatter(line) {
+            continue;
+        }
         if !notes.iter().any(|existing| existing == line) {
             notes.push(line.to_string());
         }
     }
     notes
+}
+
+fn contains_structured_planning_output(message: &str) -> bool {
+    message.contains("<plan>") || message.contains("<request_user_input>")
+}
+
+fn is_planning_chatter(line: &str) -> bool {
+    let lower = line.trim().to_ascii_lowercase();
+    lower.starts_with("i will now ")
+        || lower.starts_with("i will start by ")
+        || lower.starts_with("i need to ")
+        || lower.starts_with("to continue ")
+        || lower.starts_with("to fully ")
+        || lower.starts_with("to understand ")
 }
 
 fn format_tool_use(name: &str, input: &serde_json::Value) -> String {

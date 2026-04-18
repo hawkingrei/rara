@@ -56,7 +56,6 @@ pub enum LocalCommandKind {
     Resume,
     Plan,
     Approval,
-    Search,
     Compact,
     Setup,
     Model,
@@ -232,6 +231,7 @@ impl AgentMarkdownStreamState {
 pub struct ActiveLiveSections {
     pub exploration_actions: Vec<String>,
     pub exploration_notes: Vec<String>,
+    pub planning_actions: Vec<String>,
     pub running_actions: Vec<String>,
 }
 
@@ -769,6 +769,18 @@ impl TuiApp {
             .any(|item| item == &action)
         {
             self.active_live.running_actions.push(action);
+        }
+    }
+
+    pub fn record_planning_action(&mut self, action: impl Into<String>) {
+        let action = action.into();
+        if !self
+            .active_live
+            .planning_actions
+            .iter()
+            .any(|item| item == &action)
+        {
+            self.active_live.planning_actions.push(action);
         }
     }
 

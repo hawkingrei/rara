@@ -106,7 +106,6 @@ fn render_transcript(f: &mut Frame, app: &TuiApp, area: Rect) {
                     .add_modifier(Modifier::BOLD),
             )),
             Line::from("  /help    browse built-in commands and runtime hints"),
-            Line::from("  /search  grep the workspace without going through the model"),
             Line::from("  /model   choose provider first, then switch models"),
             Line::from("  /status  inspect runtime, tokens, cache, and session"),
             Line::from("  /quit    leave the TUI and restore the terminal"),
@@ -605,7 +604,7 @@ fn render_composer(f: &mut Frame, app: &TuiApp, area: Rect) -> Option<(u16, u16)
     } else if app.agent_execution_mode_label() == "plan" {
         "planning mode  analyze, refine, or finalize a plan"
     } else {
-        "/search grep  /compact summarize history  /plan enter planning mode  /quit exit"
+        "/compact summarize history  /plan enter planning mode  /quit exit"
     };
     f.render_widget(
         Paragraph::new(Span::styled(hint, Style::default().fg(Color::Gray)))

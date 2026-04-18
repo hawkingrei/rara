@@ -5,7 +5,7 @@ use super::state::{
     PROVIDER_FAMILIES,
 };
 
-pub const COMMAND_SPECS: [CommandSpec; 13] = [
+pub const COMMAND_SPECS: [CommandSpec; 12] = [
     CommandSpec {
         category: "Session",
         name: "help",
@@ -47,13 +47,6 @@ pub const COMMAND_SPECS: [CommandSpec; 13] = [
         usage: "/approval",
         summary: "Toggle bash approval between suggestion and always.",
         detail: "Toggle bash execution between suggestion-only mode and always-run mode. Suggestion mode keeps bash inside the plan/approval flow instead of executing immediately.",
-    },
-    CommandSpec {
-        category: "Explore",
-        name: "search",
-        usage: "/search <pattern> [in <path>]",
-        summary: "Search the workspace with grep and keep the result in the current turn.",
-        detail: "Run a local regex search without going through the model. Results show up in the current turn as an exploration step, which makes follow-up reads and review prompts feel more like Codex/Claude exploration.",
     },
     CommandSpec {
         category: "Session",
@@ -117,7 +110,6 @@ pub fn parse_local_command(input: &str) -> Option<LocalCommand> {
         "resume" => LocalCommandKind::Resume,
         "plan" => LocalCommandKind::Plan,
         "approval" => LocalCommandKind::Approval,
-        "search" => LocalCommandKind::Search,
         "compact" => LocalCommandKind::Compact,
         "setup" => LocalCommandKind::Setup,
         "model" => LocalCommandKind::Model,
@@ -156,8 +148,8 @@ pub fn recommended_commands(app: &TuiApp) -> Vec<&'static CommandSpec> {
         &["status", "help", "clear"]
     } else {
         &[
-            "search", "compact", "resume", "plan", "approval", "model", "base-url", "status",
-            "help", "clear", "setup",
+            "compact", "resume", "plan", "approval", "model", "base-url", "status", "help",
+            "clear", "setup",
         ]
     };
     names
@@ -204,7 +196,7 @@ pub fn command_detail_text(spec: &CommandSpec) -> String {
 }
 
 pub fn general_help_text() -> &'static str {
-    "RARA uses a single composer as the control surface.\n\nNormal input goes to the current agent.\nSlash commands stay local and open overlays or update runtime state.\n\nExplore:\n  /search <pattern> [in <path>] runs local grep and keeps the result in the current turn\n\nCompaction:\n  /compact forces one history compaction pass\n\nModes:\n  /plan enters planning mode for the current task\n  RARA may suggest planning mode first for non-trivial repository work\n  /approval toggles bash approval between suggestion and always\n\nEditing:\n  apply_patch is the default tool for updating existing files\n  write_file is for new files or full rewrites\n  replace is only a simple fallback for unique string swaps\n\nKeyboard:\n  Enter submit current composer input\n  Esc close the current overlay only\n  Up/Down or j/k move inside lists\n  1/2/3 switch help tabs or choose guided model options\n\nExit:\n  /quit or /exit leave the TUI."
+    "RARA uses a single composer as the control surface.\n\nNormal input goes to the current agent.\nSlash commands stay local and open overlays or update runtime state.\n\nCompaction:\n  /compact forces one history compaction pass\n\nModes:\n  /plan enters planning mode for the current task\n  RARA may suggest planning mode first for non-trivial repository work\n  /approval toggles bash approval between suggestion and always\n\nEditing:\n  apply_patch is the default tool for updating existing files\n  write_file is for new files or full rewrites\n  replace is only a simple fallback for unique string swaps\n\nKeyboard:\n  Enter submit current composer input\n  Esc close the current overlay only\n  Up/Down or j/k move inside lists\n  1/2/3 switch help tabs or choose guided model options\n\nExit:\n  /quit or /exit leave the TUI."
 }
 
 fn command_score(spec: &CommandSpec, query: &str) -> Option<u8> {
@@ -250,7 +242,7 @@ pub fn help_text() -> String {
         .collect::<Vec<_>>()
         .join("\n");
     format!(
-        "Built-in commands:\n{}\n\nExplore:\n  /search    run local grep in the workspace or a subpath\n\nCompaction:\n  /compact   summarize older conversation history now\n\nSessions:\n  /resume    reopen a recent local session\n\nModes:\n  /plan      enter planning mode for the current task\n  RARA may suggest planning mode for non-trivial tasks\n  /approval  toggle bash approval mode\n\nEditing:\n  apply_patch  preferred for editing existing files\n  write_file   use for new files or full rewrites\n  replace      simple fallback for unique string replacement\n\nKeyboard:\n  Enter submit\n  Esc close current overlay\n  S open setup\n\nExit:\n  /quit\n  /exit\n\nModel switching:\n  /model\n\nProvider URL:\n  /base-url",
+        "Built-in commands:\n{}\n\nCompaction:\n  /compact   summarize older conversation history now\n\nSessions:\n  /resume    reopen a recent local session\n\nModes:\n  /plan      enter planning mode for the current task\n  RARA may suggest planning mode for non-trivial tasks\n  /approval  toggle bash approval mode\n\nEditing:\n  apply_patch  preferred for editing existing files\n  write_file   use for new files or full rewrites\n  replace      simple fallback for unique string replacement\n\nKeyboard:\n  Enter submit\n  Esc close current overlay\n  S open setup\n\nExit:\n  /quit\n  /exit\n\nModel switching:\n  /model\n\nProvider URL:\n  /base-url",
         commands
     )
 }
@@ -727,13 +719,6 @@ mod tests {
     fn parses_approval_command() {
         let approval = parse_local_command("/approval").expect("approval should parse");
         assert!(matches!(approval.kind, LocalCommandKind::Approval));
-    }
-
-    #[test]
-    fn parses_search_command_with_argument() {
-        let command = parse_local_command("/search agent loop").expect("search should parse");
-        assert!(matches!(command.kind, LocalCommandKind::Search));
-        assert_eq!(command.arg.as_deref(), Some("agent loop"));
     }
 
     #[test]

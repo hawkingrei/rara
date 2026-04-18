@@ -1,41 +1,372 @@
-use crate::tool::{Tool, ToolError, ToolManager};
-use crate::agent::{Agent};
+use crate::agent::{Agent, AgentExecutionMode, PlanStep};
 use crate::llm::LlmBackend;
-use crate::vectordb::VectorDB;
+use crate::prompt::PromptRuntimeConfig;
 use crate::session::SessionManager;
+use crate::tool::{Tool, ToolError, ToolManager};
+use crate::tools::file::{ListFilesTool, ReadFileTool};
+use crate::tools::search::{GlobTool, GrepTool};
+use crate::vectordb::VectorDB;
 use crate::workspace::WorkspaceMemory;
 use async_trait::async_trait;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::sync::Arc;
 
-pub struct AgentTool { pub backend: Arc<dyn LlmBackend>, pub vdb: Arc<VectorDB>, pub session_manager: Arc<SessionManager>, pub workspace: Arc<WorkspaceMemory> }
-#[async_trait]
-impl Tool for AgentTool {
-    fn name(&self) -> &str { "spawn_agent" }
-    fn description(&self) -> &str { "Spawn sub-agent" }
-    fn input_schema(&self) -> Value { json!({ "type": "object", "properties": { "name": { "type": "string" }, "instruction": { "type": "string" } }, "required": ["name", "instruction"] }) }
-    async fn call(&self, i: Value) -> Result<Value, ToolError> {
-        let name = i["name"].as_str().unwrap_or("worker");
-        let instruction = i["instruction"].as_str().ok_or(ToolError::InvalidInput("instruction".into()))?;
-        let mut sub = Agent::new(ToolManager::new(), self.backend.clone(), self.vdb.clone(), self.session_manager.clone(), self.workspace.clone());
-        sub.query(instruction.to_string()).await.map_err(|e| ToolError::ExecutionFailed(e.to_string()))?;
-        Ok(json!({ "name": name, "status": "done" }))
+#[derive(Clone, Copy)]
+enum SubAgentKind {
+    General,
+    Explore,
+    Plan,
+}
+
+impl SubAgentKind {
+    fn result_status(self) -> &'static str {
+        match self {
+            SubAgentKind::General => "done",
+            SubAgentKind::Explore => "explored",
+            SubAgentKind::Plan => "planned",
+        }
+    }
+
+    fn append_prompt(self) -> &'static str {
+        match self {
+            SubAgentKind::General => "",
+            SubAgentKind::Explore => {
+                "## Sub-Agent Role\n- You are a read-only exploration sub-agent.\n- Inspect the repository and summarize concrete findings.\n- Do not propose edits you cannot justify from inspected code.\n- Do not narrate each next tool call; call the tool directly.\n- End with a concise findings summary."
+            }
+            SubAgentKind::Plan => {
+                "## Sub-Agent Role\n- You are a read-only planning sub-agent.\n- Inspect the repository and refine an implementation approach.\n- Keep plans shallow and grouped by behavior.\n- Use <plan> only when the plan is decision-complete.\n- If the plan is not ready, summarize what additional inspection is still needed."
+            }
+        }
+    }
+
+    fn execution_mode(self) -> AgentExecutionMode {
+        match self {
+            SubAgentKind::Plan => AgentExecutionMode::Plan,
+            SubAgentKind::General | SubAgentKind::Explore => AgentExecutionMode::Execute,
+        }
+    }
+
+    fn read_only(self) -> bool {
+        !matches!(self, SubAgentKind::General)
     }
 }
 
-pub struct TeamCreateTool { pub backend: Arc<dyn LlmBackend>, pub vdb: Arc<VectorDB>, pub session_manager: Arc<SessionManager>, pub workspace: Arc<WorkspaceMemory> }
+pub struct AgentTool {
+    pub backend: Arc<dyn LlmBackend>,
+    pub vdb: Arc<VectorDB>,
+    pub session_manager: Arc<SessionManager>,
+    pub workspace: Arc<WorkspaceMemory>,
+    pub prompt_config: PromptRuntimeConfig,
+}
+
+#[async_trait]
+impl Tool for AgentTool {
+    fn name(&self) -> &str {
+        "spawn_agent"
+    }
+
+    fn description(&self) -> &str {
+        "Spawn a general-purpose sub-agent"
+    }
+
+    fn input_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "name": { "type": "string" },
+                "instruction": { "type": "string" }
+            },
+            "required": ["name", "instruction"]
+        })
+    }
+
+    async fn call(&self, i: Value) -> Result<Value, ToolError> {
+        let name = i["name"].as_str().unwrap_or("worker");
+        let instruction = i["instruction"]
+            .as_str()
+            .ok_or(ToolError::InvalidInput("instruction".into()))?;
+        let result = run_sub_agent(
+            SubAgentKind::General,
+            instruction,
+            self.backend.clone(),
+            self.vdb.clone(),
+            self.session_manager.clone(),
+            self.workspace.clone(),
+            self.prompt_config.clone(),
+        )
+        .await?;
+        Ok(json!({
+            "name": name,
+            "status": result.status,
+            "summary": result.summary,
+        }))
+    }
+}
+
+pub struct ExploreAgentTool {
+    pub backend: Arc<dyn LlmBackend>,
+    pub vdb: Arc<VectorDB>,
+    pub session_manager: Arc<SessionManager>,
+    pub workspace: Arc<WorkspaceMemory>,
+    pub prompt_config: PromptRuntimeConfig,
+}
+
+#[async_trait]
+impl Tool for ExploreAgentTool {
+    fn name(&self) -> &str {
+        "explore_agent"
+    }
+
+    fn description(&self) -> &str {
+        "Spawn a read-only exploration sub-agent for repository inspection"
+    }
+
+    fn input_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "instruction": { "type": "string" }
+            },
+            "required": ["instruction"]
+        })
+    }
+
+    async fn call(&self, i: Value) -> Result<Value, ToolError> {
+        let instruction = i["instruction"]
+            .as_str()
+            .ok_or(ToolError::InvalidInput("instruction".into()))?;
+        let result = run_sub_agent(
+            SubAgentKind::Explore,
+            instruction,
+            self.backend.clone(),
+            self.vdb.clone(),
+            self.session_manager.clone(),
+            self.workspace.clone(),
+            self.prompt_config.clone(),
+        )
+        .await?;
+        Ok(json!({
+            "status": result.status,
+            "summary": result.summary,
+        }))
+    }
+}
+
+pub struct PlanAgentTool {
+    pub backend: Arc<dyn LlmBackend>,
+    pub vdb: Arc<VectorDB>,
+    pub session_manager: Arc<SessionManager>,
+    pub workspace: Arc<WorkspaceMemory>,
+    pub prompt_config: PromptRuntimeConfig,
+}
+
+#[async_trait]
+impl Tool for PlanAgentTool {
+    fn name(&self) -> &str {
+        "plan_agent"
+    }
+
+    fn description(&self) -> &str {
+        "Spawn a read-only planning sub-agent for implementation planning"
+    }
+
+    fn input_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "instruction": { "type": "string" }
+            },
+            "required": ["instruction"]
+        })
+    }
+
+    async fn call(&self, i: Value) -> Result<Value, ToolError> {
+        let instruction = i["instruction"]
+            .as_str()
+            .ok_or(ToolError::InvalidInput("instruction".into()))?;
+        let result = run_sub_agent(
+            SubAgentKind::Plan,
+            instruction,
+            self.backend.clone(),
+            self.vdb.clone(),
+            self.session_manager.clone(),
+            self.workspace.clone(),
+            self.prompt_config.clone(),
+        )
+        .await?;
+        Ok(json!({
+            "status": result.status,
+            "summary": result.summary,
+            "plan": result
+                .plan
+                .as_ref()
+                .map(|steps| serialize_plan_steps(steps)),
+            "plan_explanation": result.plan_explanation,
+        }))
+    }
+}
+
+pub struct TeamCreateTool {
+    pub backend: Arc<dyn LlmBackend>,
+    pub vdb: Arc<VectorDB>,
+    pub session_manager: Arc<SessionManager>,
+    pub workspace: Arc<WorkspaceMemory>,
+}
+
 #[async_trait]
 impl Tool for TeamCreateTool {
-    fn name(&self) -> &str { "team_create" }
-    fn description(&self) -> &str { "Launch parallel sub-agents" }
-    fn input_schema(&self) -> Value { json!({ "type": "object", "properties": { "tasks": { "type": "array" } }, "required": ["tasks"] }) }
+    fn name(&self) -> &str {
+        "team_create"
+    }
+
+    fn description(&self) -> &str {
+        "Launch parallel sub-agents"
+    }
+
+    fn input_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": { "tasks": { "type": "array" } },
+            "required": ["tasks"]
+        })
+    }
+
     async fn call(&self, i: Value) -> Result<Value, ToolError> {
-        let tasks = i["tasks"].as_array().ok_or(ToolError::InvalidInput("tasks".into()))?;
+        let tasks = i["tasks"]
+            .as_array()
+            .ok_or(ToolError::InvalidInput("tasks".into()))?;
         let mut results = Vec::new();
         for task in tasks {
             let name = task["name"].as_str().unwrap_or("worker");
             results.push(json!({ "name": name, "status": "mocked_done" }));
         }
         Ok(json!({ "team_results": results }))
+    }
+}
+
+struct SubAgentResult {
+    status: &'static str,
+    summary: String,
+    plan: Option<Vec<PlanStep>>,
+    plan_explanation: Option<String>,
+}
+
+async fn run_sub_agent(
+    kind: SubAgentKind,
+    instruction: &str,
+    backend: Arc<dyn LlmBackend>,
+    vdb: Arc<VectorDB>,
+    session_manager: Arc<SessionManager>,
+    workspace: Arc<WorkspaceMemory>,
+    prompt_config: PromptRuntimeConfig,
+) -> Result<SubAgentResult, ToolError> {
+    let tool_manager = if kind.read_only() {
+        build_read_only_tool_manager()
+    } else {
+        ToolManager::new()
+    };
+    let mut sub = Agent::new(tool_manager, backend, vdb, session_manager, workspace);
+    sub.set_execution_mode(kind.execution_mode());
+    sub.set_prompt_config(append_subagent_prompt(prompt_config, kind.append_prompt()));
+    sub.query_with_mode(instruction.to_string(), crate::agent::AgentOutputMode::Silent)
+        .await
+        .map_err(|e| ToolError::ExecutionFailed(e.to_string()))?;
+
+    Ok(SubAgentResult {
+        status: kind.result_status(),
+        summary: latest_assistant_text(&sub).unwrap_or_else(|| "Sub-agent finished.".to_string()),
+        plan: (!sub.current_plan.is_empty()).then_some(sub.current_plan.clone()),
+        plan_explanation: sub.plan_explanation.clone(),
+    })
+}
+
+fn build_read_only_tool_manager() -> ToolManager {
+    let mut tool_manager = ToolManager::new();
+    tool_manager.register(Box::new(ReadFileTool));
+    tool_manager.register(Box::new(ListFilesTool));
+    tool_manager.register(Box::new(GlobTool));
+    tool_manager.register(Box::new(GrepTool));
+    tool_manager
+}
+
+fn append_subagent_prompt(
+    mut prompt_config: PromptRuntimeConfig,
+    appended_instructions: &str,
+) -> PromptRuntimeConfig {
+    if appended_instructions.trim().is_empty() {
+        return prompt_config;
+    }
+    prompt_config.append_system_prompt = Some(match prompt_config.append_system_prompt.take() {
+        Some(existing) if !existing.trim().is_empty() => {
+            format!("{existing}\n\n{appended_instructions}")
+        }
+        _ => appended_instructions.to_string(),
+    });
+    prompt_config
+}
+
+fn latest_assistant_text(agent: &Agent) -> Option<String> {
+    agent.history.iter().rev().find_map(|message| {
+        (message.role == "assistant")
+            .then(|| message.content.as_array())
+            .flatten()
+            .and_then(|blocks| {
+                let text = blocks
+                    .iter()
+                    .filter_map(|block| block.get("type").and_then(Value::as_str).zip(block.get("text").and_then(Value::as_str)))
+                    .filter_map(|(kind, text)| (kind == "text").then_some(text))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+                    .trim()
+                    .to_string();
+                (!text.is_empty()).then_some(text)
+            })
+    })
+}
+
+fn serialize_plan_steps(steps: &[PlanStep]) -> Vec<Value> {
+    steps
+        .iter()
+        .map(|step| {
+            json!({
+                "step": step.step,
+                "status": match step.status {
+                    crate::agent::PlanStepStatus::Pending => "pending",
+                    crate::agent::PlanStepStatus::InProgress => "in_progress",
+                    crate::agent::PlanStepStatus::Completed => "completed",
+                }
+            })
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{append_subagent_prompt, build_read_only_tool_manager};
+    use crate::prompt::PromptRuntimeConfig;
+
+    #[test]
+    fn read_only_subagent_manager_excludes_mutating_tools() {
+        let manager = build_read_only_tool_manager();
+        assert!(manager.get_tool("read_file").is_some());
+        assert!(manager.get_tool("list_files").is_some());
+        assert!(manager.get_tool("glob").is_some());
+        assert!(manager.get_tool("grep").is_some());
+        assert!(manager.get_tool("write_file").is_none());
+        assert!(manager.get_tool("apply_patch").is_none());
+        assert!(manager.get_tool("bash").is_none());
+    }
+
+    #[test]
+    fn append_subagent_prompt_preserves_existing_append_prompt() {
+        let runtime = PromptRuntimeConfig {
+            append_system_prompt: Some("existing tail".to_string()),
+            ..Default::default()
+        };
+        let updated = append_subagent_prompt(runtime, "sub-agent");
+        assert_eq!(
+            updated.append_system_prompt.as_deref(),
+            Some("existing tail\n\nsub-agent")
+        );
     }
 }
