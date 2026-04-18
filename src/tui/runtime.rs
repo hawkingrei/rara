@@ -72,27 +72,13 @@ pub async fn execute_local_command(
             app.open_overlay(Overlay::ResumePicker);
         }
         LocalCommandKind::Plan => {
-            let next_mode = if matches!(app.agent_execution_mode, AgentExecutionMode::Plan) {
-                AgentExecutionMode::Execute
-            } else {
-                AgentExecutionMode::Plan
-            };
-            let (detail, notice) = match next_mode {
-                AgentExecutionMode::Plan => (
-                    "entering plan mode".into(),
-                    "Plan mode active. Read-only tools only.".to_string(),
-                ),
-                AgentExecutionMode::Execute => (
-                    "returning to execute mode".into(),
-                    "Execute mode active. Full toolset restored.".to_string(),
-                ),
-            };
-            app.set_runtime_phase(RuntimePhase::LocalCommand, Some(detail));
-            app.set_agent_execution_mode(next_mode);
+            app.set_runtime_phase(RuntimePhase::LocalCommand, Some("entering planning mode".into()));
+            app.clear_pending_plan_approval();
+            app.set_agent_execution_mode(AgentExecutionMode::Plan);
             if let Some(agent) = agent_slot.as_mut() {
-                agent.set_execution_mode(next_mode);
+                agent.set_execution_mode(AgentExecutionMode::Plan);
             }
-            app.push_notice(notice);
+            app.push_notice("Planning mode enabled. Use the next prompt to analyze, refine, or finalize a plan.");
         }
         LocalCommandKind::Approval => {
             let next_mode = match app.bash_approval_mode {
@@ -412,9 +398,27 @@ pub async fn finish_running_task_if_ready(
             match result {
                 Ok(_) => {
                     app.finalize_agent_stream(None);
-                    app.finalize_active_turn();
-                    app.notice = Some("Prompt finished.".into());
-                    app.set_runtime_phase(RuntimePhase::Idle, Some("prompt finished".into()));
+                    if let Some(agent) = agent_slot.as_mut() {
+                        if should_enter_plan_approval(agent) {
+                            let note = plan_approval_note(agent);
+                            agent.set_execution_mode(AgentExecutionMode::Execute);
+                            app.set_agent_execution_mode(AgentExecutionMode::Execute);
+                            app.sync_snapshot(agent);
+                            app.set_pending_plan_approval(
+                                "Plan is ready. What should RARA do next?",
+                                note,
+                            );
+                            app.notice = Some("Plan ready. Waiting for approval.".into());
+                            app.set_runtime_phase(
+                                RuntimePhase::Idle,
+                                Some("awaiting plan approval".into()),
+                            );
+                        } else {
+                            app.finalize_active_turn();
+                            app.notice = Some("Prompt finished.".into());
+                            app.set_runtime_phase(RuntimePhase::Idle, Some("prompt finished".into()));
+                        }
+                    }
                 }
                 Err(err) => {
                     app.finalize_agent_stream(None);
@@ -529,6 +533,40 @@ pub async fn finish_running_task_if_ready(
     }
 
     Ok(())
+}
+
+fn should_enter_plan_approval(agent: &Agent) -> bool {
+    matches!(agent.execution_mode, AgentExecutionMode::Plan)
+        && agent.last_query_produced_plan()
+        && !agent.current_plan.is_empty()
+        && agent.pending_user_input.is_none()
+        && agent.pending_approval.is_none()
+}
+
+fn plan_approval_note(agent: &Agent) -> Option<String> {
+    if let Some(explanation) = agent
+        .plan_explanation
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        return Some(explanation.to_string());
+    }
+
+    let pending_steps = agent
+        .current_plan
+        .iter()
+        .filter(|step| !matches!(step.status, crate::agent::PlanStepStatus::Completed))
+        .map(|step| step.step.as_str())
+        .collect::<Vec<_>>();
+    if pending_steps.is_empty() {
+        None
+    } else {
+        Some(format!(
+            "Next implementation steps: {}",
+            pending_steps.join(" | ")
+        ))
+    }
 }
 
 fn emit_query_heartbeat(app: &mut TuiApp) {

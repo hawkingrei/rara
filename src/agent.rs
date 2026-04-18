@@ -247,6 +247,7 @@ pub struct Agent {
     pub completed_user_input: Option<CompletedInteraction>,
     pub completed_approval: Option<CompletedInteraction>,
     pub compact_state: CompactState,
+    last_query_plan_updated: bool,
     inspection_progress: InspectionProgress,
 }
 
@@ -279,6 +280,7 @@ impl Agent {
             completed_user_input: None,
             completed_approval: None,
             compact_state: CompactState::default(),
+            last_query_plan_updated: false,
             inspection_progress: InspectionProgress::default(),
         }
     }
@@ -300,13 +302,16 @@ impl Agent {
                 "\n## Current Execution Mode:\n\
                 - Plan mode is active.\n\
                 - This pass is read-only.\n\
-                - Inspect the codebase, analyze constraints, and produce a concrete implementation plan.\n\
+                - Use this mode to inspect the codebase, clarify constraints, and refine an implementation approach.\n\
                 - Do not call tools that edit files, run shell commands, update project memory, save experience, or spawn sub-agents.\n",
             );
             prompt.push_str(
-                "- Start your response with a <plan> block.\n\
+                "- Do not emit a <plan> block until the plan is decision-complete and ready for approval.\n\
+                - While still exploring or refining tradeoffs, respond with short, concrete planning updates grounded in the inspected code.\n\
+                - When the plan is ready for approval, start your response with a <plan> block.\n\
                 - Inside the block, emit one step per line in the form '- [pending] Step' or '- [in_progress] Step' or '- [completed] Step'.\n\
-                - After </plan>, provide a short explanation grounded in the inspected code.\n",
+                - After </plan>, provide a short explanation grounded in the inspected code.\n\
+                - Keep plans shallow, concise, and grouped by behavior instead of deep trees or file-by-file inventories.\n",
             );
             prompt.push_str(
                 "- If a key product or implementation decision blocks progress, also emit a <request_user_input> block.\n\
@@ -358,6 +363,10 @@ impl Agent {
             AgentExecutionMode::Execute => "execute",
             AgentExecutionMode::Plan => "plan",
         }
+    }
+
+    pub fn last_query_produced_plan(&self) -> bool {
+        self.last_query_plan_updated
     }
 
     pub fn set_bash_approval_mode(&mut self, mode: BashApprovalMode) {
@@ -533,6 +542,7 @@ impl Agent {
         let mut tool_rounds = 0usize;
         let mut plan_continuations = 0usize;
         let mut execute_continuations = 0usize;
+        self.last_query_plan_updated = false;
         self.inspection_progress = InspectionProgress::default();
         self.compact_if_needed_with_reporter(&mut report).await?;
         self.history = repair_tool_result_history(&self.history);
@@ -674,6 +684,7 @@ impl Agent {
             let turn_output = self
                 .run_model_turn(output_mode, report)
                 .await?;
+            self.last_query_plan_updated = turn_output.plan_updated;
             self.history.push(turn_output.assistant_message);
 
             if turn_output.tool_calls.is_empty() {
@@ -1561,6 +1572,45 @@ mod tests {
 
         let observed = backend.observed_messages.lock().expect("lock");
         assert_eq!(observed.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn last_query_plan_updated_tracks_only_the_final_planning_turn() {
+        let backend = Arc::new(SequencedBackend::new(vec![
+            AnthropicResponse {
+                content: vec![ContentBlock::Text {
+                    text: "<plan>\n- [pending] Inspect the repository structure\n</plan>\nStart with the top-level layout.".to_string(),
+                }],
+                stop_reason: Some("end_turn".to_string()),
+                usage: Some(TokenUsage::default()),
+            },
+            AnthropicResponse {
+                content: vec![ContentBlock::Text {
+                    text: "I still need to inspect the runtime and rendering paths before finalizing the plan.".to_string(),
+                }],
+                stop_reason: Some("end_turn".to_string()),
+                usage: Some(TokenUsage::default()),
+            },
+        ]));
+
+        let mut tool_manager = ToolManager::new();
+        tool_manager.register(Box::new(StubTool));
+        let mut agent = Agent::new(
+            tool_manager,
+            backend,
+            Arc::new(VectorDB::new("data/lancedb")),
+            Arc::new(SessionManager::new().expect("session manager")),
+            Arc::new(WorkspaceMemory::new().expect("workspace memory")),
+        );
+        agent.set_execution_mode(AgentExecutionMode::Plan);
+
+        agent
+            .query_with_mode("inspect".to_string(), super::AgentOutputMode::Silent)
+            .await
+            .expect("query should succeed");
+
+        assert!(!agent.last_query_produced_plan());
+        assert_eq!(agent.current_plan.len(), 1);
     }
 
     #[tokio::test]

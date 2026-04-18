@@ -212,7 +212,29 @@ fn current_turn_lines(app: &TuiApp) -> Vec<Line<'static>> {
         lines.push(Line::from(""));
     }
 
-    if let Some(summary) = current_turn_exploration_summary(app, current_turn.as_slice(), latest_agent.is_none()) {
+    let suppress_intermediate_agent = app.is_busy()
+        && has_tool_activity
+        && matches!(
+            app.runtime_phase,
+            super::state::RuntimePhase::RunningTool | super::state::RuntimePhase::SendingPrompt
+        );
+    let exploration_live_detail = preferred_live_detail(
+        latest_agent,
+        app.runtime_phase_detail.as_deref(),
+        suppress_intermediate_agent,
+    );
+    let tool_live_detail = if has_exploration_activity(current_turn.as_slice()) {
+        filtered_runtime_phase_detail(app.runtime_phase_detail.as_deref()).map(str::to_string)
+    } else {
+        exploration_live_detail.clone()
+    };
+
+    if let Some(summary) = current_turn_exploration_summary(
+        app,
+        current_turn.as_slice(),
+        latest_agent.is_none(),
+        exploration_live_detail.as_deref(),
+    ) {
         let (title, color) = if app.is_busy() && latest_agent.is_none() {
             ("Exploring", Color::Yellow)
         } else {
@@ -226,7 +248,7 @@ fn current_turn_lines(app: &TuiApp) -> Vec<Line<'static>> {
     if let Some(summary) = current_turn_tool_summary(
         current_turn.as_slice(),
         app.is_busy() && latest_agent.is_none(),
-        app.runtime_phase_detail.as_deref(),
+        tool_live_detail.as_deref(),
     ) {
         let (title, color) = if app.is_busy() && latest_agent.is_none() {
             ("Running", Color::Yellow)
@@ -243,6 +265,22 @@ fn current_turn_lines(app: &TuiApp) -> Vec<Line<'static>> {
         for line in status_plan_text(app).lines().take(8) {
             lines.push(Line::from(format!("  {line}")));
         }
+        lines.push(Line::from(""));
+    }
+
+    if let Some(plan_approval) = app.pending_plan_approval.as_ref() {
+        lines.push(Line::from(section_span("Awaiting Approval", Color::Yellow)));
+        lines.push(Line::from(format!("  {}", plan_approval.question)));
+        if let Some(note) = plan_approval.note.as_deref() {
+            for line in note.lines().take(4) {
+                let trimmed = line.trim();
+                if !trimmed.is_empty() {
+                    lines.push(Line::from(format!("  {trimmed}")));
+                }
+            }
+        }
+        lines.push(Line::from("  1. Start implementation"));
+        lines.push(Line::from("  2. Continue planning"));
         lines.push(Line::from(""));
     }
 
@@ -272,13 +310,6 @@ fn current_turn_lines(app: &TuiApp) -> Vec<Line<'static>> {
         lines.push(Line::from(""));
     }
 
-    let suppress_intermediate_agent = app.is_busy()
-        && has_tool_activity
-        && matches!(
-            app.runtime_phase,
-            super::state::RuntimePhase::RunningTool | super::state::RuntimePhase::SendingPrompt
-        );
-
     if let Some(stream_lines) = streaming_agent_lines.filter(|_| !suppress_intermediate_agent) {
         lines.extend(rendered_markdown_lines("Agent", stream_lines, usize::MAX));
     } else if let Some(agent_message) = latest_agent.filter(|_| !suppress_intermediate_agent) {
@@ -304,11 +335,12 @@ fn current_turn_exploration_summary(
     app: &TuiApp,
     current_turn: &[&TranscriptEntry],
     prefer_live_label: bool,
+    live_detail: Option<&str>,
 ) -> Option<String> {
     current_turn_exploration_summary_from_entries(
         current_turn,
         app.is_busy() && prefer_live_label,
-        app.runtime_phase_detail.as_deref(),
+        live_detail,
     )
 }
 
@@ -376,6 +408,79 @@ fn current_turn_tool_summary(
     }
 
     Some(lines.join("\n"))
+}
+
+fn has_exploration_activity(current_turn: &[&TranscriptEntry]) -> bool {
+    current_turn.iter().any(|entry| {
+        entry.role == "Tool"
+            && entry
+                .message
+                .split_whitespace()
+                .next()
+                .is_some_and(is_exploration_tool)
+    })
+}
+
+fn preferred_live_detail(
+    latest_agent: Option<&str>,
+    runtime_phase_detail: Option<&str>,
+    suppress_intermediate_agent: bool,
+) -> Option<String> {
+    if suppress_intermediate_agent {
+        if let Some(detail) = latest_agent_live_detail(latest_agent) {
+            return Some(detail);
+        }
+    }
+
+    filtered_runtime_phase_detail(runtime_phase_detail).map(str::to_string)
+}
+
+fn latest_agent_live_detail(message: Option<&str>) -> Option<String> {
+    let line = message?
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())?;
+    if looks_like_bottom_pane_chrome(line) || looks_like_transient_runtime_detail(line) {
+        return None;
+    }
+    Some(truncate_for_live_detail(line, 140))
+}
+
+fn filtered_runtime_phase_detail(detail: Option<&str>) -> Option<&str> {
+    let detail = detail?.trim();
+    if detail.is_empty()
+        || looks_like_bottom_pane_chrome(detail)
+        || looks_like_transient_runtime_detail(detail)
+    {
+        return None;
+    }
+    Some(detail)
+}
+
+fn looks_like_transient_runtime_detail(detail: &str) -> bool {
+    detail.starts_with("waiting for model response")
+        || detail.starts_with("local model is still generating")
+        || detail == "streaming model output"
+        || detail == "receiving model output"
+}
+
+fn looks_like_bottom_pane_chrome(detail: &str) -> bool {
+    detail.contains("/compact ")
+        || detail.contains("/plan ")
+        || detail.contains("/quit ")
+        || detail.contains("key=")
+        || detail.contains("tokens=")
+        || detail.contains("ctx~=")
+}
+
+fn truncate_for_live_detail(detail: &str, max_chars: usize) -> String {
+    let char_count = detail.chars().count();
+    if char_count <= max_chars {
+        return detail.to_string();
+    }
+
+    let truncated = detail.chars().take(max_chars.saturating_sub(1)).collect::<String>();
+    format!("{truncated}…")
 }
 
 fn prefixed_message_lines(role: &str, message: &str, max_lines: usize) -> Vec<Line<'static>> {
@@ -614,14 +719,16 @@ fn render_composer(f: &mut Frame, app: &TuiApp, area: Rect) -> Option<(u16, u16)
         "slash command  Enter run  Esc close"
     } else if app.is_busy() {
         "busy  wait for the current task to finish"
+    } else if app.has_pending_plan_approval() {
+        "plan ready  1 implement  2 continue planning"
     } else if app.has_pending_approval() {
         "approval pending  1 once  2 always  3 suggestion"
     } else if app.snapshot.pending_question.is_some() {
         "question pending  press 1/2/3 or type a reply"
     } else if app.agent_execution_mode_label() == "plan" {
-        "plan mode  /plan return to execute"
+        "planning mode  analyze, refine, or finalize a plan"
     } else {
-        "/search grep  /compact summarize history  /plan toggle  /quit exit"
+        "/search grep  /compact summarize history  /plan enter planning mode  /quit exit"
     };
     f.render_widget(
         Paragraph::new(Span::styled(hint, Style::default().fg(Color::Gray))).alignment(Alignment::Left),
@@ -693,6 +800,88 @@ fn render_overlay(f: &mut Frame, app: &TuiApp, overlay: Overlay) -> Option<(u16,
             None
         }
         Overlay::ApiKeyEditor => render_api_key_editor_modal(f, app, popup),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::config::{ConfigManager, RaraConfig};
+    use crate::tui::state::TuiApp;
+
+    use super::{
+        current_turn_exploration_summary_from_entries, current_turn_lines, latest_agent_live_detail, preferred_live_detail,
+        TranscriptEntry,
+    };
+
+    #[test]
+    fn suppressed_agent_detail_prefers_latest_agent_text() {
+        let detail = preferred_live_detail(
+            Some("I will now read `src/tools/mod.rs` to understand tool organization."),
+            Some("waiting for model response · 12s elapsed"),
+            true,
+        );
+        assert_eq!(
+            detail.as_deref(),
+            Some("I will now read `src/tools/mod.rs` to understand tool organization.")
+        );
+    }
+
+    #[test]
+    fn live_detail_filters_bottom_pane_chrome() {
+        assert!(latest_agent_live_detail(Some("/compact summarize history  /plan toggle  /quit exit")).is_none());
+    }
+
+    #[test]
+    fn exploration_summary_keeps_live_detail_across_redraws() {
+        let entries = vec![TranscriptEntry {
+            role: "Tool".into(),
+            message: "list_files .".into(),
+        }];
+        let refs = entries.iter().collect::<Vec<_>>();
+        let summary = current_turn_exploration_summary_from_entries(
+            refs.as_slice(),
+            true,
+            Some("I will now read `src/main.rs` to understand the startup flow."),
+        )
+        .expect("summary");
+        assert!(summary.contains("List ."));
+        assert!(summary.contains("I will now read `src/main.rs`"));
+    }
+
+    #[test]
+    fn current_turn_shows_plan_approval_card() {
+        let config_manager = ConfigManager {
+            path: std::env::temp_dir().join("rara-render-test-config.json"),
+        };
+        let mut app = TuiApp::new(config_manager);
+        app.config = RaraConfig {
+            provider: "mock".into(),
+            api_key: Some("test".into()),
+            base_url: None,
+            model: Some("mock".into()),
+            revision: None,
+            thinking: Some(true),
+            num_ctx: None,
+        };
+        app.push_entry("You", "Review the repository and propose a plan.");
+        app.snapshot.plan_steps = vec![
+            ("pending".into(), "Inspect the agent loop".into()),
+            ("pending".into(), "Review the TUI rendering path".into()),
+        ];
+        app.set_pending_plan_approval(
+            "Plan is ready. What should RARA do next?",
+            Some("Focus on the agent loop first.".into()),
+        );
+
+        let rendered = current_turn_lines(&app)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(rendered.contains("Awaiting Approval"));
+        assert!(rendered.contains("Start implementation"));
+        assert!(rendered.contains("Continue planning"));
     }
 }
 

@@ -31,6 +31,7 @@ use tokio::time::{interval, Duration};
 use unicode_width::UnicodeWidthStr;
 
 use crate::agent::Agent;
+use crate::agent::AgentExecutionMode;
 use crate::agent::CompletedInteraction;
 use crate::agent::PendingApproval;
 use crate::agent::PendingUserInput;
@@ -372,6 +373,39 @@ async fn dispatch_event(
         AppEvent::SelectPendingOption(idx) => {
             if app.is_busy() {
                 app.push_notice("Wait for the current task before answering the structured question.");
+            } else if app.has_pending_plan_approval() {
+                let Some(agent) = agent_slot.take() else {
+                    app.push_notice("No active agent is available to continue the plan.");
+                    return Ok(false);
+                };
+                let mut agent = agent;
+                match idx {
+                    0 => {
+                        app.clear_pending_plan_approval();
+                        app.set_agent_execution_mode(AgentExecutionMode::Execute);
+                        agent.set_execution_mode(AgentExecutionMode::Execute);
+                        start_query_task(
+                            app,
+                            "Implement the approved plan using the current repository state."
+                                .to_string(),
+                            agent,
+                        );
+                    }
+                    1 => {
+                        app.clear_pending_plan_approval();
+                        app.set_agent_execution_mode(AgentExecutionMode::Plan);
+                        agent.set_execution_mode(AgentExecutionMode::Plan);
+                        start_query_task(
+                            app,
+                            "Continue refining the plan and fill in any missing implementation details."
+                                .to_string(),
+                            agent,
+                        );
+                    }
+                    _ => {
+                        *agent_slot = Some(agent);
+                    }
+                }
             } else if app.has_pending_approval() {
                 if let Some(agent) = agent_slot.take() {
                     let selection = match idx {
@@ -547,6 +581,7 @@ async fn handle_submit(
         app.push_notice(format!("Unknown command '{}'. Use /help.", input.trim()));
     } else if let Some(agent) = agent_slot.take() {
         let mut agent = agent;
+        app.clear_pending_plan_approval();
         if app.snapshot.pending_question.is_some() {
             agent.consume_pending_user_input(input.trim());
         }

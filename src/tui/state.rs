@@ -122,6 +122,12 @@ pub struct PendingApprovalSnapshot {
     pub allow_net: bool,
 }
 
+#[derive(Default, Clone)]
+pub struct PendingPlanApprovalSnapshot {
+    pub question: String,
+    pub note: Option<String>,
+}
+
 pub enum TaskKind {
     Query,
     Compact,
@@ -255,6 +261,7 @@ pub struct TuiApp {
     pub runtime_phase: RuntimePhase,
     pub runtime_phase_detail: Option<String>,
     pub snapshot: RuntimeSnapshot,
+    pub pending_plan_approval: Option<PendingPlanApprovalSnapshot>,
     pub agent_execution_mode: AgentExecutionMode,
     pub bash_approval_mode: BashApprovalMode,
     pub provider_picker_idx: usize,
@@ -301,6 +308,7 @@ impl TuiApp {
             runtime_phase: RuntimePhase::Idle,
             runtime_phase_detail: None,
             snapshot: RuntimeSnapshot::default(),
+            pending_plan_approval: None,
             agent_execution_mode: AgentExecutionMode::Execute,
             bash_approval_mode: BashApprovalMode::Suggestion,
             provider_picker_idx,
@@ -505,6 +513,7 @@ impl TuiApp {
         self.inserted_turns = 0;
         self.transcript_scroll = 0;
         self.agent_markdown_stream = None;
+        self.pending_plan_approval = None;
         self.notice = Some("Cleared local transcript view.".into());
     }
 
@@ -605,6 +614,25 @@ impl TuiApp {
         self.snapshot.pending_approval.is_some()
     }
 
+    pub fn has_pending_plan_approval(&self) -> bool {
+        self.pending_plan_approval.is_some()
+    }
+
+    pub fn set_pending_plan_approval(
+        &mut self,
+        question: impl Into<String>,
+        note: Option<String>,
+    ) {
+        self.pending_plan_approval = Some(PendingPlanApprovalSnapshot {
+            question: question.into(),
+            note,
+        });
+    }
+
+    pub fn clear_pending_plan_approval(&mut self) {
+        self.pending_plan_approval = None;
+    }
+
     pub fn close_overlay(&mut self) {
         self.overlay = match self.overlay {
             Some(Overlay::BaseUrlEditor) => Some(Overlay::ModelPicker),
@@ -655,6 +683,7 @@ impl TuiApp {
         self.inserted_turns = 0;
         self.transcript_scroll = 0;
         self.agent_markdown_stream = None;
+        self.pending_plan_approval = None;
     }
 
     pub fn attach_state_db(&mut self, state_db: Arc<StateDb>) {
