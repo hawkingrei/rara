@@ -8,7 +8,9 @@ use ratatui::{
 use crate::tui::command::{
     status_plan_text, status_planning_suggestion_text, status_request_user_input_text,
 };
-use crate::tui::state::{RuntimePhase, TranscriptEntry, TuiApp};
+use crate::tui::state::{
+    contains_structured_planning_output, RuntimePhase, TranscriptEntry, TuiApp,
+};
 
 use super::{
     current_turn_exploration_summary, current_turn_exploration_summary_from_entries,
@@ -32,10 +34,6 @@ fn trim_trailing_empty_lines(lines: &mut Vec<Line<'static>>) {
     while matches!(lines.last(), Some(line) if line.spans.iter().all(|span| span.content == "")) {
         lines.pop();
     }
-}
-
-fn contains_structured_planning_output(message: &str) -> bool {
-    message.contains("<plan>") || message.contains("<request_user_input>")
 }
 
 struct UserCell {

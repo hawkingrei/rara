@@ -1,7 +1,9 @@
 use crate::agent::AgentEvent;
 use crate::tools::bash::BashCommandInput;
 
-use super::super::state::{RuntimePhase, TuiApp, TuiEvent};
+use super::super::state::{
+    contains_structured_planning_output, RuntimePhase, TuiApp, TuiEvent,
+};
 
 pub(super) fn apply_tui_event(app: &mut TuiApp, event: TuiEvent) {
     match event {
@@ -167,7 +169,11 @@ fn exploration_action_label(message: &str) -> Option<String> {
                 rest.as_str()
             }
         )),
-        "explore_agent" => Some("Delegate repository exploration".to_string()),
+        "explore_agent" => Some(if rest.is_empty() {
+            "Delegate repository exploration".to_string()
+        } else {
+            format!("Delegate repository exploration: {rest}")
+        }),
         _ => None,
     }
 }
@@ -261,10 +267,6 @@ fn exploration_note_lines(message: &str, planning_mode: bool) -> Vec<String> {
         }
     }
     notes
-}
-
-fn contains_structured_planning_output(message: &str) -> bool {
-    message.contains("<plan>") || message.contains("<request_user_input>")
 }
 
 fn is_planning_chatter(line: &str) -> bool {

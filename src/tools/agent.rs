@@ -307,20 +307,29 @@ fn append_subagent_prompt(
 
 fn latest_assistant_text(agent: &Agent) -> Option<String> {
     agent.history.iter().rev().find_map(|message| {
-        (message.role == "assistant")
-            .then(|| message.content.as_array())
-            .flatten()
-            .and_then(|blocks| {
-                let text = blocks
-                    .iter()
-                    .filter_map(|block| block.get("type").and_then(Value::as_str).zip(block.get("text").and_then(Value::as_str)))
-                    .filter_map(|(kind, text)| (kind == "text").then_some(text))
-                    .collect::<Vec<_>>()
-                    .join("\n")
-                    .trim()
-                    .to_string();
-                (!text.is_empty()).then_some(text)
-            })
+        if message.role != "assistant" {
+            return None;
+        }
+        if let Some(text) = message.content.as_str() {
+            let trimmed = text.trim();
+            return (!trimmed.is_empty()).then(|| trimmed.to_string());
+        }
+        message.content.as_array().and_then(|blocks| {
+            let text = blocks
+                .iter()
+                .filter_map(|block| {
+                    block
+                        .get("type")
+                        .and_then(Value::as_str)
+                        .zip(block.get("text").and_then(Value::as_str))
+                })
+                .filter_map(|(kind, text)| (kind == "text").then_some(text))
+                .collect::<Vec<_>>()
+                .join("\n")
+                .trim()
+                .to_string();
+            (!text.is_empty()).then_some(text)
+        })
     })
 }
 
@@ -342,8 +351,15 @@ fn serialize_plan_steps(steps: &[PlanStep]) -> Vec<Value> {
 
 #[cfg(test)]
 mod tests {
-    use super::{append_subagent_prompt, build_read_only_tool_manager};
+    use super::{append_subagent_prompt, build_read_only_tool_manager, latest_assistant_text};
+    use crate::agent::{Agent, Message};
     use crate::prompt::PromptRuntimeConfig;
+    use crate::tool::ToolManager;
+    use crate::vectordb::VectorDB;
+    use crate::workspace::WorkspaceMemory;
+    use crate::{llm::MockLlm, session::SessionManager};
+    use serde_json::json;
+    use std::sync::Arc;
 
     #[test]
     fn read_only_subagent_manager_excludes_mutating_tools() {
@@ -367,6 +383,30 @@ mod tests {
         assert_eq!(
             updated.append_system_prompt.as_deref(),
             Some("existing tail\n\nsub-agent")
+        );
+    }
+
+    #[test]
+    fn latest_assistant_text_supports_string_content() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let mut agent = Agent::new(
+            ToolManager::new(),
+            Arc::new(MockLlm),
+            Arc::new(VectorDB::new("data/lancedb")),
+            Arc::new(SessionManager::new().expect("session manager")),
+            Arc::new(WorkspaceMemory::from_paths(
+                temp.path().to_path_buf(),
+                temp.path().join(".rara"),
+            )),
+        );
+        agent.history.push(Message {
+            role: "assistant".into(),
+            content: json!("plain string assistant content"),
+        });
+
+        assert_eq!(
+            latest_assistant_text(&agent).as_deref(),
+            Some("plain string assistant content")
         );
     }
 }

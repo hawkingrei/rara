@@ -274,6 +274,10 @@ pub fn input_requests_command_palette(input: &str) -> bool {
     input.trim_start().starts_with('/')
 }
 
+pub(crate) fn contains_structured_planning_output(message: &str) -> bool {
+    message.contains("<plan>") || message.contains("<request_user_input>")
+}
+
 fn state_db_status_error(prefix: &str, message: impl Into<String>) -> String {
     format!("{prefix}: {}", redact_secrets(message.into()))
 }
