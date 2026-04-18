@@ -58,19 +58,35 @@ fn display_width(s: &str) -> usize {
         return s.width();
     }
 
-    // Strip OSC sequences: ESC ] ... BEL
     let mut visible = String::with_capacity(s.len());
-    let mut chars = s.chars();
+    let mut chars = s.chars().peekable();
     while let Some(ch) = chars.next() {
-        if ch == '\x1B' && chars.clone().next() == Some(']') {
-            // Consume the ']' and everything up to and including BEL.
-            chars.next(); // skip ']'
-            for c in chars.by_ref() {
-                if c == '\x07' {
-                    break;
+        if ch == '\x1B' {
+            match chars.peek() {
+                Some(']') => {
+                    chars.next();
+                    while let Some(c) = chars.next() {
+                        if c == '\x07' {
+                            break;
+                        }
+                        if c == '\x1B' && chars.peek() == Some(&'\\') {
+                            chars.next();
+                            break;
+                        }
+                    }
+                    continue;
                 }
+                Some('[') => {
+                    chars.next();
+                    while let Some(c) = chars.next() {
+                        if (0x40..=0x7E).contains(&(c as u32)) {
+                            break;
+                        }
+                    }
+                    continue;
+                }
+                _ => {}
             }
-            continue;
         }
         visible.push(ch);
     }
@@ -725,5 +741,28 @@ impl ModifierDiff {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::display_width;
+
+    #[test]
+    fn display_width_ignores_osc_sequences() {
+        let text = "\x1b]8;;https://example.com\x07link\x1b]8;;\x07";
+        assert_eq!(display_width(text), 4);
+    }
+
+    #[test]
+    fn display_width_ignores_osc_sequences_with_st_terminator() {
+        let text = "\x1b]8;;https://example.com\x1b\\link\x1b]8;;\x1b\\";
+        assert_eq!(display_width(text), 4);
+    }
+
+    #[test]
+    fn display_width_ignores_csi_sequences() {
+        let text = "\x1b[31mred\x1b[0m";
+        assert_eq!(display_width(text), 3);
     }
 }

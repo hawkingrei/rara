@@ -52,27 +52,12 @@ pub(super) async fn execute_local_command(
             app.open_overlay(Overlay::ResumePicker);
         }
         LocalCommandKind::Plan => {
-            let next_mode = if matches!(app.agent_execution_mode, AgentExecutionMode::Plan) {
-                AgentExecutionMode::Execute
-            } else {
-                AgentExecutionMode::Plan
-            };
-            let (detail, notice) = match next_mode {
-                AgentExecutionMode::Plan => (
-                    "entering plan mode".into(),
-                    "Plan mode active. Read-only tools only.".to_string(),
-                ),
-                AgentExecutionMode::Execute => (
-                    "returning to execute mode".into(),
-                    "Execute mode active. Full toolset restored.".to_string(),
-                ),
-            };
-            app.set_runtime_phase(RuntimePhase::LocalCommand, Some(detail));
-            app.set_agent_execution_mode(next_mode);
+            app.set_runtime_phase(RuntimePhase::LocalCommand, Some("scheduling plan turn".into()));
+            app.set_agent_execution_mode(AgentExecutionMode::Plan);
             if let Some(agent) = agent_slot.as_mut() {
-                agent.set_execution_mode(next_mode);
+                agent.set_execution_mode(AgentExecutionMode::Plan);
             }
-            app.push_notice(notice);
+            app.push_notice("The next turn will run in read-only planning mode.");
         }
         LocalCommandKind::Approval => {
             let next_mode = match app.bash_approval_mode {

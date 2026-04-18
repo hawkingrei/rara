@@ -228,8 +228,8 @@ pub(super) fn build_hf_api(
         .with_progress(true)
         .with_retries(3);
     if let Some(token) = config
-        .api_key
-        .clone()
+        .api_key()
+        .map(str::to_owned)
         .or_else(|| std::env::var("HF_TOKEN").ok())
     {
         builder = builder.with_token(Some(token));

@@ -6,6 +6,7 @@ use futures::StreamExt;
 use serde_json::{json, Value};
 
 use crate::agent::{AnthropicResponse, ContentBlock, Message};
+use crate::redaction::{redact_secrets, sanitize_url_for_display};
 
 use super::shared::{
     context_budget_from_window, hashed_embedding, http_client_for_target, parse_tool_arguments,
@@ -70,7 +71,11 @@ impl LlmBackend for OllamaBackend {
         let res = self.client.post(&endpoint).json(&body).send().await?;
 
         if !res.status().is_success() {
-            return Err(anyhow!("API Error at {}: {}", endpoint, res.text().await?));
+            return Err(anyhow!(
+                "API Error at {}: {}",
+                sanitize_url_for_display(&endpoint),
+                redact_secrets(res.text().await?)
+            ));
         }
         let resp_json: Value = res.json().await?;
         let message = &resp_json["message"];
@@ -149,7 +154,11 @@ impl LlmBackend for OllamaBackend {
 
         let res = self.client.post(&endpoint).json(&body).send().await?;
         if !res.status().is_success() {
-            return Err(anyhow!("API Error at {}: {}", endpoint, res.text().await?));
+            return Err(anyhow!(
+                "API Error at {}: {}",
+                sanitize_url_for_display(&endpoint),
+                redact_secrets(res.text().await?)
+            ));
         }
 
         let mut stream = res.bytes_stream();

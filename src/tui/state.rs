@@ -10,7 +10,9 @@ use ratatui::text::Line;
 
 use crate::agent::{Agent, AgentExecutionMode, BashApprovalMode};
 use crate::config::{ConfigManager, RaraConfig};
+use crate::redaction::redact_secrets;
 use crate::state_db::{PersistedInteraction, PersistedPlanStep, PersistedSessionSummary, PersistedTurnEntry, StateDb};
+use crate::tools::bash::BashCommandInput;
 use super::markdown_stream::MarkdownStreamCollector;
 pub use self::state_presets::{
     current_model_presets, selected_preset_idx_for_config, selected_provider_family_idx_for_config,
@@ -129,6 +131,7 @@ pub struct PendingApprovalSnapshot {
     pub tool_use_id: String,
     pub command: String,
     pub allow_net: bool,
+    pub payload: BashCommandInput,
 }
 
 pub enum TaskKind {
@@ -151,7 +154,7 @@ pub enum TaskCompletion {
         result: anyhow::Result<Agent>,
     },
     OAuth {
-        result: anyhow::Result<String>,
+        result: anyhow::Result<secrecy::SecretString>,
     },
 }
 
@@ -263,10 +266,14 @@ pub fn input_requests_command_palette(input: &str) -> bool {
     input.trim_start().starts_with('/')
 }
 
+fn state_db_status_error(prefix: &str, message: impl Into<String>) -> String {
+    format!("{prefix}: {}", redact_secrets(message.into()))
+}
+
 impl TuiApp {
     pub fn new(cm: ConfigManager) -> Self {
         let cfg = cm.load();
-        let overlay = if cfg.api_key.is_none() && super::provider_requires_api_key(&cfg.provider) {
+        let overlay = if !cfg.has_api_key() && super::provider_requires_api_key(&cfg.provider) {
             if cfg.provider == "codex" {
                 Some(Overlay::CodexAuthGuide)
             } else {
@@ -407,8 +414,9 @@ impl TuiApp {
             }),
             pending_approval: agent.pending_approval.as_ref().map(|pending| PendingApprovalSnapshot {
                 tool_use_id: pending.tool_use_id.clone(),
-                command: pending.command.clone(),
-                allow_net: pending.allow_net,
+                command: pending.request.summary(),
+                allow_net: pending.request.allow_net,
+                payload: pending.request.clone(),
             }),
             pending_plan_approval: self.pending_plan_approval,
             completed_question: agent
@@ -438,12 +446,16 @@ impl TuiApp {
     }
 
     pub fn push_entry(&mut self, role: &'static str, message: impl Into<String>) {
+        let message = match role {
+            "System" | "Runtime" => redact_secrets(message.into()),
+            _ => message.into(),
+        };
         if role == "You" && !self.active_turn.entries.is_empty() {
             self.commit_active_turn();
         }
         self.active_turn.entries.push(TranscriptEntry {
             role: role.to_string(),
-            message: message.into(),
+            message,
         });
         self.transcript_scroll = 0;
     }
@@ -499,7 +511,7 @@ impl TuiApp {
     }
 
     pub fn push_notice(&mut self, message: impl Into<String>) {
-        let message = message.into();
+        let message = redact_secrets(message.into());
         self.notice = Some(message.clone());
         self.push_entry("System", message);
     }
@@ -575,7 +587,7 @@ impl TuiApp {
                 .unwrap_or_else(|| "http://localhost:11434".to_string());
         }
         if matches!(overlay, Overlay::ApiKeyEditor) {
-            self.api_key_input = self.config.api_key.clone().unwrap_or_default();
+            self.api_key_input.clear();
         }
         self.overlay = Some(overlay);
     }
@@ -695,7 +707,7 @@ impl TuiApp {
 
     pub fn set_state_db_error(&mut self, error: String) {
         self.state_db = None;
-        self.state_db_status = Some(format!("unavailable: {error}"));
+        self.state_db_status = Some(state_db_status_error("unavailable", error));
     }
 
     fn persist_runtime_state(&mut self) {
@@ -719,7 +731,7 @@ impl TuiApp {
             self.snapshot.history_len,
             self.transcript_entry_count(),
         ) {
-            self.state_db_status = Some(format!("write failed: {err}"));
+            self.state_db_status = Some(state_db_status_error("write failed", err.to_string()));
             return;
         }
 
@@ -735,7 +747,8 @@ impl TuiApp {
             })
             .collect::<Vec<_>>();
         if let Err(err) = state_db.replace_plan_steps(&self.snapshot.session_id, &plan_steps) {
-            self.state_db_status = Some(format!("plan write failed: {err}"));
+            self.state_db_status =
+                Some(state_db_status_error("plan write failed", err.to_string()));
             return;
         }
 
@@ -785,6 +798,10 @@ impl TuiApp {
                     "tool_use_id": approval.tool_use_id,
                     "command": approval.command,
                     "allow_net": approval.allow_net,
+                    "program": approval.payload.program,
+                    "args": approval.payload.args,
+                    "cwd": approval.payload.cwd,
+                    "env": approval.payload.env,
                 })),
             });
         }
@@ -808,7 +825,10 @@ impl TuiApp {
         }
 
         if let Err(err) = state_db.replace_interactions(&self.snapshot.session_id, &interactions) {
-            self.state_db_status = Some(format!("interaction write failed: {err}"));
+            self.state_db_status = Some(state_db_status_error(
+                "interaction write failed",
+                err.to_string(),
+            ));
             return;
         }
 
@@ -832,14 +852,15 @@ impl TuiApp {
             })
             .collect::<Vec<_>>();
         if let Err(err) = state_db.persist_turn(&self.snapshot.session_id, ordinal, &entries) {
-            self.state_db_status = Some(format!("turn write failed: {err}"));
+            self.state_db_status =
+                Some(state_db_status_error("turn write failed", err.to_string()));
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::input_requests_command_palette;
+    use super::{input_requests_command_palette, state_db_status_error};
 
     #[test]
     fn detects_slash_command_input() {
@@ -849,5 +870,17 @@ mod tests {
         assert!(!input_requests_command_palette(""));
         assert!(!input_requests_command_palette("help"));
         assert!(!input_requests_command_palette("   help"));
+    }
+
+    #[test]
+    fn redacts_secrets_in_state_db_status_messages() {
+        let rendered = state_db_status_error(
+            "write failed",
+            "token=supersecretvalue Authorization: Bearer abcdefghijklmnopqrstuvwxyz",
+        );
+        assert!(rendered.contains("write failed:"));
+        assert!(rendered.contains("[REDACTED_SECRET]"));
+        assert!(!rendered.contains("supersecretvalue"));
+        assert!(!rendered.contains("abcdefghijklmnopqrstuvwxyz"));
     }
 }

@@ -11,6 +11,7 @@ use crate::tool::ToolManager;
 use crate::tool_result::{
     default_tool_result_store_dir, repair_tool_result_history, ToolResultStore,
 };
+use crate::tools::bash::BashCommandInput;
 use crate::vectordb::{MemoryMetadata, VectorDB};
 use crate::workspace::WorkspaceMemory;
 use anyhow::Result;
@@ -398,20 +399,27 @@ impl Agent {
         let mut tool_results = Vec::new();
         for tool_call in tool_calls {
             if tool_call.name == "bash" && matches!(self.bash_approval_mode, BashApprovalMode::Suggestion) {
-                let command = tool_call
-                    .input
-                    .get("command")
-                    .and_then(Value::as_str)
-                    .unwrap_or("<command>");
-                let allow_net = tool_call
-                    .input
-                    .get("allow_net")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false);
+                let request = BashCommandInput::from_value(tool_call.input.clone())
+                    .unwrap_or_else(|_| BashCommandInput {
+                        command: tool_call
+                            .input
+                            .get("command")
+                            .and_then(Value::as_str)
+                            .map(str::to_string),
+                        program: None,
+                        args: Vec::new(),
+                        cwd: None,
+                        env: Default::default(),
+                        allow_net: tool_call
+                            .input
+                            .get("allow_net")
+                            .and_then(Value::as_bool)
+                            .unwrap_or(false),
+                    });
+                let summary = request.summary();
                 self.pending_approval = Some(PendingApproval {
                     tool_use_id: tool_call.id.clone(),
-                    command: command.to_string(),
-                    allow_net,
+                    request: request.clone(),
                 });
                 self.pending_user_input = Some(PendingUserInput {
                     question: "Bash command needs approval. What should RARA do?".to_string(),
@@ -429,7 +437,7 @@ impl Agent {
                             "Do not run the command automatically. Continue with a safer path.".to_string(),
                         ),
                     ],
-                    note: Some(format!("command: {}", command)),
+                    note: Some(format!("command: {}", summary)),
                 });
                 report(AgentEvent::Status(
                     "Bash approval required. Waiting for a structured user decision.".to_string(),

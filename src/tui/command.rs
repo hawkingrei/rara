@@ -637,7 +637,7 @@ pub fn model_help_text(app: &TuiApp) -> String {
 pub fn api_key_status(config: &RaraConfig) -> &'static str {
     if !super::provider_requires_api_key(&config.provider) {
         "not-required"
-    } else if config.api_key.as_ref().is_some() {
+    } else if config.has_api_key() {
         "configured"
     } else {
         "missing"

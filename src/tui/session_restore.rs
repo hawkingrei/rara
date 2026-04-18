@@ -6,6 +6,7 @@ use crate::agent::{
     Agent, CompletedInteraction, PendingApproval, PendingUserInput, PlanStep, PlanStepStatus,
 };
 use crate::state_db::StateDb;
+use crate::tools::bash::BashCommandInput;
 
 use super::state::{TranscriptEntry, TranscriptTurn, TuiApp};
 
@@ -98,17 +99,29 @@ pub(super) fn restore_session_by_id(
                     .and_then(|value| value.as_str())
                     .unwrap_or(&interaction.summary)
                     .to_string();
+                let request = payload
+                    .cloned()
+                    .map(BashCommandInput::from_value)
+                    .transpose()
+                    .unwrap_or(None)
+                    .unwrap_or(BashCommandInput {
+                        command: Some(command.clone()),
+                        program: None,
+                        args: Vec::new(),
+                        cwd: None,
+                        env: Default::default(),
+                        allow_net: payload
+                            .and_then(|payload| payload.get("allow_net"))
+                            .and_then(|value| value.as_bool())
+                            .unwrap_or(false),
+                    });
                 agent.pending_approval = Some(PendingApproval {
                     tool_use_id: payload
                         .and_then(|payload| payload.get("tool_use_id"))
                         .and_then(|value| value.as_str())
                         .unwrap_or("restored")
                         .to_string(),
-                    command,
-                    allow_net: payload
-                        .and_then(|payload| payload.get("allow_net"))
-                        .and_then(|value| value.as_bool())
-                        .unwrap_or(false),
+                    request,
                 });
             }
             ("request_input", "completed") => {

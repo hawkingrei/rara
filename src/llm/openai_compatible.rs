@@ -1,8 +1,10 @@
 use async_trait::async_trait;
 use anyhow::{anyhow, Result};
+use secrecy::{ExposeSecret, SecretString};
 use serde_json::{json, Value};
 
 use crate::agent::{AnthropicResponse, ContentBlock, Message};
+use crate::redaction::{redact_secrets, sanitize_url_for_display};
 
 use super::shared::{
     extract_message_text, http_client_for_target, model_context_budget, parse_tool_arguments,
@@ -11,13 +13,13 @@ use super::shared::{
 
 pub struct OpenAiCompatibleBackend {
     pub client: reqwest::Client,
-    pub api_key: String,
+    pub api_key: Option<SecretString>,
     pub base_url: String,
     pub model: String,
 }
 
 impl OpenAiCompatibleBackend {
-    pub fn new(api_key: String, base_url: String, model: String) -> Result<Self> {
+    pub fn new(api_key: Option<SecretString>, base_url: String, model: String) -> Result<Self> {
         Ok(Self {
             client: http_client_for_target(&base_url)?,
             api_key,
@@ -54,13 +56,22 @@ impl LlmBackend for OpenAiCompatibleBackend {
             "{}/v1/chat/completions",
             self.base_url.trim_end_matches('/')
         ));
-        if !self.api_key.is_empty() {
-            request = request.header("Authorization", format!("Bearer {}", self.api_key));
+        if let Some(api_key) = self.api_key.as_ref().map(SecretString::expose_secret) {
+            if !api_key.is_empty() {
+                request = request.header("Authorization", format!("Bearer {api_key}"));
+            }
         }
         let res = request.json(&body).send().await?;
 
         if !res.status().is_success() {
-            return Err(anyhow!("API Error: {}", res.text().await?));
+            return Err(anyhow!(
+                "API Error at {}: {}",
+                sanitize_url_for_display(&format!(
+                    "{}/v1/chat/completions",
+                    self.base_url.trim_end_matches('/')
+                )),
+                redact_secrets(res.text().await?)
+            ));
         }
         let resp_json: Value = res.json().await?;
         let choice = &resp_json["choices"][0]["message"];
@@ -101,10 +112,22 @@ impl LlmBackend for OpenAiCompatibleBackend {
             "{}/v1/embeddings",
             self.base_url.trim_end_matches('/')
         ));
-        if !self.api_key.is_empty() {
-            request = request.header("Authorization", format!("Bearer {}", self.api_key));
+        if let Some(api_key) = self.api_key.as_ref().map(SecretString::expose_secret) {
+            if !api_key.is_empty() {
+                request = request.header("Authorization", format!("Bearer {api_key}"));
+            }
         }
         let res = request.json(&body).send().await?;
+        if !res.status().is_success() {
+            return Err(anyhow!(
+                "API Error at {}: {}",
+                sanitize_url_for_display(&format!(
+                    "{}/v1/embeddings",
+                    self.base_url.trim_end_matches('/')
+                )),
+                redact_secrets(res.text().await?)
+            ));
+        }
         let resp_json: Value = res.json().await?;
         let embedding = resp_json["data"][0]["embedding"]
             .as_array()
@@ -126,10 +149,22 @@ impl LlmBackend for OpenAiCompatibleBackend {
             "{}/v1/chat/completions",
             self.base_url.trim_end_matches('/')
         ));
-        if !self.api_key.is_empty() {
-            request = request.header("Authorization", format!("Bearer {}", self.api_key));
+        if let Some(api_key) = self.api_key.as_ref().map(SecretString::expose_secret) {
+            if !api_key.is_empty() {
+                request = request.header("Authorization", format!("Bearer {api_key}"));
+            }
         }
         let res = request.json(&body).send().await?;
+        if !res.status().is_success() {
+            return Err(anyhow!(
+                "API Error at {}: {}",
+                sanitize_url_for_display(&format!(
+                    "{}/v1/chat/completions",
+                    self.base_url.trim_end_matches('/')
+                )),
+                redact_secrets(res.text().await?)
+            ));
+        }
         let resp_json: Value = res.json().await?;
         Ok(extract_message_text(resp_json["choices"][0]["message"].get("content"))
             .unwrap_or_default())
@@ -235,7 +270,7 @@ pub struct CodexBackend {
 }
 
 impl CodexBackend {
-    pub fn new(api_key: String, base_url: String, model: String) -> Result<Self> {
+    pub fn new(api_key: Option<SecretString>, base_url: String, model: String) -> Result<Self> {
         Ok(Self {
             inner: OpenAiCompatibleBackend::new(api_key, base_url, model)?,
         })
@@ -262,7 +297,7 @@ impl LlmBackend for CodexBackend {
 }
 
 pub struct GeminiBackend {
-    pub api_key: String,
+    pub api_key: SecretString,
     pub model: String,
 }
 

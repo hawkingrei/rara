@@ -1,4 +1,5 @@
 use crate::agent::AgentEvent;
+use crate::tools::bash::BashCommandInput;
 
 use super::super::state::{RuntimePhase, TuiApp, TuiEvent};
 
@@ -92,11 +93,9 @@ fn is_exploration_tool_name(name: &str) -> bool {
 
 fn format_tool_use(name: &str, input: &serde_json::Value) -> String {
     match name {
-        "bash" => input
-            .get("command")
-            .and_then(serde_json::Value::as_str)
-            .map(|command| format!("bash {command}"))
-            .unwrap_or_else(|| format!("{name} {input}")),
+        "bash" => BashCommandInput::from_value(input.clone())
+            .map(|request| format!("bash {}", request.summary()))
+            .unwrap_or_else(|_| format!("{name} {input}")),
         "read_file" => input
             .get("path")
             .and_then(serde_json::Value::as_str)
@@ -207,11 +206,13 @@ fn first_non_empty_line(text: &str) -> &str {
 pub(super) fn format_error_chain(err: &anyhow::Error) -> String {
     let mut lines = Vec::new();
     for (idx, cause) in err.chain().enumerate() {
+        let rendered = redact_secrets(cause.to_string());
         if idx == 0 {
-            lines.push(cause.to_string());
+            lines.push(rendered);
         } else {
-            lines.push(format!("caused by: {cause}"));
+            lines.push(format!("caused by: {rendered}"));
         }
     }
     lines.join("\n")
 }
+use crate::redaction::redact_secrets;

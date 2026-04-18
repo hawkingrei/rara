@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use secrecy::{ExposeSecret, SecretString};
 use std::time::Instant;
 
 use anyhow::anyhow;
@@ -11,6 +12,7 @@ use crate::sandbox::SandboxManager;
 use crate::session::SessionManager;
 use crate::skill::SkillManager;
 use crate::tool::ToolManager;
+use crate::redaction::sanitize_url_for_display;
 use crate::tools::agent::{AgentTool, TeamCreateTool};
 use crate::tools::bash::BashTool;
 use crate::tools::context::RetrieveSessionContextTool;
@@ -28,6 +30,13 @@ use crate::workspace::WorkspaceMemory;
 
 use super::super::state::{RunningTask, RuntimePhase, TaskCompletion, TaskKind, TuiApp, TuiEvent};
 use super::events::{apply_tui_event, convert_agent_event, format_error_chain};
+
+fn restore_execute_mode_after_plan_turn(app: &mut TuiApp, agent: &mut Agent) {
+    if matches!(app.agent_execution_mode, crate::agent::AgentExecutionMode::Plan) {
+        app.set_agent_execution_mode(crate::agent::AgentExecutionMode::Execute);
+        agent.set_execution_mode(crate::agent::AgentExecutionMode::Execute);
+    }
+}
 
 pub(super) fn start_query_task(app: &mut TuiApp, prompt: String, mut agent: Agent) {
     let (sender, receiver) = mpsc::unbounded_channel();
@@ -209,28 +218,55 @@ pub(super) async fn finish_running_task_if_ready(
     }
     match completion {
         TaskCompletion::Query { agent, result } => {
-            *agent_slot = Some(agent);
-            if let Some(agent) = agent_slot.as_ref() {
-                app.sync_snapshot(agent);
-            }
+            let mut agent = agent;
             match result {
                 Ok(_) => {
+                    let finished_plan_turn =
+                        matches!(app.agent_execution_mode, crate::agent::AgentExecutionMode::Plan);
+                    if finished_plan_turn {
+                        restore_execute_mode_after_plan_turn(app, &mut agent);
+                        app.set_pending_plan_approval(!agent.current_plan.is_empty());
+                    }
+                    *agent_slot = Some(agent);
+                    if let Some(agent) = agent_slot.as_ref() {
+                        app.sync_snapshot(agent);
+                    }
                     app.finalize_agent_stream(None);
-                    app.finalize_active_turn();
-                    app.notice = Some("Prompt finished.".into());
-                    app.set_runtime_phase(RuntimePhase::Idle, Some("prompt finished".into()));
+                    if finished_plan_turn && app.has_pending_plan_approval() {
+                        app.notice = Some("Plan ready for approval.".into());
+                        app.set_runtime_phase(
+                            RuntimePhase::Idle,
+                            Some("awaiting plan approval".into()),
+                        );
+                    } else {
+                        if finished_plan_turn {
+                            app.push_notice("Planning finished. Returned to execute mode.");
+                        }
+                        app.finalize_active_turn();
+                        app.notice = Some("Prompt finished.".into());
+                        app.set_runtime_phase(RuntimePhase::Idle, Some("prompt finished".into()));
+                    }
                 }
                 Err(err) => {
+                    restore_execute_mode_after_plan_turn(app, &mut agent);
+                    app.set_pending_plan_approval(false);
+                    *agent_slot = Some(agent);
+                    if let Some(agent) = agent_slot.as_ref() {
+                        app.sync_snapshot(agent);
+                    }
                     app.finalize_agent_stream(None);
                     app.set_runtime_phase(RuntimePhase::Failed, Some("query failed".into()));
-                    let mut message = format!("Query failed: {err}");
+                    let mut message = format!("Query failed:\n{}", format_error_chain(&err));
                     if app.config.provider == "ollama" {
                         let base_url = app
                             .config
                             .base_url
                             .as_deref()
                             .unwrap_or("http://localhost:11434");
-                        message.push_str(&format!("\nbase_url={base_url}"));
+                        message.push_str(&format!(
+                            "\nbase_url={}",
+                            sanitize_url_for_display(base_url)
+                        ));
                     }
                     app.push_entry("System", message.clone());
                     app.push_notice(message);
@@ -270,7 +306,7 @@ pub(super) async fn finish_running_task_if_ready(
                 }
                 Err(err) => {
                     app.set_runtime_phase(RuntimePhase::Failed, Some("compact failed".into()));
-                    let message = format!("Compaction failed: {err}");
+                    let message = format!("Compaction failed:\n{}", format_error_chain(&err));
                     app.push_entry("System", message.clone());
                     app.push_notice(message);
                 }
@@ -310,17 +346,17 @@ pub(super) async fn finish_running_task_if_ready(
         },
         TaskCompletion::OAuth { result } => match result {
             Ok(access_token) => {
-                app.config.api_key = Some(access_token);
+                app.config.set_api_key(access_token.expose_secret().to_string());
                 app.config.provider = "codex".into();
                 if app.config.model.is_none() {
                     app.config.model = Some("codex".into());
                 }
                 app.config_manager.save(&app.config)?;
-                app.setup_status = Some("Saved OAuth token.".into());
+                app.setup_status = Some("Saved OAuth token to local config.".into());
                 app.notice = app.setup_status.clone();
                 app.set_runtime_phase(RuntimePhase::OAuthSaved, Some("oauth token saved".into()));
                 app.overlay = None;
-                app.push_entry("Runtime", "Saved OAuth token.");
+                app.push_entry("Runtime", "Saved OAuth token to local config.");
                 start_rebuild_task(app);
             }
             Err(err) => {
@@ -367,7 +403,7 @@ fn emit_query_heartbeat(app: &mut TuiApp) {
 async fn run_oauth_login(
     oauth_manager: Arc<OAuthManager>,
     sender: mpsc::UnboundedSender<TuiEvent>,
-) -> anyhow::Result<String> {
+) -> anyhow::Result<SecretString> {
     let (verifier, challenge) = oauth_manager.generate_pkce();
     let (port, receiver) = oauth_manager.start_callback_server().await?;
     let auth_url = oauth_manager.get_authorize_url(&challenge, port);
@@ -423,13 +459,15 @@ async fn rebuild_agent_with_progress(
         skill_manager_arc,
     );
 
-    Ok(Agent::new(
+    let mut agent = Agent::new(
         tool_manager,
         backend_arc,
         vdb,
         session_manager,
         workspace,
-    ))
+    );
+    agent.set_prompt_config(crate::prompt::PromptRuntimeConfig::from_config(config));
+    Ok(agent)
 }
 
 fn create_full_tool_manager(
