@@ -1,22 +1,24 @@
 mod state_presets;
 
+use ratatui::text::Line;
+use serde_json::json;
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::Instant;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::task::JoinHandle;
-use std::time::Instant;
-use std::sync::Arc;
-use std::path::PathBuf;
-use serde_json::json;
-use ratatui::text::Line;
 
-use crate::agent::{Agent, AgentExecutionMode, BashApprovalMode};
-use crate::config::{ConfigManager, RaraConfig};
-use crate::redaction::redact_secrets;
-use crate::state_db::{PersistedInteraction, PersistedPlanStep, PersistedSessionSummary, PersistedTurnEntry, StateDb};
-use crate::tools::bash::BashCommandInput;
-use super::markdown_stream::MarkdownStreamCollector;
 pub use self::state_presets::{
     current_model_presets, selected_preset_idx_for_config, selected_provider_family_idx_for_config,
 };
+use super::markdown_stream::MarkdownStreamCollector;
+use crate::agent::{Agent, AgentExecutionMode, BashApprovalMode};
+use crate::config::{ConfigManager, RaraConfig};
+use crate::redaction::redact_secrets;
+use crate::state_db::{
+    PersistedInteraction, PersistedPlanStep, PersistedSessionSummary, PersistedTurnEntry, StateDb,
+};
+use crate::tools::bash::BashCommandInput;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum HelpTab {
@@ -159,10 +161,7 @@ pub enum TaskCompletion {
 }
 
 pub enum TuiEvent {
-    Transcript {
-        role: &'static str,
-        message: String,
-    },
+    Transcript { role: &'static str, message: String },
 }
 
 pub struct RunningTask {
@@ -229,6 +228,13 @@ impl AgentMarkdownStreamState {
     }
 }
 
+#[derive(Default)]
+pub struct ActiveLiveSections {
+    pub exploration_actions: Vec<String>,
+    pub exploration_notes: Vec<String>,
+    pub running_actions: Vec<String>,
+}
+
 pub struct TuiApp {
     pub input: String,
     pub committed_turns: Vec<TranscriptTurn>,
@@ -255,6 +261,8 @@ pub struct TuiApp {
     pub resume_picker_idx: usize,
     pub transcript_scroll: usize,
     pub agent_markdown_stream: Option<AgentMarkdownStreamState>,
+    pub active_live: ActiveLiveSections,
+    pub pending_planning_suggestion: Option<String>,
     pub pending_plan_approval: bool,
     pub terminal_focused: bool,
     pub state_db: Option<Arc<StateDb>>,
@@ -310,6 +318,8 @@ impl TuiApp {
             resume_picker_idx: 0,
             transcript_scroll: 0,
             agent_markdown_stream: None,
+            active_live: ActiveLiveSections::default(),
+            pending_planning_suggestion: None,
             pending_plan_approval: false,
             terminal_focused: true,
             state_db: None,
@@ -371,7 +381,8 @@ impl TuiApp {
     }
 
     pub fn cycle_local_model(&mut self) {
-        let next = (self.selected_preset_idx() + 1) % current_model_presets(self.provider_picker_idx).len();
+        let next = (self.selected_preset_idx() + 1)
+            % current_model_presets(self.provider_picker_idx).len();
         self.select_local_model(next);
     }
 
@@ -412,11 +423,13 @@ impl TuiApp {
                     question.note.clone(),
                 )
             }),
-            pending_approval: agent.pending_approval.as_ref().map(|pending| PendingApprovalSnapshot {
-                tool_use_id: pending.tool_use_id.clone(),
-                command: pending.request.summary(),
-                allow_net: pending.request.allow_net,
-                payload: pending.request.clone(),
+            pending_approval: agent.pending_approval.as_ref().map(|pending| {
+                PendingApprovalSnapshot {
+                    tool_use_id: pending.tool_use_id.clone(),
+                    command: pending.request.summary(),
+                    allow_net: pending.request.allow_net,
+                    payload: pending.request.clone(),
+                }
             }),
             pending_plan_approval: self.pending_plan_approval,
             completed_question: agent
@@ -522,6 +535,8 @@ impl TuiApp {
         self.inserted_turns = 0;
         self.transcript_scroll = 0;
         self.agent_markdown_stream = None;
+        self.clear_active_live_sections();
+        self.pending_planning_suggestion = None;
         self.pending_plan_approval = false;
         self.notice = Some("Cleared local transcript view.".into());
     }
@@ -532,9 +547,7 @@ impl TuiApp {
                 .transcript_scroll
                 .saturating_add(delta.unsigned_abs() as usize);
         } else {
-            self.transcript_scroll = self
-                .transcript_scroll
-                .saturating_sub(delta as usize);
+            self.transcript_scroll = self.transcript_scroll.saturating_sub(delta as usize);
         }
     }
 
@@ -633,6 +646,27 @@ impl TuiApp {
         self.snapshot.pending_approval.is_some()
     }
 
+    pub fn has_pending_planning_suggestion(&self) -> bool {
+        self.pending_planning_suggestion.is_some()
+    }
+
+    pub fn queue_planning_suggestion(&mut self, prompt: impl Into<String>) {
+        self.pending_planning_suggestion = Some(prompt.into());
+        self.notice = Some(
+            "This looks like a non-trivial task. Enter planning mode first or continue in execute mode."
+                .into(),
+        );
+        self.transcript_scroll = 0;
+    }
+
+    pub fn take_pending_planning_suggestion(&mut self) -> Option<String> {
+        self.pending_planning_suggestion.take()
+    }
+
+    pub fn clear_pending_planning_suggestion(&mut self) {
+        self.pending_planning_suggestion = None;
+    }
+
     pub fn has_pending_plan_approval(&self) -> bool {
         self.pending_plan_approval
     }
@@ -674,6 +708,7 @@ impl TuiApp {
     fn commit_active_turn(&mut self) {
         self.finalize_agent_stream(None);
         if self.active_turn.entries.is_empty() {
+            self.clear_active_live_sections();
             return;
         }
         let turn = std::mem::take(&mut self.active_turn);
@@ -681,6 +716,7 @@ impl TuiApp {
         self.persist_turn(ordinal, &turn);
         self.committed_turns.push(turn);
         self.transcript_scroll = 0;
+        self.clear_active_live_sections();
     }
 
     pub fn finalize_active_turn(&mut self) {
@@ -693,6 +729,47 @@ impl TuiApp {
         self.inserted_turns = 0;
         self.transcript_scroll = 0;
         self.agent_markdown_stream = None;
+        self.clear_active_live_sections();
+    }
+
+    pub fn clear_active_live_sections(&mut self) {
+        self.active_live = ActiveLiveSections::default();
+    }
+
+    pub fn record_exploration_action(&mut self, action: impl Into<String>) {
+        let action = action.into();
+        if !self
+            .active_live
+            .exploration_actions
+            .iter()
+            .any(|item| item == &action)
+        {
+            self.active_live.exploration_actions.push(action);
+        }
+    }
+
+    pub fn record_exploration_note(&mut self, note: impl Into<String>) {
+        let note = note.into();
+        if !self
+            .active_live
+            .exploration_notes
+            .iter()
+            .any(|item| item == &note)
+        {
+            self.active_live.exploration_notes.push(note);
+        }
+    }
+
+    pub fn record_running_action(&mut self, action: impl Into<String>) {
+        let action = action.into();
+        if !self
+            .active_live
+            .running_actions
+            .iter()
+            .any(|item| item == &action)
+        {
+            self.active_live.running_actions.push(action);
+        }
     }
 
     pub fn attach_state_db(&mut self, state_db: Arc<StateDb>) {
@@ -780,11 +857,9 @@ impl TuiApp {
                 kind: "plan_approval".to_string(),
                 status: "pending".to_string(),
                 title: "Plan Ready".to_string(),
-                summary: self
-                    .snapshot
-                    .plan_explanation
-                    .clone()
-                    .unwrap_or_else(|| "Review the proposed plan before implementation.".to_string()),
+                summary: self.snapshot.plan_explanation.clone().unwrap_or_else(|| {
+                    "Review the proposed plan before implementation.".to_string()
+                }),
                 payload: None,
             });
         }

@@ -10,18 +10,19 @@ use std::path::Path;
 use textwrap::Options;
 use unicode_width::UnicodeWidthStr;
 
-use super::custom_terminal::Frame;
-use super::command::{
-    api_key_status, command_detail_text, command_spec_by_index, general_help_text, help_text,
-    current_turn_preview, download_status_text, matching_commands, model_help_text, palette_command_by_index,
-    palette_commands, quick_actions_text, recent_transcript_preview, status_prompt_sources_text,
-    status_plan_text, status_request_user_input_text, status_resources_text, status_runtime_text, status_workspace_text,
-};
-use super::line_utils::prefix_lines;
 pub(crate) use self::cells::{ActiveCell, HistoryCell};
 use self::cells::{ActiveTurnCell, CommittedTurnCell, StartupCardCell};
+use super::command::{
+    api_key_status, command_detail_text, command_spec_by_index, current_turn_preview,
+    download_status_text, general_help_text, help_text, matching_commands, model_help_text,
+    palette_command_by_index, palette_commands, quick_actions_text, recent_transcript_preview,
+    status_plan_text, status_prompt_sources_text, status_request_user_input_text,
+    status_resources_text, status_runtime_text, status_workspace_text,
+};
+use super::custom_terminal::Frame;
+use super::line_utils::prefix_lines;
 use super::state::{
-    current_model_presets, HelpTab, Overlay, PROVIDER_FAMILIES, TaskKind, TranscriptEntry, TuiApp,
+    current_model_presets, HelpTab, Overlay, TaskKind, TranscriptEntry, TuiApp, PROVIDER_FAMILIES,
 };
 
 pub fn render(f: &mut Frame, app: &TuiApp) {
@@ -48,7 +49,8 @@ pub fn desired_viewport_height(app: &TuiApp, _width: u16, rows: u16) -> u16 {
     }
 
     let bottom_pane_height = 5u16;
-    let has_active_content = !app.active_turn.entries.is_empty();
+    let has_active_content =
+        !app.active_turn.entries.is_empty() || app.has_pending_planning_suggestion();
     if !has_active_content {
         return bottom_pane_height.clamp(1, rows.max(1));
     }
@@ -58,7 +60,11 @@ pub fn desired_viewport_height(app: &TuiApp, _width: u16, rows: u16) -> u16 {
 fn render_bottom_pane(f: &mut Frame, app: &TuiApp, area: Rect) -> Option<(u16, u16)> {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Min(3), Constraint::Length(1)])
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Min(3),
+            Constraint::Length(1),
+        ])
         .split(area);
     render_activity_bar(f, app, chunks[0]);
     let cursor = render_composer(f, app, chunks[1]);
@@ -67,7 +73,8 @@ fn render_bottom_pane(f: &mut Frame, app: &TuiApp, area: Rect) -> Option<(u16, u
 }
 
 fn render_transcript(f: &mut Frame, app: &TuiApp, area: Rect) {
-    if !app.has_any_transcript() {
+    let active_lines = active_turn_cell(app).display_lines(area.width);
+    if !app.has_any_transcript() && active_lines.is_empty() {
         if app.startup_card_inserted {
             f.render_widget(Paragraph::new(Vec::<Line<'static>>::new()), area);
             return;
@@ -75,13 +82,17 @@ fn render_transcript(f: &mut Frame, app: &TuiApp, area: Rect) {
         let lines = vec![
             Line::from(Span::styled(
                 "Ready.",
-                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
             )),
             Line::from("Use the input bar below to start a task or run a local command."),
             Line::from(""),
             Line::from(Span::styled(
                 "Start with:",
-                Style::default().fg(Color::LightBlue).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::LightBlue)
+                    .add_modifier(Modifier::BOLD),
             )),
             Line::from("  /help    browse built-in commands and runtime hints"),
             Line::from("  /search  grep the workspace without going through the model"),
@@ -91,7 +102,9 @@ fn render_transcript(f: &mut Frame, app: &TuiApp, area: Rect) {
             Line::from(""),
             Line::from(Span::styled(
                 "Prompt ideas:",
-                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
             )),
             Line::from("  Explain this repository structure."),
             Line::from("  Find the main agent loop and summarize it."),
@@ -100,10 +113,8 @@ fn render_transcript(f: &mut Frame, app: &TuiApp, area: Rect) {
         return;
     }
 
-    let mut lines = Vec::new();
-    lines.extend(active_turn_cell(app).display_lines(area.width));
     f.render_widget(
-        Paragraph::new(lines)
+        Paragraph::new(active_lines)
             .wrap(Wrap { trim: false })
             .scroll((app.transcript_scroll as u16, 0)),
         area,
@@ -131,7 +142,10 @@ pub fn active_turn_cell<'a>(app: &'a TuiApp) -> ActiveTurnCell<'a> {
 }
 
 pub fn startup_card_cell(app: &TuiApp) -> StartupCardCell {
-    StartupCardCell::new(app.current_model_label().to_string(), display_directory_for_startup(app))
+    StartupCardCell::new(
+        app.current_model_label().to_string(),
+        display_directory_for_startup(app),
+    )
 }
 
 pub(crate) fn startup_card_lines(app: &TuiApp, width: u16) -> Vec<Line<'static>> {
@@ -148,6 +162,39 @@ fn current_turn_exploration_summary(
         app.is_busy() && prefer_live_label,
         app.runtime_phase_detail.as_deref(),
     )
+}
+
+fn exploration_note_lines(current_turn: &[&TranscriptEntry]) -> Vec<String> {
+    let mut notes = Vec::new();
+    for entry in current_turn {
+        if entry.role != "Agent" {
+            continue;
+        }
+        for line in entry
+            .message
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+        {
+            if line.starts_with("/search ")
+                || line.starts_with("/compact ")
+                || line.starts_with("/plan ")
+                || line.starts_with("/quit ")
+                || line.starts_with("key=")
+                || line.starts_with("history=")
+                || line.starts_with("tokens=")
+                || line.starts_with("ctx~=")
+                || line.starts_with("waiting for model response")
+            {
+                continue;
+            }
+            if notes.last().is_some_and(|existing| existing == line) {
+                continue;
+            }
+            notes.push(line.to_string());
+        }
+    }
+    notes
 }
 
 pub(crate) fn current_turn_exploration_summary_from_entries(
@@ -172,6 +219,10 @@ pub(crate) fn current_turn_exploration_summary_from_entries(
         .into_iter()
         .map(|action| format!("└ {action}"))
         .collect::<Vec<_>>();
+
+    for note in exploration_note_lines(current_turn) {
+        lines.push(format!("└ {note}"));
+    }
 
     if show_live_detail {
         lines.push(format!(
@@ -216,7 +267,11 @@ pub(crate) fn current_turn_tool_summary(
     Some(lines.join("\n"))
 }
 
-pub(crate) fn prefixed_message_lines(role: &str, message: &str, max_lines: usize) -> Vec<Line<'static>> {
+pub(crate) fn prefixed_message_lines(
+    role: &str,
+    message: &str,
+    max_lines: usize,
+) -> Vec<Line<'static>> {
     let message_lines = message.lines().collect::<Vec<_>>();
     if message_lines.is_empty() {
         return vec![Line::from(format!("{role}:"))];
@@ -325,7 +380,10 @@ pub(crate) fn rendered_markdown_lines(
 }
 
 fn is_exploration_tool(name: &str) -> bool {
-    matches!(name, "list_files" | "read_file" | "glob" | "grep" | "search_files")
+    matches!(
+        name,
+        "list_files" | "read_file" | "glob" | "grep" | "search_files"
+    )
 }
 
 fn exploration_action_label(message: &str) -> Option<String> {
@@ -333,11 +391,42 @@ fn exploration_action_label(message: &str) -> Option<String> {
     let name = parts.next()?;
     let rest = parts.collect::<Vec<_>>().join(" ");
     match name {
-        "list_files" => Some(format!("List {}", if rest.is_empty() { "." } else { rest.as_str() })),
-        "read_file" => Some(format!("Read {}", if rest.is_empty() { "file" } else { rest.as_str() })),
-        "glob" => Some(format!("Glob {}", if rest.is_empty() { "workspace" } else { rest.as_str() })),
-        "grep" => Some(format!("Search {}", if rest.is_empty() { "workspace" } else { rest.as_str() })),
-        "search_files" => Some(format!("Search files {}", if rest.is_empty() { "workspace" } else { rest.as_str() })),
+        "list_files" => Some(format!(
+            "List {}",
+            if rest.is_empty() { "." } else { rest.as_str() }
+        )),
+        "read_file" => Some(format!(
+            "Read {}",
+            if rest.is_empty() {
+                "file"
+            } else {
+                rest.as_str()
+            }
+        )),
+        "glob" => Some(format!(
+            "Glob {}",
+            if rest.is_empty() {
+                "workspace"
+            } else {
+                rest.as_str()
+            }
+        )),
+        "grep" => Some(format!(
+            "Search {}",
+            if rest.is_empty() {
+                "workspace"
+            } else {
+                rest.as_str()
+            }
+        )),
+        "search_files" => Some(format!(
+            "Search files {}",
+            if rest.is_empty() {
+                "workspace"
+            } else {
+                rest.as_str()
+            }
+        )),
         _ => None,
     }
 }
@@ -351,17 +440,51 @@ fn tool_action_label(message: &str) -> Option<String> {
 
     let rest = parts.collect::<Vec<_>>().join(" ");
     match name {
-        "bash" => Some(format!("Run {}", if rest.is_empty() { "command" } else { rest.as_str() })),
+        "bash" => Some(format!(
+            "Run {}",
+            if rest.is_empty() {
+                "command"
+            } else {
+                rest.as_str()
+            }
+        )),
         "apply_patch" => Some("Apply patch".to_string()),
-        "write_file" => Some(format!("Write {}", if rest.is_empty() { "file" } else { rest.as_str() })),
-        "replace" => Some(format!("Edit {}", if rest.is_empty() { "file" } else { rest.as_str() })),
-        "web_fetch" => Some(format!("Fetch {}", if rest.is_empty() { "resource" } else { rest.as_str() })),
-        other => Some(format!("Run {}", if rest.is_empty() { other } else { message })),
+        "write_file" => Some(format!(
+            "Write {}",
+            if rest.is_empty() {
+                "file"
+            } else {
+                rest.as_str()
+            }
+        )),
+        "replace" => Some(format!(
+            "Edit {}",
+            if rest.is_empty() {
+                "file"
+            } else {
+                rest.as_str()
+            }
+        )),
+        "web_fetch" => Some(format!(
+            "Fetch {}",
+            if rest.is_empty() {
+                "resource"
+            } else {
+                rest.as_str()
+            }
+        )),
+        other => Some(format!(
+            "Run {}",
+            if rest.is_empty() { other } else { message }
+        )),
     }
 }
 
 fn render_activity_bar(f: &mut Frame, app: &TuiApp, area: Rect) {
-    let (label, color) = if matches!(app.runtime_phase, super::state::RuntimePhase::RebuildingBackend) {
+    let (label, color) = if matches!(
+        app.runtime_phase,
+        super::state::RuntimePhase::RebuildingBackend
+    ) {
         ("Downloading", Color::LightBlue)
     } else if app.is_busy() {
         ("Working", Color::Yellow)
@@ -417,7 +540,12 @@ fn render_composer(f: &mut Frame, app: &TuiApp, area: Rect) -> Option<(u16, u16)
         .split(area);
     let composer_lines = if app.input.is_empty() {
         vec![Line::from(vec![
-            Span::styled("› ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "› ",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled(
                 "Ask about the repo, request a code change, or type ",
                 Style::default().fg(Color::DarkGray),
@@ -435,7 +563,12 @@ fn render_composer(f: &mut Frame, app: &TuiApp, area: Rect) -> Option<(u16, u16)
             .lines()
             .map(|line| {
                 Line::from(vec![
-                    Span::styled("› ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                    Span::styled(
+                        "› ",
+                        Style::default()
+                            .fg(Color::Cyan)
+                            .add_modifier(Modifier::BOLD),
+                    ),
                     Span::raw(line.to_string()),
                 ])
             })
@@ -454,15 +587,18 @@ fn render_composer(f: &mut Frame, app: &TuiApp, area: Rect) -> Option<(u16, u16)
         "busy  wait for the current task to finish"
     } else if app.has_pending_approval() {
         "approval pending  1 once  2 always  3 suggestion"
+    } else if app.has_pending_planning_suggestion() {
+        "planning suggested  1 enter planning mode  2 continue in execute mode"
     } else if app.snapshot.pending_question.is_some() {
         "question pending  press 1/2/3 or type a reply"
     } else if app.agent_execution_mode_label() == "plan" {
-        "plan mode  /plan return to execute"
+        "planning mode  analyze, refine, or finalize a plan"
     } else {
-        "/search grep  /compact summarize history  /plan toggle  /quit exit"
+        "/search grep  /compact summarize history  /plan enter planning mode  /quit exit"
     };
     f.render_widget(
-        Paragraph::new(Span::styled(hint, Style::default().fg(Color::Gray))).alignment(Alignment::Left),
+        Paragraph::new(Span::styled(hint, Style::default().fg(Color::Gray)))
+            .alignment(Alignment::Left),
         chunks[1],
     );
     Some(composer_cursor_position(app.input.as_str(), chunks[0]))
@@ -470,11 +606,7 @@ fn render_composer(f: &mut Frame, app: &TuiApp, area: Rect) -> Option<(u16, u16)
 
 fn render_footer(f: &mut Frame, app: &TuiApp, area: Rect) {
     let context = match app.snapshot.context_window_tokens {
-        Some(window) => format!(
-            "ctx~={}/{}",
-            app.snapshot.estimated_history_tokens,
-            window
-        ),
+        Some(window) => format!("ctx~={}/{}", app.snapshot.estimated_history_tokens, window),
         None => format!("ctx~={}", app.snapshot.estimated_history_tokens),
     };
     let summary = format!(
@@ -487,8 +619,11 @@ fn render_footer(f: &mut Frame, app: &TuiApp, area: Rect) {
         context,
     );
     f.render_widget(
-        Paragraph::new(Line::from(Span::styled(summary, Style::default().fg(Color::DarkGray))))
-            .alignment(Alignment::Right),
+        Paragraph::new(Line::from(Span::styled(
+            summary,
+            Style::default().fg(Color::DarkGray),
+        )))
+        .alignment(Alignment::Right),
         area,
     );
 }
@@ -537,7 +672,11 @@ fn render_overlay(f: &mut Frame, app: &TuiApp, overlay: Overlay) -> Option<(u16,
 fn render_help_modal(f: &mut Frame, app: &TuiApp, area: Rect, tab: HelpTab) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(3), Constraint::Min(10), Constraint::Length(2)])
+        .constraints([
+            Constraint::Length(3),
+            Constraint::Min(10),
+            Constraint::Length(2),
+        ])
         .split(area);
     let titles = ["General", "Commands", "Runtime"]
         .into_iter()
@@ -552,7 +691,11 @@ fn render_help_modal(f: &mut Frame, app: &TuiApp, area: Rect, tab: HelpTab) {
         Tabs::new(titles)
             .block(Block::default().borders(Borders::ALL).title(" Help "))
             .select(selected)
-            .highlight_style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            .highlight_style(
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
         chunks[0],
     );
     match tab {
@@ -575,7 +718,9 @@ fn render_help_modal(f: &mut Frame, app: &TuiApp, area: Rect, tab: HelpTab) {
                 .enumerate()
                 .map(|(idx, spec)| {
                     let style = if idx == app.command_palette_idx {
-                        Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+                        Style::default()
+                            .fg(Color::Cyan)
+                            .add_modifier(Modifier::BOLD)
                     } else {
                         Style::default()
                     };
@@ -586,8 +731,11 @@ fn render_help_modal(f: &mut Frame, app: &TuiApp, area: Rect, tab: HelpTab) {
                 .map(command_detail_text)
                 .unwrap_or_else(help_text);
             f.render_widget(
-                List::new(items)
-                    .block(Block::default().borders(Borders::LEFT | Borders::RIGHT).title(" Commands ")),
+                List::new(items).block(
+                    Block::default()
+                        .borders(Borders::LEFT | Borders::RIGHT)
+                        .title(" Commands "),
+                ),
                 inner[0],
             );
             f.render_widget(
@@ -604,7 +752,11 @@ fn render_help_modal(f: &mut Frame, app: &TuiApp, area: Rect, tab: HelpTab) {
                 .split(chunks[1]);
             let left = Layout::default()
                 .direction(Direction::Vertical)
-                .constraints([Constraint::Length(8), Constraint::Length(6), Constraint::Min(5)])
+                .constraints([
+                    Constraint::Length(8),
+                    Constraint::Length(6),
+                    Constraint::Min(5),
+                ])
                 .split(inner[0]);
             let right = Layout::default()
                 .direction(Direction::Vertical)
@@ -612,26 +764,42 @@ fn render_help_modal(f: &mut Frame, app: &TuiApp, area: Rect, tab: HelpTab) {
                 .split(inner[1]);
             f.render_widget(
                 Paragraph::new(status_runtime_text(app))
-                .block(Block::default().borders(Borders::LEFT | Borders::RIGHT).title(" Runtime "))
-                .wrap(Wrap { trim: false }),
+                    .block(
+                        Block::default()
+                            .borders(Borders::LEFT | Borders::RIGHT)
+                            .title(" Runtime "),
+                    )
+                    .wrap(Wrap { trim: false }),
                 left[0],
             );
             f.render_widget(
                 Paragraph::new(status_workspace_text(app))
-                .block(Block::default().borders(Borders::LEFT | Borders::RIGHT).title(" Workspace "))
-                .wrap(Wrap { trim: false }),
+                    .block(
+                        Block::default()
+                            .borders(Borders::LEFT | Borders::RIGHT)
+                            .title(" Workspace "),
+                    )
+                    .wrap(Wrap { trim: false }),
                 left[1],
             );
             f.render_widget(
                 Paragraph::new(status_prompt_sources_text(app))
-                .block(Block::default().borders(Borders::LEFT | Borders::RIGHT).title(" Prompt Sources "))
-                .wrap(Wrap { trim: false }),
+                    .block(
+                        Block::default()
+                            .borders(Borders::LEFT | Borders::RIGHT)
+                            .title(" Prompt Sources "),
+                    )
+                    .wrap(Wrap { trim: false }),
                 left[2],
             );
             f.render_widget(
                 Paragraph::new(status_resources_text(app))
-                .block(Block::default().borders(Borders::RIGHT).title(" Resources "))
-                .wrap(Wrap { trim: false }),
+                    .block(
+                        Block::default()
+                            .borders(Borders::RIGHT)
+                            .title(" Resources "),
+                    )
+                    .wrap(Wrap { trim: false }),
                 right[0],
             );
             f.render_widget(
@@ -640,15 +808,21 @@ fn render_help_modal(f: &mut Frame, app: &TuiApp, area: Rect, tab: HelpTab) {
                     model_help_text(app),
                     recent_transcript_preview(app, 4)
                 ))
-                .block(Block::default().borders(Borders::RIGHT).title(" Models / Recent "))
+                .block(
+                    Block::default()
+                        .borders(Borders::RIGHT)
+                        .title(" Models / Recent "),
+                )
                 .wrap(Wrap { trim: false }),
                 right[1],
             );
         }
     }
     f.render_widget(
-        Paragraph::new("Esc close  1 general  2 commands  3 runtime  Up/Down move in command lists")
-            .alignment(Alignment::Center),
+        Paragraph::new(
+            "Esc close  1 general  2 commands  3 runtime  Up/Down move in command lists",
+        )
+        .alignment(Alignment::Center),
         chunks[2],
     );
 }
@@ -657,7 +831,11 @@ fn render_command_palette(f: &mut Frame, app: &TuiApp, area: Rect) {
     let query = app.input.trim_start().trim_start_matches('/');
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(3), Constraint::Min(8), Constraint::Length(2)])
+        .constraints([
+            Constraint::Length(3),
+            Constraint::Min(8),
+            Constraint::Length(2),
+        ])
         .split(area);
     let body = Layout::default()
         .direction(Direction::Horizontal)
@@ -674,12 +852,19 @@ fn render_command_palette(f: &mut Frame, app: &TuiApp, area: Rect) {
         "Use Up/Down to inspect matches. Enter runs the highlighted command immediately."
     };
     f.render_widget(
-        Paragraph::new(intro)
-            .block(Block::default().borders(Borders::ALL).title(format!(" Commands matching /{} ", query))),
+        Paragraph::new(intro).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(format!(" Commands matching /{} ", query)),
+        ),
         chunks[0],
     );
     f.render_widget(
-        List::new(items).block(Block::default().borders(Borders::LEFT | Borders::RIGHT).title(" Matches ")),
+        List::new(items).block(
+            Block::default()
+                .borders(Borders::LEFT | Borders::RIGHT)
+                .title(" Matches "),
+        ),
         body[0],
     );
     let detail = palette_command_by_index(app, query, app.command_palette_idx)
@@ -722,7 +907,9 @@ fn palette_items_for_matches(app: &TuiApp, query: &str) -> Vec<ListItem<'static>
                 *last_category = Some(spec.category);
             }
             let style = if idx == app.command_palette_idx {
-                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD)
             } else {
                 Style::default()
             };
@@ -739,7 +926,9 @@ fn command_palette_item(
     spec: &super::state::CommandSpec,
 ) -> ListItem<'static> {
     let style = if index == selected_index {
-        Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD)
     } else {
         Style::default()
     };
@@ -753,11 +942,22 @@ fn command_palette_item(
 fn render_status_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(8), Constraint::Length(6), Constraint::Length(8), Constraint::Length(8), Constraint::Min(6), Constraint::Length(2)])
+        .constraints([
+            Constraint::Length(8),
+            Constraint::Length(6),
+            Constraint::Length(8),
+            Constraint::Length(8),
+            Constraint::Min(6),
+            Constraint::Length(2),
+        ])
         .split(area);
     let top = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(34), Constraint::Percentage(33), Constraint::Percentage(33)])
+        .constraints([
+            Constraint::Percentage(34),
+            Constraint::Percentage(33),
+            Constraint::Percentage(33),
+        ])
         .split(chunks[0]);
     let middle = Layout::default()
         .direction(Direction::Horizontal)
@@ -783,12 +983,19 @@ fn render_status_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
     );
     f.render_widget(
         Paragraph::new(status_prompt_sources_text(app))
-            .block(Block::default().borders(Borders::ALL).title(" Prompt Sources "))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(" Prompt Sources "),
+            )
             .wrap(Wrap { trim: false }),
         chunks[1],
     );
     let right_panel = download_status_text(app).unwrap_or_else(|| quick_actions_text().to_string());
-    let right_title = if matches!(app.runtime_phase, super::state::RuntimePhase::RebuildingBackend | super::state::RuntimePhase::BackendReady) {
+    let right_title = if matches!(
+        app.runtime_phase,
+        super::state::RuntimePhase::RebuildingBackend | super::state::RuntimePhase::BackendReady
+    ) {
         " Download "
     } else {
         " Quick Actions "
@@ -817,19 +1024,31 @@ fn render_status_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
         .split(chunks[3]);
     f.render_widget(
         Paragraph::new(status_request_user_input_text(app))
-            .block(Block::default().borders(Borders::ALL).title(" Request Input "))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(" Request Input "),
+            )
             .wrap(Wrap { trim: false }),
         lower[0],
     );
     f.render_widget(
         Paragraph::new(current_turn_preview(app, 10))
-            .block(Block::default().borders(Borders::ALL).title(" Current Turn "))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(" Current Turn "),
+            )
             .wrap(Wrap { trim: false }),
         lower[1],
     );
     f.render_widget(
         Paragraph::new(recent_transcript_preview(app, 8))
-            .block(Block::default().borders(Borders::ALL).title(" Recent Activity "))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(" Recent Activity "),
+            )
             .wrap(Wrap { trim: false }),
         chunks[4],
     );
@@ -845,12 +1064,13 @@ fn render_setup_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
         .iter()
         .enumerate()
         .map(|(idx, (label, provider, model))| {
-            let marker =
-                if app.config.provider == *provider && app.config.model.as_deref() == Some(*model) {
-                    ">"
-                } else {
-                    " "
-                };
+            let marker = if app.config.provider == *provider
+                && app.config.model.as_deref() == Some(*model)
+            {
+                ">"
+            } else {
+                " "
+            };
             format!("{marker} [{}] {label} ({provider} / {model})", idx + 1)
         })
         .collect::<Vec<_>>()
@@ -883,7 +1103,9 @@ fn render_provider_picker_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
         .enumerate()
         .map(|(idx, (_, label, detail))| {
             let style = if idx == app.provider_picker_idx {
-                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD)
             } else {
                 Style::default()
             };
@@ -897,11 +1119,21 @@ fn render_provider_picker_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
         .collect::<Vec<_>>();
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(3), Constraint::Min(6), Constraint::Length(2)])
+        .constraints([
+            Constraint::Length(3),
+            Constraint::Min(6),
+            Constraint::Length(2),
+        ])
         .split(area);
     f.render_widget(
-        Paragraph::new("Select a provider family first, then choose a concrete runtime or auth path.")
-            .block(Block::default().borders(Borders::ALL).title(" Provider Menu ")),
+        Paragraph::new(
+            "Select a provider family first, then choose a concrete runtime or auth path.",
+        )
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" Provider Menu "),
+        ),
         chunks[0],
     );
     f.render_widget(
@@ -918,7 +1150,11 @@ fn render_provider_picker_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
 fn render_resume_picker_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(3), Constraint::Min(8), Constraint::Length(2)])
+        .constraints([
+            Constraint::Length(3),
+            Constraint::Min(8),
+            Constraint::Length(2),
+        ])
         .split(area);
     let intro = if app.recent_sessions.is_empty() {
         "No persisted sessions found yet."
@@ -926,8 +1162,11 @@ fn render_resume_picker_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
         "Choose a recent session to restore its transcript, plan state, and interaction cards."
     };
     f.render_widget(
-        Paragraph::new(intro)
-            .block(Block::default().borders(Borders::ALL).title(" Resume Session ")),
+        Paragraph::new(intro).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" Resume Session "),
+        ),
         chunks[0],
     );
     let items = if app.recent_sessions.is_empty() {
@@ -938,7 +1177,9 @@ fn render_resume_picker_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
             .enumerate()
             .map(|(idx, session)| {
                 let style = if idx == app.resume_picker_idx {
-                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD)
                 } else {
                     Style::default()
                 };
@@ -966,8 +1207,7 @@ fn render_resume_picker_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
         chunks[1],
     );
     f.render_widget(
-        Paragraph::new("Esc close  Up/Down move  Enter restore")
-            .alignment(Alignment::Center),
+        Paragraph::new("Esc close  Up/Down move  Enter restore").alignment(Alignment::Center),
         chunks[2],
     );
 }
@@ -980,15 +1220,18 @@ fn render_model_picker_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
         .enumerate()
         .map(|(idx, (label, provider, model))| {
             let style = if idx == app.model_picker_idx {
-                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD)
             } else {
                 Style::default()
             };
-            let current =
-                if app.config.provider == *provider && app.config.model.as_deref() == Some(*model) {
-                    " current"
-                } else {
-                    ""
+            let current = if app.config.provider == *provider
+                && app.config.model.as_deref() == Some(*model)
+            {
+                " current"
+            } else {
+                ""
             };
             let recommendation = if provider_label == "Candle Local" && idx == 2 {
                 " recommended"
@@ -1009,7 +1252,11 @@ fn render_model_picker_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
         .collect::<Vec<_>>();
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(3), Constraint::Min(6), Constraint::Length(2)])
+        .constraints([
+            Constraint::Length(3),
+            Constraint::Min(6),
+            Constraint::Length(2),
+        ])
         .split(area);
     let help = if provider_label == "Codex" && api_key_status(&app.config) == "missing" {
         "Provider: Codex\nAuthentication is required before this preset can be used.\nEnter opens the Codex login guide."
@@ -1020,8 +1267,11 @@ fn render_model_picker_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
         )
     };
     f.render_widget(
-        Paragraph::new(help)
-            .block(Block::default().borders(Borders::ALL).title(" Model Picker ")),
+        Paragraph::new(help).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" Model Picker "),
+        ),
         chunks[0],
     );
     f.render_widget(
@@ -1034,7 +1284,7 @@ fn render_model_picker_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
         } else {
             "1/2/3 apply directly  Up/Down move  B edit base URL  Enter apply  Esc close"
         })
-            .alignment(Alignment::Center),
+        .alignment(Alignment::Center),
         chunks[2],
     );
 }
@@ -1042,7 +1292,11 @@ fn render_model_picker_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
 fn render_base_url_editor_modal(f: &mut Frame, app: &TuiApp, area: Rect) -> Option<(u16, u16)> {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(4), Constraint::Length(3), Constraint::Length(2)])
+        .constraints([
+            Constraint::Length(4),
+            Constraint::Length(3),
+            Constraint::Length(2),
+        ])
         .split(area);
     let intro = Paragraph::new(
         "Edit the Ollama base URL for this provider.\nLeave it empty to clear the override. Default: http://localhost:11434",
@@ -1050,18 +1304,25 @@ fn render_base_url_editor_modal(f: &mut Frame, app: &TuiApp, area: Rect) -> Opti
     .block(Block::default().borders(Borders::ALL).title(" Base URL "));
     let editor = Paragraph::new(app.base_url_input.as_str())
         .block(Block::default().borders(Borders::ALL).title(" Value "));
-    let footer = Paragraph::new("Enter save  Esc back to model picker")
-        .alignment(Alignment::Center);
+    let footer =
+        Paragraph::new("Enter save  Esc back to model picker").alignment(Alignment::Center);
     f.render_widget(intro, chunks[0]);
     f.render_widget(editor, chunks[1]);
     f.render_widget(footer, chunks[2]);
-    Some(editor_cursor_position(app.base_url_input.as_str(), chunks[1]))
+    Some(editor_cursor_position(
+        app.base_url_input.as_str(),
+        chunks[1],
+    ))
 }
 
 fn render_codex_auth_guide_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(8), Constraint::Min(6), Constraint::Length(2)])
+        .constraints([
+            Constraint::Length(8),
+            Constraint::Min(6),
+            Constraint::Length(2),
+        ])
         .split(area);
     let ssh_hint = if super::is_ssh_session() {
         "\n\nSSH session detected. Browser OAuth on a remote shell usually cannot complete the localhost callback. Use API key in SSH/headless sessions."
@@ -1076,7 +1337,11 @@ fn render_codex_auth_guide_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
     );
     f.render_widget(
         Paragraph::new(intro)
-            .block(Block::default().borders(Borders::ALL).title(" Codex Login "))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(" Codex Login "),
+            )
             .wrap(Wrap { trim: false }),
         chunks[0],
     );
@@ -1087,13 +1352,16 @@ fn render_codex_auth_guide_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
         app.current_model_label(),
         api_key_status(&app.config),
     ))
-    .block(Block::default().borders(Borders::LEFT | Borders::RIGHT).title(" Details "))
+    .block(
+        Block::default()
+            .borders(Borders::LEFT | Borders::RIGHT)
+            .title(" Details "),
+    )
     .wrap(Wrap { trim: false });
     f.render_widget(body, chunks[1]);
 
     f.render_widget(
-        Paragraph::new("1 OAuth  2 API key  Enter OAuth  Esc back")
-            .alignment(Alignment::Center),
+        Paragraph::new("1 OAuth  2 API key  Enter OAuth  Esc back").alignment(Alignment::Center),
         chunks[2],
     );
 }
@@ -1101,12 +1369,20 @@ fn render_codex_auth_guide_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
 fn render_api_key_editor_modal(f: &mut Frame, app: &TuiApp, area: Rect) -> Option<(u16, u16)> {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(4), Constraint::Length(3), Constraint::Length(2)])
+        .constraints([
+            Constraint::Length(4),
+            Constraint::Length(3),
+            Constraint::Length(2),
+        ])
         .split(area);
     let intro = Paragraph::new(
         "Paste a Codex-compatible API key. This is the recommended path for SSH/headless sessions.",
     )
-    .block(Block::default().borders(Borders::ALL).title(" Codex API Key "))
+    .block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(" Codex API Key "),
+    )
     .wrap(Wrap { trim: false });
     let editor = Paragraph::new(app.api_key_input.as_str())
         .block(Block::default().borders(Borders::ALL).title(" Value "));
@@ -1115,7 +1391,10 @@ fn render_api_key_editor_modal(f: &mut Frame, app: &TuiApp, area: Rect) -> Optio
     f.render_widget(intro, chunks[0]);
     f.render_widget(editor, chunks[1]);
     f.render_widget(footer, chunks[2]);
-    Some(editor_cursor_position(app.api_key_input.as_str(), chunks[1]))
+    Some(editor_cursor_position(
+        app.api_key_input.as_str(),
+        chunks[1],
+    ))
 }
 
 fn composer_cursor_position(input: &str, area: Rect) -> (u16, u16) {
@@ -1227,9 +1506,12 @@ pub(crate) fn wrapped_history_line_count(lines: &[Line<'static>], width: u16) ->
 
 fn badge<'a>(label: &'a str, value: &'a str, color: Color) -> Span<'a> {
     let fg = match color {
-        Color::Black | Color::DarkGray | Color::Gray | Color::Blue | Color::Red | Color::Magenta => {
-            Color::White
-        }
+        Color::Black
+        | Color::DarkGray
+        | Color::Gray
+        | Color::Blue
+        | Color::Red
+        | Color::Magenta => Color::White,
         _ => Color::Black,
     };
     Span::styled(
@@ -1336,8 +1618,8 @@ mod tests {
 
     use crate::tui::state::TranscriptEntry;
 
-    use super::committed_turn_cell;
     use super::cells::HistoryCell;
+    use super::committed_turn_cell;
 
     #[test]
     fn committed_turn_does_not_truncate_agent_response() {
