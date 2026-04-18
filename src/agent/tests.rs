@@ -27,6 +27,18 @@ impl Tool for StubTool {
     }
 }
 
+struct ListFilesStub;
+
+#[async_trait]
+impl Tool for ListFilesStub {
+    fn name(&self) -> &str { "list_files" }
+    fn description(&self) -> &str { "Return a simple list result" }
+    fn input_schema(&self) -> Value { json!({"type":"object"}) }
+    async fn call(&self, _input: Value) -> Result<Value, ToolError> {
+        Ok(json!({ "path": ".", "entries": [] }))
+    }
+}
+
 struct SequencedBackend {
     responses: Mutex<Vec<AnthropicResponse>>,
     observed_messages: Mutex<Vec<Vec<Message>>>,
@@ -374,6 +386,59 @@ async fn continues_plan_mode_after_exploration_if_assistant_still_signals_more_w
         .history
         .iter()
         .any(|message| message.content.to_string().contains("plan_continuation_required")));
+}
+
+#[tokio::test]
+async fn continues_plan_mode_to_synthesize_plan_after_exploration_evidence() {
+    let backend = Arc::new(SequencedBackend::new(vec![
+        AnthropicResponse {
+            content: vec![ContentBlock::ToolUse {
+                id: "tool-1".to_string(),
+                name: "list_files".to_string(),
+                input: json!({}),
+            }],
+            stop_reason: Some("tool_use".to_string()),
+            usage: Some(TokenUsage::default()),
+        },
+        AnthropicResponse {
+            content: vec![ContentBlock::Text {
+                text: "I inspected the repository structure and the current planning flow.".to_string(),
+            }],
+            stop_reason: Some("end_turn".to_string()),
+            usage: Some(TokenUsage::default()),
+        },
+        AnthropicResponse {
+            content: vec![ContentBlock::Text {
+                text: "<plan>\n- [pending] Review planning continuation state\n- [pending] Tighten plan completion rules\n</plan>\nThe first pass exposed enough evidence to finalize the plan.".to_string(),
+            }],
+            stop_reason: Some("end_turn".to_string()),
+            usage: Some(TokenUsage::default()),
+        },
+    ]));
+
+    let mut tool_manager = ToolManager::new();
+    tool_manager.register(Box::new(ListFilesStub));
+    let mut agent = Agent::new(
+        tool_manager,
+        backend.clone(),
+        Arc::new(VectorDB::new("data/lancedb")),
+        Arc::new(SessionManager::new().expect("session manager")),
+        Arc::new(WorkspaceMemory::new().expect("workspace memory")),
+    );
+    agent.set_execution_mode(AgentExecutionMode::Plan);
+
+    agent
+        .query_with_mode("inspect".to_string(), super::AgentOutputMode::Silent)
+        .await
+        .expect("query should succeed");
+
+    let observed = backend.observed_messages.lock().expect("lock");
+    assert_eq!(observed.len(), 3);
+    assert!(agent
+        .history
+        .iter()
+        .any(|message| message.content.to_string().contains("plan_continuation_required")));
+    assert_eq!(agent.current_plan.len(), 2);
 }
 
 

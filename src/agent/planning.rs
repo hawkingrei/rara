@@ -344,15 +344,24 @@ impl Agent {
         plan_continuations: usize,
     ) -> bool {
         let shallow_initial_plan = plan_updated && tool_rounds == 0 && self.current_plan.len() <= 1;
+        let has_inspection_evidence = self.inspection_progress.has_any_evidence();
         let still_missing_inspection_evidence = tool_rounds > 0
-            && self.inspection_progress.has_any_evidence()
+            && !plan_updated
+            && has_inspection_evidence
             && !self.inspection_progress.has_minimum_review_evidence();
+        let needs_plan_synthesis =
+            tool_rounds > 0 && has_inspection_evidence && self.current_plan.is_empty();
         matches!(self.execution_mode, AgentExecutionMode::Plan)
-            && (continue_inspection || shallow_initial_plan || still_missing_inspection_evidence)
+            && (
+                continue_inspection
+                    || shallow_initial_plan
+                    || still_missing_inspection_evidence
+                    || needs_plan_synthesis
+            )
             && plan_continuations < MAX_PLAN_CONTINUATIONS_PER_TURN
             && self.pending_user_input.is_none()
             && self.pending_approval.is_none()
-            && (continue_inspection || !self.current_plan.is_empty())
+            && (continue_inspection || has_inspection_evidence || !self.current_plan.is_empty())
     }
 
     pub(super) fn should_continue_execute_without_tools(
@@ -566,8 +575,10 @@ impl RuntimeContinuationPhase {
             Self::PlanContinuationRequired => vec![
                 "Continue planning immediately.",
                 "Use read-only tools to inspect the repository before stopping.",
+                "If you already inspected enough code, synthesize the plan now instead of stopping with narration.",
+                "End the turn with exactly one of: <plan>, <request_user_input>, or <continue_inspection/>.",
                 "Expand the plan into multiple concrete steps grounded in the inspected code.",
-                "Only stop planning when you have either gathered enough code context or need structured user input.",
+                "Only stop planning when you have either produced the plan, requested structured user input, or explicitly requested more inspection.",
                 "Do not ask the user to continue.",
             ],
             Self::ExecutionContinuationRequired => vec![
