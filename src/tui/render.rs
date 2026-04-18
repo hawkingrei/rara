@@ -1,3 +1,5 @@
+pub(crate) mod cells;
+
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Flex, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -16,6 +18,8 @@ use super::command::{
     status_plan_text, status_request_user_input_text, status_resources_text, status_runtime_text, status_workspace_text,
 };
 use super::line_utils::prefix_lines;
+pub(crate) use self::cells::{ActiveCell, HistoryCell};
+use self::cells::{ActiveTurnCell, CommittedTurnCell, StartupCardCell};
 use super::state::{
     current_model_presets, HelpTab, Overlay, PROVIDER_FAMILIES, TaskKind, TranscriptEntry, TuiApp,
 };
@@ -97,7 +101,7 @@ fn render_transcript(f: &mut Frame, app: &TuiApp, area: Rect) {
     }
 
     let mut lines = Vec::new();
-    lines.extend(current_turn_lines(app));
+    lines.extend(active_turn_cell(app).display_lines(area.width));
     f.render_widget(
         Paragraph::new(lines)
             .wrap(Wrap { trim: false })
@@ -106,198 +110,20 @@ fn render_transcript(f: &mut Frame, app: &TuiApp, area: Rect) {
     );
 }
 
-pub fn committed_turn_lines(entries: &[TranscriptEntry], cwd: Option<&Path>) -> Vec<Line<'static>> {
-    let mut lines = Vec::new();
-    if let Some(user) = entries.iter().find(|entry| entry.role == "You") {
-        lines.extend(prefixed_message_lines("You", &user.message, 4));
-        lines.push(Line::from(""));
-    }
-
-    let entry_refs = entries.iter().collect::<Vec<_>>();
-    let has_tool_activity = entry_refs.iter().any(|entry| {
-        matches!(
-            entry.role.as_str(),
-            "Tool" | "Tool Result" | "Tool Error"
-        )
-    });
-    if let Some(summary) = current_turn_exploration_summary_from_entries(entry_refs.as_slice(), false, None) {
-        lines.push(Line::from(section_span("Explored", Color::Rgb(231, 201, 92))));
-        lines.extend(summary.lines().map(|line| Line::from(format!("  {line}"))));
-        lines.push(Line::from(""));
-    }
-
-    if let Some(summary) = current_turn_tool_summary(entry_refs.as_slice(), false, None) {
-        lines.push(Line::from(section_span("Ran", Color::LightYellow)));
-        lines.extend(summary.lines().map(|line| Line::from(format!("  {line}"))));
-        lines.push(Line::from(""));
-    }
-
-    let tail_entries: Vec<&TranscriptEntry> = if has_tool_activity {
-        entries
-            .iter()
-            .rev()
-            .filter(|entry| matches!(entry.role.as_str(), "Agent" | "System"))
-            .take(1)
-            .collect::<Vec<_>>()
-            .into_iter()
-            .rev()
-            .collect()
-    } else {
-        entries
-            .iter()
-            .filter(|entry| matches!(entry.role.as_str(), "Agent" | "System"))
-            .collect()
-    };
-
-    for entry in tail_entries {
-        let max_lines = if entry.role == "Agent" { 8 } else { 4 };
-        lines.extend(formatted_message_lines(
-            &entry.role,
-            &entry.message,
-            max_lines,
-            cwd,
-        ));
-        lines.push(Line::from(""));
-    }
-
-    while matches!(lines.last(), Some(line) if line.spans.iter().all(|span| span.content == ""))
-    {
-        lines.pop();
-    }
-    lines
+pub fn committed_turn_cell<'a>(
+    entries: &'a [TranscriptEntry],
+    cwd: Option<&'a Path>,
+) -> CommittedTurnCell<'a> {
+    CommittedTurnCell::new(entries, cwd)
 }
 
-fn current_turn_lines(app: &TuiApp) -> Vec<Line<'static>> {
-    let current_turn = app.active_turn.entries.iter().collect::<Vec<_>>();
-    if current_turn.is_empty() {
-        return Vec::new();
-    }
-    let has_tool_activity = current_turn.iter().any(|entry| {
-        matches!(
-            entry.role.as_str(),
-            "Tool" | "Tool Result" | "Tool Error"
-        )
-    });
-    let user_message = current_turn
-        .iter()
-        .find(|entry| entry.role == "You")
-        .map(|entry| entry.message.as_str())
-        .unwrap_or("");
-    let latest_agent = current_turn
-        .iter()
-        .rev()
-        .find(|entry| entry.role == "Agent")
-        .map(|entry| entry.message.as_str());
-    let streaming_agent_lines = app.agent_stream_lines();
-    let latest_system = current_turn
-        .iter()
-        .rev()
-        .find(|entry| entry.role == "System")
-        .map(|entry| entry.message.as_str());
-    let latest_tool_result = current_turn
-        .iter()
-        .rev()
-        .find(|entry| entry.role == "Tool Result" || entry.role == "Tool Error")
-        .map(|entry| (entry.role.as_str(), entry.message.as_str()));
-    let mut lines = Vec::new();
+pub fn active_turn_cell<'a>(app: &'a TuiApp) -> ActiveTurnCell<'a> {
     let cwd = (!app.snapshot.cwd.is_empty()).then(|| Path::new(app.snapshot.cwd.as_str()));
+    ActiveTurnCell::new(app, cwd)
+}
 
-    if !user_message.is_empty() {
-        lines.extend(prefixed_message_lines("You", user_message, 4));
-        lines.push(Line::from(""));
-    }
-
-    if app.agent_execution_mode_label() == "plan" {
-        lines.push(Line::from(section_span("Plan Mode", Color::LightBlue)));
-        lines.push(Line::from(""));
-    }
-
-    if let Some(summary) = current_turn_exploration_summary(app, current_turn.as_slice(), latest_agent.is_none()) {
-        let (title, color) = if app.is_busy() && latest_agent.is_none() {
-            ("Exploring", Color::Yellow)
-        } else {
-            ("Explored", Color::Rgb(231, 201, 92))
-        };
-        lines.push(Line::from(section_span(title, color)));
-        lines.extend(summary.lines().map(|line| Line::from(format!("  {line}"))));
-        lines.push(Line::from(""));
-    }
-
-    if let Some(summary) = current_turn_tool_summary(
-        current_turn.as_slice(),
-        app.is_busy() && latest_agent.is_none(),
-        app.runtime_phase_detail.as_deref(),
-    ) {
-        let (title, color) = if app.is_busy() && latest_agent.is_none() {
-            ("Running", Color::Yellow)
-        } else {
-            ("Ran", Color::LightYellow)
-        };
-        lines.push(Line::from(section_span(title, color)));
-        lines.extend(summary.lines().map(|line| Line::from(format!("  {line}"))));
-        lines.push(Line::from(""));
-    }
-
-    if !app.snapshot.plan_steps.is_empty() {
-        lines.push(Line::from(section_span("Plan", Color::LightBlue)));
-        for line in status_plan_text(app).lines().take(8) {
-            lines.push(Line::from(format!("  {line}")));
-        }
-        lines.push(Line::from(""));
-    }
-
-    if app.snapshot.pending_question.is_some() {
-        let (title, color) = if app.has_pending_approval() {
-            ("Approval", Color::Yellow)
-        } else {
-            ("Request Input", Color::LightGreen)
-        };
-        lines.push(Line::from(section_span(title, color)));
-        for line in status_request_user_input_text(app).lines().take(8) {
-            lines.push(Line::from(format!("  {line}")));
-        }
-        lines.push(Line::from("  shortcuts: press 1/2/3 to answer immediately"));
-        lines.push(Line::from(""));
-    }
-
-    if let Some((title, summary)) = app.snapshot.completed_approval.as_ref() {
-        lines.push(Line::from(section_span("Approval Completed", Color::LightGreen)));
-        lines.push(Line::from(format!("  {}: {}", title, summary)));
-        lines.push(Line::from(""));
-    }
-
-    if let Some((title, summary)) = app.snapshot.completed_question.as_ref() {
-        lines.push(Line::from(section_span("Question Answered", Color::LightGreen)));
-        lines.push(Line::from(format!("  {}: {}", title, summary)));
-        lines.push(Line::from(""));
-    }
-
-    let suppress_intermediate_agent = app.is_busy()
-        && has_tool_activity
-        && matches!(
-            app.runtime_phase,
-            super::state::RuntimePhase::RunningTool | super::state::RuntimePhase::SendingPrompt
-        );
-
-    if let Some(stream_lines) = streaming_agent_lines.filter(|_| !suppress_intermediate_agent) {
-        lines.extend(rendered_markdown_lines("Agent", stream_lines, usize::MAX));
-    } else if let Some(agent_message) = latest_agent.filter(|_| !suppress_intermediate_agent) {
-        lines.extend(formatted_message_lines("Agent", agent_message, usize::MAX, cwd));
-    } else if let Some(system_message) = latest_system {
-        lines.extend(formatted_message_lines("System", system_message, 14, cwd));
-    } else if let Some((role, tool_result)) = latest_tool_result {
-        lines.extend(prefixed_message_lines(role, tool_result, 14));
-    } else if app.is_busy() {
-        lines.push(Line::from(section_span("Working", Color::Yellow)));
-        lines.push(Line::from(format!(
-            "  {}",
-            app.runtime_phase_detail
-                .as_deref()
-                .unwrap_or("waiting for the current turn to finish")
-        )));
-    }
-
-    lines
+pub fn startup_card_cell(app: &TuiApp) -> StartupCardCell {
+    StartupCardCell::new(app.current_model_label().to_string(), display_directory_for_startup(app))
 }
 
 fn current_turn_exploration_summary(
@@ -312,7 +138,7 @@ fn current_turn_exploration_summary(
     )
 }
 
-fn current_turn_exploration_summary_from_entries(
+pub(crate) fn current_turn_exploration_summary_from_entries(
     current_turn: &[&TranscriptEntry],
     show_live_detail: bool,
     live_detail: Option<&str>,
@@ -345,7 +171,7 @@ fn current_turn_exploration_summary_from_entries(
     Some(lines.join("\n"))
 }
 
-fn current_turn_tool_summary(
+pub(crate) fn current_turn_tool_summary(
     current_turn: &[&TranscriptEntry],
     show_live_detail: bool,
     live_detail: Option<&str>,
@@ -378,7 +204,7 @@ fn current_turn_tool_summary(
     Some(lines.join("\n"))
 }
 
-fn prefixed_message_lines(role: &str, message: &str, max_lines: usize) -> Vec<Line<'static>> {
+pub(crate) fn prefixed_message_lines(role: &str, message: &str, max_lines: usize) -> Vec<Line<'static>> {
     let message_lines = message.lines().collect::<Vec<_>>();
     if message_lines.is_empty() {
         return vec![Line::from(format!("{role}:"))];
@@ -406,7 +232,7 @@ fn prefixed_message_lines(role: &str, message: &str, max_lines: usize) -> Vec<Li
     lines
 }
 
-fn formatted_message_lines(
+pub(crate) fn formatted_message_lines(
     role: &str,
     message: &str,
     max_lines: usize,
@@ -1368,7 +1194,7 @@ fn command_preview_text(spec: &super::state::CommandSpec) -> String {
     format!("{}\n\n{}", spec.usage, spec.summary)
 }
 
-fn section_span<'a>(title: &'a str, color: Color) -> Span<'a> {
+pub(crate) fn section_span<'a>(title: &'a str, color: Color) -> Span<'a> {
     Span::styled(
         format!(" {} ", title),
         Style::default()
@@ -1376,6 +1202,15 @@ fn section_span<'a>(title: &'a str, color: Color) -> Span<'a> {
             .bg(color)
             .add_modifier(Modifier::BOLD),
     )
+}
+
+pub(crate) fn wrapped_history_line_count(lines: &[Line<'static>], width: u16) -> u16 {
+    let wrap_width = usize::from(width.max(1));
+    lines
+        .iter()
+        .map(|line| line.width().max(1).div_ceil(wrap_width))
+        .sum::<usize>()
+        .max(1) as u16
 }
 
 fn badge<'a>(label: &'a str, value: &'a str, color: Color) -> Span<'a> {
@@ -1392,4 +1227,130 @@ fn badge<'a>(label: &'a str, value: &'a str, color: Color) -> Span<'a> {
             .bg(color)
             .add_modifier(Modifier::BOLD),
     )
+}
+
+pub(crate) fn display_directory_for_startup(app: &TuiApp) -> String {
+    let cwd = if app.snapshot.cwd.is_empty() {
+        std::env::current_dir()
+            .ok()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| ".".to_string())
+    } else {
+        app.snapshot.cwd.clone()
+    };
+    if let Ok(home) = std::env::var("HOME") {
+        if let Some(stripped) = cwd.strip_prefix(&home) {
+            return format!("~{stripped}");
+        }
+    }
+    cwd
+}
+
+pub(crate) fn truncate_for_startup_card(value: &str, width: usize) -> String {
+    if display_width(value) <= width {
+        return value.to_string();
+    }
+    if width <= 1 {
+        return "…".to_string();
+    }
+    let kept = value.chars().take(width - 1).collect::<String>();
+    format!("{kept}…")
+}
+
+pub(crate) fn truncate_path_middle(value: &str, width: usize) -> String {
+    if display_width(value) <= width {
+        return value.to_string();
+    }
+    if width <= 1 {
+        return "…".to_string();
+    }
+    if width <= 5 {
+        return truncate_for_startup_card(value, width);
+    }
+
+    let keep_left = (width - 1) / 2;
+    let keep_right = width - 1 - keep_left;
+    let chars = value.chars().collect::<Vec<_>>();
+    let left = chars.iter().take(keep_left).collect::<String>();
+    let right = chars
+        .iter()
+        .rev()
+        .take(keep_right)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect::<String>();
+    format!("{left}…{right}")
+}
+
+pub(crate) fn startup_card_inner_width(width: u16) -> Option<usize> {
+    if width < 8 {
+        return None;
+    }
+    Some(std::cmp::min(width.saturating_sub(4) as usize, 56))
+}
+
+pub(crate) fn with_border(lines: Vec<Line<'static>>, inner_width: usize) -> Vec<Line<'static>> {
+    let mut out = Vec::with_capacity(lines.len() + 3);
+    let border_inner_width = inner_width + 2;
+    out.push(Line::from(format!("╭{}╮", "─".repeat(border_inner_width))));
+
+    for line in lines {
+        let used_width = line
+            .iter()
+            .map(|span| display_width(span.content.as_ref()))
+            .sum::<usize>();
+        let mut spans = Vec::with_capacity(line.spans.len() + 3);
+        spans.push(Span::from("│ "));
+        spans.extend(line.into_iter());
+        if used_width < inner_width {
+            spans.push(Span::from(" ".repeat(inner_width - used_width)));
+        }
+        spans.push(Span::from(" │"));
+        out.push(Line::from(spans));
+    }
+
+    out.push(Line::from(format!("╰{}╯", "─".repeat(border_inner_width))));
+    out
+}
+
+pub(crate) fn display_width(value: &str) -> usize {
+    UnicodeWidthStr::width(value)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use crate::tui::state::TranscriptEntry;
+
+    use super::committed_turn_cell;
+    use super::cells::HistoryCell;
+
+    #[test]
+    fn committed_turn_does_not_truncate_agent_response() {
+        let entries = vec![
+            TranscriptEntry {
+                role: "You".into(),
+                message: "Review the code".into(),
+            },
+            TranscriptEntry {
+                role: "Agent".into(),
+                message: (1..=12)
+                    .map(|idx| format!("Line {idx}"))
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            },
+        ];
+
+        let rendered = committed_turn_cell(entries.as_slice(), Some(Path::new(".")))
+            .display_lines(100)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(rendered.contains("Line 12"));
+        assert!(!rendered.contains("more line(s)"));
+    }
 }
