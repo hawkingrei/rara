@@ -14,6 +14,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::{json, Value};
 use std::sync::{Arc, Mutex};
+use tempfile::tempdir;
 
 struct StubTool;
 
@@ -269,6 +270,17 @@ async fn continues_plan_mode_after_shallow_initial_plan() {
 
 #[tokio::test]
 async fn last_query_plan_updated_tracks_only_the_final_planning_turn() {
+    let temp = tempdir().expect("tempdir");
+    let root = temp.path().to_path_buf();
+    let rara_dir = root.join(".rara");
+    std::fs::create_dir_all(rara_dir.join("rollouts")).expect("rollouts");
+    std::fs::create_dir_all(rara_dir.join("sessions")).expect("sessions");
+    let session_manager = Arc::new(SessionManager {
+        storage_dir: rara_dir.join("rollouts"),
+        legacy_storage_dir: rara_dir.join("sessions"),
+    });
+    let workspace = Arc::new(WorkspaceMemory::from_paths(root, rara_dir));
+
     let backend = Arc::new(SequencedBackend::new(vec![
         AnthropicResponse {
             content: vec![ContentBlock::Text {
@@ -292,8 +304,8 @@ async fn last_query_plan_updated_tracks_only_the_final_planning_turn() {
         tool_manager,
         backend,
         Arc::new(VectorDB::new("data/lancedb")),
-        Arc::new(SessionManager::new().expect("session manager")),
-        Arc::new(WorkspaceMemory::new().expect("workspace memory")),
+        session_manager.clone(),
+        workspace.clone(),
     );
     agent.set_execution_mode(AgentExecutionMode::Plan);
 
@@ -318,8 +330,8 @@ async fn last_query_plan_updated_tracks_only_the_final_planning_turn() {
         tool_manager,
         backend,
         Arc::new(VectorDB::new("data/lancedb")),
-        Arc::new(SessionManager::new().expect("session manager")),
-        Arc::new(WorkspaceMemory::new().expect("workspace memory")),
+        session_manager,
+        workspace,
     );
     agent.set_execution_mode(AgentExecutionMode::Plan);
 
