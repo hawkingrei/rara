@@ -37,6 +37,7 @@ impl SandboxManager {
         if !rara_dir.exists() { fs::create_dir_all(&rara_dir)?; }
         let profile_dir = rara_dir.join("sandbox");
         if !profile_dir.exists() { fs::create_dir_all(&profile_dir)?; }
+        cleanup_stale_profiles(&profile_dir)?;
 
         Ok(Self { os, profile_dir })
     }
@@ -217,10 +218,24 @@ impl SandboxManager {
     }
 }
 
+fn cleanup_stale_profiles(profile_dir: &Path) -> Result<()> {
+    for entry in fs::read_dir(profile_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if path.is_file() && file_name.starts_with("sandbox-") && file_name.ends_with(".sb") {
+            let _ = fs::remove_file(&path);
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::SandboxManager;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use tempfile::tempdir;
 
     #[test]
@@ -263,6 +278,30 @@ mod tests {
                 .iter()
                 .any(|arg| arg == &cleanup_path.display().to_string()),
             "wrapped command should reference the generated profile path"
+        );
+    }
+
+    #[test]
+    fn new_removes_stale_macos_profiles() {
+        let tempdir = tempdir().expect("tempdir");
+        let rara_dir = tempdir.path().join(".rara");
+        let profile_dir = rara_dir.join("sandbox");
+        std::fs::create_dir_all(&profile_dir).expect("profile dir");
+        let stale_profile = profile_dir.join("sandbox-stale.sb");
+        std::fs::write(&stale_profile, "(version 1)").expect("stale profile");
+
+        let current_dir = std::env::current_dir().expect("cwd");
+        std::env::set_current_dir(tempdir.path()).expect("switch cwd");
+        let manager = SandboxManager::new().expect("sandbox manager");
+        std::env::set_current_dir(current_dir).expect("restore cwd");
+
+        assert!(
+            manager.profile_dir.ends_with(Path::new(".rara").join("sandbox")),
+            "sandbox manager should point at the workspace-local sandbox dir"
+        );
+        assert!(
+            !stale_profile.exists(),
+            "stale sandbox profiles should be cleaned up on startup"
         );
     }
 

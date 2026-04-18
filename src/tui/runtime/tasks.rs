@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use secrecy::SecretString;
+use secrecy::{ExposeSecret, SecretString};
 use std::time::Instant;
 
 use anyhow::anyhow;
@@ -345,18 +345,18 @@ pub(super) async fn finish_running_task_if_ready(
             }
         },
         TaskCompletion::OAuth { result } => match result {
-            Ok(_access_token) => {
-                app.config.clear_api_key();
+            Ok(access_token) => {
+                app.config.set_api_key(access_token.expose_secret().to_string());
                 app.config.provider = "codex".into();
                 if app.config.model.is_none() {
                     app.config.model = Some("codex".into());
                 }
                 app.config_manager.save(&app.config)?;
-                app.setup_status = Some("Saved OAuth token.".into());
+                app.setup_status = Some("Saved OAuth token to local config.".into());
                 app.notice = app.setup_status.clone();
                 app.set_runtime_phase(RuntimePhase::OAuthSaved, Some("oauth token saved".into()));
                 app.overlay = None;
-                app.push_entry("Runtime", "Saved OAuth token.");
+                app.push_entry("Runtime", "Saved OAuth token to local config.");
                 start_rebuild_task(app);
             }
             Err(err) => {
