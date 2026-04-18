@@ -1,14 +1,19 @@
 use std::path::Path;
 
-use ratatui::{style::Color, text::{Line, Span}};
+use ratatui::{
+    style::Color,
+    text::{Line, Span},
+};
 
-use crate::tui::command::{status_plan_text, status_request_user_input_text};
-use crate::tui::state::{RuntimePhase, TuiApp, TranscriptEntry};
+use crate::tui::command::{
+    status_plan_text, status_planning_suggestion_text, status_request_user_input_text,
+};
+use crate::tui::state::{RuntimePhase, TranscriptEntry, TuiApp};
 
 use super::{
-    current_turn_exploration_summary, current_turn_exploration_summary_from_entries, current_turn_tool_summary,
-    formatted_message_lines, prefixed_message_lines, rendered_markdown_lines, section_span, with_border,
-    wrapped_history_line_count,
+    current_turn_exploration_summary, current_turn_exploration_summary_from_entries,
+    current_turn_tool_summary, formatted_message_lines, prefixed_message_lines,
+    rendered_markdown_lines, section_span, with_border, wrapped_history_line_count,
 };
 
 pub(crate) trait HistoryCell {
@@ -21,6 +26,12 @@ pub(crate) trait HistoryCell {
 
 pub(crate) trait ActiveCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>>;
+}
+
+fn trim_trailing_empty_lines(lines: &mut Vec<Line<'static>>) {
+    while matches!(lines.last(), Some(line) if line.spans.iter().all(|span| span.content == "")) {
+        lines.pop();
+    }
 }
 
 struct UserCell {
@@ -60,7 +71,11 @@ impl SummaryCell {
 impl HistoryCell for SummaryCell {
     fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
         let mut lines = vec![Line::from(section_span(self.title, self.color))];
-        lines.extend(self.summary.lines().map(|line| Line::from(format!("  {line}"))));
+        lines.extend(
+            self.summary
+                .lines()
+                .map(|line| Line::from(format!("  {line}"))),
+        );
         lines
     }
 }
@@ -173,14 +188,47 @@ struct ApprovalCell {
 
 impl ApprovalCell {
     fn new(title: &'static str, color: Color, lines: Vec<String>) -> Self {
-        Self { title, color, lines }
+        Self {
+            title,
+            color,
+            lines,
+        }
     }
 }
 
 impl HistoryCell for ApprovalCell {
     fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
         let mut lines = vec![Line::from(section_span(self.title, self.color))];
-        lines.extend(self.lines.iter().map(|line| Line::from(format!("  {line}"))));
+        lines.extend(
+            self.lines
+                .iter()
+                .map(|line| Line::from(format!("  {line}"))),
+        );
+        lines
+    }
+}
+
+struct PlanningSuggestionCell {
+    text: String,
+}
+
+impl PlanningSuggestionCell {
+    fn new(text: impl Into<String>) -> Self {
+        Self { text: text.into() }
+    }
+}
+
+impl HistoryCell for PlanningSuggestionCell {
+    fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
+        let mut lines = vec![Line::from(section_span(
+            "Planning Suggested",
+            Color::LightBlue,
+        ))];
+        lines.extend(
+            self.text
+                .lines()
+                .map(|line| Line::from(format!("  {line}"))),
+        );
         lines
     }
 }
@@ -218,42 +266,88 @@ impl HistoryCell for PlanModeCell {
     }
 }
 
-struct RespondingCell {
-    lines: Vec<Line<'static>>,
+struct RespondingCell<'a> {
+    content: RespondingCellContent<'a>,
 }
 
-impl RespondingCell {
-    fn from_stream(stream_lines: &[Line<'static>]) -> Self {
+enum RespondingCellContent<'a> {
+    Stream(&'a [Line<'static>]),
+    Message {
+        role: &'static str,
+        message: &'a str,
+        max_lines: usize,
+        cwd: Option<&'a Path>,
+    },
+    ToolResult {
+        role: &'a str,
+        message: &'a str,
+        max_lines: usize,
+    },
+    Working(&'a str),
+}
+
+impl<'a> RespondingCell<'a> {
+    fn from_stream(stream_lines: &'a [Line<'static>]) -> Self {
         Self {
-            lines: rendered_markdown_lines("Agent", stream_lines, usize::MAX),
+            content: RespondingCellContent::Stream(stream_lines),
         }
     }
 
-    fn from_message(role: &'static str, message: &str, max_lines: usize, cwd: Option<&Path>) -> Self {
+    fn from_message(
+        role: &'static str,
+        message: &'a str,
+        max_lines: usize,
+        cwd: Option<&'a Path>,
+    ) -> Self {
         Self {
-            lines: formatted_message_lines(role, message, max_lines, cwd),
+            content: RespondingCellContent::Message {
+                role,
+                message,
+                max_lines,
+                cwd,
+            },
         }
     }
 
-    fn from_tool_result(role: &str, message: &str, max_lines: usize) -> Self {
+    fn from_tool_result(role: &'a str, message: &'a str, max_lines: usize) -> Self {
         Self {
-            lines: prefixed_message_lines(role, message, max_lines),
+            content: RespondingCellContent::ToolResult {
+                role,
+                message,
+                max_lines,
+            },
         }
     }
 
-    fn working(detail: &str) -> Self {
+    fn working(detail: &'a str) -> Self {
         Self {
-            lines: vec![
+            content: RespondingCellContent::Working(detail),
+        }
+    }
+}
+
+impl HistoryCell for RespondingCell<'_> {
+    fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
+        match &self.content {
+            RespondingCellContent::Stream(stream_lines) => {
+                rendered_markdown_lines("Agent", stream_lines, usize::MAX)
+            }
+            RespondingCellContent::Message {
+                role,
+                message,
+                max_lines,
+                cwd,
+            } => formatted_message_lines(role, message, *max_lines, *cwd),
+            RespondingCellContent::ToolResult {
+                role,
+                message,
+                max_lines,
+            } => prefixed_message_lines(role, message, *max_lines),
+            RespondingCellContent::Working(detail) => vec![
                 Line::from(section_span("Working", Color::Yellow)),
                 Line::from(format!("  {detail}")),
             ],
         }
-    }
-}
-
-impl HistoryCell for RespondingCell {
-    fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
-        self.lines.clone()
     }
 }
 
@@ -312,7 +406,8 @@ impl HistoryCell for StartupCardCell {
             .saturating_sub(model_prefix_width)
             .saturating_sub(1)
             .saturating_sub(hint_width);
-        let model_value = super::truncate_for_startup_card(&self.model_label, model_available_width);
+        let model_value =
+            super::truncate_for_startup_card(&self.model_label, model_available_width);
         let model_value_width = super::display_width(&model_value);
         let gap_width = inner_width
             .saturating_sub(model_prefix_width)
@@ -320,7 +415,8 @@ impl HistoryCell for StartupCardCell {
             .saturating_sub(hint_width)
             .max(1);
         let directory_prefix = format!("{directory_label:<label_width$} ");
-        let directory_max_width = inner_width.saturating_sub(super::display_width(&directory_prefix));
+        let directory_max_width =
+            inner_width.saturating_sub(super::display_width(&directory_prefix));
 
         let lines = vec![
             Line::from(vec![Span::from(">_ "), Span::from("RARA")]),
@@ -356,16 +452,16 @@ impl<'a> CommittedTurnCell<'a> {
 }
 
 impl HistoryCell for CommittedTurnCell<'_> {
-    fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
         let mut cells: Vec<Box<dyn HistoryCell + '_>> = Vec::new();
         if let Some(user) = self.entries.iter().find(|entry| entry.role == "You") {
             cells.push(Box::new(UserCell::new(user.message.clone())));
         }
 
         let entry_refs = self.entries.iter().collect::<Vec<_>>();
-        let has_tool_activity = entry_refs.iter().any(|entry| {
-            matches!(entry.role.as_str(), "Tool" | "Tool Result" | "Tool Error")
-        });
+        let has_tool_activity = entry_refs
+            .iter()
+            .any(|entry| matches!(entry.role.as_str(), "Tool" | "Tool Result" | "Tool Error"));
         if let Some(summary) =
             current_turn_exploration_summary_from_entries(entry_refs.as_slice(), false, None)
         {
@@ -394,11 +490,7 @@ impl HistoryCell for CommittedTurnCell<'_> {
         };
 
         for entry in tail_entries {
-            let max_lines = if entry.role == "Agent" {
-                usize::MAX
-            } else {
-                4
-            };
+            let max_lines = if entry.role == "Agent" { usize::MAX } else { 4 };
             cells.push(Box::new(MessageCell::new(
                 &entry.role,
                 &entry.message,
@@ -412,13 +504,10 @@ impl HistoryCell for CommittedTurnCell<'_> {
             if idx > 0 {
                 lines.push(Line::from(""));
             }
-            lines.extend(cell.display_lines(u16::MAX));
+            lines.extend(cell.display_lines(width));
         }
 
-        while matches!(lines.last(), Some(line) if line.spans.iter().all(|span| span.content == ""))
-        {
-            lines.pop();
-        }
+        trim_trailing_empty_lines(&mut lines);
         lines
     }
 }
@@ -435,14 +524,38 @@ impl<'a> ActiveTurnCell<'a> {
 }
 
 impl ActiveCell for ActiveTurnCell<'_> {
-    fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
         let current_turn = self.app.active_turn.entries.iter().collect::<Vec<_>>();
+        let turn_live = self.app.is_busy()
+            || matches!(
+                self.app.runtime_phase,
+                RuntimePhase::SendingPrompt
+                    | RuntimePhase::ProcessingResponse
+                    | RuntimePhase::RunningTool
+            );
         if current_turn.is_empty() {
+            if let Some(prompt) = self.app.pending_planning_suggestion.as_deref() {
+                let cells: Vec<Box<dyn HistoryCell + '_>> = vec![
+                    Box::new(UserCell::new(prompt)),
+                    Box::new(PlanningSuggestionCell::new(
+                        status_planning_suggestion_text(self.app),
+                    )),
+                ];
+                let mut lines = Vec::new();
+                for (idx, cell) in cells.into_iter().enumerate() {
+                    if idx > 0 {
+                        lines.push(Line::from(""));
+                    }
+                    lines.extend(cell.display_lines(width));
+                }
+                trim_trailing_empty_lines(&mut lines);
+                return lines;
+            }
             return Vec::new();
         }
-        let has_tool_activity = current_turn.iter().any(|entry| {
-            matches!(entry.role.as_str(), "Tool" | "Tool Result" | "Tool Error")
-        });
+        let has_tool_activity = current_turn
+            .iter()
+            .any(|entry| matches!(entry.role.as_str(), "Tool" | "Tool Result" | "Tool Error"));
         let user_message = current_turn
             .iter()
             .find(|entry| entry.role == "You")
@@ -465,6 +578,9 @@ impl ActiveCell for ActiveTurnCell<'_> {
             .find(|entry| entry.role == "Tool Result" || entry.role == "Tool Error")
             .map(|entry| (entry.role.as_str(), entry.message.as_str()));
         let mut cells: Vec<Box<dyn HistoryCell + '_>> = Vec::new();
+        let has_live_exploration = !self.app.active_live.exploration_actions.is_empty()
+            || !self.app.active_live.exploration_notes.is_empty();
+        let has_live_running = !self.app.active_live.running_actions.is_empty();
 
         if !user_message.is_empty() {
             cells.push(Box::new(UserCell::new(user_message)));
@@ -474,26 +590,67 @@ impl ActiveCell for ActiveTurnCell<'_> {
             cells.push(Box::new(PlanModeCell));
         }
 
-        if let Some(summary) = current_turn_exploration_summary(
-            self.app,
-            current_turn.as_slice(),
-            latest_agent.is_none(),
-        ) {
-            cells.push(Box::new(ExploringCell::new(
-                summary,
-                self.app.is_busy() && latest_agent.is_none(),
-            )));
+        let exploration_summary = if has_live_exploration {
+            let mut lines = self
+                .app
+                .active_live
+                .exploration_actions
+                .iter()
+                .map(|action| format!("└ {action}"))
+                .collect::<Vec<_>>();
+            lines.extend(
+                self.app
+                    .active_live
+                    .exploration_notes
+                    .iter()
+                    .map(|note| format!("└ {note}")),
+            );
+            if turn_live {
+                lines.push(format!(
+                    "└ {}",
+                    self.app
+                        .runtime_phase_detail
+                        .as_deref()
+                        .unwrap_or("waiting for more exploration output")
+                ));
+            }
+            Some(lines.join("\n"))
+        } else {
+            current_turn_exploration_summary(self.app, current_turn.as_slice(), turn_live)
+        };
+        let exploration_active = turn_live && exploration_summary.is_some();
+        if let Some(summary) = exploration_summary {
+            cells.push(Box::new(ExploringCell::new(summary, exploration_active)));
         }
 
-        if let Some(summary) = current_turn_tool_summary(
-            current_turn.as_slice(),
-            self.app.is_busy() && latest_agent.is_none(),
-            self.app.runtime_phase_detail.as_deref(),
-        ) {
-            cells.push(Box::new(RunningCell::new(
-                summary,
-                self.app.is_busy() && latest_agent.is_none(),
-            )));
+        let running_summary = if has_live_running {
+            let mut lines = self
+                .app
+                .active_live
+                .running_actions
+                .iter()
+                .map(|action| format!("└ {action}"))
+                .collect::<Vec<_>>();
+            if turn_live {
+                lines.push(format!(
+                    "└ {}",
+                    self.app
+                        .runtime_phase_detail
+                        .as_deref()
+                        .unwrap_or("waiting for tool output")
+                ));
+            }
+            Some(lines.join("\n"))
+        } else {
+            current_turn_tool_summary(
+                current_turn.as_slice(),
+                turn_live,
+                self.app.runtime_phase_detail.as_deref(),
+            )
+        };
+        let running_active = turn_live && running_summary.is_some();
+        if let Some(summary) = running_summary {
+            cells.push(Box::new(RunningCell::new(summary, running_active)));
         }
 
         if !self.app.snapshot.plan_steps.is_empty() {
@@ -521,6 +678,12 @@ impl ActiveCell for ActiveTurnCell<'_> {
             cells.push(Box::new(ApprovalCell::new(title, color, request_lines)));
         }
 
+        if self.app.pending_planning_suggestion.is_some() {
+            cells.push(Box::new(PlanningSuggestionCell::new(
+                status_planning_suggestion_text(self.app),
+            )));
+        }
+
         if let Some((title, summary)) = self.app.snapshot.completed_approval.as_ref() {
             cells.push(Box::new(CompletionCell::new(
                 "Approval Completed",
@@ -537,12 +700,12 @@ impl ActiveCell for ActiveTurnCell<'_> {
             )));
         }
 
-        let suppress_intermediate_agent = self.app.is_busy()
+        let suppress_intermediate_agent = turn_live
             && has_tool_activity
             && matches!(
                 self.app.runtime_phase,
                 RuntimePhase::RunningTool | RuntimePhase::SendingPrompt
-        );
+            );
 
         if let Some(stream_lines) = streaming_agent_lines.filter(|_| !suppress_intermediate_agent) {
             cells.push(Box::new(RespondingCell::from_stream(stream_lines)));
@@ -561,8 +724,12 @@ impl ActiveCell for ActiveTurnCell<'_> {
                 self.cwd,
             )));
         } else if let Some((role, tool_result)) = latest_tool_result {
-            cells.push(Box::new(RespondingCell::from_tool_result(role, tool_result, 14)));
-        } else if self.app.is_busy() {
+            cells.push(Box::new(RespondingCell::from_tool_result(
+                role,
+                tool_result,
+                14,
+            )));
+        } else if turn_live {
             cells.push(Box::new(RespondingCell::working(
                 self.app
                     .runtime_phase_detail
@@ -576,9 +743,10 @@ impl ActiveCell for ActiveTurnCell<'_> {
             if idx > 0 {
                 lines.push(Line::from(""));
             }
-            lines.extend(cell.display_lines(u16::MAX));
+            lines.extend(cell.display_lines(width));
         }
 
+        trim_trailing_empty_lines(&mut lines);
         lines
     }
 }
@@ -588,7 +756,9 @@ mod tests {
     use std::path::Path;
 
     use crate::config::ConfigManager;
-    use crate::tui::state::{RuntimePhase, RuntimeSnapshot, TranscriptTurn, TuiApp, TranscriptEntry};
+    use crate::tui::state::{
+        RuntimePhase, RuntimeSnapshot, TranscriptEntry, TranscriptTurn, TuiApp,
+    };
     use tempfile::tempdir;
 
     use super::{ActiveCell, ActiveTurnCell, CommittedTurnCell, HistoryCell};
@@ -673,8 +843,8 @@ mod tests {
             .join("\n");
 
         let you_idx = rendered.find("You: Inspect the codebase").unwrap();
-        let exploring_idx = rendered.find(" Explored ").unwrap();
-        let running_idx = rendered.find(" Ran ").unwrap();
+        let exploring_idx = rendered.find(" Exploring ").unwrap();
+        let running_idx = rendered.find(" Running ").unwrap();
         let plan_idx = rendered.find(" Plan ").unwrap();
         let approval_idx = rendered.find(" Request Input ").unwrap();
 
@@ -682,5 +852,104 @@ mod tests {
         assert!(exploring_idx < running_idx);
         assert!(running_idx < plan_idx);
         assert!(plan_idx < approval_idx);
+    }
+
+    #[test]
+    fn active_turn_cell_renders_planning_suggestion_without_active_turn_entries() {
+        let temp = tempdir().unwrap();
+        let mut app = TuiApp::new(ConfigManager {
+            path: temp.path().join("config.json"),
+        });
+        app.queue_planning_suggestion("Review this repository and propose changes.");
+
+        let rendered = ActiveTurnCell::new(&app, Some(Path::new(".")))
+            .display_lines(100)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(rendered.contains("You: Review this repository and propose changes."));
+        assert!(rendered.contains(" Planning Suggested "));
+        assert!(rendered.contains("Enter planning mode"));
+        assert!(rendered.contains("Continue in execute mode"));
+    }
+
+    #[test]
+    fn active_turn_cell_keeps_exploration_notes_inside_exploring_block() {
+        let temp = tempdir().unwrap();
+        let mut app = TuiApp::new(ConfigManager {
+            path: temp.path().join("config.json"),
+        });
+        app.runtime_phase = RuntimePhase::RunningTool;
+        app.runtime_phase_detail = Some("waiting for model response · 12s elapsed".into());
+        app.active_turn = TranscriptTurn {
+            entries: vec![
+                TranscriptEntry {
+                    role: "You".into(),
+                    message: "Review this repository".into(),
+                },
+                TranscriptEntry {
+                    role: "Tool".into(),
+                    message: "read_file src/main.rs".into(),
+                },
+                TranscriptEntry {
+                    role: "Agent".into(),
+                    message:
+                        "I have inspected the repository structure and will now inspect the core modules."
+                            .into(),
+                },
+            ],
+        };
+
+        let rendered = ActiveTurnCell::new(&app, Some(Path::new(".")))
+            .display_lines(100)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(
+            rendered.contains(" Exploring "),
+            "rendered_exploration_notes=\n{rendered}"
+        );
+        assert!(rendered.contains("Read src/main.rs"));
+        assert!(rendered.contains(
+            "I have inspected the repository structure and will now inspect the core modules."
+        ));
+        assert!(rendered.contains("waiting for model response · 12s elapsed"));
+    }
+
+    #[test]
+    fn active_turn_cell_uses_stateful_live_exploration_sections() {
+        let temp = tempdir().unwrap();
+        let mut app = TuiApp::new(ConfigManager {
+            path: temp.path().join("config.json"),
+        });
+        app.runtime_phase = RuntimePhase::RunningTool;
+        app.runtime_phase_detail = Some("waiting for model response · 20s elapsed".into());
+        app.active_turn = TranscriptTurn {
+            entries: vec![TranscriptEntry {
+                role: "You".into(),
+                message: "Inspect the repository".into(),
+            }],
+        };
+        app.record_exploration_action("Read src/tools/vector.rs");
+        app.record_exploration_note("I have inspected the repository structure.");
+
+        let rendered = ActiveTurnCell::new(&app, Some(Path::new(".")))
+            .display_lines(100)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(
+            rendered.contains(" Exploring "),
+            "rendered_stateful_exploration=\n{rendered}"
+        );
+        assert!(rendered.contains("Read src/tools/vector.rs"));
+        assert!(rendered.contains("I have inspected the repository structure."));
+        assert!(rendered.contains("waiting for model response · 20s elapsed"));
     }
 }
