@@ -279,8 +279,8 @@ fn state_db_status_error(prefix: &str, message: impl Into<String>) -> String {
 }
 
 impl TuiApp {
-    pub fn new(cm: ConfigManager) -> Self {
-        let cfg = cm.load();
+    pub fn new(cm: ConfigManager) -> anyhow::Result<Self> {
+        let cfg = cm.load()?;
         let overlay = if !cfg.has_api_key() && super::provider_requires_api_key(&cfg.provider) {
             if cfg.provider == "codex" {
                 Some(Overlay::CodexAuthGuide)
@@ -292,7 +292,7 @@ impl TuiApp {
         };
         let provider_picker_idx = selected_provider_family_idx_for_config(&cfg);
         let model_picker_idx = selected_preset_idx_for_config(&cfg, provider_picker_idx);
-        Self {
+        Ok(Self {
             input: String::new(),
             committed_turns: Vec::new(),
             active_turn: TranscriptTurn::default(),
@@ -325,7 +325,7 @@ impl TuiApp {
             state_db: None,
             state_db_status: None,
             running_task: None,
-        }
+        })
     }
 
     pub fn is_busy(&self) -> bool {

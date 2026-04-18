@@ -176,10 +176,8 @@ impl WorkspaceMemory {
         let head_text = head_text.trim();
         if let Some(reference) = head_text.strip_prefix("ref: ") {
             return reference
-                .rsplit('/')
-                .next()
-                .filter(|value| !value.is_empty())
-                .unwrap_or("no-git")
+                .strip_prefix("refs/heads/")
+                .unwrap_or(reference)
                 .to_string();
         }
         if head_text.is_empty() {
@@ -294,5 +292,20 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(project_sources.len(), 1);
         assert_eq!(project_sources[0].display_path, "AGENTS.md");
+    }
+
+    #[test]
+    fn read_git_branch_keeps_full_head_ref_name() {
+        let dir = tempdir().expect("tempdir");
+        let root = dir.path().join("repo");
+        let rara_dir = root.join(".rara");
+        let git_dir = root.join(".git");
+        fs::create_dir_all(&rara_dir).expect("mkdir rara");
+        fs::create_dir_all(&git_dir).expect("mkdir git");
+        fs::write(git_dir.join("HEAD"), "ref: refs/heads/feature/fix-issue\n")
+            .expect("write head");
+
+        let workspace = WorkspaceMemory::from_paths(root, rara_dir);
+        assert_eq!(workspace.read_git_branch(), "feature/fix-issue");
     }
 }

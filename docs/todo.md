@@ -32,6 +32,7 @@ Active backlog only. Keep this file small and current.
 - [ ] Rework token accounting in `src/agent.rs` so repeated checks do not need to re-encode the full history every time.
 - [ ] Replace the fixed 100ms TUI event polling loop in `src/tui/mod.rs` with a more event-driven wakeup model when the app is idle.
 - [ ] Add terminal panic/teardown guards so alternate-screen/raw-mode cleanup is more robust on unexpected failures.
+- [ ] Reduce per-frame TUI render allocations in `src/tui/render/cells.rs`: avoid rebuilding `Vec`s and boxed trait objects on every `display_lines()` call, likely by letting history/active cells append into an existing buffer instead of returning freshly allocated collections.
 
 ## Code Organization and Docs
 

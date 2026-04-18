@@ -82,16 +82,12 @@ impl ConfigManager {
         })
     }
 
-    pub fn load(&self) -> RaraConfig {
-        if let Ok(content) = fs::read_to_string(&self.path) {
-            if let Ok(config) = serde_json::from_str(&content) {
-                return config;
-            }
-        }
-        RaraConfig {
-            provider: "mock".to_string(),
-            thinking: Some(true),
-            ..Default::default()
+    pub fn load(&self) -> Result<RaraConfig> {
+        match fs::read_to_string(&self.path) {
+            Ok(content) => serde_json::from_str(&content)
+                .map_err(|err| anyhow::anyhow!("failed to parse {}: {err}", self.path.display())),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(Self::default_config()),
+            Err(err) => Err(err.into()),
         }
     }
 
@@ -100,11 +96,21 @@ impl ConfigManager {
         fs::write(&self.path, content)?;
         Ok(())
     }
+
+    fn default_config() -> RaraConfig {
+        RaraConfig {
+            provider: "mock".to_string(),
+            thinking: Some(true),
+            ..Default::default()
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::RaraConfig;
+    use super::{ConfigManager, RaraConfig};
+    use std::fs;
+    use tempfile::tempdir;
 
     #[test]
     fn secret_api_key_roundtrips_through_json() {
@@ -126,5 +132,16 @@ mod tests {
         let mut config = RaraConfig::default();
         config.set_api_key("");
         assert!(!config.has_api_key());
+    }
+
+    #[test]
+    fn load_returns_error_for_invalid_json() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("config.json");
+        fs::write(&path, "{invalid json").expect("write invalid config");
+        let manager = ConfigManager { path };
+
+        let err = manager.load().expect_err("invalid config should fail");
+        assert!(err.to_string().contains("failed to parse"));
     }
 }

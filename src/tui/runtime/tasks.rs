@@ -613,7 +613,8 @@ mod tests {
         let temp = tempdir().unwrap();
         let app = TuiApp::new(ConfigManager {
             path: temp.path().join("config.json"),
-        });
+        })
+        .expect("build tui app");
         assert!(should_suggest_planning_mode(
             &app,
             "看一下代码，并提出修改建议"
@@ -629,7 +630,8 @@ mod tests {
         let temp = tempdir().unwrap();
         let app = TuiApp::new(ConfigManager {
             path: temp.path().join("config.json"),
-        });
+        })
+        .expect("build tui app");
         assert!(!should_suggest_planning_mode(
             &app,
             "Fix the typo in README."

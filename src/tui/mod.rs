@@ -50,7 +50,7 @@ use crate::agent::BashApprovalMode;
 pub async fn run_tui(agent: Agent, oauth_manager: OAuthManager) -> anyhow::Result<()> {
     enable_raw_mode()?;
     let initial_size = terminal_size()?;
-    let mut app = TuiApp::new(crate::config::ConfigManager::new()?);
+    let mut app = TuiApp::new(crate::config::ConfigManager::new()?)?;
     let mut viewport_height = desired_viewport_height(&app, initial_size.0, initial_size.1);
     let mut terminal = build_terminal(viewport_height)?;
     let mut agent_slot = Some(agent);

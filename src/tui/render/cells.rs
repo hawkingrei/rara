@@ -330,7 +330,7 @@ impl HistoryCell for RespondingCell<'_> {
     fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
         match &self.content {
             RespondingCellContent::Stream(stream_lines) => {
-                rendered_markdown_lines("Agent", stream_lines, usize::MAX)
+                rendered_markdown_lines("Responding", stream_lines, usize::MAX)
             }
             RespondingCellContent::Message {
                 role,
@@ -707,11 +707,13 @@ impl ActiveCell for ActiveTurnCell<'_> {
                 RuntimePhase::RunningTool | RuntimePhase::SendingPrompt
             );
 
+        let responding_role = if turn_live { "Responding" } else { "Agent" };
+
         if let Some(stream_lines) = streaming_agent_lines.filter(|_| !suppress_intermediate_agent) {
             cells.push(Box::new(RespondingCell::from_stream(stream_lines)));
         } else if let Some(agent_message) = latest_agent.filter(|_| !suppress_intermediate_agent) {
             cells.push(Box::new(RespondingCell::from_message(
-                "Agent",
+                responding_role,
                 agent_message,
                 usize::MAX,
                 self.cwd,
@@ -806,7 +808,8 @@ mod tests {
         let temp = tempdir().unwrap();
         let mut app = TuiApp::new(ConfigManager {
             path: temp.path().join("config.json"),
-        });
+        })
+        .expect("build tui app");
         app.runtime_phase = RuntimePhase::RunningTool;
         app.runtime_phase_detail = Some("waiting for tool output".into());
         app.active_turn = TranscriptTurn {
@@ -859,7 +862,8 @@ mod tests {
         let temp = tempdir().unwrap();
         let mut app = TuiApp::new(ConfigManager {
             path: temp.path().join("config.json"),
-        });
+        })
+        .expect("build tui app");
         app.queue_planning_suggestion("Review this repository and propose changes.");
 
         let rendered = ActiveTurnCell::new(&app, Some(Path::new(".")))
@@ -880,7 +884,8 @@ mod tests {
         let temp = tempdir().unwrap();
         let mut app = TuiApp::new(ConfigManager {
             path: temp.path().join("config.json"),
-        });
+        })
+        .expect("build tui app");
         app.runtime_phase = RuntimePhase::RunningTool;
         app.runtime_phase_detail = Some("waiting for model response · 12s elapsed".into());
         app.active_turn = TranscriptTurn {
@@ -925,7 +930,8 @@ mod tests {
         let temp = tempdir().unwrap();
         let mut app = TuiApp::new(ConfigManager {
             path: temp.path().join("config.json"),
-        });
+        })
+        .expect("build tui app");
         app.runtime_phase = RuntimePhase::RunningTool;
         app.runtime_phase_detail = Some("waiting for model response · 20s elapsed".into());
         app.active_turn = TranscriptTurn {
@@ -951,5 +957,39 @@ mod tests {
         assert!(rendered.contains("Read src/tools/vector.rs"));
         assert!(rendered.contains("I have inspected the repository structure."));
         assert!(rendered.contains("waiting for model response · 20s elapsed"));
+    }
+
+    #[test]
+    fn active_turn_cell_uses_responding_label_while_busy() {
+        let temp = tempdir().unwrap();
+        let mut app = TuiApp::new(ConfigManager {
+            path: temp.path().join("config.json"),
+        })
+        .expect("build tui app");
+        app.runtime_phase = RuntimePhase::ProcessingResponse;
+        app.runtime_phase_detail = Some("waiting for model response · 2s elapsed".into());
+        app.active_turn = TranscriptTurn {
+            entries: vec![
+                TranscriptEntry {
+                    role: "You".into(),
+                    message: "Review this repository".into(),
+                },
+                TranscriptEntry {
+                    role: "Agent".into(),
+                    message: "I have inspected the main module and will continue with the tool layer."
+                        .into(),
+                },
+            ],
+        };
+
+        let rendered = ActiveTurnCell::new(&app, Some(Path::new(".")))
+            .display_lines(100)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(rendered.contains("Responding"));
+        assert!(!rendered.contains("Agent\n  I have inspected"));
     }
 }
