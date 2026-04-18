@@ -20,6 +20,7 @@ open = "5.0"
 rand = "0.8"
 base64 = "0.22"
 sha2 = "0.10"
+secrecy = { version = "0.10", features = ["serde"] }
 urlencoding = "2.1"
 url = "2.5"
 ratatui = "0.30"

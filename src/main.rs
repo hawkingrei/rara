@@ -4,6 +4,8 @@ mod config;
 mod local_backend;
 mod llm;
 mod oauth;
+mod prompt;
+mod redaction;
 mod sandbox;
 mod session;
 mod skill;
@@ -23,6 +25,7 @@ use crate::llm::{
 };
 use crate::local_backend::{LocalLlmBackend, LocalProgressReporter};
 use crate::oauth::OAuthManager;
+use crate::redaction::redact_secrets;
 use crate::sandbox::SandboxManager;
 use crate::session::SessionManager;
 use crate::skill::SkillManager;
@@ -41,7 +44,7 @@ use crate::tools::web::WebFetchTool;
 use crate::tools::workspace::UpdateProjectMemoryTool;
 use crate::vectordb::VectorDB;
 use crate::workspace::WorkspaceMemory;
-use anyhow::Result;
+use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
 use std::sync::Arc;
 
@@ -76,7 +79,14 @@ enum Commands {
 }
 
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn main() {
+    if let Err(err) = main_impl().await {
+        eprintln!("{}", redact_secrets(format!("Error: {err}")));
+        std::process::exit(1);
+    }
+}
+
+async fn main_impl() -> Result<()> {
     let cli = Cli::parse();
     let config_manager = ConfigManager::new()?;
     let mut config = config_manager.load();
@@ -85,7 +95,7 @@ async fn main() -> Result<()> {
         config.provider = p;
     }
     if let Some(k) = cli.api_key {
-        config.api_key = Some(k);
+        config.set_api_key(k);
     }
     if let Some(b) = cli.base_url {
         config.base_url = Some(b);
@@ -130,10 +140,12 @@ async fn main() -> Result<()> {
         }
         Commands::Ask { prompt } => {
             let mut agent = Agent::new(tool_manager, backend_arc, vdb, session_manager, workspace);
+            agent.set_prompt_config(prompt::PromptRuntimeConfig::from_config(&config));
             agent.query(prompt).await?;
         }
         Commands::Tui => {
-            let agent = Agent::new(tool_manager, backend_arc, vdb, session_manager, workspace);
+            let mut agent = Agent::new(tool_manager, backend_arc, vdb, session_manager, workspace);
+            agent.set_prompt_config(prompt::PromptRuntimeConfig::from_config(&config));
             crate::tui::run_tui(agent, oauth_manager).await?;
         }
     }
@@ -204,41 +216,49 @@ pub(crate) async fn build_backend_with_progress(
     progress: Option<LocalProgressReporter>,
 ) -> Result<Box<dyn LlmBackend>> {
     match config.provider.as_str() {
-        "kimi" => Ok(Box::new(OpenAiCompatibleBackend {
-            api_key: config.api_key.clone().expect("API key required for Kimi"),
-            base_url: "https://api.moonshot.cn/v1".to_string(),
-            model: config
+        "kimi" => Ok(Box::new(OpenAiCompatibleBackend::new(
+            Some(
+                config
+                    .api_key
+                    .clone()
+                    .context("API key required for Kimi provider")?,
+            ),
+            "https://api.moonshot.cn/v1".to_string(),
+            config
                 .model
                 .clone()
                 .unwrap_or_else(|| "moonshot-v1-8k".to_string()),
-        })),
-        "codex" => Ok(Box::new(CodexBackend {
-            api_key: config.api_key.clone().unwrap_or_default(),
-            base_url: config
+        )?)),
+        "codex" => Ok(Box::new(CodexBackend::new(
+            config.api_key.clone(),
+            config
                 .base_url
                 .clone()
                 .unwrap_or_else(|| "http://localhost:8080".to_string()),
-            model: config.model.clone().unwrap_or_else(|| "codex".to_string()),
-        })),
-        "ollama" | "ollama-native" => Ok(Box::new(OllamaBackend {
-            base_url: config
+            config.model.clone().unwrap_or_else(|| "codex".to_string()),
+        )?)),
+        "ollama" | "ollama-native" => Ok(Box::new(OllamaBackend::new(
+            config
                 .base_url
                 .clone()
                 .unwrap_or_else(|| "http://localhost:11434".to_string()),
-            model: config.model.clone().unwrap_or_else(|| "gemma4".to_string()),
-            thinking: config.thinking.unwrap_or(true),
-            num_ctx: config.num_ctx,
-        })),
-        "ollama-openai" => Ok(Box::new(OpenAiCompatibleBackend {
-            api_key: config.api_key.clone().unwrap_or_default(),
-            base_url: config
+            config.model.clone().unwrap_or_else(|| "gemma4".to_string()),
+            config.thinking.unwrap_or(true),
+            config.num_ctx,
+        )?)),
+        "ollama-openai" => Ok(Box::new(OpenAiCompatibleBackend::new(
+            config.api_key.clone(),
+            config
                 .base_url
                 .clone()
                 .unwrap_or_else(|| "http://localhost:11434".to_string()),
-            model: config.model.clone().unwrap_or_else(|| "gemma4".to_string()),
-        })),
+            config.model.clone().unwrap_or_else(|| "gemma4".to_string()),
+        )?)),
         "gemini" => Ok(Box::new(GeminiBackend {
-            api_key: config.api_key.clone().expect("API key required for Gemini"),
+            api_key: config
+                .api_key
+                .clone()
+                .context("API key required for Gemini provider")?,
             model: config
                 .model
                 .clone()
@@ -254,6 +274,27 @@ pub(crate) async fn build_backend_with_progress(
             Ok(Box::new(backend))
         }
         "mock" => Ok(Box::new(MockLlm)),
-        _ => Ok(Box::new(MockLlm)),
+        other => bail!("Unsupported provider '{other}'"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_backend_with_progress;
+    use crate::config::RaraConfig;
+
+    #[tokio::test]
+    async fn unsupported_provider_returns_error() {
+        let config = RaraConfig {
+            provider: "does-not-exist".to_string(),
+            ..Default::default()
+        };
+
+        let err = match build_backend_with_progress(&config, None).await {
+            Ok(_) => panic!("unsupported provider should fail"),
+            Err(err) => err,
+        };
+
+        assert!(err.to_string().contains("Unsupported provider 'does-not-exist'"));
     }
 }

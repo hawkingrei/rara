@@ -1,3 +1,5 @@
+mod state_presets;
+
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::task::JoinHandle;
 use std::time::Instant;
@@ -8,9 +10,13 @@ use ratatui::text::Line;
 
 use crate::agent::{Agent, AgentExecutionMode, BashApprovalMode};
 use crate::config::{ConfigManager, RaraConfig};
+use crate::redaction::redact_secrets;
 use crate::state_db::{PersistedInteraction, PersistedPlanStep, PersistedSessionSummary, PersistedTurnEntry, StateDb};
-use super::markdown;
+use crate::tools::bash::BashCommandInput;
 use super::markdown_stream::MarkdownStreamCollector;
+pub use self::state_presets::{
+    current_model_presets, selected_preset_idx_for_config, selected_provider_family_idx_for_config,
+};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum HelpTab {
@@ -111,8 +117,13 @@ pub struct RuntimeSnapshot {
     pub plan_explanation: Option<String>,
     pub pending_question: Option<(String, Vec<(String, String)>, Option<String>)>,
     pub pending_approval: Option<PendingApprovalSnapshot>,
+    pub pending_plan_approval: bool,
     pub completed_question: Option<(String, String)>,
     pub completed_approval: Option<(String, String)>,
+    pub prompt_base_kind: String,
+    pub prompt_section_keys: Vec<String>,
+    pub prompt_source_status_lines: Vec<String>,
+    pub prompt_warnings: Vec<String>,
 }
 
 #[derive(Default, Clone)]
@@ -120,6 +131,7 @@ pub struct PendingApprovalSnapshot {
     pub tool_use_id: String,
     pub command: String,
     pub allow_net: bool,
+    pub payload: BashCommandInput,
 }
 
 pub enum TaskKind {
@@ -142,7 +154,7 @@ pub enum TaskCompletion {
         result: anyhow::Result<Agent>,
     },
     OAuth {
-        result: anyhow::Result<String>,
+        result: anyhow::Result<secrecy::SecretString>,
     },
 }
 
@@ -160,23 +172,6 @@ pub struct RunningTask {
     pub started_at: Instant,
     pub next_heartbeat_after_secs: u64,
 }
-
-pub const CODEX_MODEL_PRESETS: [(&str, &str, &str); 2] = [
-    ("Codex (OAuth)", "codex", "codex"),
-    ("Codex (API Key)", "codex", "codex"),
-];
-
-pub const LOCAL_MODEL_PRESETS: [(&str, &str, &str); 3] = [
-    ("Gemma 4 E4B (Experimental)", "gemma4", "gemma4-e4b"),
-    ("Gemma 4 E2B (Experimental)", "gemma4", "gemma4-e2b"),
-    ("Qwn3 8B", "qwn3", "qwn3-8b"),
-];
-
-pub const OLLAMA_MODEL_PRESETS: [(&str, &str, &str); 3] = [
-    ("Gemma 4", "ollama", "gemma4"),
-    ("Gemma 4 E4B", "ollama", "gemma4:e4b"),
-    ("Gemma 4 E2B", "ollama", "gemma4:e2b"),
-];
 
 pub const PROVIDER_FAMILIES: [(ProviderFamily, &str, &str); 3] = [
     (
@@ -209,7 +204,6 @@ pub struct TranscriptTurn {
 
 pub struct AgentMarkdownStreamState {
     raw_text: String,
-    cwd: PathBuf,
     collector: MarkdownStreamCollector,
     committed_lines: Vec<Line<'static>>,
     display_lines: Vec<Line<'static>>,
@@ -222,7 +216,6 @@ impl AgentMarkdownStreamState {
             collector: MarkdownStreamCollector::new(None, &cwd),
             committed_lines: Vec::new(),
             display_lines: Vec::new(),
-            cwd,
         }
     }
 
@@ -231,13 +224,8 @@ impl AgentMarkdownStreamState {
         self.collector.push_delta(delta);
         self.committed_lines
             .extend(self.collector.commit_complete_lines());
-        self.display_lines.clear();
-        markdown::append_markdown(
-            &self.raw_text,
-            None,
-            Some(self.cwd.as_path()),
-            &mut self.display_lines,
-        );
+        self.display_lines = self.committed_lines.clone();
+        self.display_lines.extend(self.collector.preview_lines());
     }
 }
 
@@ -267,16 +255,25 @@ pub struct TuiApp {
     pub resume_picker_idx: usize,
     pub transcript_scroll: usize,
     pub agent_markdown_stream: Option<AgentMarkdownStreamState>,
+    pub pending_plan_approval: bool,
     pub terminal_focused: bool,
     pub state_db: Option<Arc<StateDb>>,
     pub state_db_status: Option<String>,
     pub running_task: Option<RunningTask>,
 }
 
+pub fn input_requests_command_palette(input: &str) -> bool {
+    input.trim_start().starts_with('/')
+}
+
+fn state_db_status_error(prefix: &str, message: impl Into<String>) -> String {
+    format!("{prefix}: {}", redact_secrets(message.into()))
+}
+
 impl TuiApp {
     pub fn new(cm: ConfigManager) -> Self {
         let cfg = cm.load();
-        let overlay = if cfg.api_key.is_none() && super::provider_requires_api_key(&cfg.provider) {
+        let overlay = if !cfg.has_api_key() && super::provider_requires_api_key(&cfg.provider) {
             if cfg.provider == "codex" {
                 Some(Overlay::CodexAuthGuide)
             } else {
@@ -313,6 +310,7 @@ impl TuiApp {
             resume_picker_idx: 0,
             transcript_scroll: 0,
             agent_markdown_stream: None,
+            pending_plan_approval: false,
             terminal_focused: true,
             state_db: None,
             state_db_status: None,
@@ -379,6 +377,7 @@ impl TuiApp {
 
     pub fn sync_snapshot(&mut self, agent: &Agent) {
         let (cwd, branch) = agent.workspace.get_env_info();
+        let effective_prompt = agent.effective_prompt();
         self.snapshot = RuntimeSnapshot {
             cwd,
             branch,
@@ -415,9 +414,11 @@ impl TuiApp {
             }),
             pending_approval: agent.pending_approval.as_ref().map(|pending| PendingApprovalSnapshot {
                 tool_use_id: pending.tool_use_id.clone(),
-                command: pending.command.clone(),
-                allow_net: pending.allow_net,
+                command: pending.request.summary(),
+                allow_net: pending.request.allow_net,
+                payload: pending.request.clone(),
             }),
+            pending_plan_approval: self.pending_plan_approval,
             completed_question: agent
                 .completed_user_input
                 .as_ref()
@@ -426,6 +427,18 @@ impl TuiApp {
                 .completed_approval
                 .as_ref()
                 .map(|item| (item.title.clone(), item.summary.clone())),
+            prompt_base_kind: effective_prompt.base_prompt_kind.label().to_string(),
+            prompt_section_keys: effective_prompt
+                .section_keys
+                .iter()
+                .map(|key| (*key).to_string())
+                .collect(),
+            prompt_source_status_lines: effective_prompt
+                .sources
+                .iter()
+                .map(|source| source.status_line())
+                .collect(),
+            prompt_warnings: agent.prompt_config().warnings.clone(),
         };
         self.agent_execution_mode = agent.execution_mode;
         self.bash_approval_mode = agent.bash_approval_mode;
@@ -433,12 +446,16 @@ impl TuiApp {
     }
 
     pub fn push_entry(&mut self, role: &'static str, message: impl Into<String>) {
+        let message = match role {
+            "System" | "Runtime" => redact_secrets(message.into()),
+            _ => message.into(),
+        };
         if role == "You" && !self.active_turn.entries.is_empty() {
             self.commit_active_turn();
         }
         self.active_turn.entries.push(TranscriptEntry {
             role: role.to_string(),
-            message: message.into(),
+            message,
         });
         self.transcript_scroll = 0;
     }
@@ -494,7 +511,7 @@ impl TuiApp {
     }
 
     pub fn push_notice(&mut self, message: impl Into<String>) {
-        let message = message.into();
+        let message = redact_secrets(message.into());
         self.notice = Some(message.clone());
         self.push_entry("System", message);
     }
@@ -505,6 +522,7 @@ impl TuiApp {
         self.inserted_turns = 0;
         self.transcript_scroll = 0;
         self.agent_markdown_stream = None;
+        self.pending_plan_approval = false;
         self.notice = Some("Cleared local transcript view.".into());
     }
 
@@ -569,9 +587,19 @@ impl TuiApp {
                 .unwrap_or_else(|| "http://localhost:11434".to_string());
         }
         if matches!(overlay, Overlay::ApiKeyEditor) {
-            self.api_key_input = self.config.api_key.clone().unwrap_or_default();
+            self.api_key_input.clear();
         }
         self.overlay = Some(overlay);
+    }
+
+    pub fn sync_command_palette_with_input(&mut self) {
+        if input_requests_command_palette(self.input.as_str()) {
+            if matches!(self.overlay, None | Some(Overlay::CommandPalette)) {
+                self.open_overlay(Overlay::CommandPalette);
+            }
+        } else if matches!(self.overlay, Some(Overlay::CommandPalette)) {
+            self.overlay = None;
+        }
     }
 
     pub fn set_agent_execution_mode(&mut self, mode: AgentExecutionMode) {
@@ -603,6 +631,16 @@ impl TuiApp {
 
     pub fn has_pending_approval(&self) -> bool {
         self.snapshot.pending_approval.is_some()
+    }
+
+    pub fn has_pending_plan_approval(&self) -> bool {
+        self.pending_plan_approval
+    }
+
+    pub fn set_pending_plan_approval(&mut self, pending: bool) {
+        self.pending_plan_approval = pending;
+        self.snapshot.pending_plan_approval = pending;
+        self.persist_runtime_state();
     }
 
     pub fn close_overlay(&mut self) {
@@ -669,7 +707,7 @@ impl TuiApp {
 
     pub fn set_state_db_error(&mut self, error: String) {
         self.state_db = None;
-        self.state_db_status = Some(format!("unavailable: {error}"));
+        self.state_db_status = Some(state_db_status_error("unavailable", error));
     }
 
     fn persist_runtime_state(&mut self) {
@@ -693,7 +731,7 @@ impl TuiApp {
             self.snapshot.history_len,
             self.transcript_entry_count(),
         ) {
-            self.state_db_status = Some(format!("write failed: {err}"));
+            self.state_db_status = Some(state_db_status_error("write failed", err.to_string()));
             return;
         }
 
@@ -709,7 +747,8 @@ impl TuiApp {
             })
             .collect::<Vec<_>>();
         if let Err(err) = state_db.replace_plan_steps(&self.snapshot.session_id, &plan_steps) {
-            self.state_db_status = Some(format!("plan write failed: {err}"));
+            self.state_db_status =
+                Some(state_db_status_error("plan write failed", err.to_string()));
             return;
         }
 
@@ -736,6 +775,19 @@ impl TuiApp {
                 })),
             });
         }
+        if self.snapshot.pending_plan_approval {
+            interactions.push(PersistedInteraction {
+                kind: "plan_approval".to_string(),
+                status: "pending".to_string(),
+                title: "Plan Ready".to_string(),
+                summary: self
+                    .snapshot
+                    .plan_explanation
+                    .clone()
+                    .unwrap_or_else(|| "Review the proposed plan before implementation.".to_string()),
+                payload: None,
+            });
+        }
         if let Some(approval) = self.snapshot.pending_approval.as_ref() {
             interactions.push(PersistedInteraction {
                 kind: "approval".to_string(),
@@ -746,6 +798,10 @@ impl TuiApp {
                     "tool_use_id": approval.tool_use_id,
                     "command": approval.command,
                     "allow_net": approval.allow_net,
+                    "program": approval.payload.program,
+                    "args": approval.payload.args,
+                    "cwd": approval.payload.cwd,
+                    "env": approval.payload.env,
                 })),
             });
         }
@@ -769,7 +825,10 @@ impl TuiApp {
         }
 
         if let Err(err) = state_db.replace_interactions(&self.snapshot.session_id, &interactions) {
-            self.state_db_status = Some(format!("interaction write failed: {err}"));
+            self.state_db_status = Some(state_db_status_error(
+                "interaction write failed",
+                err.to_string(),
+            ));
             return;
         }
 
@@ -793,32 +852,35 @@ impl TuiApp {
             })
             .collect::<Vec<_>>();
         if let Err(err) = state_db.persist_turn(&self.snapshot.session_id, ordinal, &entries) {
-            self.state_db_status = Some(format!("turn write failed: {err}"));
+            self.state_db_status =
+                Some(state_db_status_error("turn write failed", err.to_string()));
         }
     }
 }
 
-pub fn selected_provider_family_idx_for_config(config: &RaraConfig) -> usize {
-    match config.provider.as_str() {
-        "codex" => 0,
-        "ollama" => 2,
-        _ => 1,
-    }
-}
+#[cfg(test)]
+mod tests {
+    use super::{input_requests_command_palette, state_db_status_error};
 
-pub fn current_model_presets(provider_picker_idx: usize) -> &'static [(&'static str, &'static str, &'static str)] {
-    match PROVIDER_FAMILIES[provider_picker_idx].0 {
-        ProviderFamily::Codex => &CODEX_MODEL_PRESETS,
-        ProviderFamily::CandleLocal => &LOCAL_MODEL_PRESETS,
-        ProviderFamily::Ollama => &OLLAMA_MODEL_PRESETS,
+    #[test]
+    fn detects_slash_command_input() {
+        assert!(input_requests_command_palette("/"));
+        assert!(input_requests_command_palette("/help"));
+        assert!(input_requests_command_palette("   /help"));
+        assert!(!input_requests_command_palette(""));
+        assert!(!input_requests_command_palette("help"));
+        assert!(!input_requests_command_palette("   help"));
     }
-}
 
-pub fn selected_preset_idx_for_config(config: &RaraConfig, provider_picker_idx: usize) -> usize {
-    current_model_presets(provider_picker_idx)
-        .iter()
-        .position(|(_, provider, model)| {
-            config.provider == *provider && config.model.as_deref() == Some(*model)
-        })
-        .unwrap_or(0)
+    #[test]
+    fn redacts_secrets_in_state_db_status_messages() {
+        let rendered = state_db_status_error(
+            "write failed",
+            "token=supersecretvalue Authorization: Bearer abcdefghijklmnopqrstuvwxyz",
+        );
+        assert!(rendered.contains("write failed:"));
+        assert!(rendered.contains("[REDACTED_SECRET]"));
+        assert!(!rendered.contains("supersecretvalue"));
+        assert!(!rendered.contains("abcdefghijklmnopqrstuvwxyz"));
+    }
 }

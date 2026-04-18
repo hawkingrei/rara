@@ -5,12 +5,12 @@ use ratatui::{
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Tabs, Wrap},
-    Frame,
 };
 use std::path::Path;
 use textwrap::Options;
 use unicode_width::UnicodeWidthStr;
 
+use super::custom_terminal::Frame;
 use super::command::{
     api_key_status, command_detail_text, command_spec_by_index, general_help_text, help_text,
     current_turn_preview, download_status_text, matching_commands, model_help_text, palette_command_by_index,
@@ -117,6 +117,14 @@ pub fn committed_turn_cell<'a>(
     CommittedTurnCell::new(entries, cwd)
 }
 
+pub(crate) fn committed_turn_lines(
+    entries: &[TranscriptEntry],
+    cwd: Option<&Path>,
+    width: u16,
+) -> Vec<Line<'static>> {
+    committed_turn_cell(entries, cwd).display_lines(width)
+}
+
 pub fn active_turn_cell<'a>(app: &'a TuiApp) -> ActiveTurnCell<'a> {
     let cwd = (!app.snapshot.cwd.is_empty()).then(|| Path::new(app.snapshot.cwd.as_str()));
     ActiveTurnCell::new(app, cwd)
@@ -124,6 +132,10 @@ pub fn active_turn_cell<'a>(app: &'a TuiApp) -> ActiveTurnCell<'a> {
 
 pub fn startup_card_cell(app: &TuiApp) -> StartupCardCell {
     StartupCardCell::new(app.current_model_label().to_string(), display_directory_for_startup(app))
+}
+
+pub(crate) fn startup_card_lines(app: &TuiApp, width: u16) -> Vec<Line<'static>> {
+    startup_card_cell(app).display_lines(width)
 }
 
 fn current_turn_exploration_summary(
@@ -280,7 +292,7 @@ fn markdown_message_lines(
     lines
 }
 
-fn rendered_markdown_lines(
+pub(crate) fn rendered_markdown_lines(
     role: &str,
     rendered: &[Line<'static>],
     max_lines: usize,
@@ -611,7 +623,7 @@ fn render_help_modal(f: &mut Frame, app: &TuiApp, area: Rect, tab: HelpTab) {
                 left[1],
             );
             f.render_widget(
-                Paragraph::new(status_prompt_sources_text())
+                Paragraph::new(status_prompt_sources_text(app))
                 .block(Block::default().borders(Borders::LEFT | Borders::RIGHT).title(" Prompt Sources "))
                 .wrap(Wrap { trim: false }),
                 left[2],
@@ -770,7 +782,7 @@ fn render_status_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
         top[2],
     );
     f.render_widget(
-        Paragraph::new(status_prompt_sources_text())
+        Paragraph::new(status_prompt_sources_text(app))
             .block(Block::default().borders(Borders::ALL).title(" Prompt Sources "))
             .wrap(Wrap { trim: false }),
         chunks[1],
