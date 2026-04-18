@@ -44,17 +44,28 @@ pub fn render(f: &mut Frame, app: &TuiApp) {
 }
 
 pub fn desired_viewport_height(app: &TuiApp, _width: u16, rows: u16) -> u16 {
-    if app.overlay.is_some() {
+    if app.overlay.is_some() || app.transcript_scroll > 0 {
         return rows.max(1);
     }
 
     let bottom_pane_height = 5u16;
     let has_active_content =
         !app.active_turn.entries.is_empty() || app.has_pending_planning_suggestion();
-    if !has_active_content {
+    if !app.has_any_transcript() && !has_active_content {
         return bottom_pane_height.clamp(1, rows.max(1));
     }
-    rows.max(1)
+
+    let history_reserve = if rows >= 18 {
+        6
+    } else if rows >= 12 {
+        4
+    } else {
+        2
+    };
+
+    rows.saturating_sub(history_reserve)
+        .max(bottom_pane_height)
+        .max(1)
 }
 
 fn render_bottom_pane(f: &mut Frame, app: &TuiApp, area: Rect) -> Option<(u16, u16)> {
@@ -1614,12 +1625,16 @@ pub(crate) fn display_width(value: &str) -> usize {
 
 #[cfg(test)]
 mod tests {
+    use tempfile::tempdir;
+
+    use crate::config::ConfigManager;
+    use crate::tui::state::TuiApp;
     use std::path::Path;
 
     use crate::tui::state::TranscriptEntry;
 
     use super::cells::HistoryCell;
-    use super::committed_turn_cell;
+    use super::{committed_turn_cell, desired_viewport_height};
 
     #[test]
     fn committed_turn_does_not_truncate_agent_response() {
@@ -1646,5 +1661,24 @@ mod tests {
 
         assert!(rendered.contains("Line 12"));
         assert!(!rendered.contains("more line(s)"));
+    }
+
+    #[test]
+    fn keeps_history_reserve_once_transcript_exists() {
+        let temp = tempdir().expect("tempdir");
+        let mut app = TuiApp::new(ConfigManager {
+            path: temp.path().join("config.json"),
+        })
+        .expect("build tui app");
+        app.committed_turns.push(crate::tui::state::TranscriptTurn {
+            entries: vec![TranscriptEntry {
+                role: "You".into(),
+                message: "Earlier prompt".into(),
+            }],
+        });
+
+        let height = desired_viewport_height(&app, 120, 24);
+        assert!(height > 5);
+        assert!(height < 24);
     }
 }

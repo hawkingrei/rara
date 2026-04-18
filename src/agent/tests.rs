@@ -1,4 +1,6 @@
-use super::planning::{parse_plan_block, parse_request_user_input_block};
+use super::planning::{
+    parse_plan_block, parse_request_user_input_block, strip_continue_inspection_control,
+};
 use super::{
     Agent, AgentExecutionMode, AnthropicResponse, ContentBlock, Message, PendingUserInput,
     PlanStep, PlanStepStatus, RuntimeContinuationPhase, TokenUsage,
@@ -336,7 +338,7 @@ async fn continues_plan_mode_after_exploration_if_assistant_still_signals_more_w
         },
         AnthropicResponse {
             content: vec![ContentBlock::Text {
-                text: "I have examined the overall structure. To provide detailed feedback, I will inspect the more complex components next.".to_string(),
+                text: "I have examined the overall structure and still need more inspection.\n<continue_inspection/>".to_string(),
             }],
             stop_reason: Some("end_turn".to_string()),
             usage: Some(TokenUsage::default()),
@@ -367,8 +369,13 @@ async fn continues_plan_mode_after_exploration_if_assistant_still_signals_more_w
         .expect("query should succeed");
 
     let observed = backend.observed_messages.lock().expect("lock");
-    assert_eq!(observed.len(), 2);
+    assert_eq!(observed.len(), 3);
+    assert!(agent
+        .history
+        .iter()
+        .any(|message| message.content.to_string().contains("plan_continuation_required")));
 }
+
 
 #[tokio::test]
 async fn continues_execute_mode_after_exploration_if_assistant_still_signals_more_work() {
@@ -384,7 +391,7 @@ async fn continues_execute_mode_after_exploration_if_assistant_still_signals_mor
         },
         AnthropicResponse {
             content: vec![ContentBlock::Text {
-                text: "I have checked the top-level structure. Next, I will inspect src/main.rs to understand the bootstrap flow.".to_string(),
+                text: "I have checked the top-level structure and need one more inspection pass.\n<continue_inspection/>".to_string(),
             }],
             stop_reason: Some("end_turn".to_string()),
             usage: Some(TokenUsage::default()),
@@ -423,11 +430,11 @@ async fn continues_execute_mode_after_exploration_if_assistant_still_signals_mor
 }
 
 #[tokio::test]
-async fn continues_execute_mode_when_assistant_only_plans_followup_file_reads() {
+async fn continues_execute_mode_when_assistant_requests_structured_followup_inspection() {
     let backend = Arc::new(SequencedBackend::new(vec![
         AnthropicResponse {
             content: vec![ContentBlock::Text {
-                text: "I have checked the repository layout. Next, I will read Cargo.toml, AGENTS.md, and src/main.rs to understand the bootstrap and architecture.".to_string(),
+                text: "I have checked the repository layout and need one more repo-inspection step.\n<continue_inspection/>".to_string(),
             }],
             stop_reason: Some("end_turn".to_string()),
             usage: Some(TokenUsage::default()),
@@ -461,6 +468,19 @@ async fn continues_execute_mode_when_assistant_only_plans_followup_file_reads() 
         .history
         .iter()
         .any(|message| message.content.to_string().contains("execution_continuation_required")));
+}
+
+#[test]
+fn strips_continue_inspection_control_tag() {
+    let (cleaned, requested) = strip_continue_inspection_control(
+        "Need one more inspection pass.\n<continue_inspection/>",
+    );
+    assert!(requested);
+    assert_eq!(cleaned, "Need one more inspection pass.\n");
+
+    let (cleaned, requested) = strip_continue_inspection_control("Final answer");
+    assert!(!requested);
+    assert_eq!(cleaned, "Final answer");
 }
 
 #[test]

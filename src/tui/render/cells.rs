@@ -476,7 +476,11 @@ impl HistoryCell for CommittedTurnCell<'_> {
             self.entries
                 .iter()
                 .rev()
-                .filter(|entry| matches!(entry.role.as_str(), "Agent" | "System"))
+                .filter(|entry| {
+                    entry.role == "Agent"
+                        || (entry.role == "System"
+                            && is_renderable_system_message(entry.message.as_str()))
+                })
                 .take(1)
                 .collect::<Vec<_>>()
                 .into_iter()
@@ -485,7 +489,11 @@ impl HistoryCell for CommittedTurnCell<'_> {
         } else {
             self.entries
                 .iter()
-                .filter(|entry| matches!(entry.role.as_str(), "Agent" | "System"))
+                .filter(|entry| {
+                    entry.role == "Agent"
+                        || (entry.role == "System"
+                            && is_renderable_system_message(entry.message.as_str()))
+                })
                 .collect()
         };
 
@@ -570,7 +578,9 @@ impl ActiveCell for ActiveTurnCell<'_> {
         let latest_system = current_turn
             .iter()
             .rev()
-            .find(|entry| entry.role == "System")
+            .find(|entry| {
+                entry.role == "System" && is_renderable_system_message(entry.message.as_str())
+            })
             .map(|entry| entry.message.as_str());
         let latest_tool_result = current_turn
             .iter()
@@ -751,6 +761,16 @@ impl ActiveCell for ActiveTurnCell<'_> {
         trim_trailing_empty_lines(&mut lines);
         lines
     }
+}
+
+fn is_renderable_system_message(message: &str) -> bool {
+    let lower = message.trim().to_ascii_lowercase();
+    lower.starts_with("query failed:")
+        || lower.starts_with("compaction failed:")
+        || lower.starts_with("compact failed:")
+        || lower.starts_with("oauth failed:")
+        || lower.starts_with("backend rebuild failed:")
+        || lower.starts_with("error:")
 }
 
 #[cfg(test)]
@@ -991,5 +1011,34 @@ mod tests {
 
         assert!(rendered.contains("Responding"));
         assert!(!rendered.contains("Agent\n  I have inspected"));
+    }
+
+    #[test]
+    fn committed_turn_cell_ignores_routine_system_notices() {
+        let entries = vec![
+            TranscriptEntry {
+                role: "You".into(),
+                message: "Review this repo".into(),
+            },
+            TranscriptEntry {
+                role: "Agent".into(),
+                message: "Final recommendation".into(),
+            },
+            TranscriptEntry {
+                role: "System".into(),
+                message: "prompt finished".into(),
+            },
+        ];
+
+        let rendered = CommittedTurnCell::new(entries.as_slice(), Some(Path::new(".")))
+            .display_lines(100)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(rendered.contains("Agent\n  Final recommendation"));
+        assert!(!rendered.contains("System"));
+        assert!(!rendered.contains("prompt finished"));
     }
 }
