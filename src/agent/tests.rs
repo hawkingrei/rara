@@ -21,9 +21,15 @@ struct StubTool;
 
 #[async_trait]
 impl Tool for StubTool {
-    fn name(&self) -> &str { "stub_tool" }
-    fn description(&self) -> &str { "Return a simple structured result" }
-    fn input_schema(&self) -> Value { json!({"type":"object"}) }
+    fn name(&self) -> &str {
+        "stub_tool"
+    }
+    fn description(&self) -> &str {
+        "Return a simple structured result"
+    }
+    fn input_schema(&self) -> Value {
+        json!({"type":"object"})
+    }
     async fn call(&self, _input: Value) -> Result<Value, ToolError> {
         Ok(json!({ "status": "ok", "value": 42 }))
     }
@@ -33,9 +39,15 @@ struct ListFilesStub;
 
 #[async_trait]
 impl Tool for ListFilesStub {
-    fn name(&self) -> &str { "list_files" }
-    fn description(&self) -> &str { "Return a simple list result" }
-    fn input_schema(&self) -> Value { json!({"type":"object"}) }
+    fn name(&self) -> &str {
+        "list_files"
+    }
+    fn description(&self) -> &str {
+        "Return a simple list result"
+    }
+    fn input_schema(&self) -> Value {
+        json!({"type":"object"})
+    }
     async fn call(&self, _input: Value) -> Result<Value, ToolError> {
         Ok(json!({ "path": ".", "entries": [] }))
     }
@@ -45,9 +57,15 @@ struct PlanAgentStub;
 
 #[async_trait]
 impl Tool for PlanAgentStub {
-    fn name(&self) -> &str { "plan_agent" }
-    fn description(&self) -> &str { "Return a delegated planning result" }
-    fn input_schema(&self) -> Value { json!({"type":"object"}) }
+    fn name(&self) -> &str {
+        "plan_agent"
+    }
+    fn description(&self) -> &str {
+        "Return a delegated planning result"
+    }
+    fn input_schema(&self) -> Value {
+        json!({"type":"object"})
+    }
     async fn call(&self, _input: Value) -> Result<Value, ToolError> {
         Ok(json!({ "status": "ok", "summary": "delegated inspection complete" }))
     }
@@ -73,7 +91,12 @@ impl SequencedBackend {
     }
 }
 
-fn test_runtime_storage() -> (tempfile::TempDir, Arc<SessionManager>, Arc<WorkspaceMemory>, std::path::PathBuf) {
+fn test_runtime_storage() -> (
+    tempfile::TempDir,
+    Arc<SessionManager>,
+    Arc<WorkspaceMemory>,
+    std::path::PathBuf,
+) {
     let temp = tempdir().expect("tempdir");
     let root = temp.path().to_path_buf();
     let rara_dir = root.join(".rara");
@@ -91,7 +114,10 @@ fn test_runtime_storage() -> (tempfile::TempDir, Arc<SessionManager>, Arc<Worksp
 #[async_trait]
 impl LlmBackend for SequencedBackend {
     async fn ask(&self, messages: &[Message], tools: &[Value]) -> Result<AnthropicResponse> {
-        self.observed_messages.lock().expect("lock").push(messages.to_vec());
+        self.observed_messages
+            .lock()
+            .expect("lock")
+            .push(messages.to_vec());
         self.observed_tools.lock().expect("lock").push(
             tools
                 .iter()
@@ -149,11 +175,14 @@ async fn appends_continuation_after_tool_result() {
     let observed = backend.observed_messages.lock().expect("lock");
     assert_eq!(observed.len(), 2);
     let second_round = &observed[1];
-    let continuation = agent.runtime_continuation_message(RuntimeContinuationPhase::ToolResultsAvailable, 1);
-    assert!(second_round.iter().any(|message| message.content == continuation.content));
-    assert!(second_round.iter().any(|message| {
-        message.content.to_string().contains("tool_result")
-    }));
+    let continuation =
+        agent.runtime_continuation_message(RuntimeContinuationPhase::ToolResultsAvailable, 1);
+    assert!(second_round
+        .iter()
+        .any(|message| message.content == continuation.content));
+    assert!(second_round
+        .iter()
+        .any(|message| { message.content.to_string().contains("tool_result") }));
 }
 
 #[tokio::test]
@@ -201,9 +230,9 @@ async fn resumes_after_plan_approval_via_structured_continuation() {
     assert!(runtime_texts
         .iter()
         .any(|text| text.contains("\"mode\": \"execute\"")));
-    assert!(!runtime_texts
-        .iter()
-        .any(|text| text.contains("Implement the approved plan using the current repository state")));
+    assert!(!runtime_texts.iter().any(
+        |text| text.contains("Implement the approved plan using the current repository state")
+    ));
 }
 
 #[tokio::test]
@@ -231,10 +260,10 @@ async fn does_not_append_continuation_without_tools() {
 
     let observed = backend.observed_messages.lock().expect("lock");
     assert_eq!(observed.len(), 1);
-    assert!(!agent
-        .history
-        .iter()
-        .any(|message| message.content.to_string().contains("\"phase\": \"tool_results_available\"")));
+    assert!(!agent.history.iter().any(|message| message
+        .content
+        .to_string()
+        .contains("\"phase\": \"tool_results_available\"")));
 }
 
 #[tokio::test]
@@ -266,9 +295,7 @@ async fn errors_when_tool_loop_exceeds_limit() {
         .query_with_mode("loop".to_string(), super::AgentOutputMode::Silent)
         .await
         .expect_err("query should fail");
-    assert!(error
-        .to_string()
-        .contains("Tool loop exceeded"));
+    assert!(error.to_string().contains("Tool loop exceeded"));
 }
 
 #[tokio::test]
@@ -294,7 +321,10 @@ async fn plan_mode_filters_write_tools_from_schema() {
     agent.set_execution_mode(AgentExecutionMode::Plan);
 
     agent
-        .query_with_mode("review-current-project".to_string(), super::AgentOutputMode::Silent)
+        .query_with_mode(
+            "review-current-project".to_string(),
+            super::AgentOutputMode::Silent,
+        )
         .await
         .expect("query should succeed");
 
@@ -340,10 +370,10 @@ async fn continues_plan_mode_after_shallow_initial_plan() {
 
     let observed = backend.observed_messages.lock().expect("lock");
     assert_eq!(observed.len(), 2);
-    assert!(agent
-        .history
-        .iter()
-        .any(|message| message.content.to_string().contains("plan_continuation_required")));
+    assert!(agent.history.iter().any(|message| message
+        .content
+        .to_string()
+        .contains("plan_continuation_required")));
 }
 
 #[tokio::test]
@@ -385,7 +415,8 @@ async fn last_query_plan_updated_tracks_only_the_final_planning_turn() {
         session_manager.clone(),
         workspace.clone(),
     );
-    agent.tool_result_store = ToolResultStore::new(rara_dir.join("tool-results")).expect("tool result store");
+    agent.tool_result_store =
+        ToolResultStore::new(rara_dir.join("tool-results")).expect("tool result store");
     agent.set_execution_mode(AgentExecutionMode::Plan);
 
     agent
@@ -412,7 +443,8 @@ async fn last_query_plan_updated_tracks_only_the_final_planning_turn() {
         session_manager,
         workspace,
     );
-    agent.tool_result_store = ToolResultStore::new(rara_dir.join("tool-results")).expect("tool result store");
+    agent.tool_result_store =
+        ToolResultStore::new(rara_dir.join("tool-results")).expect("tool result store");
     agent.set_execution_mode(AgentExecutionMode::Plan);
 
     agent
@@ -474,10 +506,10 @@ async fn continues_plan_mode_after_exploration_if_assistant_still_signals_more_w
 
     let observed = backend.observed_messages.lock().expect("lock");
     assert_eq!(observed.len(), 3);
-    assert!(agent
-        .history
-        .iter()
-        .any(|message| message.content.to_string().contains("plan_continuation_required")));
+    assert!(agent.history.iter().any(|message| message
+        .content
+        .to_string()
+        .contains("plan_continuation_required")));
 }
 
 #[tokio::test]
@@ -526,10 +558,52 @@ async fn continues_plan_mode_to_synthesize_plan_after_exploration_evidence() {
 
     let observed = backend.observed_messages.lock().expect("lock");
     assert_eq!(observed.len(), 3);
-    assert!(agent
-        .history
-        .iter()
-        .any(|message| message.content.to_string().contains("plan_continuation_required")));
+    assert!(agent.history.iter().any(|message| message
+        .content
+        .to_string()
+        .contains("plan_continuation_required")));
+    assert_eq!(agent.current_plan.len(), 2);
+}
+
+#[tokio::test]
+async fn narration_only_planning_turn_requires_structured_followup() {
+    let backend = Arc::new(SequencedBackend::new(vec![
+        AnthropicResponse {
+            content: vec![ContentBlock::Text {
+                text: "I reviewed the prompt runtime and the workspace discovery flow.".to_string(),
+            }],
+            stop_reason: Some("end_turn".to_string()),
+            usage: Some(TokenUsage::default()),
+        },
+        AnthropicResponse {
+            content: vec![ContentBlock::Text {
+                text: "<plan>\n- [pending] Generalize instruction discovery\n- [pending] Preserve current cache behavior\n</plan>\nThe inspected code now supports a concrete refactor path.".to_string(),
+            }],
+            stop_reason: Some("end_turn".to_string()),
+            usage: Some(TokenUsage::default()),
+        },
+    ]));
+
+    let mut agent = Agent::new(
+        ToolManager::new(),
+        backend.clone(),
+        Arc::new(VectorDB::new("data/lancedb")),
+        Arc::new(SessionManager::new().expect("session manager")),
+        Arc::new(WorkspaceMemory::new().expect("workspace memory")),
+    );
+    agent.set_execution_mode(AgentExecutionMode::Plan);
+
+    agent
+        .query_with_mode("inspect".to_string(), super::AgentOutputMode::Silent)
+        .await
+        .expect("query should succeed");
+
+    let observed = backend.observed_messages.lock().expect("lock");
+    assert_eq!(observed.len(), 2);
+    assert!(agent.history.iter().any(|message| message
+        .content
+        .to_string()
+        .contains("plan_structured_outcome_required")));
     assert_eq!(agent.current_plan.len(), 2);
 }
 
@@ -582,7 +656,6 @@ async fn delegated_plan_agent_counts_as_planning_evidence() {
     assert_eq!(agent.current_plan.len(), 2);
 }
 
-
 #[tokio::test]
 async fn continues_execute_mode_after_exploration_if_assistant_still_signals_more_work() {
     let backend = Arc::new(SequencedBackend::new(vec![
@@ -629,10 +702,10 @@ async fn continues_execute_mode_after_exploration_if_assistant_still_signals_mor
 
     let observed = backend.observed_messages.lock().expect("lock");
     assert_eq!(observed.len(), 3);
-    assert!(agent
-        .history
-        .iter()
-        .any(|message| message.content.to_string().contains("execution_continuation_required")));
+    assert!(agent.history.iter().any(|message| message
+        .content
+        .to_string()
+        .contains("execution_continuation_required")));
 }
 
 #[tokio::test]
@@ -670,17 +743,16 @@ async fn continues_execute_mode_when_assistant_requests_structured_followup_insp
 
     let observed = backend.observed_messages.lock().expect("lock");
     assert_eq!(observed.len(), 2);
-    assert!(agent
-        .history
-        .iter()
-        .any(|message| message.content.to_string().contains("execution_continuation_required")));
+    assert!(agent.history.iter().any(|message| message
+        .content
+        .to_string()
+        .contains("execution_continuation_required")));
 }
 
 #[test]
 fn strips_continue_inspection_control_tag() {
-    let (cleaned, requested) = strip_continue_inspection_control(
-        "Need one more inspection pass.\n<continue_inspection/>",
-    );
+    let (cleaned, requested) =
+        strip_continue_inspection_control("Need one more inspection pass.\n<continue_inspection/>");
     assert!(requested);
     assert_eq!(cleaned, "Need one more inspection pass.\n");
 

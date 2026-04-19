@@ -21,7 +21,10 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 pub use self::compact::CompactState;
-use self::planning::{tool_result_message, InspectionProgress, RuntimeContinuationPhase};
+use self::planning::{
+    tool_result_message, InspectionProgress, PlanningOutcomeContract,
+    RuntimeContinuationPhase,
+};
 pub use self::planning::{
     CompletedInteraction, PendingApproval, PendingUserInput, PlanStep, PlanStepStatus,
 };
@@ -86,7 +89,10 @@ pub enum AgentEvent {
     Status(String),
     AssistantText(String),
     AssistantDelta(String),
-    ToolUse { name: String, input: Value },
+    ToolUse {
+        name: String,
+        input: Value,
+    },
     ToolResult {
         name: String,
         content: String,
@@ -107,6 +113,7 @@ struct TurnOutput {
     tool_calls: Vec<ToolCall>,
     plan_updated: bool,
     continue_inspection: bool,
+    had_text_response: bool,
 }
 
 pub struct Agent {
@@ -136,7 +143,7 @@ pub struct Agent {
 
 impl Agent {
     pub fn new(
-        tool_manager: ToolManager, 
+        tool_manager: ToolManager,
         llm_backend: Arc<dyn LlmBackend>,
         vdb: Arc<VectorDB>,
         session_manager: Arc<SessionManager>,
@@ -170,11 +177,17 @@ impl Agent {
     }
 
     pub async fn query(&mut self, prompt: String) -> Result<()> {
-        self.query_with_mode(prompt, AgentOutputMode::Terminal).await
+        self.query_with_mode(prompt, AgentOutputMode::Terminal)
+            .await
     }
 
-    pub async fn query_with_mode(&mut self, prompt: String, output_mode: AgentOutputMode) -> Result<()> {
-        self.query_with_mode_and_events(prompt, output_mode, |_| {}).await
+    pub async fn query_with_mode(
+        &mut self,
+        prompt: String,
+        output_mode: AgentOutputMode,
+    ) -> Result<()> {
+        self.query_with_mode_and_events(prompt, output_mode, |_| {})
+            .await
     }
 
     pub async fn query_with_mode_and_events<F>(
@@ -195,7 +208,7 @@ impl Agent {
         self.compact_if_needed_with_reporter(&mut report).await?;
         self.history = repair_tool_result_history(&self.history);
         self.clear_completed_interactions();
-        
+
         self.history.push(Message {
             role: "user".to_string(),
             content: json!([{"type": "text", "text": prompt.clone()}]),
@@ -208,16 +221,28 @@ impl Agent {
             &mut plan_continuations,
             &mut execute_continuations,
         )
-            .await?;
+        .await?;
 
-        self.session_manager.save_session(&self.session_id, &self.history)?;
-        let turn_text = format!("User: {}\nAgent Response: {:?}", prompt, self.history.last().unwrap().content);
+        self.session_manager
+            .save_session(&self.session_id, &self.history)?;
+        let turn_text = format!(
+            "User: {}\nAgent Response: {:?}",
+            prompt,
+            self.history.last().unwrap().content
+        );
         if let Ok(vector) = self.llm_backend.embed(&turn_text).await {
-            let _ = self.vdb.upsert_turn("conversations", MemoryMetadata {
-                session_id: self.session_id.clone(),
-                turn_index: turn_start_idx as u32,
-                text: turn_text,
-            }, vector).await;
+            let _ = self
+                .vdb
+                .upsert_turn(
+                    "conversations",
+                    MemoryMetadata {
+                        session_id: self.session_id.clone(),
+                        turn_index: turn_start_idx as u32,
+                        text: turn_text,
+                    },
+                    vector,
+                )
+                .await;
         }
         Ok(())
     }
@@ -257,6 +282,7 @@ impl Agent {
         let mut tool_calls = Vec::new();
         let mut plan_updated = false;
         let mut continue_inspection = false;
+        let mut had_text_response = false;
         let mut sanitized_content = Vec::new();
         for block in &response.content {
             match block {
@@ -265,6 +291,7 @@ impl Agent {
                         planning::strip_continue_inspection_control(text);
                     continue_inspection |= block_requests_continue;
                     if !clean_text.trim().is_empty() {
+                        had_text_response = true;
                         sanitized_content.push(ContentBlock::Text {
                             text: clean_text.clone(),
                         });
@@ -306,10 +333,15 @@ impl Agent {
             tool_calls,
             plan_updated,
             continue_inspection,
+            had_text_response,
         })
     }
 
-    async fn run_agent_loop<F>(&mut self, output_mode: AgentOutputMode, report: &mut F) -> Result<()>
+    async fn run_agent_loop<F>(
+        &mut self,
+        output_mode: AgentOutputMode,
+        report: &mut F,
+    ) -> Result<()>
     where
         F: FnMut(AgentEvent) + Send,
     {
@@ -323,7 +355,7 @@ impl Agent {
             &mut plan_continuations,
             &mut execute_continuations,
         )
-            .await
+        .await
     }
 
     async fn run_agent_loop_with_limit<F>(
@@ -339,9 +371,7 @@ impl Agent {
     {
         loop {
             self.ensure_active_plan_step();
-            let turn_output = self
-                .run_model_turn(output_mode, report)
-                .await?;
+            let turn_output = self.run_model_turn(output_mode, report).await?;
             self.last_query_plan_updated = turn_output.plan_updated;
             self.history.push(turn_output.assistant_message);
 
@@ -349,18 +379,33 @@ impl Agent {
                 if self.should_continue_plan_without_tools(
                     turn_output.plan_updated,
                     turn_output.continue_inspection,
+                    turn_output.had_text_response,
                     *tool_rounds,
                     *plan_continuations,
                 ) {
                     *plan_continuations += 1;
-                    report(AgentEvent::Status(
-                        "Plan needs more repository inspection. Continuing in read-only mode."
-                            .to_string(),
-                    ));
-                    self.history.push(self.runtime_continuation_message(
-                        RuntimeContinuationPhase::PlanContinuationRequired,
-                        *tool_rounds,
-                    ));
+                    let phase = if matches!(
+                        self.planning_outcome_contract(
+                            turn_output.plan_updated,
+                            turn_output.continue_inspection,
+                            turn_output.had_text_response,
+                        ),
+                        PlanningOutcomeContract::StructuredOutcomeRequired
+                    ) {
+                        report(AgentEvent::Status(
+                            "Planning mode needs a concrete plan, question, or explicit continue signal. Continuing in read-only mode."
+                                .to_string(),
+                        ));
+                        RuntimeContinuationPhase::PlanStructuredOutcomeRequired
+                    } else {
+                        report(AgentEvent::Status(
+                            "Plan needs more repository inspection. Continuing in read-only mode."
+                                .to_string(),
+                        ));
+                        RuntimeContinuationPhase::PlanContinuationRequired
+                    };
+                    self.history
+                        .push(self.runtime_continuation_message(phase, *tool_rounds));
                     continue;
                 }
                 if self.should_continue_execute_without_tools(
@@ -412,23 +457,27 @@ impl Agent {
     {
         let mut tool_results = Vec::new();
         for tool_call in tool_calls {
-            if tool_call.name == "bash" && matches!(self.bash_approval_mode, BashApprovalMode::Suggestion) {
-                let request = BashCommandInput::from_value(tool_call.input.clone())
-                    .unwrap_or_else(|_| BashCommandInput {
-                        command: tool_call
-                            .input
-                            .get("command")
-                            .and_then(Value::as_str)
-                            .map(str::to_string),
-                        program: None,
-                        args: Vec::new(),
-                        cwd: None,
-                        env: Default::default(),
-                        allow_net: tool_call
-                            .input
-                            .get("allow_net")
-                            .and_then(Value::as_bool)
-                            .unwrap_or(false),
+            if tool_call.name == "bash"
+                && matches!(self.bash_approval_mode, BashApprovalMode::Suggestion)
+            {
+                let request =
+                    BashCommandInput::from_value(tool_call.input.clone()).unwrap_or_else(|_| {
+                        BashCommandInput {
+                            command: tool_call
+                                .input
+                                .get("command")
+                                .and_then(Value::as_str)
+                                .map(str::to_string),
+                            program: None,
+                            args: Vec::new(),
+                            cwd: None,
+                            env: Default::default(),
+                            allow_net: tool_call
+                                .input
+                                .get("allow_net")
+                                .and_then(Value::as_bool)
+                                .unwrap_or(false),
+                        }
                     });
                 let summary = request.summary();
                 self.pending_approval = Some(PendingApproval {
@@ -440,15 +489,18 @@ impl Agent {
                     options: vec![
                         (
                             "Run once".to_string(),
-                            "Execute this command now and then return to suggestion mode.".to_string(),
+                            "Execute this command now and then return to suggestion mode."
+                                .to_string(),
                         ),
                         (
                             "Always allow bash".to_string(),
-                            "Execute now and keep bash approval open for later commands.".to_string(),
+                            "Execute now and keep bash approval open for later commands."
+                                .to_string(),
                         ),
                         (
                             "Suggestion only".to_string(),
-                            "Do not run the command automatically. Continue with a safer path.".to_string(),
+                            "Do not run the command automatically. Continue with a safer path."
+                                .to_string(),
                         ),
                     ],
                     note: Some(format!("command: {}", summary)),
@@ -469,11 +521,7 @@ impl Agent {
                     content: error_text.clone(),
                     is_error: true,
                 });
-                tool_results.push(tool_result_message(
-                    &tool_call.id,
-                    error_text,
-                    true,
-                ));
+                tool_results.push(tool_result_message(&tool_call.id, error_text, true));
                 continue;
             }
             if let Some(tool) = self.tool_manager.get_tool(&tool_call.name) {
@@ -496,11 +544,7 @@ impl Agent {
                             content: result_text.clone(),
                             is_error: false,
                         });
-                        tool_results.push(tool_result_message(
-                            &tool_call.id,
-                            result_text,
-                            false,
-                        ));
+                        tool_results.push(tool_result_message(&tool_call.id, result_text, false));
                     }
                     Err(e) => {
                         let error_text = format!("Error: {}", e);
@@ -509,16 +553,11 @@ impl Agent {
                             content: error_text.clone(),
                             is_error: true,
                         });
-                        tool_results.push(tool_result_message(
-                            &tool_call.id,
-                            error_text,
-                            true,
-                        ));
+                        tool_results.push(tool_result_message(&tool_call.id, error_text, true));
                     }
                 }
             }
         }
         Ok(tool_results)
     }
-
 }
