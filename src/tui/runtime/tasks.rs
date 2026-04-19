@@ -41,6 +41,31 @@ fn restore_execute_mode_after_plan_turn(app: &mut TuiApp, agent: &mut Agent) {
     }
 }
 
+fn try_start_queued_follow_up(app: &mut TuiApp, agent_slot: &mut Option<Agent>) {
+    if app.running_task.is_some()
+        || app.active_pending_interaction().is_some()
+        || app.has_pending_planning_suggestion()
+    {
+        return;
+    }
+
+    let Some(prompt) = app.pop_queued_follow_up_message() else {
+        return;
+    };
+    let Some(agent) = agent_slot.take() else {
+        app.queue_follow_up_message(prompt);
+        return;
+    };
+
+    let remaining = app.queued_follow_up_count();
+    app.notice = Some(if remaining > 0 {
+        format!("Running queued follow-up. {remaining} more queued.")
+    } else {
+        "Running queued follow-up.".to_string()
+    });
+    start_query_task(app, prompt, agent);
+}
+
 pub(super) fn start_query_task(app: &mut TuiApp, prompt: String, mut agent: Agent) {
     let (sender, receiver) = mpsc::unbounded_channel();
     app.clear_pending_planning_suggestion();
@@ -388,6 +413,7 @@ pub(super) async fn finish_running_task_if_ready(
                         app.finalize_active_turn();
                         app.notice = Some("Prompt finished.".into());
                         app.set_runtime_phase(RuntimePhase::Idle, Some("prompt finished".into()));
+                        try_start_queued_follow_up(app, agent_slot);
                     }
                 }
                 Err(err) => {
@@ -441,6 +467,7 @@ pub(super) async fn finish_running_task_if_ready(
                     }
                     app.finalize_active_turn();
                     app.set_runtime_phase(RuntimePhase::Idle, Some("history compacted".into()));
+                    try_start_queued_follow_up(app, agent_slot);
                 }
                 Ok(false) => {
                     app.clear_active_live_sections();
@@ -449,6 +476,7 @@ pub(super) async fn finish_running_task_if_ready(
                     app.push_notice(message);
                     app.finalize_active_turn();
                     app.set_runtime_phase(RuntimePhase::Idle, Some("compact skipped".into()));
+                    try_start_queued_follow_up(app, agent_slot);
                 }
                 Err(err) => {
                     app.clear_active_live_sections();
@@ -471,7 +499,10 @@ pub(super) async fn finish_running_task_if_ready(
                     app.current_model_label()
                 ));
                 app.notice = app.setup_status.clone();
+                let queued_follow_up_messages =
+                    std::mem::take(&mut app.queued_follow_up_messages);
                 app.reset_transcript();
+                app.queued_follow_up_messages = queued_follow_up_messages;
                 *agent_slot = Some(agent);
                 if let Some(agent) = agent_slot.as_ref() {
                     app.sync_snapshot(agent);
@@ -480,6 +511,7 @@ pub(super) async fn finish_running_task_if_ready(
                 app.set_runtime_phase(RuntimePhase::BackendReady, Some("backend ready".into()));
                 app.push_entry("Runtime", app.setup_status.clone().unwrap_or_default());
                 app.finalize_active_turn();
+                try_start_queued_follow_up(app, agent_slot);
             }
             Err(err) => {
                 app.set_runtime_phase(RuntimePhase::Failed, Some("backend rebuild failed".into()));

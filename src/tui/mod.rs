@@ -3,8 +3,8 @@ mod command;
 mod custom_terminal;
 mod event_stream;
 mod highlight;
-mod interaction_text;
 mod insert_history;
+mod interaction_text;
 mod line_utils;
 mod markdown;
 mod markdown_render;
@@ -242,7 +242,10 @@ fn map_key_to_event(key: KeyCode, app: &TuiApp) -> AppEvent {
                 if app.input.is_empty()
                     && app.active_pending_interaction().is_some_and(|pending| {
                         pending.kind != self::state::ActivePendingInteractionKind::PlanApproval
-                    }) => AppEvent::SelectPendingOption(2),
+                    }) =>
+            {
+                AppEvent::SelectPendingOption(2)
+            }
             KeyCode::Char('s') => AppEvent::OpenOverlay(Overlay::Setup),
             KeyCode::Backspace => AppEvent::Backspace,
             KeyCode::Char(c) => AppEvent::InputChar(c),
@@ -396,9 +399,7 @@ async fn dispatch_event(
                             }
                         }
                         _ => {
-                            app.push_notice(
-                                "Select 1 to implement now or 2 to continue planning.",
-                            );
+                            app.push_notice("Select 1 to implement now or 2 to continue planning.");
                         }
                     },
                     self::state::ActivePendingInteractionKind::ShellApproval => {
@@ -571,7 +572,26 @@ async fn handle_submit(
         return Ok(false);
     }
     if app.is_busy() {
-        app.push_notice("A task is already running. Wait for it to finish.");
+        let input = std::mem::take(&mut app.input);
+        let trimmed = input.trim();
+        if trimmed.is_empty() {
+            return Ok(false);
+        }
+        if trimmed.starts_with('/') {
+            app.push_notice(
+                "A task is already running. Wait for it to finish before running a slash command.",
+            );
+        } else {
+            let queued = app.queue_follow_up_message(trimmed.to_string());
+            let suffix = if queued > 1 {
+                format!(" {queued} follow-up messages are queued.")
+            } else {
+                " 1 follow-up message is queued.".to_string()
+            };
+            app.notice = Some(format!(
+                "Queued for after the current task finishes.{suffix}"
+            ));
+        }
         return Ok(false);
     }
 
@@ -657,9 +677,10 @@ fn classify_pending_plan_approval_input(input: &str) -> Option<PendingPlanApprov
         "调整计划",
         "完善计划",
     ];
-    if continue_planning_keywords.iter().any(|keyword| {
-        lowered.contains(&keyword.to_ascii_lowercase()) || trimmed.contains(keyword)
-    }) {
+    if continue_planning_keywords
+        .iter()
+        .any(|keyword| lowered.contains(&keyword.to_ascii_lowercase()) || trimmed.contains(keyword))
+    {
         return Some(PendingPlanApprovalAction::ContinuePlanning);
     }
 
@@ -685,9 +706,10 @@ fn classify_pending_plan_approval_input(input: &str) -> Option<PendingPlanApprov
         "continue",
         "ship it",
     ];
-    if approve_keywords.iter().any(|keyword| {
-        lowered == keyword.to_ascii_lowercase() || trimmed == *keyword
-    }) {
+    if approve_keywords
+        .iter()
+        .any(|keyword| lowered == keyword.to_ascii_lowercase() || trimmed == *keyword)
+    {
         return Some(PendingPlanApprovalAction::StartImplementation);
     }
 
@@ -746,6 +768,12 @@ fn should_open_codex_auth_guide(app: &TuiApp) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{classify_pending_plan_approval_input, PendingPlanApprovalAction};
+    use crate::config::ConfigManager;
+    use crate::tui::state::{RunningTask, TaskKind, TuiApp};
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+    use tempfile::tempdir;
+    use tokio::sync::mpsc;
 
     #[test]
     fn pending_plan_approval_treats_generic_continue_as_approval() {
@@ -769,5 +797,49 @@ mod tests {
             classify_pending_plan_approval_input("continue planning"),
             Some(PendingPlanApprovalAction::ContinuePlanning)
         );
+    }
+
+    #[tokio::test]
+    async fn busy_submit_queues_follow_up_message() {
+        let temp = tempdir().expect("tempdir");
+        let mut app = TuiApp::new(ConfigManager {
+            path: temp.path().join("config.json"),
+        })
+        .expect("app");
+        app.input = "continue with the follow-up".into();
+
+        let (_sender, receiver) = mpsc::unbounded_channel();
+        app.running_task = Some(RunningTask {
+            kind: TaskKind::Query,
+            receiver,
+            handle: tokio::spawn(async move {
+                tokio::time::sleep(Duration::from_secs(60)).await;
+                unreachable!()
+            }),
+            started_at: Instant::now(),
+            next_heartbeat_after_secs: 2,
+        });
+
+        let mut agent_slot = None;
+        let oauth_manager = Arc::new(crate::oauth::OAuthManager {
+            config_dir: temp.path().join(".rara"),
+        });
+        let should_quit = super::handle_submit(&mut app, &mut agent_slot, &oauth_manager)
+            .await
+            .expect("submit");
+
+        assert!(!should_quit);
+        assert_eq!(
+            app.queued_follow_up_preview(),
+            Some("continue with the follow-up")
+        );
+        assert!(app
+            .notice
+            .as_deref()
+            .is_some_and(|value| value.contains("Queued for after the current task")));
+
+        if let Some(task) = app.running_task.take() {
+            task.handle.abort();
+        }
     }
 }

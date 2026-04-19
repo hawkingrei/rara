@@ -258,7 +258,12 @@ impl Agent {
         F: FnMut(AgentEvent) + Send,
     {
         report(AgentEvent::Status("Sending prompt to model.".to_string()));
-        let mut messages = self.history.clone();
+        let mut messages = self
+            .history
+            .iter()
+            .filter(|message| !is_compact_boundary_message(message))
+            .cloned()
+            .collect::<Vec<_>>();
         messages.insert(
             0,
             Message {
@@ -564,4 +569,13 @@ impl Agent {
         }
         Ok(tool_results)
     }
+}
+
+fn is_compact_boundary_message(message: &Message) -> bool {
+    message.role == "system"
+        && message
+            .content
+            .get("type")
+            .and_then(Value::as_str)
+            == Some("compact_boundary")
 }

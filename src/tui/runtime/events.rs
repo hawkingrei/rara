@@ -243,7 +243,14 @@ fn tool_action_label(message: &str) -> Option<String> {
                 rest.as_str()
             }
         )),
-        "apply_patch" => Some("Apply patch".to_string()),
+        "apply_patch" => Some(format!(
+            "Apply patch {}",
+            if rest.is_empty() {
+                "changes"
+            } else {
+                rest.as_str()
+            }
+        )),
         "write_file" => Some(format!(
             "Write {}",
             if rest.is_empty() {
@@ -409,9 +416,40 @@ fn format_tool_use(name: &str, input: &serde_json::Value) -> String {
             .and_then(serde_json::Value::as_str)
             .map(|url| format!("web_fetch {url}"))
             .unwrap_or_else(|| format!("{name} {input}")),
-        "apply_patch" => "apply_patch".to_string(),
+        "apply_patch" => format_apply_patch_use(input),
         _ => format!("{name} {input}"),
     }
+}
+
+fn format_apply_patch_use(input: &serde_json::Value) -> String {
+    let Some(patch) = input.get("patch").and_then(serde_json::Value::as_str) else {
+        return "apply_patch".to_string();
+    };
+
+    let files = apply_patch_targets(patch);
+    if files.is_empty() {
+        "apply_patch".to_string()
+    } else {
+        format!("apply_patch {}", files.join(", "))
+    }
+}
+
+fn apply_patch_targets(patch: &str) -> Vec<String> {
+    let mut files = Vec::new();
+    for line in patch.lines().map(str::trim) {
+        let path = line
+            .strip_prefix("*** Add File: ")
+            .or_else(|| line.strip_prefix("*** Delete File: "))
+            .or_else(|| line.strip_prefix("*** Update File: "))
+            .or_else(|| line.strip_prefix("*** Move to: "));
+        let Some(path) = path else {
+            continue;
+        };
+        if !files.iter().any(|existing| existing == path) {
+            files.push(path.to_string());
+        }
+    }
+    files
 }
 
 fn format_tool_result(name: &str, content: &str) -> String {
@@ -468,13 +506,31 @@ fn format_tool_result(name: &str, content: &str) -> String {
                 .and_then(serde_json::Value::as_str)
                 .unwrap_or_default();
             let mut summary = format!("bash exit_code={exit_code}");
-            if !stdout.trim().is_empty() {
-                summary.push_str(&format!("\nstdout: {}", first_non_empty_line(stdout)));
+            if let Some(stdout_preview) = output_tail_preview(stdout) {
+                summary.push_str(&format!("\nstdout:\n{stdout_preview}"));
             }
-            if !stderr.trim().is_empty() {
-                summary.push_str(&format!("\nstderr: {}", first_non_empty_line(stderr)));
+            if let Some(stderr_preview) = output_tail_preview(stderr) {
+                summary.push_str(&format!("\nstderr:\n{stderr_preview}"));
             }
             return summary;
+        }
+    }
+
+    if name == "apply_patch" {
+        if let Ok(value) = serde_json::from_str::<serde_json::Value>(content) {
+            return format_apply_patch_result(&value);
+        }
+    }
+
+    if name == "write_file" {
+        if let Ok(value) = serde_json::from_str::<serde_json::Value>(content) {
+            return format_write_file_result(&value);
+        }
+    }
+
+    if name == "replace" {
+        if let Ok(value) = serde_json::from_str::<serde_json::Value>(content) {
+            return format_replace_result(&value);
         }
     }
 
@@ -498,6 +554,176 @@ fn format_tool_result(name: &str, content: &str) -> String {
     }
 
     format!("{name}: {content}")
+}
+
+fn format_apply_patch_result(value: &serde_json::Value) -> String {
+    let status = value
+        .get("status")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("unknown");
+    let files_changed = value
+        .get("files_changed")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or_default();
+    let added = value
+        .get("line_delta")
+        .and_then(|delta| delta.get("added"))
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or_default();
+    let removed = value
+        .get("line_delta")
+        .and_then(|delta| delta.get("removed"))
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or_default();
+
+    let mut lines = vec![format!(
+        "apply_patch {status} {files_changed} file(s) (+{added} -{removed})"
+    )];
+
+    append_path_group(&mut lines, "updated", value.get("updated_files"));
+    append_path_group(&mut lines, "created", value.get("created_files"));
+    append_path_group(&mut lines, "deleted", value.get("deleted_files"));
+
+    if let Some(moves) = value
+        .get("moved_files")
+        .and_then(serde_json::Value::as_array)
+    {
+        let rendered = moves
+            .iter()
+            .filter_map(|entry| {
+                let from = entry.get("from").and_then(serde_json::Value::as_str)?;
+                let to = entry.get("to").and_then(serde_json::Value::as_str)?;
+                Some(format!("{from} -> {to}"))
+            })
+            .collect::<Vec<_>>();
+        if !rendered.is_empty() {
+            lines.push(format!("moved: {}", rendered.join(", ")));
+        }
+    }
+
+    if let Some(summary) = value.get("summary").and_then(serde_json::Value::as_array) {
+        let preview = summary
+            .iter()
+            .filter_map(serde_json::Value::as_str)
+            .take(4)
+            .collect::<Vec<_>>();
+        if !preview.is_empty() {
+            let remaining = summary.len().saturating_sub(preview.len());
+            lines.push("changes:".to_string());
+            for line in preview {
+                lines.push(format!("  {line}"));
+            }
+            if remaining > 0 {
+                lines.push(format!("  ... {remaining} more change(s)"));
+            }
+        }
+    }
+
+    lines.join("\n")
+}
+
+fn append_path_group(lines: &mut Vec<String>, label: &str, value: Option<&serde_json::Value>) {
+    let Some(paths) = value.and_then(serde_json::Value::as_array) else {
+        return;
+    };
+    let rendered = paths
+        .iter()
+        .filter_map(serde_json::Value::as_str)
+        .take(4)
+        .collect::<Vec<_>>();
+    if rendered.is_empty() {
+        return;
+    }
+    lines.push(format!("{label}: {}", rendered.join(", ")));
+    let remaining = paths.len().saturating_sub(rendered.len());
+    if remaining > 0 {
+        lines.push(format!("  ... {remaining} more"));
+    }
+}
+
+fn output_tail_preview(output: &str) -> Option<String> {
+    let lines = output
+        .lines()
+        .map(str::trim_end)
+        .filter(|line| !line.trim().is_empty())
+        .collect::<Vec<_>>();
+    if lines.is_empty() {
+        return None;
+    }
+
+    let preview = lines
+        .iter()
+        .rev()
+        .take(6)
+        .copied()
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect::<Vec<_>>();
+    Some(preview.join("\n"))
+}
+
+fn format_write_file_result(value: &serde_json::Value) -> String {
+    let path = value
+        .get("path")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("<unknown>");
+    let operation = value
+        .get("operation")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("updated");
+    let line_count = value
+        .get("line_count")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or_default();
+    let bytes_written = value
+        .get("bytes_written")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or_default();
+
+    let mut lines = vec![format!(
+        "write_file {operation} {path} ({line_count} lines, {bytes_written} bytes)"
+    )];
+
+    if let Some(previous_bytes) = value
+        .get("previous_bytes")
+        .and_then(serde_json::Value::as_u64)
+    {
+        let previous_lines = value
+            .get("previous_line_count")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or_default();
+        lines.push(format!(
+            "previous: {previous_lines} lines, {previous_bytes} bytes"
+        ));
+    }
+
+    lines.join("\n")
+}
+
+fn format_replace_result(value: &serde_json::Value) -> String {
+    let path = value
+        .get("path")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("<unknown>");
+    let replacements = value
+        .get("replacements")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or_default();
+    let line_delta = value
+        .get("line_delta")
+        .and_then(serde_json::Value::as_i64)
+        .unwrap_or_default();
+    let mut lines = vec![format!(
+        "replace {path} {replacements} replacement(s) (Δlines={line_delta})"
+    )];
+    if let Some(old_preview) = value.get("old_preview").and_then(serde_json::Value::as_str) {
+        lines.push(format!("old: {old_preview}"));
+    }
+    if let Some(new_preview) = value.get("new_preview").and_then(serde_json::Value::as_str) {
+        lines.push(format!("new: {new_preview}"));
+    }
+    lines.join("\n")
 }
 
 fn exploration_result_note(message: &str) -> Option<String> {
@@ -583,7 +809,11 @@ use crate::redaction::redact_secrets;
 
 #[cfg(test)]
 mod tests {
-    use super::{planning_note_lines, subagent_request_input};
+    use super::{
+        format_apply_patch_result, format_apply_patch_use, format_tool_result, planning_note_lines,
+        subagent_request_input,
+    };
+    use serde_json::json;
 
     #[test]
     fn parses_delegated_request_input_from_subagent_result() {
@@ -611,5 +841,50 @@ mod tests {
             notes,
             vec!["The current discovery is hardcoded to root-level markdown files.".to_string()]
         );
+    }
+
+    #[test]
+    fn formats_apply_patch_tool_use_with_target_files() {
+        let rendered = format_apply_patch_use(&json!({
+            "patch": "*** Begin Patch\n*** Update File: src/tui/render.rs\n@@\n-old\n+new\n*** Update File: src/tui/runtime/events.rs\n@@\n-old\n+new\n*** End Patch"
+        }));
+        assert_eq!(rendered, "apply_patch src/tui/render.rs, src/tui/runtime/events.rs");
+    }
+
+    #[test]
+    fn formats_apply_patch_tool_result_as_diff_summary() {
+        let rendered = format_apply_patch_result(&json!({
+            "status": "ok",
+            "files_changed": 2,
+            "line_delta": { "added": 12, "removed": 3 },
+            "updated_files": ["src/tui/render.rs"],
+            "created_files": ["src/tui/render/bottom_pane.rs"],
+            "summary": [
+                "updated src/tui/render.rs",
+                "created src/tui/render/bottom_pane.rs"
+            ]
+        }));
+
+        assert!(rendered.contains("apply_patch ok 2 file(s) (+12 -3)"));
+        assert!(rendered.contains("updated: src/tui/render.rs"));
+        assert!(rendered.contains("created: src/tui/render/bottom_pane.rs"));
+        assert!(rendered.contains("changes:"));
+    }
+
+    #[test]
+    fn formats_bash_tool_result_with_output_tail() {
+        let rendered = format_tool_result(
+            "bash",
+            &json!({
+                "exit_code": 0,
+                "stdout": "line 1\nline 2\nline 3\nline 4\nline 5\nline 6\nline 7\n",
+                "stderr": "warn 1\nwarn 2\n"
+            })
+            .to_string(),
+        );
+
+        assert!(rendered.contains("bash exit_code=0"));
+        assert!(rendered.contains("stdout:\nline 2\nline 3\nline 4\nline 5\nline 6\nline 7"));
+        assert!(rendered.contains("stderr:\nwarn 1\nwarn 2"));
     }
 }
