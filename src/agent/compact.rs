@@ -1,5 +1,6 @@
 use super::*;
 use crate::llm::ContextBudget;
+use std::sync::OnceLock;
 
 const RECENT_FILE_CARRY_OVER_LIMIT: usize = 5;
 const RECENT_FILE_EXCERPT_LIMIT: usize = 3;
@@ -213,7 +214,7 @@ impl Agent {
 }
 
 fn estimate_history_tokens(history: &[Message]) -> Result<usize> {
-    let bpe = tiktoken_rs::cl100k_base()?;
+    let bpe = tokenizer()?;
     Ok(history
         .iter()
         .map(|message| estimate_message_tokens_with_bpe(message, &bpe))
@@ -221,7 +222,7 @@ fn estimate_history_tokens(history: &[Message]) -> Result<usize> {
 }
 
 fn estimate_message_tokens(message: &Message) -> Result<usize> {
-    let bpe = tiktoken_rs::cl100k_base()?;
+    let bpe = tokenizer()?;
     estimate_message_tokens_with_bpe(message, &bpe)
 }
 
@@ -229,9 +230,22 @@ fn estimate_message_tokens_with_bpe(
     message: &Message,
     bpe: &tiktoken_rs::CoreBPE,
 ) -> Result<usize> {
-    Ok(bpe
-        .encode_with_special_tokens(&message.content.to_string())
-        .len())
+    let rendered;
+    let content = if let Some(text) = message.content.as_str() {
+        text
+    } else {
+        rendered = message.content.to_string();
+        rendered.as_str()
+    };
+    Ok(bpe.encode_with_special_tokens(content).len())
+}
+
+fn tokenizer() -> Result<&'static tiktoken_rs::CoreBPE> {
+    static BPE: OnceLock<std::result::Result<tiktoken_rs::CoreBPE, String>> = OnceLock::new();
+    match BPE.get_or_init(|| tiktoken_rs::cl100k_base().map_err(|err| err.to_string())) {
+        Ok(bpe) => Ok(bpe),
+        Err(err) => Err(anyhow::anyhow!(err.clone())),
+    }
 }
 
 fn collect_recent_files(history: &[Message], limit: usize) -> Vec<String> {

@@ -769,7 +769,6 @@ fn should_open_codex_auth_guide(app: &TuiApp) -> bool {
 mod tests {
     use super::{classify_pending_plan_approval_input, PendingPlanApprovalAction};
     use crate::config::ConfigManager;
-    use crate::oauth::OAuthManager;
     use crate::tui::state::{RunningTask, TaskKind, TuiApp};
     use std::sync::Arc;
     use std::time::{Duration, Instant};
@@ -822,7 +821,9 @@ mod tests {
         });
 
         let mut agent_slot = None;
-        let oauth_manager = Arc::new(OAuthManager::new().expect("oauth manager"));
+        let oauth_manager = Arc::new(crate::oauth::OAuthManager {
+            config_dir: temp.path().join(".rara"),
+        });
         let should_quit = super::handle_submit(&mut app, &mut agent_slot, &oauth_manager)
             .await
             .expect("submit");

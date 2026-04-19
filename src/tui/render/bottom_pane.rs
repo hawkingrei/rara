@@ -226,21 +226,7 @@ fn render_composer(f: &mut Frame, app: &TuiApp, area: Rect) -> Option<(u16, u16)
             .wrap(Wrap { trim: false }),
         chunks[0],
     );
-    let hint = if app.input.trim_start().starts_with('/') {
-        "slash command  Enter run  Esc close"
-    } else if app.has_queued_follow_up_messages() {
-        "queued follow-up pending  current task will finish before submission"
-    } else if app.is_busy() {
-        "busy  wait for the current task to finish"
-    } else if app.has_pending_planning_suggestion() {
-        "planning suggested  1 enter planning mode  2 continue in execute mode"
-    } else if let Some(pending) = app.active_pending_interaction() {
-        pending_interaction_hint_text(pending.kind)
-    } else if app.agent_execution_mode_label() == "plan" {
-        "planning mode  analyze, refine, or finalize a plan"
-    } else {
-        "/compact summarize history  /plan enter planning mode  /quit exit"
-    };
+    let hint = composer_hint(app);
     f.render_widget(
         Paragraph::new(Span::styled(hint, Style::default().fg(Color::Gray)))
             .alignment(Alignment::Left),
@@ -276,6 +262,24 @@ fn queued_follow_up_preview_lines(app: &TuiApp) -> Vec<Line<'static>> {
         ]));
     }
     lines
+}
+
+fn composer_hint(app: &TuiApp) -> &'static str {
+    if app.input.trim_start().starts_with('/') {
+        "slash command  Enter run  Esc close"
+    } else if app.has_queued_follow_up_messages() {
+        "queued follow-up pending  current task will finish before submission"
+    } else if app.is_busy() {
+        "busy  wait for the current task to finish"
+    } else if app.has_pending_planning_suggestion() {
+        "planning suggested  1 enter planning mode  2 continue in execute mode"
+    } else if let Some(pending) = app.active_pending_interaction() {
+        pending_interaction_hint_text(pending.kind)
+    } else if app.agent_execution_mode_label() == "plan" {
+        "planning mode  analyze, refine, or finalize a plan"
+    } else {
+        "/compact summarize history  /plan enter planning mode  /quit exit"
+    }
 }
 
 fn render_footer(f: &mut Frame, app: &TuiApp, area: Rect) {
@@ -389,7 +393,9 @@ mod tests {
         InteractionKind, PendingInteractionSnapshot, RuntimePhase, RuntimeSnapshot, TuiApp,
     };
 
-    use super::{activity_status_line, footer_summary_text, queued_follow_up_preview_lines};
+    use super::{
+        activity_status_line, composer_hint, footer_summary_text, queued_follow_up_preview_lines,
+    };
 
     #[test]
     fn footer_summary_text_prefers_minimal_idle_context() {
@@ -484,7 +490,9 @@ mod tests {
         app.runtime_phase = RuntimePhase::ProcessingResponse;
         app.queue_follow_up_message("follow-up");
 
-        let (_, _, detail) = activity_status_line(&app);
-        assert!(detail.contains("queued follow-up"));
+        assert_eq!(
+            composer_hint(&app),
+            "queued follow-up pending  current task will finish before submission"
+        );
     }
 }

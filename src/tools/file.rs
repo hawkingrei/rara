@@ -2,6 +2,7 @@ use crate::tool::{Tool, ToolError};
 use async_trait::async_trait;
 use serde_json::{json, Value};
 use std::fs;
+use std::io::{BufRead, BufReader};
 use std::path::Path;
 use walkdir::WalkDir;
 
@@ -101,7 +102,7 @@ impl Tool for WriteFileTool {
         let c = i["content"]
             .as_str()
             .ok_or(ToolError::InvalidInput("content".into()))?;
-        let existing = fs::read_to_string(p).ok();
+        let existing = existing_file_summary(p)?;
         let operation = if existing.is_some() {
             "overwritten"
         } else {
@@ -114,8 +115,8 @@ impl Tool for WriteFileTool {
             "operation": operation,
             "bytes_written": c.len(),
             "line_count": c.lines().count(),
-            "previous_bytes": existing.as_ref().map(|value| value.len()),
-            "previous_line_count": existing.as_ref().map(|value| value.lines().count()),
+            "previous_bytes": existing.as_ref().map(|(bytes, _)| *bytes),
+            "previous_line_count": existing.as_ref().map(|(_, line_count)| *line_count),
         }))
     }
 }
@@ -233,6 +234,24 @@ fn preview_snippet(value: &str) -> String {
         preview.push_str("...");
     }
     preview
+}
+
+fn existing_file_summary(path: &str) -> Result<Option<(u64, usize)>, ToolError> {
+    let metadata = match fs::metadata(path) {
+        Ok(metadata) => metadata,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(ToolError::Io(err)),
+    };
+
+    let file = fs::File::open(path)?;
+    let reader = BufReader::new(file);
+    let mut line_count = 0usize;
+    for line in reader.lines() {
+        line?;
+        line_count += 1;
+    }
+
+    Ok(Some((metadata.len(), line_count)))
 }
 
 #[cfg(test)]
