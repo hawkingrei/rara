@@ -13,7 +13,7 @@ Active backlog only. Keep this file small and current.
 
 - [ ] Add explicit HTTP timeouts to all networked backends in `src/llm.rs` so provider calls fail predictably instead of hanging indefinitely.
 - [ ] Extract shared message-mapping helpers across OpenAI-compatible and Ollama backends to reduce duplication and keep tool-call behavior consistent.
-- [ ] Add a real `team` runtime mode behind a CLI flag: in team mode, use a small model first for intent routing and only hand the task to the larger model when the intent is relevant to that worker, instead of sending every turn directly to the expensive model.
+- [ ] Add an AgentHub-oriented `team` runtime mode on top of ACP: for role-specialized worker sessions, use a small model first for intent routing and only hand the task to the larger worker model when the intent is relevant to that worker, instead of sending every ACP turn directly to the expensive model.
 
 ## Memory and Retrieval
 
@@ -22,7 +22,7 @@ Active backlog only. Keep this file small and current.
 - [ ] Harden local model prompting contracts for Gemma 4 and Qwen3: chat template handling, stop sequences, and tool-call JSON framing should be explicit and regression-tested.
 - [ ] Replace the current hash-based local embedding fallback with a real embedding backend so project memory retrieval quality is good enough for normal coding sessions.
 - [ ] Replace the mock `VectorDB` implementation in `src/vectordb.rs` with real LanceDB-backed search/upsert behavior, or feature-gate the memory tools until the backend is real.
-- [ ] Implement the ACP runtime path end to end: `RaraAcpAgent::prompt` and `run_acp_stdio` should execute the real tool/backend loop instead of returning placeholder responses.
+- [ ] Implement the ACP runtime path end to end: `RaraAcpAgent::prompt` and `run_acp_stdio` should execute the real tool/backend loop instead of returning placeholder responses, because AgentHub integration will use ACP as the worker boundary.
 - [ ] Implement the Gemini backend instead of keeping the current `Gemini pending` stub so the configured provider is a real option.
 - [ ] Implement session context retrieval on top of the existing session storage and vector/session managers instead of returning `no_context_found`.
 - [ ] Implement the vector memory tools against the real backend and LanceDB path instead of using placeholder save/retrieve responses.
