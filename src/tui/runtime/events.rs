@@ -346,7 +346,12 @@ fn mentions_mutating_plan_action(line: &str) -> bool {
     let lower = line.to_ascii_lowercase();
     lower.contains("apply_patch")
         || lower.contains("write_file")
+        || lower.contains("apply the patch")
+        || lower.contains("write the file")
+        || lower.contains("edit ")
         || lower.contains("replace ")
+        || lower.contains("modify ")
+        || lower.contains("write ")
         || lower.contains("edit files")
         || lower.contains("modify the code")
         || lower.contains("implement the change")

@@ -60,12 +60,15 @@ fn render_activity_bar(f: &mut Frame, app: &TuiApp, area: Rect) {
             Style::default().fg(color).add_modifier(Modifier::BOLD),
         ),
     ];
-    if app.agent_execution_mode_label() == "plan"
-        && !matches!(
-            app.active_pending_interaction().map(|item| item.kind),
-            Some(ActivePendingInteractionKind::PlanApproval)
+    let label_already_reflects_planning = matches!(
+        app.active_pending_interaction().map(|item| item.kind),
+        Some(
+            ActivePendingInteractionKind::PlanApproval
+                | ActivePendingInteractionKind::PlanningQuestion
         )
-    {
+    ) || matches!(label, "Planning");
+
+    if app.agent_execution_mode_label() == "plan" && !label_already_reflects_planning {
         spans.push(Span::raw("  "));
         spans.push(badge("mode", "plan", Color::LightBlue));
     }

@@ -1,5 +1,4 @@
 use super::state::{ActivePendingInteractionKind, TuiApp};
-use super::plan_display::status_plan_text;
 
 pub fn pending_interaction_section_title(kind: ActivePendingInteractionKind) -> &'static str {
     match kind {
@@ -41,9 +40,9 @@ pub fn pending_interaction_hint_text(kind: ActivePendingInteractionKind) -> &'st
 }
 
 pub fn status_plan_approval_text(app: &TuiApp) -> String {
+    let _ = app;
     format!(
-        "review the updated plan before implementation:\n\n{}\n\noptions:\n1. Start implementation now\n2. Continue planning",
-        status_plan_text(app)
+        "review the updated plan before implementation:\n\noptions:\n1. Start implementation now\n2. Continue planning"
     )
 }
 

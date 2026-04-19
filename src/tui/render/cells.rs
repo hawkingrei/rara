@@ -18,8 +18,7 @@ use crate::tui::state::{
 
 use super::{
     history_pipeline::{
-        completion_role_kind as committed_completion_role_kind, narrative_entries,
-        ordered_completion_entries,
+        narrative_entries, ordered_completion_entries,
     },
     current_turn_exploration_summary, current_turn_exploration_summary_from_entries,
     current_turn_tool_summary, formatted_message_lines, prefixed_message_lines,
@@ -104,16 +103,7 @@ impl InteractionCompletionKind {
 }
 
 fn completion_role_color(role: &str) -> Option<Color> {
-    committed_completion_role_kind(role).map(|kind| match kind {
-        super::history_pipeline::CommittedCompletionKind::PlanDecision => Color::LightBlue,
-        super::history_pipeline::CommittedCompletionKind::ShellApprovalCompleted
-        | super::history_pipeline::CommittedCompletionKind::QuestionAnswered
-        | super::history_pipeline::CommittedCompletionKind::PlanningQuestionAnswered
-        | super::history_pipeline::CommittedCompletionKind::ExplorationQuestionAnswered
-        | super::history_pipeline::CommittedCompletionKind::SubAgentQuestionAnswered => {
-            Color::LightGreen
-        }
-    })
+    InteractionCompletionKind::from_role(role).map(|kind| kind.color())
 }
 
 fn completion_role_kind(role: &str) -> Option<InteractionCompletionKind> {
@@ -913,7 +903,6 @@ impl ActiveCell for ActiveTurnCell<'_> {
         if let Some(pending) = self.app.active_pending_interaction() {
             let mut request_lines = pending_interaction_detail_text(self.app, pending.kind)
                 .lines()
-                .take(10)
                 .map(ToString::to_string)
                 .collect::<Vec<_>>();
             request_lines.push(pending_interaction_shortcut_text(pending.kind).to_string());
