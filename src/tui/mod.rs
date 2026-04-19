@@ -9,6 +9,7 @@ mod line_utils;
 mod markdown;
 mod markdown_render;
 mod markdown_stream;
+mod plan_display;
 mod render;
 mod runtime;
 mod session_restore;

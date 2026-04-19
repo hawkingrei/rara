@@ -1,49 +1,87 @@
 use super::state::{ActivePendingInteractionKind, TuiApp};
+use super::plan_display::status_plan_text;
 
-pub fn status_plan_approval_text(app: &TuiApp) -> String {
-    let plan_summary = if app.snapshot.plan_steps.is_empty() {
-        "No structured plan captured yet.".to_string()
-    } else {
-        app.snapshot
-            .plan_steps
-            .iter()
-            .enumerate()
-            .take(5)
-            .map(|(idx, (_, step))| format!("{}. {}", idx + 1, step))
-            .collect::<Vec<_>>()
-            .join("\n")
-    };
-
-    let explanation = app
-        .snapshot
-        .plan_explanation
-        .as_deref()
-        .unwrap_or("Review the proposed implementation plan before starting code changes.");
-
-    format!(
-        "ready to implement:\n{}\n\nsummary:\n{}\n\noptions:\n1. Start implementation now\n2. Continue planning",
-        plan_summary, explanation
-    )
-}
-
-pub fn status_active_pending_interaction_text(app: &TuiApp) -> Option<(&'static str, String)> {
-    let pending = app.active_pending_interaction()?;
-    let title = match pending.kind {
+pub fn pending_interaction_section_title(kind: ActivePendingInteractionKind) -> &'static str {
+    match kind {
         ActivePendingInteractionKind::PlanApproval => " Plan Approval ",
         ActivePendingInteractionKind::ShellApproval => " Shell Approval ",
         ActivePendingInteractionKind::PlanningQuestion => " Planning Question ",
         ActivePendingInteractionKind::ExplorationQuestion => " Exploration Question ",
         ActivePendingInteractionKind::SubAgentQuestion => " Sub-agent Question ",
         ActivePendingInteractionKind::RequestInput => " Request Input ",
-    };
-    let text = match pending.kind {
+    }
+}
+
+pub fn pending_interaction_card_title(kind: ActivePendingInteractionKind) -> &'static str {
+    match kind {
+        ActivePendingInteractionKind::PlanApproval => "Awaiting Approval",
+        ActivePendingInteractionKind::ShellApproval => "Shell Approval",
+        ActivePendingInteractionKind::PlanningQuestion => "Planning Question",
+        ActivePendingInteractionKind::ExplorationQuestion => "Exploration Question",
+        ActivePendingInteractionKind::SubAgentQuestion => "Sub-agent Question",
+        ActivePendingInteractionKind::RequestInput => "Request Input",
+    }
+}
+
+pub fn pending_interaction_hint_text(kind: ActivePendingInteractionKind) -> &'static str {
+    match kind {
+        ActivePendingInteractionKind::PlanApproval => {
+            "plan approval pending  1 start implementation  2 continue planning"
+        }
+        ActivePendingInteractionKind::ShellApproval => {
+            "shell approval pending  1 once  2 session  3 suggestion"
+        }
+        ActivePendingInteractionKind::PlanningQuestion
+        | ActivePendingInteractionKind::ExplorationQuestion
+        | ActivePendingInteractionKind::SubAgentQuestion
+        | ActivePendingInteractionKind::RequestInput => {
+            "question pending  press 1/2/3 or type a reply"
+        }
+    }
+}
+
+pub fn status_plan_approval_text(app: &TuiApp) -> String {
+    format!(
+        "review the updated plan before implementation:\n\n{}\n\noptions:\n1. Start implementation now\n2. Continue planning",
+        status_plan_text(app)
+    )
+}
+
+pub fn pending_interaction_shortcut_text(kind: ActivePendingInteractionKind) -> &'static str {
+    match kind {
+        ActivePendingInteractionKind::PlanApproval => {
+            "shortcuts: press 1 to start implementation, 2 to continue planning"
+        }
+        ActivePendingInteractionKind::ShellApproval => {
+            "shortcuts: press 1 to approve once, 2 to approve for session, 3 to keep as suggestion"
+        }
+        ActivePendingInteractionKind::PlanningQuestion
+        | ActivePendingInteractionKind::ExplorationQuestion
+        | ActivePendingInteractionKind::SubAgentQuestion
+        | ActivePendingInteractionKind::RequestInput => {
+            "shortcuts: press 1/2/3 to answer immediately"
+        }
+    }
+}
+
+pub fn pending_interaction_detail_text(
+    app: &TuiApp,
+    kind: ActivePendingInteractionKind,
+) -> String {
+    match kind {
         ActivePendingInteractionKind::PlanApproval => status_plan_approval_text(app),
         ActivePendingInteractionKind::ShellApproval => status_command_approval_text(app),
         ActivePendingInteractionKind::PlanningQuestion
         | ActivePendingInteractionKind::ExplorationQuestion
         | ActivePendingInteractionKind::SubAgentQuestion
         | ActivePendingInteractionKind::RequestInput => status_request_user_input_text(app),
-    };
+    }
+}
+
+pub fn status_active_pending_interaction_text(app: &TuiApp) -> Option<(&'static str, String)> {
+    let pending = app.active_pending_interaction()?;
+    let title = pending_interaction_section_title(pending.kind);
+    let text = pending_interaction_detail_text(app, pending.kind);
     Some((title, text))
 }
 

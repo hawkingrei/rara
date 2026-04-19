@@ -75,8 +75,10 @@ pub(super) fn apply_tui_event(app: &mut TuiApp, event: TuiEvent) {
                     Some(message.lines().next().unwrap_or(role).trim().to_string()),
                 );
             } else if role == "Agent" {
-                let planning_mode = matches!(app.agent_execution_mode, crate::agent::AgentExecutionMode::Plan);
-                let has_live_exploration = !app.active_live.exploration_actions.is_empty();
+                let planning_mode =
+                    matches!(app.agent_execution_mode, crate::agent::AgentExecutionMode::Plan);
+                let has_live_exploration = !app.active_live.exploration_actions.is_empty()
+                    || !app.active_live.exploration_notes.is_empty();
                 if !app.active_live.exploration_actions.is_empty()
                     && matches!(
                         app.runtime_phase,
@@ -91,12 +93,17 @@ pub(super) fn apply_tui_event(app: &mut TuiApp, event: TuiEvent) {
                     RuntimePhase::ProcessingResponse,
                     Some("receiving model output".into()),
                 );
-                if planning_mode
-                    && has_live_exploration
-                    && !contains_structured_planning_output(&message)
-                {
-                    app.agent_markdown_stream = None;
-                    return;
+                if planning_mode && !contains_structured_planning_output(&message) {
+                    for note in planning_note_lines(&message) {
+                        app.record_planning_note(note);
+                    }
+                    if has_live_exploration
+                        || !app.active_live.planning_actions.is_empty()
+                        || !app.active_live.planning_notes.is_empty()
+                    {
+                        app.agent_markdown_stream = None;
+                        return;
+                    }
                 }
                 app.finalize_agent_stream(Some(message));
                 return;
@@ -301,10 +308,48 @@ fn is_planning_chatter(line: &str) -> bool {
     let lower = line.trim().to_ascii_lowercase();
     lower.starts_with("i will now ")
         || lower.starts_with("i will start by ")
+        || lower.starts_with("i will use ")
+        || lower.starts_with("i am ready to ")
+        || lower.starts_with("i'm ready to ")
         || lower.starts_with("i need to ")
         || lower.starts_with("to continue ")
         || lower.starts_with("to fully ")
         || lower.starts_with("to understand ")
+        || lower.starts_with("this is the final step")
+        || lower.starts_with("based on the existing code")
+}
+
+fn planning_note_lines(message: &str) -> Vec<String> {
+    let mut notes = Vec::new();
+    for line in message
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+    {
+        if line.starts_with("/compact ")
+            || line.starts_with("/plan ")
+            || line.starts_with("/quit ")
+            || line.starts_with("waiting for model response")
+            || is_planning_chatter(line)
+            || mentions_mutating_plan_action(line)
+        {
+            continue;
+        }
+        if !notes.iter().any(|existing| existing == line) {
+            notes.push(line.to_string());
+        }
+    }
+    notes
+}
+
+fn mentions_mutating_plan_action(line: &str) -> bool {
+    let lower = line.to_ascii_lowercase();
+    lower.contains("apply_patch")
+        || lower.contains("write_file")
+        || lower.contains("replace ")
+        || lower.contains("edit files")
+        || lower.contains("modify the code")
+        || lower.contains("implement the change")
 }
 
 fn format_tool_use(name: &str, input: &serde_json::Value) -> String {
@@ -533,7 +578,7 @@ use crate::redaction::redact_secrets;
 
 #[cfg(test)]
 mod tests {
-    use super::subagent_request_input;
+    use super::{planning_note_lines, subagent_request_input};
 
     #[test]
     fn parses_delegated_request_input_from_subagent_result() {
@@ -549,6 +594,17 @@ mod tests {
         assert_eq!(
             parsed.note.as_deref(),
             Some("We need one product decision before editing.")
+        );
+    }
+
+    #[test]
+    fn planning_note_lines_drop_meta_and_mutating_chatter() {
+        let notes = planning_note_lines(
+            "I will use apply_patch on crates/instructions/src/workspace.rs.\nThe current discovery is hardcoded to root-level markdown files.\nThis is the final step: applying the patch.",
+        );
+        assert_eq!(
+            notes,
+            vec!["The current discovery is hardcoded to root-level markdown files.".to_string()]
         );
     }
 }

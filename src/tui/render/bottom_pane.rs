@@ -8,8 +8,8 @@ use textwrap::Options;
 use unicode_width::UnicodeWidthStr;
 
 use super::super::custom_terminal::Frame;
-use super::super::command::api_key_status;
-use super::super::state::{TaskKind, TuiApp};
+use super::super::interaction_text::pending_interaction_hint_text;
+use super::super::state::{ActivePendingInteractionKind, TaskKind, TuiApp};
 use super::badge;
 
 pub(crate) fn desired_viewport_height(app: &TuiApp, _width: u16, rows: u16) -> u16 {
@@ -53,40 +53,110 @@ pub(super) fn render_bottom_pane(
 }
 
 fn render_activity_bar(f: &mut Frame, app: &TuiApp, area: Rect) {
-    let (label, color) = if matches!(
+    let (label, color, detail) = activity_status_line(app);
+    let mut spans = vec![
+        Span::styled(
+            animated_activity_label(app, label),
+            Style::default().fg(color).add_modifier(Modifier::BOLD),
+        ),
+    ];
+    if app.agent_execution_mode_label() == "plan"
+        && !matches!(
+            app.active_pending_interaction().map(|item| item.kind),
+            Some(ActivePendingInteractionKind::PlanApproval)
+        )
+    {
+        spans.push(Span::raw("  "));
+        spans.push(badge("mode", "plan", Color::LightBlue));
+    }
+    if !detail.is_empty() {
+        spans.push(Span::raw("  "));
+        spans.push(Span::styled(detail, Style::default().fg(Color::DarkGray)));
+    }
+    let status = Paragraph::new(Line::from(spans));
+    f.render_widget(status, area);
+}
+
+fn activity_status_line(app: &TuiApp) -> (&'static str, Color, String) {
+    if matches!(
         app.runtime_phase,
         super::super::state::RuntimePhase::RebuildingBackend
     ) {
-        ("Downloading", Color::LightBlue)
-    } else if app.is_busy() {
-        ("Working", Color::Yellow)
-    } else {
-        ("Ready", Color::Green)
-    };
-    let detail = app
-        .runtime_phase_detail
-        .as_deref()
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| app.notice.as_deref().unwrap_or("waiting for input"));
-    let animated_label = animated_activity_label(app, label);
-    let mode_color = if app.agent_execution_mode_label() == "plan" {
-        Color::LightBlue
-    } else {
-        Color::LightGreen
-    };
-    let status = Paragraph::new(Line::from(vec![
-        Span::styled(
-            animated_label,
-            Style::default().fg(color).add_modifier(Modifier::BOLD),
-        ),
-        Span::raw("  "),
-        badge("mode", app.agent_execution_mode_label(), mode_color),
-        Span::raw("  "),
-        Span::styled(app.runtime_phase_label(), Style::default().fg(Color::Gray)),
-        Span::raw("  "),
-        Span::styled(detail, Style::default().fg(Color::DarkGray)),
-    ]));
-    f.render_widget(status, area);
+        return (
+            "Downloading",
+            Color::LightBlue,
+            app.runtime_phase_detail
+                .as_deref()
+                .unwrap_or("preparing backend")
+                .to_string(),
+        );
+    }
+
+    if let Some(pending) = app.active_pending_interaction() {
+        let (label, color) = match pending.kind {
+            ActivePendingInteractionKind::PlanApproval => ("Plan Approval", Color::LightBlue),
+            ActivePendingInteractionKind::ShellApproval => ("Shell Approval", Color::Yellow),
+            ActivePendingInteractionKind::PlanningQuestion => ("Planning Question", Color::LightBlue),
+            ActivePendingInteractionKind::ExplorationQuestion => ("Exploration Question", Color::Yellow),
+            ActivePendingInteractionKind::SubAgentQuestion => ("Sub-agent Question", Color::LightGreen),
+            ActivePendingInteractionKind::RequestInput => ("Request Input", Color::LightGreen),
+        };
+        let detail = match pending.kind {
+            ActivePendingInteractionKind::PlanApproval => {
+                "review the proposed plan and choose the next step".to_string()
+            }
+            ActivePendingInteractionKind::ShellApproval => app
+                .pending_command_approval()
+                .map(|interaction| interaction.summary.clone())
+                .filter(|value| !value.is_empty())
+                .unwrap_or_else(|| "review the pending shell command".to_string()),
+            ActivePendingInteractionKind::PlanningQuestion
+            | ActivePendingInteractionKind::ExplorationQuestion
+            | ActivePendingInteractionKind::SubAgentQuestion
+            | ActivePendingInteractionKind::RequestInput => app
+                .pending_request_input()
+                .map(|interaction| interaction.title.clone())
+                .filter(|value| !value.is_empty())
+                .unwrap_or_else(|| "answer the pending question".to_string()),
+        };
+        return (label, color, detail);
+    }
+
+    if app.has_pending_planning_suggestion() {
+        return (
+            "Planning Suggested",
+            Color::LightBlue,
+            "enter planning mode first or continue in execute mode".to_string(),
+        );
+    }
+
+    if app.is_busy() {
+        return (
+            "Working",
+            Color::Yellow,
+            app.runtime_phase_detail
+                .as_deref()
+                .unwrap_or("waiting for model response")
+                .to_string(),
+        );
+    }
+
+    if app.agent_execution_mode_label() == "plan" {
+        return (
+            "Planning",
+            Color::LightBlue,
+            "analyze, refine, or finalize a plan".to_string(),
+        );
+    }
+
+    (
+        "Ready",
+        Color::Green,
+        app.notice
+            .as_deref()
+            .unwrap_or("waiting for input")
+            .to_string(),
+    )
 }
 
 fn animated_activity_label(app: &TuiApp, label: &str) -> String {
@@ -150,20 +220,7 @@ fn render_composer(f: &mut Frame, app: &TuiApp, area: Rect) -> Option<(u16, u16)
     } else if app.has_pending_planning_suggestion() {
         "planning suggested  1 enter planning mode  2 continue in execute mode"
     } else if let Some(pending) = app.active_pending_interaction() {
-        match pending.kind {
-            crate::tui::state::ActivePendingInteractionKind::PlanApproval => {
-                "plan approval pending  1 start implementation  2 continue planning"
-            }
-            crate::tui::state::ActivePendingInteractionKind::ShellApproval => {
-                "shell approval pending  1 once  2 session  3 suggestion"
-            }
-            crate::tui::state::ActivePendingInteractionKind::PlanningQuestion
-            | crate::tui::state::ActivePendingInteractionKind::ExplorationQuestion
-            | crate::tui::state::ActivePendingInteractionKind::SubAgentQuestion
-            | crate::tui::state::ActivePendingInteractionKind::RequestInput => {
-                "question pending  press 1/2/3 or type a reply"
-            }
-        }
+        pending_interaction_hint_text(pending.kind)
     } else if app.agent_execution_mode_label() == "plan" {
         "planning mode  analyze, refine, or finalize a plan"
     } else {
@@ -178,19 +235,7 @@ fn render_composer(f: &mut Frame, app: &TuiApp, area: Rect) -> Option<(u16, u16)
 }
 
 fn render_footer(f: &mut Frame, app: &TuiApp, area: Rect) {
-    let context = match app.snapshot.context_window_tokens {
-        Some(window) => format!("ctx~={}/{}", app.snapshot.estimated_history_tokens, window),
-        None => format!("ctx~={}", app.snapshot.estimated_history_tokens),
-    };
-    let summary = format!(
-        "key={}  history={}  local={}  tokens={} in / {} out  {}",
-        api_key_status(&app.config),
-        app.snapshot.history_len,
-        app.transcript_entry_count(),
-        app.snapshot.total_input_tokens,
-        app.snapshot.total_output_tokens,
-        context,
-    );
+    let summary = footer_summary_text(app);
     f.render_widget(
         Paragraph::new(Line::from(Span::styled(
             summary,
@@ -199,6 +244,33 @@ fn render_footer(f: &mut Frame, app: &TuiApp, area: Rect) {
         .alignment(Alignment::Right),
         area,
     );
+}
+
+fn footer_summary_text(app: &TuiApp) -> String {
+    let context = match app.snapshot.context_window_tokens {
+        Some(window) => format!("ctx~={}/{}", app.snapshot.estimated_history_tokens, window),
+        None => format!("ctx~={}", app.snapshot.estimated_history_tokens),
+    };
+    if shows_live_task_stats(app) {
+        format!(
+            "{}  tokens={} in / {} out",
+            context, app.snapshot.total_input_tokens, app.snapshot.total_output_tokens
+        )
+    } else if app.snapshot.compaction_count > 0 {
+        format!("{}  compactions={}", context, app.snapshot.compaction_count)
+    } else {
+        context
+    }
+}
+
+fn shows_live_task_stats(app: &TuiApp) -> bool {
+    app.is_busy()
+        || matches!(
+            app.runtime_phase,
+            super::super::state::RuntimePhase::SendingPrompt
+                | super::super::state::RuntimePhase::ProcessingResponse
+                | super::super::state::RuntimePhase::RunningTool
+        )
 }
 
 fn composer_cursor_position(input: &str, area: Rect) -> (u16, u16) {
@@ -262,4 +334,78 @@ fn wrapped_text_cursor_position(
     let cursor_x = area.x.saturating_add(display_width.min(max_x_offset));
 
     (cursor_x, cursor_y)
+}
+
+#[cfg(test)]
+mod tests {
+    use tempfile::tempdir;
+
+    use crate::config::ConfigManager;
+    use crate::tui::state::{
+        InteractionKind, PendingInteractionSnapshot, RuntimePhase, RuntimeSnapshot, TuiApp,
+    };
+
+    use super::{activity_status_line, footer_summary_text};
+
+    #[test]
+    fn footer_summary_text_prefers_minimal_idle_context() {
+        let temp = tempdir().unwrap();
+        let mut app = TuiApp::new(ConfigManager {
+            path: temp.path().join("config.json"),
+        })
+        .expect("build tui app");
+        app.snapshot = RuntimeSnapshot {
+            estimated_history_tokens: 1234,
+            context_window_tokens: Some(32768),
+            ..RuntimeSnapshot::default()
+        };
+
+        let rendered = footer_summary_text(&app);
+        assert_eq!(rendered, "ctx~=1234/32768");
+    }
+
+    #[test]
+    fn footer_summary_text_shows_tokens_only_while_busy() {
+        let temp = tempdir().unwrap();
+        let mut app = TuiApp::new(ConfigManager {
+            path: temp.path().join("config.json"),
+        })
+        .expect("build tui app");
+        app.runtime_phase = RuntimePhase::ProcessingResponse;
+        app.snapshot = RuntimeSnapshot {
+            estimated_history_tokens: 2048,
+            context_window_tokens: Some(32768),
+            total_input_tokens: 111,
+            total_output_tokens: 22,
+            ..RuntimeSnapshot::default()
+        };
+
+        let rendered = footer_summary_text(&app);
+        assert_eq!(rendered, "ctx~=2048/32768  tokens=111 in / 22 out");
+        assert!(!rendered.contains("history="));
+        assert!(!rendered.contains("local="));
+        assert!(!rendered.contains("key="));
+    }
+
+    #[test]
+    fn activity_status_line_prefers_pending_interactions() {
+        let temp = tempdir().unwrap();
+        let mut app = TuiApp::new(ConfigManager {
+            path: temp.path().join("config.json"),
+        })
+        .expect("build tui app");
+        app.snapshot.pending_interactions.push(PendingInteractionSnapshot {
+            kind: InteractionKind::PlanApproval,
+            title: "Approve plan".into(),
+            summary: "ready".into(),
+            options: Vec::new(),
+            note: None,
+            approval: None,
+            source: None,
+        });
+
+        let (label, _, detail) = activity_status_line(&app);
+        assert_eq!(label, "Plan Approval");
+        assert!(detail.contains("review the proposed plan"));
+    }
 }

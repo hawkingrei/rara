@@ -10,13 +10,13 @@ use super::super::command::{
     api_key_status, command_detail_text, command_spec_by_index, current_turn_preview,
     download_status_text, general_help_text, help_text, matching_commands, model_help_text,
     palette_command_by_index, palette_commands, quick_actions_text, recent_transcript_preview,
-    status_plan_text, status_prompt_sources_text, status_resources_text, status_runtime_text,
-    status_workspace_text,
+    status_prompt_sources_text, status_resources_text, status_runtime_text, status_workspace_text,
 };
 use super::super::state::{
     current_model_presets, CommandSpec, HelpTab, Overlay, PROVIDER_FAMILIES, TuiApp,
 };
 use super::super::interaction_text::status_active_pending_interaction_text;
+use super::super::plan_display::status_plan_text;
 use super::bottom_pane::editor_cursor_position;
 
 pub(super) fn render_overlay(
@@ -350,7 +350,7 @@ fn render_status_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
     );
     f.render_widget(
         Paragraph::new(status_plan_text(app))
-            .block(Block::default().borders(Borders::ALL).title(" Plan "))
+            .block(Block::default().borders(Borders::ALL).title(" Updated Plan "))
             .wrap(Wrap { trim: false }),
         chunks[2],
     );
