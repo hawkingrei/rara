@@ -205,6 +205,60 @@ pub(super) fn start_pending_approval_task(
     });
 }
 
+pub(super) fn start_plan_approval_resume_task(
+    app: &mut TuiApp,
+    continue_planning: bool,
+    mut agent: Agent,
+) {
+    let (sender, receiver) = mpsc::unbounded_channel();
+    app.clear_active_live_sections();
+    app.set_pending_plan_approval(false);
+    app.notice = Some(if continue_planning {
+        "Continuing plan refinement.".into()
+    } else {
+        "Plan approved. Continuing with implementation.".into()
+    });
+    app.set_runtime_phase(
+        RuntimePhase::ProcessingResponse,
+        Some(if continue_planning {
+            "resuming plan refinement".into()
+        } else {
+            "resuming approved plan".into()
+        }),
+    );
+
+    agent.set_execution_mode(if continue_planning {
+        crate::agent::AgentExecutionMode::Plan
+    } else {
+        crate::agent::AgentExecutionMode::Execute
+    });
+    app.set_agent_execution_mode(agent.execution_mode);
+
+    let handle = tokio::spawn(async move {
+        let tx = sender.clone();
+        let result = agent
+            .resume_after_plan_approval_with_events(
+                continue_planning,
+                AgentOutputMode::Silent,
+                move |event| {
+                    if let Some(event) = convert_agent_event(event) {
+                        let _ = tx.send(event);
+                    }
+                },
+            )
+            .await;
+        TaskCompletion::Query { agent, result }
+    });
+
+    app.running_task = Some(RunningTask {
+        kind: TaskKind::Query,
+        receiver,
+        handle,
+        started_at: Instant::now(),
+        next_heartbeat_after_secs: 2,
+    });
+}
+
 pub(super) fn start_rebuild_task(app: &mut TuiApp) {
     let (sender, receiver) = mpsc::unbounded_channel();
     let config = app.config.clone();

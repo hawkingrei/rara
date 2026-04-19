@@ -34,7 +34,8 @@ use self::event_stream::{translate_event, UiEvent};
 use self::render::{desired_viewport_height, render};
 use self::runtime::{
     execute_local_command, finish_running_task_if_ready, should_suggest_planning_mode,
-    start_oauth_task, start_pending_approval_task, start_query_task, start_rebuild_task,
+    start_oauth_task, start_pending_approval_task, start_plan_approval_resume_task,
+    start_query_task, start_rebuild_task,
 };
 use self::session_restore::{
     provider_requires_api_key, restore_latest_session, restore_session_by_id,
@@ -384,33 +385,13 @@ async fn dispatch_event(
             } else if app.has_pending_plan_approval() {
                 match idx {
                     0 => {
-                        app.set_pending_plan_approval(false);
-                        app.set_agent_execution_mode(AgentExecutionMode::Execute);
-                        if let Some(agent) = agent_slot.as_mut() {
-                            agent.set_execution_mode(AgentExecutionMode::Execute);
-                        }
                         if let Some(agent) = agent_slot.take() {
-                            start_query_task(
-                                app,
-                                "Implement the approved plan using the current repository state."
-                                    .to_string(),
-                                agent,
-                            );
+                            start_plan_approval_resume_task(app, false, agent);
                         }
                     }
                     1 => {
-                        app.set_pending_plan_approval(false);
-                        app.set_agent_execution_mode(AgentExecutionMode::Plan);
-                        if let Some(agent) = agent_slot.as_mut() {
-                            agent.set_execution_mode(AgentExecutionMode::Plan);
-                        }
                         if let Some(agent) = agent_slot.take() {
-                            start_query_task(
-                                app,
-                                "Continue refining the plan and fill in any missing implementation details."
-                                    .to_string(),
-                                agent,
-                            );
+                            start_plan_approval_resume_task(app, true, agent);
                         }
                     }
                     _ => {
@@ -584,6 +565,11 @@ async fn handle_submit(
     }
 
     let input = std::mem::take(&mut app.input);
+    if app.has_pending_plan_approval() && !input.trim_start().starts_with('/') {
+        if handle_pending_plan_approval_submit(app, agent_slot, input.trim()).await? {
+            return Ok(false);
+        }
+    }
     if let Some(command) = parse_local_command(&input) {
         if execute_local_command(command, app, agent_slot, oauth_manager).await? {
             return Ok(true);
@@ -607,6 +593,99 @@ async fn handle_submit(
     Ok(false)
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PendingPlanApprovalAction {
+    StartImplementation,
+    ContinuePlanning,
+}
+
+fn classify_pending_plan_approval_input(input: &str) -> Option<PendingPlanApprovalAction> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let lowered = trimmed.to_ascii_lowercase();
+    let continue_planning_keywords = [
+        "继续规划",
+        "继续计划",
+        "继续 refine",
+        "refine plan",
+        "continue planning",
+        "keep planning",
+        "revise plan",
+        "调整计划",
+        "完善计划",
+    ];
+    if continue_planning_keywords.iter().any(|keyword| {
+        lowered.contains(&keyword.to_ascii_lowercase()) || trimmed.contains(keyword)
+    }) {
+        return Some(PendingPlanApprovalAction::ContinuePlanning);
+    }
+
+    let approve_keywords = [
+        "继续",
+        "继续吧",
+        "好的",
+        "好",
+        "开始",
+        "开始吧",
+        "执行",
+        "执行吧",
+        "实现",
+        "实现吧",
+        "可以",
+        "行",
+        "ok",
+        "okay",
+        "yes",
+        "y",
+        "go",
+        "proceed",
+        "continue",
+        "ship it",
+    ];
+    if approve_keywords.iter().any(|keyword| {
+        lowered == keyword.to_ascii_lowercase() || trimmed == *keyword
+    }) {
+        return Some(PendingPlanApprovalAction::StartImplementation);
+    }
+
+    None
+}
+
+async fn handle_pending_plan_approval_submit(
+    app: &mut TuiApp,
+    agent_slot: &mut Option<Agent>,
+    input: &str,
+) -> anyhow::Result<bool> {
+    let Some(action) = classify_pending_plan_approval_input(input) else {
+        app.push_notice(
+            "A plan is waiting for approval. Press 1/2 or type '继续' to implement, '继续规划' to refine the plan.",
+        );
+        return Ok(true);
+    };
+
+    match action {
+        PendingPlanApprovalAction::StartImplementation => {
+            if let Some(agent) = agent_slot.take() {
+                start_plan_approval_resume_task(app, false, agent);
+            } else {
+                app.push_notice("No active agent is available to start implementation.");
+            }
+        }
+        PendingPlanApprovalAction::ContinuePlanning => {
+            if let Some(agent) = agent_slot.take() {
+                start_plan_approval_resume_task(app, true, agent);
+            } else {
+                app.push_notice("No active agent is available to continue planning.");
+            }
+        }
+    }
+
+    Ok(true)
+}
+
 fn clamp_command_palette_selection(app: &mut TuiApp) {
     let len = palette_commands(app, app.input.trim_start().trim_start_matches('/')).len();
     if len == 0 {
@@ -622,4 +701,33 @@ fn should_open_codex_auth_guide(app: &TuiApp) -> bool {
         return false;
     };
     *provider == "codex" && !app.config.has_api_key()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{classify_pending_plan_approval_input, PendingPlanApprovalAction};
+
+    #[test]
+    fn pending_plan_approval_treats_generic_continue_as_approval() {
+        assert_eq!(
+            classify_pending_plan_approval_input("继续吧"),
+            Some(PendingPlanApprovalAction::StartImplementation)
+        );
+        assert_eq!(
+            classify_pending_plan_approval_input("ok"),
+            Some(PendingPlanApprovalAction::StartImplementation)
+        );
+    }
+
+    #[test]
+    fn pending_plan_approval_supports_explicit_refine_signal() {
+        assert_eq!(
+            classify_pending_plan_approval_input("继续规划"),
+            Some(PendingPlanApprovalAction::ContinuePlanning)
+        );
+        assert_eq!(
+            classify_pending_plan_approval_input("continue planning"),
+            Some(PendingPlanApprovalAction::ContinuePlanning)
+        );
+    }
 }

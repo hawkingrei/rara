@@ -73,6 +73,21 @@ impl SequencedBackend {
     }
 }
 
+fn test_runtime_storage() -> (tempfile::TempDir, Arc<SessionManager>, Arc<WorkspaceMemory>, std::path::PathBuf) {
+    let temp = tempdir().expect("tempdir");
+    let root = temp.path().to_path_buf();
+    let rara_dir = root.join(".rara");
+    std::fs::create_dir_all(rara_dir.join("rollouts")).expect("rollouts");
+    std::fs::create_dir_all(rara_dir.join("sessions")).expect("sessions");
+    std::fs::create_dir_all(rara_dir.join("tool-results")).expect("tool results");
+    let session_manager = Arc::new(SessionManager {
+        storage_dir: rara_dir.join("rollouts"),
+        legacy_storage_dir: rara_dir.join("sessions"),
+    });
+    let workspace = Arc::new(WorkspaceMemory::from_paths(root, rara_dir.clone()));
+    (temp, session_manager, workspace, rara_dir)
+}
+
 #[async_trait]
 impl LlmBackend for SequencedBackend {
     async fn ask(&self, messages: &[Message], tools: &[Value]) -> Result<AnthropicResponse> {
@@ -139,6 +154,56 @@ async fn appends_continuation_after_tool_result() {
     assert!(second_round.iter().any(|message| {
         message.content.to_string().contains("tool_result")
     }));
+}
+
+#[tokio::test]
+async fn resumes_after_plan_approval_via_structured_continuation() {
+    let (_temp, session_manager, workspace, rara_dir) = test_runtime_storage();
+    let backend = Arc::new(SequencedBackend::new(vec![AnthropicResponse {
+        content: vec![ContentBlock::Text {
+            text: "Implemented the first plan step.".to_string(),
+        }],
+        stop_reason: Some("end_turn".to_string()),
+        usage: Some(TokenUsage::default()),
+    }]));
+
+    let mut agent = Agent::new(
+        ToolManager::new(),
+        backend.clone(),
+        Arc::new(VectorDB::new("data/lancedb")),
+        session_manager,
+        workspace,
+    );
+    agent.tool_result_store =
+        ToolResultStore::new(rara_dir.join("tool-results")).expect("tool result store");
+    agent.set_execution_mode(AgentExecutionMode::Plan);
+    agent.current_plan = vec![PlanStep {
+        step: "Modify workspace instruction discovery".to_string(),
+        status: PlanStepStatus::Pending,
+    }];
+
+    agent
+        .resume_after_plan_approval_with_events(false, super::AgentOutputMode::Silent, |_| {})
+        .await
+        .expect("resume should succeed");
+
+    let observed = backend.observed_messages.lock().expect("lock");
+    assert_eq!(observed.len(), 1);
+    let runtime_texts = observed[0]
+        .iter()
+        .filter_map(|message| message.content.as_array())
+        .flat_map(|blocks| blocks.iter())
+        .filter_map(|block| block.get("text").and_then(Value::as_str))
+        .collect::<Vec<_>>();
+    assert!(runtime_texts
+        .iter()
+        .any(|text| text.contains("\"phase\": \"plan_approved\"")));
+    assert!(runtime_texts
+        .iter()
+        .any(|text| text.contains("\"mode\": \"execute\"")));
+    assert!(!runtime_texts
+        .iter()
+        .any(|text| text.contains("Implement the approved plan using the current repository state")));
 }
 
 #[tokio::test]

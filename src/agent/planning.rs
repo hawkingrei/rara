@@ -48,6 +48,7 @@ pub(super) enum RuntimeContinuationPhase {
     ToolResultsAvailable,
     PlanContinuationRequired,
     ExecutionContinuationRequired,
+    PlanApproved,
 }
 
 #[derive(Serialize)]
@@ -329,6 +330,41 @@ impl Agent {
         }
     }
 
+    pub async fn resume_after_plan_approval_with_events<F>(
+        &mut self,
+        continue_planning: bool,
+        output_mode: AgentOutputMode,
+        mut report: F,
+    ) -> Result<()>
+    where
+        F: FnMut(AgentEvent) + Send,
+    {
+        self.pending_user_input = None;
+        self.pending_approval = None;
+
+        if continue_planning {
+            self.execution_mode = AgentExecutionMode::Plan;
+            report(AgentEvent::Status(
+                "Continuing plan refinement from the current plan state.".to_string(),
+            ));
+            self.history.push(self.runtime_continuation_message(
+                RuntimeContinuationPhase::PlanContinuationRequired,
+                0,
+            ));
+        } else {
+            self.execution_mode = AgentExecutionMode::Execute;
+            report(AgentEvent::Status(
+                "Plan approved. Continuing with implementation.".to_string(),
+            ));
+            self.history.push(self.runtime_continuation_message(
+                RuntimeContinuationPhase::PlanApproved,
+                0,
+            ));
+        }
+
+        self.run_agent_loop(output_mode, &mut report).await
+    }
+
     pub(super) fn capture_plan_from_text(&mut self, text: &str) -> bool {
         let Some((steps, explanation)) = parse_plan_block(text) else {
             self.pending_user_input = parse_request_user_input_block(text);
@@ -566,6 +602,7 @@ impl RuntimeContinuationPhase {
             Self::ToolResultsAvailable => "tool_results_available",
             Self::PlanContinuationRequired => "plan_continuation_required",
             Self::ExecutionContinuationRequired => "execution_continuation_required",
+            Self::PlanApproved => "plan_approved",
         }
     }
 
@@ -592,6 +629,13 @@ impl RuntimeContinuationPhase {
                 "Keep gathering the next relevant code context now.",
                 "If you mentioned a next file or next inspection step, call the tool for it directly.",
                 "Only stop when you can provide concrete, evidence-based suggestions or when structured user input is required.",
+                "Do not ask the user to continue.",
+            ],
+            Self::PlanApproved => vec![
+                "The user approved the current plan. Continue the same task immediately.",
+                "Implement the approved plan using the existing plan state and repository context.",
+                "Do not restate the plan back to the user unless a short reminder is necessary.",
+                "Start with the next concrete implementation step or tool call.",
                 "Do not ask the user to continue.",
             ],
         }
