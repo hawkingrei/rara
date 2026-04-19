@@ -13,6 +13,8 @@ Active backlog only. Keep this file small and current.
 
 - [ ] Add explicit HTTP timeouts to all networked backends in `src/llm.rs` so provider calls fail predictably instead of hanging indefinitely.
 - [ ] Extract shared message-mapping helpers across OpenAI-compatible and Ollama backends to reduce duplication and keep tool-call behavior consistent.
+- [ ] Replace the current Codex-auth mirror in `src/oauth.rs` with direct reuse of the smallest useful `codex_login` primitives so browser login, device-code login, API-key login, and logout stop drifting from Codex behavior over time.
+- [ ] Broaden Codex-auth validation after the first parity pass: add callback-flow, persistence, and TUI auth-picker tests so the new browser/device/API-key/logout paths stay regression-tested.
 - [ ] Add an `AgentHub team mode` on top of ACP: for role-specialized worker sessions, use a small model first for intent routing and only hand the task to the larger worker model when the intent is relevant to that worker, instead of sending every ACP turn directly to the expensive model.
 - [ ] Deepen the `AgentHub team mode` spec before implementation: define the ACP session metadata, worker-role contract, router prompt/output schema, and the exact `skip` / `handle` response semantics so the worker runtime can be implemented without inventing a parallel protocol later.
 

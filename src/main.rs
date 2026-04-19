@@ -46,6 +46,7 @@ use crate::vectordb::VectorDB;
 use crate::workspace::WorkspaceMemory;
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
+use secrecy::ExposeSecret;
 use std::sync::Arc;
 
 #[derive(Parser)]
@@ -75,6 +76,13 @@ struct Cli {
 enum Commands {
     Acp,
     Ask { prompt: String },
+    Login {
+        #[arg(long)]
+        device_auth: bool,
+        #[arg(long)]
+        with_api_key: bool,
+    },
+    Logout,
     Tui,
 }
 
@@ -144,6 +152,56 @@ async fn main_impl() -> Result<()> {
             agent.set_prompt_config(prompt::PromptRuntimeConfig::from_config(&config));
             agent.query(prompt).await?;
         }
+        Commands::Login {
+            device_auth,
+            with_api_key,
+        } => {
+            if device_auth && with_api_key {
+                bail!("choose either --device-auth or --with-api-key, not both");
+            }
+            if with_api_key {
+                let api_key = oauth_manager.read_api_key_from_stdin()?;
+                save_codex_credential(&mut config, &config_manager, api_key.expose_secret())?;
+                println!("Successfully saved Codex API key.");
+            } else if device_auth {
+                let token = oauth_manager.request_device_code().await?;
+                eprintln!(
+                    "Open this URL and enter the one-time code:\n{}\n\nCode: {}",
+                    token.verification_url, token.user_code
+                );
+                let token = oauth_manager.complete_device_code_login(&token).await?;
+                save_codex_credential(
+                    &mut config,
+                    &config_manager,
+                    token.access_token.expose_secret(),
+                )?;
+                println!("Successfully logged in with device code.");
+            } else {
+                if std::env::var_os("SSH_CONNECTION").is_some() {
+                    bail!("browser login is not reliable in SSH/headless sessions; use --device-auth or --with-api-key");
+                }
+                let (verifier, challenge) = oauth_manager.generate_pkce();
+                let (port, receiver) = oauth_manager.start_callback_server().await?;
+                let auth_url = oauth_manager.get_authorize_url(&challenge, port);
+                eprintln!(
+                    "Starting local login server on http://localhost:{port}.\nIf your browser did not open, navigate to this URL:\n\n{auth_url}"
+                );
+                let _ = open::that(&auth_url);
+                let code = receiver.await?;
+                let token = oauth_manager.exchange_code(&code, &verifier, port).await?;
+                save_codex_credential(
+                    &mut config,
+                    &config_manager,
+                    token.access_token.expose_secret(),
+                )?;
+                println!("Successfully logged in.");
+            }
+        }
+        Commands::Logout => {
+            config.clear_api_key();
+            config_manager.save(&config)?;
+            println!("Removed the saved Codex credential.");
+        }
         Commands::Tui => {
             let mut agent = Agent::new(tool_manager, backend_arc, vdb, session_manager, workspace);
             agent.set_prompt_config(prompt::PromptRuntimeConfig::from_config(&config));
@@ -151,6 +209,19 @@ async fn main_impl() -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn save_codex_credential(
+    config: &mut RaraConfig,
+    config_manager: &ConfigManager,
+    credential: &str,
+) -> Result<()> {
+    config.set_api_key(credential.to_string());
+    config.provider = "codex".into();
+    if config.model.is_none() {
+        config.model = Some("codex".into());
+    }
+    config_manager.save(config)
 }
 
 fn create_full_tool_manager(

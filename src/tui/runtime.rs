@@ -7,7 +7,7 @@ use std::sync::Arc;
 use crate::agent::{Agent, BashApprovalMode};
 use crate::oauth::OAuthManager;
 
-use super::state::{LocalCommand, TuiApp};
+use super::state::{LocalCommand, OAuthLoginMode, TuiApp};
 
 pub async fn execute_local_command(
     command: LocalCommand,
@@ -42,8 +42,12 @@ pub fn start_rebuild_task(app: &mut TuiApp) {
     tasks::start_rebuild_task(app);
 }
 
-pub fn start_oauth_task(app: &mut TuiApp, oauth_manager: Arc<OAuthManager>) {
-    tasks::start_oauth_task(app, oauth_manager);
+pub fn start_oauth_task(
+    app: &mut TuiApp,
+    oauth_manager: Arc<OAuthManager>,
+    mode: OAuthLoginMode,
+) {
+    tasks::start_oauth_task(app, oauth_manager, mode);
 }
 
 pub async fn finish_running_task_if_ready(

@@ -56,8 +56,8 @@ pub(super) fn render_overlay(
             None
         }
         Overlay::BaseUrlEditor => render_base_url_editor_modal(f, app, popup),
-        Overlay::CodexAuthGuide => {
-            render_codex_auth_guide_modal(f, app, popup);
+        Overlay::AuthModePicker => {
+            render_auth_mode_picker_modal(f, app, popup);
             None
         }
         Overlay::ApiKeyEditor => render_api_key_editor_modal(f, app, popup),
@@ -406,9 +406,9 @@ fn render_setup_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
     let text = format!(
         "Provider: {}\nModel: {}\nBase URL: {}\nAPI key: {}\nRevision: {}\n\n\
          Presets:\n{}\n\n\
-         [1/2/3] Select preset\n[M] Cycle preset\n[Enter] Apply and rebuild\n[L] OAuth login\n[Esc] Close\n\n\
+         [1/2/3] Select preset\n[M] Cycle preset\n[Enter] Apply and rebuild\n[L] Auth modes\n[Esc] Close\n\n\
          Use /model for the full provider menu.\n\
-         Codex supports both OAuth login and API key auth.\n\
+         Codex supports browser login, device-code login, and API key auth.\n\
          Recommended: Qwn3 8B for stable local use.",
         app.config.provider,
         app.current_model_label(),
@@ -612,21 +612,19 @@ fn render_base_url_editor_modal(
     Some(editor_cursor_position(app.base_url_input.as_str(), chunks[1]))
 }
 
-fn render_codex_auth_guide_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
+fn render_auth_mode_picker_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(8), Constraint::Min(6), Constraint::Length(2)])
         .split(area);
     let ssh_hint = if super::super::is_ssh_session() {
-        "\n\nSSH session detected. Browser OAuth on a remote shell usually cannot complete the localhost callback. Use API key in SSH/headless sessions."
+        "\n\nSSH session detected. Browser login on a remote shell usually cannot complete the localhost callback. Device-code login or API key is recommended in SSH/headless sessions."
     } else {
         ""
     };
     let intro = format!(
         "Codex needs authentication before this preset can be used.\n\n\
-         [1] OAuth login\n\
-         [2] API key\n\n\
-         OAuth matches the Codex desktop flow when this TUI is running locally.{ssh_hint}"
+         Choose one auth mode below.{ssh_hint}"
     );
     f.render_widget(
         Paragraph::new(intro)
@@ -635,18 +633,46 @@ fn render_codex_auth_guide_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
         chunks[0],
     );
 
-    let body = Paragraph::new(format!(
-        "Current model: {}\nProvider: codex\nKey status: {}\n\n\
-         Pick OAuth for local desktop login, or API key for headless / SSH usage.",
-        app.current_model_label(),
-        api_key_status(&app.config),
-    ))
+    let options = [
+        (
+            "Browser login",
+            "Best for local desktop sessions with a localhost callback.",
+        ),
+        (
+            "Device code",
+            "Best for SSH/headless sessions. Open the URL elsewhere and enter the one-time code.",
+        ),
+        (
+            "API key",
+            "Paste an existing Codex-compatible API key and save it locally.",
+        ),
+        (
+            "Logout",
+            "Clear the saved provider credential and rebuild the current codex backend.",
+        ),
+    ];
+    let mut lines = vec![
+        format!("Current model: {}", app.current_model_label()),
+        format!("Provider: codex"),
+        format!("Credential status: {}", api_key_status(&app.config)),
+        String::new(),
+    ];
+    for (idx, (title, detail)) in options.iter().enumerate() {
+        let marker = if idx == app.auth_mode_idx { ">" } else { " " };
+        lines.push(format!("{marker} {title}"));
+        lines.push(format!("    {detail}"));
+    }
+    let body = Paragraph::new(lines.join("\n"))
     .block(Block::default().borders(Borders::LEFT | Borders::RIGHT).title(" Details "))
     .wrap(Wrap { trim: false });
     f.render_widget(body, chunks[1]);
 
     f.render_widget(
-        Paragraph::new("1 OAuth  2 API key  Enter OAuth  Esc back")
+        Paragraph::new(if super::super::is_ssh_session() {
+            "Up/Down move  Enter choose  number keys jump  default: device code  Esc back"
+        } else {
+            "Up/Down move  Enter choose  number keys jump  default: browser login  Esc back"
+        })
             .alignment(Alignment::Center),
         chunks[2],
     );

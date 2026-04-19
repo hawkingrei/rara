@@ -6,13 +6,13 @@ use crate::oauth::OAuthManager;
 use super::super::state::{
     HelpTab, LocalCommand, LocalCommandKind, Overlay, RuntimePhase, TuiApp,
 };
-use super::tasks::{start_compact_task, start_oauth_task};
+use super::tasks::{start_compact_task, start_rebuild_task};
 
 pub(super) async fn execute_local_command(
     command: LocalCommand,
     app: &mut TuiApp,
     agent_slot: &mut Option<Agent>,
-    oauth_manager: &Arc<OAuthManager>,
+    _oauth_manager: &Arc<OAuthManager>,
 ) -> anyhow::Result<bool> {
     app.remember_command(match command.kind {
         LocalCommandKind::Help => "help",
@@ -26,6 +26,7 @@ pub(super) async fn execute_local_command(
         LocalCommandKind::Model => "model",
         LocalCommandKind::BaseUrl => "base-url",
         LocalCommandKind::Login => "login",
+        LocalCommandKind::Logout => "logout",
         LocalCommandKind::Quit => "quit",
     });
     match command.kind {
@@ -91,7 +92,19 @@ pub(super) async fn execute_local_command(
             if app.is_busy() {
                 app.push_notice("A task is already running. Wait for it to finish.");
             } else {
-                start_oauth_task(app, Arc::clone(oauth_manager));
+                app.open_overlay(Overlay::AuthModePicker);
+            }
+        }
+        LocalCommandKind::Logout => {
+            if app.is_busy() {
+                app.push_notice("A task is already running. Wait for it to finish.");
+            } else {
+                app.config.clear_api_key();
+                app.config_manager.save(&app.config)?;
+                app.push_notice("Cleared the saved provider credential.");
+                if app.config.provider == "codex" {
+                    start_rebuild_task(app);
+                }
             }
         }
         LocalCommandKind::Quit => {

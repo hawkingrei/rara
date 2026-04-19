@@ -116,10 +116,22 @@ pub(super) fn apply_tui_event(app: &mut TuiApp, event: TuiEvent) {
                 }
             } else if role == "Runtime" {
                 let detail = message.lines().next().unwrap_or(role).trim().to_string();
-                if detail.contains("OAuth flow") {
+                let lower = detail.to_ascii_lowercase();
+                if lower.contains("device-code login")
+                    || lower.contains("one-time code")
+                    || lower.contains("open this url in a browser")
+                {
+                    app.set_runtime_phase(RuntimePhase::OAuthDeviceCodePrompt, Some(detail));
+                } else if lower.contains("waiting for browser callback") {
                     app.set_runtime_phase(RuntimePhase::OAuthWaitingCallback, Some(detail));
-                } else if detail.contains("exchanging token") {
+                } else if lower.contains("exchanging token") {
                     app.set_runtime_phase(RuntimePhase::OAuthExchangingToken, Some(detail));
+                } else if lower.contains("starting codex browser login")
+                    || lower.contains("starting codex browser")
+                {
+                    app.set_runtime_phase(RuntimePhase::OAuthWaitingCallback, Some(detail));
+                } else if lower.contains("starting codex device-code login") {
+                    app.set_runtime_phase(RuntimePhase::OAuthDeviceCodePrompt, Some(detail));
                 } else {
                     app.set_runtime_phase(RuntimePhase::RebuildingBackend, Some(detail));
                 }
