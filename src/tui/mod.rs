@@ -34,7 +34,8 @@ use self::event_stream::{translate_event, UiEvent};
 use self::render::{desired_viewport_height, render};
 use self::runtime::{
     execute_local_command, finish_running_task_if_ready, should_suggest_planning_mode,
-    start_oauth_task, start_pending_approval_task, start_query_task, start_rebuild_task,
+    start_oauth_task, start_pending_approval_task, start_plan_approval_resume_task,
+    start_query_task, start_rebuild_task,
 };
 use self::session_restore::{
     provider_requires_api_key, restore_latest_session, restore_session_by_id,
@@ -384,33 +385,13 @@ async fn dispatch_event(
             } else if app.has_pending_plan_approval() {
                 match idx {
                     0 => {
-                        app.set_pending_plan_approval(false);
-                        app.set_agent_execution_mode(AgentExecutionMode::Execute);
-                        if let Some(agent) = agent_slot.as_mut() {
-                            agent.set_execution_mode(AgentExecutionMode::Execute);
-                        }
                         if let Some(agent) = agent_slot.take() {
-                            start_query_task(
-                                app,
-                                "Implement the approved plan using the current repository state."
-                                    .to_string(),
-                                agent,
-                            );
+                            start_plan_approval_resume_task(app, false, agent);
                         }
                     }
                     1 => {
-                        app.set_pending_plan_approval(false);
-                        app.set_agent_execution_mode(AgentExecutionMode::Plan);
-                        if let Some(agent) = agent_slot.as_mut() {
-                            agent.set_execution_mode(AgentExecutionMode::Plan);
-                        }
                         if let Some(agent) = agent_slot.take() {
-                            start_query_task(
-                                app,
-                                "Continue refining the plan and fill in any missing implementation details."
-                                    .to_string(),
-                                agent,
-                            );
+                            start_plan_approval_resume_task(app, true, agent);
                         }
                     }
                     _ => {
@@ -687,34 +668,15 @@ async fn handle_pending_plan_approval_submit(
 
     match action {
         PendingPlanApprovalAction::StartImplementation => {
-            app.set_pending_plan_approval(false);
-            app.set_agent_execution_mode(AgentExecutionMode::Execute);
-            if let Some(agent) = agent_slot.as_mut() {
-                agent.set_execution_mode(AgentExecutionMode::Execute);
-            }
             if let Some(agent) = agent_slot.take() {
-                start_query_task(
-                    app,
-                    "Implement the approved plan using the current repository state.".to_string(),
-                    agent,
-                );
+                start_plan_approval_resume_task(app, false, agent);
             } else {
                 app.push_notice("No active agent is available to start implementation.");
             }
         }
         PendingPlanApprovalAction::ContinuePlanning => {
-            app.set_pending_plan_approval(false);
-            app.set_agent_execution_mode(AgentExecutionMode::Plan);
-            if let Some(agent) = agent_slot.as_mut() {
-                agent.set_execution_mode(AgentExecutionMode::Plan);
-            }
             if let Some(agent) = agent_slot.take() {
-                start_query_task(
-                    app,
-                    "Continue refining the plan and fill in any missing implementation details."
-                        .to_string(),
-                    agent,
-                );
+                start_plan_approval_resume_task(app, true, agent);
             } else {
                 app.push_notice("No active agent is available to continue planning.");
             }
