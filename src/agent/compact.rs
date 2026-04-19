@@ -262,7 +262,6 @@ fn collect_recent_files(history: &[Message], limit: usize) -> Vec<String> {
                     | "list_files"
                     | "write_file"
                     | "replace"
-                    | "search_files"
                     | "apply_patch"
             ) {
                 continue;

@@ -394,6 +394,7 @@ mod tests {
         assert!(manager.get_tool("list_files").is_some());
         assert!(manager.get_tool("glob").is_some());
         assert!(manager.get_tool("grep").is_some());
+        assert!(manager.get_tool("search_files").is_none());
         assert!(manager.get_tool("write_file").is_none());
         assert!(manager.get_tool("apply_patch").is_none());
         assert!(manager.get_tool("bash").is_none());

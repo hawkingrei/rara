@@ -161,10 +161,7 @@ pub(super) fn convert_agent_event(event: AgentEvent) -> Option<TuiEvent> {
 }
 
 fn is_exploration_tool_name(name: &str) -> bool {
-    matches!(
-        name,
-        "list_files" | "read_file" | "glob" | "grep" | "search_files"
-    )
+    matches!(name, "list_files" | "read_file" | "glob" | "grep")
 }
 
 fn exploration_action_label(message: &str) -> Option<String> {
@@ -194,14 +191,6 @@ fn exploration_action_label(message: &str) -> Option<String> {
         )),
         "grep" => Some(format!(
             "Search {}",
-            if rest.is_empty() {
-                "workspace"
-            } else {
-                rest.as_str()
-            }
-        )),
-        "search_files" => Some(format!(
-            "Search files {}",
             if rest.is_empty() {
                 "workspace"
             } else {
