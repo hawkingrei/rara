@@ -239,16 +239,9 @@ fn map_key_to_event(key: KeyCode, app: &TuiApp) -> AppEvent {
             }
             KeyCode::Char('3')
                 if app.input.is_empty()
-                    && matches!(
-                        app.active_pending_interaction().map(|pending| pending.kind),
-                        Some(
-                            self::state::ActivePendingInteractionKind::ShellApproval
-                                | self::state::ActivePendingInteractionKind::PlanningQuestion
-                                | self::state::ActivePendingInteractionKind::ExplorationQuestion
-                                | self::state::ActivePendingInteractionKind::SubAgentQuestion
-                                | self::state::ActivePendingInteractionKind::RequestInput
-                        )
-                    ) => AppEvent::SelectPendingOption(2),
+                    && app.active_pending_interaction().is_some_and(|pending| {
+                        pending.kind != self::state::ActivePendingInteractionKind::PlanApproval
+                    }) => AppEvent::SelectPendingOption(2),
             KeyCode::Char('s') => AppEvent::OpenOverlay(Overlay::Setup),
             KeyCode::Backspace => AppEvent::Backspace,
             KeyCode::Char(c) => AppEvent::InputChar(c),

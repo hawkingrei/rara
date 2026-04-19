@@ -347,6 +347,11 @@ impl TuiApp {
             .active_turn
             .entries
             .iter()
+            .chain(
+                self.committed_turns
+                    .iter()
+                    .flat_map(|turn| turn.entries.iter()),
+            )
             .any(|entry| entry.role == role && entry.message == message);
         if !exists {
             self.active_turn.entries.push(TranscriptEntry { role, message });
@@ -570,6 +575,14 @@ impl TuiApp {
         if let Some(item) = existing_plan_completion {
             completed_interactions.push(item);
         }
+        for interaction in &completed_interactions {
+            self.ensure_completed_interaction_entry(
+                interaction.kind,
+                interaction.title.as_str(),
+                interaction.summary.as_str(),
+                interaction.source.as_deref(),
+            );
+        }
         self.snapshot = RuntimeSnapshot {
             cwd,
             branch,
@@ -612,14 +625,6 @@ impl TuiApp {
                 .collect(),
             prompt_warnings: agent.prompt_config().warnings.clone(),
         };
-        for interaction in &self.snapshot.completed_interactions.clone() {
-            self.ensure_completed_interaction_entry(
-                interaction.kind,
-                interaction.title.as_str(),
-                interaction.summary.as_str(),
-                interaction.source.as_deref(),
-            );
-        }
         self.agent_execution_mode = agent.execution_mode;
         self.bash_approval_mode = agent.bash_approval_mode;
         self.persist_runtime_state();
