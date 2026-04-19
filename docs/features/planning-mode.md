@@ -16,6 +16,8 @@ RARA planning mode is a read-only collaboration mode for non-trivial tasks.
   - `<plan>` when the implementation plan is ready for approval;
   - `<request_user_input>` when a key decision still needs user input;
   - `<continue_inspection/>` when more repository inspection is still required.
+- planning-mode prose should stay in inspected findings and concise progress updates;
+- planning mode must not describe file edits, patches, or implementation steps as if they are already happening.
 
 Plain narration or status updates are not valid terminal planning artifacts.
 If the model ends a planning turn with narration alone, runtime must continue the same planning turn instead of treating it as a successful completion.
@@ -42,5 +44,8 @@ When planning mode needs to continue, runtime records a structured continuation 
 ## TUI Expectations
 
 - planning mode should render as a dedicated planning workflow, not as ordinary execution with extra chatter;
+- non-structured planning narration should be folded into planning/exploration sidecars instead of rendering as a separate responding block;
+- structured plans should render as an `Updated Plan` checklist object with a separate note/explanation and stable step status markers;
 - pending plan approval and planning questions should appear as interaction cards;
+- status panels, overlays, and transcript cells should reuse the same plan formatting instead of diverging into separate text-only summaries;
 - approval or answers should resume the same workflow rather than starting a brand-new free-form chat turn.

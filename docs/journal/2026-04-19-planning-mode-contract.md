@@ -27,3 +27,11 @@ That behavior was weaker than both Claude Code plan mode and Codex collaboration
   - planning continuation after inspection evidence;
   - narration-only planning turns forcing a structured follow-up;
   - delegated planning evidence still leading to plan synthesis.
+
+## Follow-up Alignment
+
+- tightened the planning prompt so plan-mode turns do not claim `apply_patch`, file writes, or implementation as if it is already happening;
+- folded non-structured planning narration into planning/exploration sidecars in the TUI instead of rendering it as a standalone responding block;
+- added focused tests for planning-sidecar rendering and chatter filtering.
+- moved plan rendering onto a dedicated `Updated Plan` formatter so transcript cells, status panels, and overlays now show the same checklist-style plan object instead of separate `steps:/note:` text blocks;
+- reduced bottom-pane noise so planning and pending-interaction states behave more like Codex's single-status source instead of duplicating transcript information.
