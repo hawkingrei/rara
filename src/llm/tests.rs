@@ -3,7 +3,8 @@ use serde_json::json;
 use crate::agent::Message;
 
 use super::ollama::{
-    apply_ollama_stream_event, build_ollama_options, suggest_ollama_num_ctx, to_ollama_messages,
+    apply_ollama_stream_event, build_ollama_options, ensure_ollama_stream_completed,
+    suggest_ollama_num_ctx, to_ollama_messages,
 };
 use super::openai_compatible::to_openai_messages;
 use super::shared::{
@@ -138,7 +139,7 @@ fn applies_ollama_stream_event_deltas_and_tool_calls() {
     let mut output_tokens = 0u32;
     let mut deltas = Vec::new();
 
-    apply_ollama_stream_event(
+    let done = apply_ollama_stream_event(
         &json!({"message":{"content":"Hello"}}),
         &mut text,
         &mut tool_calls,
@@ -148,8 +149,9 @@ fn applies_ollama_stream_event_deltas_and_tool_calls() {
         &mut |delta| deltas.push(delta),
     )
     .unwrap();
+    assert!(!done);
 
-    apply_ollama_stream_event(
+    let done = apply_ollama_stream_event(
         &json!({
             "message":{
                 "content":" world",
@@ -168,6 +170,7 @@ fn applies_ollama_stream_event_deltas_and_tool_calls() {
         &mut |delta| deltas.push(delta),
     )
     .unwrap();
+    assert!(done);
 
     assert_eq!(text, "Hello world");
     assert_eq!(deltas, vec!["Hello".to_string(), " world".to_string()]);
@@ -176,6 +179,15 @@ fn applies_ollama_stream_event_deltas_and_tool_calls() {
     assert_eq!(stop_reason, Some("stop".to_string()));
     assert_eq!(input_tokens, 12);
     assert_eq!(output_tokens, 6);
+}
+
+#[test]
+fn rejects_ollama_streams_without_final_done_event() {
+    let error = ensure_ollama_stream_completed(false, "http://localhost:11434/api/chat")
+        .expect_err("missing done event should fail");
+    assert!(error
+        .to_string()
+        .contains("ended before the final done event"));
 }
 
 #[test]

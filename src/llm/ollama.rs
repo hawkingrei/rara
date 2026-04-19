@@ -168,6 +168,7 @@ impl LlmBackend for OllamaBackend {
         let mut stop_reason = None;
         let mut input_tokens = 0u32;
         let mut output_tokens = 0u32;
+        let mut saw_done = false;
 
         while let Some(chunk) = stream.next().await {
             let chunk = chunk?;
@@ -180,7 +181,7 @@ impl LlmBackend for OllamaBackend {
                     continue;
                 }
                 let event: Value = serde_json::from_slice(&payload)?;
-                apply_ollama_stream_event(
+                saw_done |= apply_ollama_stream_event(
                     &event,
                     &mut streamed_text,
                     &mut streamed_tool_calls,
@@ -195,7 +196,7 @@ impl LlmBackend for OllamaBackend {
         let payload = normalize_ollama_stream_line(&buffer);
         if !payload.is_empty() {
             let event: Value = serde_json::from_slice(&payload)?;
-            apply_ollama_stream_event(
+            saw_done |= apply_ollama_stream_event(
                 &event,
                 &mut streamed_text,
                 &mut streamed_tool_calls,
@@ -205,6 +206,8 @@ impl LlmBackend for OllamaBackend {
                 on_text_delta,
             )?;
         }
+
+        ensure_ollama_stream_completed(saw_done, &endpoint)?;
 
         let mut content = Vec::new();
         if !streamed_text.trim().is_empty() {
@@ -280,7 +283,7 @@ pub(super) fn apply_ollama_stream_event(
     input_tokens: &mut u32,
     output_tokens: &mut u32,
     on_text_delta: &mut (dyn FnMut(String) + Send),
-) -> Result<()> {
+) -> Result<bool> {
     if let Some(delta) = event
         .get("message")
         .and_then(|message| message.get("content"))
@@ -315,9 +318,20 @@ pub(super) fn apply_ollama_stream_event(
             .get("eval_count")
             .and_then(Value::as_u64)
             .unwrap_or(0) as u32;
+        return Ok(true);
     }
 
-    Ok(())
+    Ok(false)
+}
+
+pub(super) fn ensure_ollama_stream_completed(saw_done: bool, endpoint: &str) -> Result<()> {
+    if saw_done {
+        return Ok(());
+    }
+    Err(anyhow!(
+        "Ollama stream at {} ended before the final done event",
+        sanitize_url_for_display(endpoint)
+    ))
 }
 
 pub(super) fn to_ollama_messages(messages: &[Message]) -> Vec<Value> {

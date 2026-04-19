@@ -221,9 +221,12 @@ impl Agent {
                     content: error_text.clone(),
                     is_error: true,
                 });
-                self.history
-                    .push(tool_result_message(&pending.tool_use_id, error_text, true));
-                self.history.push(self.runtime_continuation_message(
+                self.push_history_message(tool_result_message(
+                    &pending.tool_use_id,
+                    error_text,
+                    true,
+                ));
+                self.push_history_message(self.runtime_continuation_message(
                     RuntimeContinuationPhase::ToolResultsAvailable,
                     0,
                 ));
@@ -271,7 +274,7 @@ impl Agent {
                     content: result_text.clone(),
                     is_error: false,
                 });
-                self.history.push(tool_result_message(
+                self.push_history_message(tool_result_message(
                     &pending.tool_use_id,
                     result_text,
                     false,
@@ -284,11 +287,14 @@ impl Agent {
                     content: error_text.clone(),
                     is_error: true,
                 });
-                self.history
-                    .push(tool_result_message(&pending.tool_use_id, error_text, true));
+                self.push_history_message(tool_result_message(
+                    &pending.tool_use_id,
+                    error_text,
+                    true,
+                ));
             }
         }
-        self.history.push(
+        self.push_history_message(
             self.runtime_continuation_message(RuntimeContinuationPhase::ToolResultsAvailable, 1),
         );
         if !keep_always {
@@ -305,11 +311,11 @@ impl Agent {
     ) where
         F: FnMut(AgentEvent) + Send,
     {
-        self.history.extend(tool_results);
+        self.extend_history_messages(tool_results);
         report(AgentEvent::Status(
             "Tool results recorded. Advancing to the next agent step.".to_string(),
         ));
-        self.history.push(self.runtime_continuation_message(
+        self.push_history_message(self.runtime_continuation_message(
             RuntimeContinuationPhase::ToolResultsAvailable,
             tool_rounds,
         ));
@@ -354,7 +360,7 @@ impl Agent {
             report(AgentEvent::Status(
                 "Continuing plan refinement from the current plan state.".to_string(),
             ));
-            self.history.push(self.runtime_continuation_message(
+            self.push_history_message(self.runtime_continuation_message(
                 RuntimeContinuationPhase::PlanContinuationRequired,
                 0,
             ));
@@ -363,8 +369,9 @@ impl Agent {
             report(AgentEvent::Status(
                 "Plan approved. Continuing with implementation.".to_string(),
             ));
-            self.history
-                .push(self.runtime_continuation_message(RuntimeContinuationPhase::PlanApproved, 0));
+            self.push_history_message(
+                self.runtime_continuation_message(RuntimeContinuationPhase::PlanApproved, 0),
+            );
         }
 
         self.run_agent_loop(output_mode, &mut report).await

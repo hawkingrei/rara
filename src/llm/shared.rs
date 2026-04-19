@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
+use std::time::Duration;
 use url::Url;
 
 use crate::agent::{AnthropicResponse, ContentBlock, Message};
@@ -122,8 +123,13 @@ pub(super) fn parse_tool_arguments(arguments: &Value) -> Result<Value> {
     }
 }
 
+const HTTP_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+const HTTP_READ_TIMEOUT: Duration = Duration::from_secs(300);
+
 pub(super) fn http_client_for_target(base_url: &str) -> Result<reqwest::Client> {
-    let mut builder = reqwest::Client::builder();
+    let mut builder = reqwest::Client::builder()
+        .connect_timeout(HTTP_CONNECT_TIMEOUT)
+        .read_timeout(HTTP_READ_TIMEOUT);
     if should_bypass_proxy(base_url) {
         builder = builder.no_proxy();
     }

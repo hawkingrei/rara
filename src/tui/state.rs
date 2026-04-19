@@ -16,7 +16,8 @@ use crate::agent::{Agent, AgentExecutionMode, BashApprovalMode};
 use crate::config::{ConfigManager, RaraConfig};
 use crate::redaction::redact_secrets;
 use crate::state_db::{
-    PersistedInteraction, PersistedPlanStep, PersistedSessionSummary, PersistedTurnEntry, StateDb,
+    PersistedCompactState, PersistedInteraction, PersistedPlanStep, PersistedSessionSummary,
+    PersistedTurnEntry, StateDb,
 };
 use crate::tools::bash::BashCommandInput;
 
@@ -114,6 +115,10 @@ pub struct RuntimeSnapshot {
     pub compaction_count: usize,
     pub last_compaction_before_tokens: Option<usize>,
     pub last_compaction_after_tokens: Option<usize>,
+    pub last_compaction_recent_files: Vec<String>,
+    pub last_compaction_boundary_version: Option<u32>,
+    pub last_compaction_boundary_before_tokens: Option<usize>,
+    pub last_compaction_boundary_recent_file_count: Option<usize>,
     pub plan_steps: Vec<(String, String)>,
     pub plan_explanation: Option<String>,
     pub pending_interactions: Vec<PendingInteractionSnapshot>,
@@ -354,7 +359,9 @@ impl TuiApp {
             )
             .any(|entry| entry.role == role && entry.message == message);
         if !exists {
-            self.active_turn.entries.push(TranscriptEntry { role, message });
+            self.active_turn
+                .entries
+                .push(TranscriptEntry { role, message });
         }
     }
 
@@ -497,15 +504,13 @@ impl TuiApp {
         let existing_plan_completion = self
             .completed_interaction(InteractionKind::PlanApproval)
             .cloned();
-        let existing_pending_plan_approval =
-            self.pending_plan_approval_interaction().cloned();
+        let existing_pending_plan_approval = self.pending_plan_approval_interaction().cloned();
         let existing_local_request_completion = self
             .snapshot
             .completed_interactions
             .iter()
             .find(|item| {
-                item.kind == InteractionKind::RequestInput
-                    && item.source.as_deref().is_some()
+                item.kind == InteractionKind::RequestInput && item.source.as_deref().is_some()
             })
             .cloned();
         let existing_local_request_inputs = self
@@ -513,8 +518,7 @@ impl TuiApp {
             .pending_interactions
             .iter()
             .filter(|item| {
-                item.kind == InteractionKind::RequestInput
-                    && item.source.as_deref().is_some()
+                item.kind == InteractionKind::RequestInput && item.source.as_deref().is_some()
             })
             .cloned()
             .collect::<Vec<_>>();
@@ -597,6 +601,19 @@ impl TuiApp {
             compaction_count: agent.compact_state.compaction_count,
             last_compaction_before_tokens: agent.compact_state.last_compaction_before_tokens,
             last_compaction_after_tokens: agent.compact_state.last_compaction_after_tokens,
+            last_compaction_recent_files: agent.compact_state.last_compaction_recent_files.clone(),
+            last_compaction_boundary_version: agent
+                .compact_state
+                .last_compaction_boundary
+                .map(|boundary| boundary.version),
+            last_compaction_boundary_before_tokens: agent
+                .compact_state
+                .last_compaction_boundary
+                .map(|boundary| boundary.before_tokens),
+            last_compaction_boundary_recent_file_count: agent
+                .compact_state
+                .last_compaction_boundary
+                .map(|boundary| boundary.recent_file_count),
             plan_steps: agent
                 .current_plan
                 .iter()
@@ -607,7 +624,7 @@ impl TuiApp {
                         crate::agent::PlanStepStatus::Completed => "completed",
                     };
                     (status.to_string(), step.step.clone())
-            })
+                })
                 .collect(),
             plan_explanation: agent.plan_explanation.clone(),
             pending_interactions,
@@ -931,7 +948,12 @@ impl TuiApp {
                 summary: summary.clone(),
                 source: source.clone(),
             });
-        self.ensure_completed_interaction_entry(kind, title.as_str(), summary.as_str(), source.as_deref());
+        self.ensure_completed_interaction_entry(
+            kind,
+            title.as_str(),
+            summary.as_str(),
+            source.as_deref(),
+        );
         self.persist_runtime_state();
     }
 
@@ -1016,10 +1038,7 @@ impl TuiApp {
                     .cloned()
                     .collect::<Vec<_>>(),
             ),
-            (
-                "Running",
-                self.active_live.running_actions.to_vec(),
-            ),
+            ("Running", self.active_live.running_actions.to_vec()),
         ];
 
         for (role, lines) in sections {
@@ -1160,6 +1179,15 @@ impl TuiApp {
             self.snapshot.plan_explanation.as_deref(),
             self.snapshot.history_len,
             self.transcript_entry_count(),
+            &PersistedCompactState {
+                compaction_count: self.snapshot.compaction_count,
+                last_compaction_before_tokens: self.snapshot.last_compaction_before_tokens,
+                last_compaction_after_tokens: self.snapshot.last_compaction_after_tokens,
+                last_compaction_recent_file_count: Some(
+                    self.snapshot.last_compaction_recent_files.len(),
+                ),
+                last_compaction_boundary_version: self.snapshot.last_compaction_boundary_version,
+            },
         ) {
             self.state_db_status = Some(state_db_status_error("write failed", err.to_string()));
             return;

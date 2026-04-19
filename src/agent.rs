@@ -20,10 +20,9 @@ use serde_json::{json, Value};
 use std::sync::Arc;
 use uuid::Uuid;
 
-pub use self::compact::CompactState;
+pub use self::compact::{latest_compact_boundary_metadata, CompactBoundaryMetadata, CompactState};
 use self::planning::{
-    tool_result_message, InspectionProgress, PlanningOutcomeContract,
-    RuntimeContinuationPhase,
+    tool_result_message, InspectionProgress, PlanningOutcomeContract, RuntimeContinuationPhase,
 };
 pub use self::planning::{
     CompletedInteraction, PendingApproval, PendingUserInput, PlanStep, PlanStepStatus,
@@ -46,7 +45,7 @@ pub enum BashApprovalMode {
     Suggestion,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct Message {
     pub role: String,
     pub content: Value,
@@ -206,10 +205,13 @@ impl Agent {
         self.inspection_progress = InspectionProgress::default();
         self.last_query_plan_updated = false;
         self.compact_if_needed_with_reporter(&mut report).await?;
-        self.history = repair_tool_result_history(&self.history);
+        let repaired_history = repair_tool_result_history(&self.history);
+        if repaired_history != self.history {
+            self.replace_history(repaired_history);
+        }
         self.clear_completed_interactions();
 
-        self.history.push(Message {
+        self.push_history_message(Message {
             role: "user".to_string(),
             content: json!([{"type": "text", "text": prompt.clone()}]),
         });
@@ -373,7 +375,7 @@ impl Agent {
             self.ensure_active_plan_step();
             let turn_output = self.run_model_turn(output_mode, report).await?;
             self.last_query_plan_updated = turn_output.plan_updated;
-            self.history.push(turn_output.assistant_message);
+            self.push_history_message(turn_output.assistant_message);
 
             if turn_output.tool_calls.is_empty() {
                 if self.should_continue_plan_without_tools(
@@ -404,8 +406,10 @@ impl Agent {
                         ));
                         RuntimeContinuationPhase::PlanContinuationRequired
                     };
-                    self.history
-                        .push(self.runtime_continuation_message(phase, *tool_rounds));
+                    self.push_history_message(self.runtime_continuation_message(
+                        phase,
+                        *tool_rounds,
+                    ));
                     continue;
                 }
                 if self.should_continue_execute_without_tools(
@@ -418,7 +422,7 @@ impl Agent {
                         "Repository review needs more code inspection. Continuing the same turn."
                             .to_string(),
                     ));
-                    self.history.push(self.runtime_continuation_message(
+                    self.push_history_message(self.runtime_continuation_message(
                         RuntimeContinuationPhase::ExecutionContinuationRequired,
                         *tool_rounds,
                     ));
