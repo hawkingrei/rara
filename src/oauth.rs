@@ -64,7 +64,9 @@ where
     S: serde::Serializer,
 {
     Option::<String>::serialize(
-        &value.as_ref().map(|secret| secret.expose_secret().to_string()),
+        &value
+            .as_ref()
+            .map(|secret| secret.expose_secret().to_string()),
         serializer,
     )
 }
@@ -77,17 +79,27 @@ where
     Ok(value.map(SecretString::from))
 }
 
-pub struct OAuthManager { pub config_dir: PathBuf }
+#[derive(Clone)]
+pub struct OAuthManager {
+    pub config_dir: PathBuf,
+}
 impl OAuthManager {
-    pub fn new() -> Result<Self> { 
+    pub fn new() -> Result<Self> {
         let d = std::env::current_dir()?.join(".rara");
-        if !d.exists() { std::fs::create_dir_all(&d)?; }
-        Ok(Self { config_dir: d }) 
+        if !d.exists() {
+            std::fs::create_dir_all(&d)?;
+        }
+        Ok(Self { config_dir: d })
     }
 
     pub fn generate_pkce(&self) -> (String, String) {
-        let v: String = rand::thread_rng().sample_iter(&Alphanumeric).take(128).map(char::from).collect();
-        let mut h = Sha256::new(); h.update(v.as_bytes());
+        let v: String = rand::thread_rng()
+            .sample_iter(&Alphanumeric)
+            .take(128)
+            .map(char::from)
+            .collect();
+        let mut h = Sha256::new();
+        h.update(v.as_bytes());
         (v, URL_SAFE_NO_PAD.encode(h.finalize()))
     }
 
@@ -99,7 +111,9 @@ impl OAuthManager {
         CLIENT_ID
     }
 
-    pub async fn start_callback_server(&self) -> Result<(u16, tokio::sync::oneshot::Receiver<String>)> {
+    pub async fn start_callback_server(
+        &self,
+    ) -> Result<(u16, tokio::sync::oneshot::Receiver<String>)> {
         let l = TcpListener::bind("127.0.0.1:0").await?;
         let p = l.local_addr()?.port();
         let (tx, rx) = tokio::sync::oneshot::channel();
@@ -108,7 +122,12 @@ impl OAuthManager {
                 let mut r = BufReader::new(&mut s);
                 let mut line = String::new();
                 if r.read_line(&mut line).await.is_ok() {
-                    if let Some(c) = line.split_whitespace().nth(1).and_then(|p| p.split("code=").nth(1)).and_then(|c| c.split('&').next()) {
+                    if let Some(c) = line
+                        .split_whitespace()
+                        .nth(1)
+                        .and_then(|p| p.split("code=").nth(1))
+                        .and_then(|c| c.split('&').next())
+                    {
                         let _ = s.write_all(b"HTTP/1.1 200 OK\r\n\r\nLogin Success").await;
                         let _ = tx.send(c.to_string());
                     }
@@ -124,7 +143,10 @@ impl OAuthManager {
             ("code", code),
             ("client_id", CLIENT_ID),
             ("code_verifier", verifier),
-            ("redirect_uri", &format!("http://localhost:{}/callback", port)),
+            (
+                "redirect_uri",
+                &format!("http://localhost:{}/callback", port),
+            ),
         ];
         let token_url = format!("{ISSUER}/oauth/token");
         let res = reqwest::Client::new()
@@ -133,7 +155,10 @@ impl OAuthManager {
             .send()
             .await?;
         if !res.status().is_success() {
-            return Err(anyhow!("OAuth token exchange failed with status {}", res.status()));
+            return Err(anyhow!(
+                "OAuth token exchange failed with status {}",
+                res.status()
+            ));
         }
         Ok(res.json().await?)
     }
@@ -163,7 +188,9 @@ impl OAuthManager {
         }
 
         let url = format!("{ISSUER}/api/accounts/deviceauth/usercode");
-        let body = serde_json::to_string(&UserCodeReq { client_id: CLIENT_ID })?;
+        let body = serde_json::to_string(&UserCodeReq {
+            client_id: CLIENT_ID,
+        })?;
         let response = reqwest::Client::new()
             .post(url)
             .header("Content-Type", "application/json")
@@ -200,6 +227,7 @@ impl OAuthManager {
             code_verifier: String,
         }
 
+        let client = reqwest::Client::new();
         let poll_url = format!("{ISSUER}/api/accounts/deviceauth/token");
         let started = std::time::Instant::now();
         let response = loop {
@@ -211,7 +239,7 @@ impl OAuthManager {
                 device_auth_id: &device_code.device_auth_id,
                 user_code: &device_code.user_code,
             })?;
-            let response = reqwest::Client::new()
+            let response = client
                 .post(&poll_url)
                 .header("Content-Type", "application/json")
                 .body(body)
@@ -245,11 +273,7 @@ impl OAuthManager {
             ("redirect_uri", redirect_uri.as_str()),
         ];
         let token_url = format!("{ISSUER}/oauth/token");
-        let result = reqwest::Client::new()
-            .post(token_url)
-            .form(&params)
-            .send()
-            .await?;
+        let result = client.post(token_url).form(&params).send().await?;
         if !result.status().is_success() {
             return Err(anyhow!(
                 "device code exchange failed with status {}",
@@ -264,9 +288,7 @@ impl OAuthManager {
 
         let mut stdin = std::io::stdin();
         if stdin.is_terminal() {
-            return Err(anyhow!(
-                "--with-api-key expects the API key on stdin"
-            ));
+            return Err(anyhow!("--with-api-key expects the API key on stdin"));
         }
 
         let mut buffer = String::new();

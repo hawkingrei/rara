@@ -30,11 +30,7 @@ pub fn start_pending_approval_task(app: &mut TuiApp, selection: BashApprovalMode
     tasks::start_pending_approval_task(app, selection, agent);
 }
 
-pub fn start_plan_approval_resume_task(
-    app: &mut TuiApp,
-    continue_planning: bool,
-    agent: Agent,
-) {
+pub fn start_plan_approval_resume_task(app: &mut TuiApp, continue_planning: bool, agent: Agent) {
     tasks::start_plan_approval_resume_task(app, continue_planning, agent);
 }
 
@@ -42,11 +38,7 @@ pub fn start_rebuild_task(app: &mut TuiApp) {
     tasks::start_rebuild_task(app);
 }
 
-pub fn start_oauth_task(
-    app: &mut TuiApp,
-    oauth_manager: Arc<OAuthManager>,
-    mode: OAuthLoginMode,
-) {
+pub fn start_oauth_task(app: &mut TuiApp, oauth_manager: Arc<OAuthManager>, mode: OAuthLoginMode) {
     tasks::start_oauth_task(app, oauth_manager, mode);
 }
 

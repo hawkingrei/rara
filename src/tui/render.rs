@@ -1,5 +1,5 @@
-pub(crate) mod cells;
 mod bottom_pane;
+pub(crate) mod cells;
 mod history_pipeline;
 
 use ratatui::{
@@ -11,16 +11,16 @@ use ratatui::{
 use std::path::Path;
 use unicode_width::UnicodeWidthStr;
 
-pub(crate) use self::cells::{ActiveCell, HistoryCell};
 pub(crate) use self::bottom_pane::desired_viewport_height;
 use self::bottom_pane::{editor_cursor_position, render_bottom_pane};
+pub(crate) use self::cells::{ActiveCell, HistoryCell};
 use self::cells::{ActiveTurnCell, CommittedTurnCell, StartupCardCell};
+use super::auth_mode_picker::build_auth_mode_picker_view;
 use super::command::{
     api_key_status, command_detail_text, command_spec_by_index, current_turn_preview,
     download_status_text, general_help_text, help_text, matching_commands, model_help_text,
     palette_command_by_index, palette_commands, quick_actions_text, recent_transcript_preview,
-    status_prompt_sources_text, status_resources_text, status_runtime_text,
-    status_workspace_text,
+    status_prompt_sources_text, status_resources_text, status_runtime_text, status_workspace_text,
 };
 use super::custom_terminal::Frame;
 use super::interaction_text::status_active_pending_interaction_text;
@@ -837,7 +837,11 @@ fn render_status_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
     );
     f.render_widget(
         Paragraph::new(status_plan_text(app))
-            .block(Block::default().borders(Borders::ALL).title(" Updated Plan "))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(" Updated Plan "),
+            )
             .wrap(Wrap { trim: false }),
         chunks[2],
     );
@@ -845,14 +849,15 @@ fn render_status_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
         .split(chunks[3]);
-    let (interaction_title, interaction_text) =
-        status_active_pending_interaction_text(app).unwrap_or((
-            " Request Input ",
-            "No pending interaction.".to_string(),
-        ));
+    let (interaction_title, interaction_text) = status_active_pending_interaction_text(app)
+        .unwrap_or((" Request Input ", "No pending interaction.".to_string()));
     f.render_widget(
         Paragraph::new(interaction_text)
-            .block(Block::default().borders(Borders::ALL).title(interaction_title))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(interaction_title),
+            )
             .wrap(Wrap { trim: false }),
         lower[0],
     );
@@ -1148,17 +1153,9 @@ fn render_auth_mode_picker_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
             Constraint::Length(2),
         ])
         .split(area);
-    let ssh_hint = if super::is_ssh_session() {
-        "\n\nSSH session detected. Browser login on a remote shell usually cannot complete the localhost callback. Device-code login or API key is recommended in SSH/headless sessions."
-    } else {
-        ""
-    };
-    let intro = format!(
-        "Codex needs authentication before this preset can be used.\n\n\
-         Choose one auth mode below.{ssh_hint}"
-    );
+    let view = build_auth_mode_picker_view(app, super::is_ssh_session());
     f.render_widget(
-        Paragraph::new(intro)
+        Paragraph::new(view.intro)
             .block(
                 Block::default()
                     .borders(Borders::ALL)
@@ -1168,51 +1165,17 @@ fn render_auth_mode_picker_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
         chunks[0],
     );
 
-    let options = [
-        (
-            "Browser login",
-            "Best for local desktop sessions with a localhost callback.",
-        ),
-        (
-            "Device code",
-            "Best for SSH/headless sessions. Open the URL elsewhere and enter the one-time code.",
-        ),
-        (
-            "API key",
-            "Paste an existing Codex-compatible API key and save it locally.",
-        ),
-        (
-            "Logout",
-            "Clear the saved provider credential and rebuild the current codex backend.",
-        ),
-    ];
-    let mut lines = vec![
-        format!("Current model: {}", app.current_model_label()),
-        "Provider: codex".to_string(),
-        format!("Credential status: {}", api_key_status(&app.config)),
-        String::new(),
-    ];
-    for (idx, (title, detail)) in options.iter().enumerate() {
-        let marker = if idx == app.auth_mode_idx { ">" } else { " " };
-        lines.push(format!("{marker} {title}"));
-        lines.push(format!("    {detail}"));
-    }
-    let body = Paragraph::new(lines.join("\n"))
-    .block(
-        Block::default()
-            .borders(Borders::LEFT | Borders::RIGHT)
-            .title(" Details "),
-    )
-    .wrap(Wrap { trim: false });
+    let body = Paragraph::new(view.lines.join("\n"))
+        .block(
+            Block::default()
+                .borders(Borders::LEFT | Borders::RIGHT)
+                .title(" Details "),
+        )
+        .wrap(Wrap { trim: false });
     f.render_widget(body, chunks[1]);
 
     f.render_widget(
-        Paragraph::new(if super::is_ssh_session() {
-            "Up/Down move  Enter choose  number keys jump  default: device code  Esc back"
-        } else {
-            "Up/Down move  Enter choose  number keys jump  default: browser login  Esc back"
-        })
-        .alignment(Alignment::Center),
+        Paragraph::new(view.footer).alignment(Alignment::Center),
         chunks[2],
     );
 }

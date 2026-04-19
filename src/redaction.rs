@@ -26,8 +26,7 @@ static BEARER_TOKEN_REGEX: LazyLock<Regex> =
 static SECRET_ASSIGNMENT_REGEX: LazyLock<Regex> = LazyLock::new(|| {
     compile_regex(r#"(?i)\b(api[_-]?key|token|secret|password)\b(\s*[:=]\s*)(["']?)[^\s"']{8,}"#)
 });
-static URL_REGEX: LazyLock<Regex> =
-    LazyLock::new(|| compile_regex(r#"https?://[^\s)>"]+"#));
+static URL_REGEX: LazyLock<Regex> = LazyLock::new(|| compile_regex(r#"https?://[^\s)>"]+"#));
 
 pub fn redact_secrets(input: impl Into<String>) -> String {
     let input = input.into();

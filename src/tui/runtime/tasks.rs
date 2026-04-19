@@ -16,9 +16,7 @@ use crate::tool::ToolManager;
 use crate::tools::agent::{AgentTool, ExploreAgentTool, PlanAgentTool, TeamCreateTool};
 use crate::tools::bash::BashTool;
 use crate::tools::context::RetrieveSessionContextTool;
-use crate::tools::file::{
-    ListFilesTool, ReadFileTool, ReplaceTool, WriteFileTool,
-};
+use crate::tools::file::{ListFilesTool, ReadFileTool, ReplaceTool, WriteFileTool};
 use crate::tools::patch::ApplyPatchTool;
 use crate::tools::search::{GlobTool, GrepTool};
 use crate::tools::skill::SkillTool;
@@ -512,8 +510,7 @@ pub(super) async fn finish_running_task_if_ready(
                     app.current_model_label()
                 ));
                 app.notice = app.setup_status.clone();
-                let queued_follow_up_messages =
-                    std::mem::take(&mut app.queued_follow_up_messages);
+                let queued_follow_up_messages = std::mem::take(&mut app.queued_follow_up_messages);
                 app.reset_transcript();
                 app.queued_follow_up_messages = queued_follow_up_messages;
                 *agent_slot = Some(agent);
@@ -544,9 +541,7 @@ pub(super) async fn finish_running_task_if_ready(
                 app.config_manager.save(&app.config)?;
                 let saved_message = match mode {
                     OAuthLoginMode::Browser => "Saved browser login token to local config.",
-                    OAuthLoginMode::DeviceCode => {
-                        "Saved device-code login token to local config."
-                    }
+                    OAuthLoginMode::DeviceCode => "Saved device-code login token to local config.",
                 };
                 app.setup_status = Some(saved_message.into());
                 app.notice = app.setup_status.clone();
@@ -647,7 +642,9 @@ async fn run_oauth_login(
                     device_code.verification_url, device_code.user_code
                 ),
             });
-            let token = oauth_manager.complete_device_code_login(&device_code).await?;
+            let token = oauth_manager
+                .complete_device_code_login(&device_code)
+                .await?;
             Ok(token.access_token)
         }
     }

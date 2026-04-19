@@ -22,6 +22,7 @@ Active backlog only. Keep this file small and current.
 
 - [ ] Add a first-run onboarding flow that explains workspace, provider/model selection, local model download behavior, cache location, and tool loop expectations before the user lands in a blank chat.
 - [ ] Continue aligning the TUI status and transcript surfaces with Codex/Claude so runtime state stays visible without leaking bottom-pane chrome into transcript history.
+- [ ] Add Codex-style TUI snapshot coverage for popups, status surfaces, and transcript-heavy widgets so layout/text regressions are caught by golden snapshots instead of only narrow string assertions.
 - [ ] Continue making tool-action transcript summaries more source-aware and file-aware so edit tools such as `write_file` / `replace` / `apply_patch` consistently show what they touched instead of only generic action labels.
 - [ ] Turn `bash` execution into a real evented TUI transcript path so long-running commands can stream stdout/stderr live instead of only surfacing a post-hoc result summary.
 - [ ] Upgrade queued follow-up messages from "run after the current task finishes" to a true "submit after the next tool call boundary" steer path, matching the Codex-style pending input contract more closely.
@@ -33,6 +34,7 @@ Active backlog only. Keep this file small and current.
 - [ ] Implement session context retrieval on top of the existing session storage and vector/session managers instead of returning `no_context_found`.
 - [ ] Implement the vector memory tools against the real backend and LanceDB path instead of using placeholder save/retrieve responses.
 - [ ] Implement real parallel `team_create` execution instead of the current mocked result payload.
+- [ ] Evaluate and add a `thread-store`-style persistence boundary so thread/session metadata, rollout history, resume, archive, and future remote-backed thread storage do not stay split across unrelated local state surfaces.
 
 ## Performance and Runtime
 

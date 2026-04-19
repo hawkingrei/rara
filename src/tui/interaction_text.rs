@@ -63,10 +63,7 @@ pub fn pending_interaction_shortcut_text(kind: ActivePendingInteractionKind) -> 
     }
 }
 
-pub fn pending_interaction_detail_text(
-    app: &TuiApp,
-    kind: ActivePendingInteractionKind,
-) -> String {
+pub fn pending_interaction_detail_text(app: &TuiApp, kind: ActivePendingInteractionKind) -> String {
     match kind {
         ActivePendingInteractionKind::PlanApproval => status_plan_approval_text(app),
         ActivePendingInteractionKind::ShellApproval => status_command_approval_text(app),

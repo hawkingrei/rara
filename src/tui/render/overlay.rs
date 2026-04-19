@@ -5,6 +5,7 @@ use ratatui::{
     widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Tabs, Wrap},
 };
 
+use super::super::auth_mode_picker::build_auth_mode_picker_view;
 use super::super::custom_terminal::Frame;
 use super::super::command::{
     api_key_status, command_detail_text, command_spec_by_index, current_turn_preview,
@@ -617,63 +618,21 @@ fn render_auth_mode_picker_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(8), Constraint::Min(6), Constraint::Length(2)])
         .split(area);
-    let ssh_hint = if super::super::is_ssh_session() {
-        "\n\nSSH session detected. Browser login on a remote shell usually cannot complete the localhost callback. Device-code login or API key is recommended in SSH/headless sessions."
-    } else {
-        ""
-    };
-    let intro = format!(
-        "Codex needs authentication before this preset can be used.\n\n\
-         Choose one auth mode below.{ssh_hint}"
-    );
+    let view = build_auth_mode_picker_view(app, super::super::is_ssh_session());
     f.render_widget(
-        Paragraph::new(intro)
+        Paragraph::new(view.intro)
             .block(Block::default().borders(Borders::ALL).title(" Codex Login "))
             .wrap(Wrap { trim: false }),
         chunks[0],
     );
 
-    let options = [
-        (
-            "Browser login",
-            "Best for local desktop sessions with a localhost callback.",
-        ),
-        (
-            "Device code",
-            "Best for SSH/headless sessions. Open the URL elsewhere and enter the one-time code.",
-        ),
-        (
-            "API key",
-            "Paste an existing Codex-compatible API key and save it locally.",
-        ),
-        (
-            "Logout",
-            "Clear the saved provider credential and rebuild the current codex backend.",
-        ),
-    ];
-    let mut lines = vec![
-        format!("Current model: {}", app.current_model_label()),
-        format!("Provider: codex"),
-        format!("Credential status: {}", api_key_status(&app.config)),
-        String::new(),
-    ];
-    for (idx, (title, detail)) in options.iter().enumerate() {
-        let marker = if idx == app.auth_mode_idx { ">" } else { " " };
-        lines.push(format!("{marker} {title}"));
-        lines.push(format!("    {detail}"));
-    }
-    let body = Paragraph::new(lines.join("\n"))
+    let body = Paragraph::new(view.lines.join("\n"))
     .block(Block::default().borders(Borders::LEFT | Borders::RIGHT).title(" Details "))
     .wrap(Wrap { trim: false });
     f.render_widget(body, chunks[1]);
 
     f.render_widget(
-        Paragraph::new(if super::super::is_ssh_session() {
-            "Up/Down move  Enter choose  number keys jump  default: device code  Esc back"
-        } else {
-            "Up/Down move  Enter choose  number keys jump  default: browser login  Esc back"
-        })
-            .alignment(Alignment::Center),
+        Paragraph::new(view.footer).alignment(Alignment::Center),
         chunks[2],
     );
 }

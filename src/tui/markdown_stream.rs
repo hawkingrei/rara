@@ -39,7 +39,8 @@ impl MarkdownStreamCollector {
         let mut rendered = Vec::new();
         markdown::append_markdown(&source, self.width, Some(self.cwd.as_path()), &mut rendered);
         let mut complete_line_count = rendered.len();
-        if complete_line_count > 0 && is_blank_line_spaces_only(&rendered[complete_line_count - 1]) {
+        if complete_line_count > 0 && is_blank_line_spaces_only(&rendered[complete_line_count - 1])
+        {
             complete_line_count -= 1;
         }
 
@@ -58,7 +59,12 @@ impl MarkdownStreamCollector {
         }
 
         let mut rendered = Vec::new();
-        markdown::append_markdown(&self.buffer, self.width, Some(self.cwd.as_path()), &mut rendered);
+        markdown::append_markdown(
+            &self.buffer,
+            self.width,
+            Some(self.cwd.as_path()),
+            &mut rendered,
+        );
         if self.committed_line_count >= rendered.len() {
             Vec::new()
         } else {

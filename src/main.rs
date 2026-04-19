@@ -33,9 +33,7 @@ use crate::tool::ToolManager;
 use crate::tools::agent::{AgentTool, ExploreAgentTool, PlanAgentTool, TeamCreateTool};
 use crate::tools::bash::BashTool;
 use crate::tools::context::RetrieveSessionContextTool;
-use crate::tools::file::{
-    ListFilesTool, ReadFileTool, ReplaceTool, WriteFileTool,
-};
+use crate::tools::file::{ListFilesTool, ReadFileTool, ReplaceTool, WriteFileTool};
 use crate::tools::patch::ApplyPatchTool;
 use crate::tools::search::{GlobTool, GrepTool};
 use crate::tools::skill::SkillTool;
@@ -75,7 +73,9 @@ struct Cli {
 #[derive(Subcommand)]
 enum Commands {
     Acp,
-    Ask { prompt: String },
+    Ask {
+        prompt: String,
+    },
     Login {
         #[arg(long)]
         device_auth: bool,
@@ -160,7 +160,10 @@ async fn main_impl() -> Result<()> {
                 bail!("choose either --device-auth or --with-api-key, not both");
             }
             if with_api_key {
-                let api_key = oauth_manager.read_api_key_from_stdin()?;
+                let oauth_manager = oauth_manager.clone();
+                let api_key =
+                    tokio::task::spawn_blocking(move || oauth_manager.read_api_key_from_stdin())
+                        .await??;
                 save_codex_credential(&mut config, &config_manager, api_key.expose_secret())?;
                 println!("Successfully saved Codex API key.");
             } else if device_auth {

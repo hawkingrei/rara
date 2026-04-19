@@ -1,4 +1,5 @@
 mod app_event;
+mod auth_mode_picker;
 mod command;
 mod custom_terminal;
 mod event_stream;
@@ -200,9 +201,7 @@ fn map_key_to_event(key: KeyCode, app: &TuiApp) -> AppEvent {
             KeyCode::Char('2') => AppEvent::SetAuthModeSelection(1),
             KeyCode::Char('3') => AppEvent::SetAuthModeSelection(2),
             KeyCode::Char('4') => AppEvent::SetAuthModeSelection(3),
-            KeyCode::Enter => {
-                AppEvent::ApplyOverlaySelection
-            }
+            KeyCode::Enter => AppEvent::ApplyOverlaySelection,
             _ => AppEvent::Noop,
         },
         Some(Overlay::BaseUrlEditor) => match key {
@@ -544,48 +543,46 @@ async fn dispatch_event(
                     start_rebuild_task(app);
                 }
             }
-            Some(Overlay::AuthModePicker) => {
-                match app.auth_mode_idx {
-                    0 => {
-                        if app.is_busy() {
-                            app.push_notice("A task is already running. Wait for it to finish.");
-                        } else if is_ssh_session() {
-                            app.push_notice("Browser login is unavailable in SSH/headless sessions. Choose device code or API key instead.");
-                        } else {
-                            start_oauth_task(
-                                app,
-                                Arc::clone(oauth_manager),
-                                self::state::OAuthLoginMode::Browser,
-                            );
-                        }
+            Some(Overlay::AuthModePicker) => match app.auth_mode_idx {
+                0 => {
+                    if app.is_busy() {
+                        app.push_notice("A task is already running. Wait for it to finish.");
+                    } else if is_ssh_session() {
+                        app.push_notice("Browser login is unavailable in SSH/headless sessions. Choose device code or API key instead.");
+                    } else {
+                        start_oauth_task(
+                            app,
+                            Arc::clone(oauth_manager),
+                            self::state::OAuthLoginMode::Browser,
+                        );
                     }
-                    1 => {
-                        if app.is_busy() {
-                            app.push_notice("A task is already running. Wait for it to finish.");
-                        } else {
-                            start_oauth_task(
-                                app,
-                                Arc::clone(oauth_manager),
-                                self::state::OAuthLoginMode::DeviceCode,
-                            );
-                        }
-                    }
-                    2 => app.open_overlay(Overlay::ApiKeyEditor),
-                    3 => {
-                        if app.is_busy() {
-                            app.push_notice("A task is already running. Wait for it to finish.");
-                        } else {
-                            app.config.clear_api_key();
-                            app.config_manager.save(&app.config)?;
-                            app.notice = Some("Cleared the saved provider credential.".into());
-                            if app.config.provider == "codex" {
-                                start_rebuild_task(app);
-                            }
-                        }
-                    }
-                    _ => {}
                 }
-            }
+                1 => {
+                    if app.is_busy() {
+                        app.push_notice("A task is already running. Wait for it to finish.");
+                    } else {
+                        start_oauth_task(
+                            app,
+                            Arc::clone(oauth_manager),
+                            self::state::OAuthLoginMode::DeviceCode,
+                        );
+                    }
+                }
+                2 => app.open_overlay(Overlay::ApiKeyEditor),
+                3 => {
+                    if app.is_busy() {
+                        app.push_notice("A task is already running. Wait for it to finish.");
+                    } else {
+                        app.config.clear_api_key();
+                        app.config_manager.save(&app.config)?;
+                        app.notice = Some("Cleared the saved provider credential.".into());
+                        if app.config.provider == "codex" {
+                            start_rebuild_task(app);
+                        }
+                    }
+                }
+                _ => {}
+            },
             _ => {}
         },
     }
@@ -804,7 +801,9 @@ fn should_open_codex_auth_guide(app: &TuiApp) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{classify_pending_plan_approval_input, map_key_to_event, PendingPlanApprovalAction};
+    use super::{
+        classify_pending_plan_approval_input, map_key_to_event, PendingPlanApprovalAction,
+    };
     use crate::config::ConfigManager;
     use crate::tui::app_event::AppEvent;
     use crate::tui::state::{Overlay, RunningTask, TaskKind, TuiApp};

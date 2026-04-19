@@ -3,9 +3,7 @@ use std::sync::Arc;
 use crate::agent::{Agent, AgentExecutionMode, BashApprovalMode};
 use crate::oauth::OAuthManager;
 
-use super::super::state::{
-    HelpTab, LocalCommand, LocalCommandKind, Overlay, RuntimePhase, TuiApp,
-};
+use super::super::state::{HelpTab, LocalCommand, LocalCommandKind, Overlay, RuntimePhase, TuiApp};
 use super::tasks::{start_compact_task, start_rebuild_task};
 
 pub(super) async fn execute_local_command(
@@ -39,15 +37,24 @@ pub(super) async fn execute_local_command(
             app.open_overlay(Overlay::Status);
         }
         LocalCommandKind::Clear => {
-            app.set_runtime_phase(RuntimePhase::LocalCommand, Some("clearing transcript".into()));
+            app.set_runtime_phase(
+                RuntimePhase::LocalCommand,
+                Some("clearing transcript".into()),
+            );
             app.reset_transcript();
         }
         LocalCommandKind::Resume => {
-            app.set_runtime_phase(RuntimePhase::LocalCommand, Some("opening resume picker".into()));
+            app.set_runtime_phase(
+                RuntimePhase::LocalCommand,
+                Some("opening resume picker".into()),
+            );
             app.open_overlay(Overlay::ResumePicker);
         }
         LocalCommandKind::Plan => {
-            app.set_runtime_phase(RuntimePhase::LocalCommand, Some("entering planning mode".into()));
+            app.set_runtime_phase(
+                RuntimePhase::LocalCommand,
+                Some("entering planning mode".into()),
+            );
             app.set_pending_plan_approval(false);
             app.set_agent_execution_mode(AgentExecutionMode::Plan);
             if let Some(agent) = agent_slot.as_mut() {
@@ -72,7 +79,10 @@ pub(super) async fn execute_local_command(
                 BashApprovalMode::Once => "Bash approval set to once.",
                 BashApprovalMode::Suggestion => "Bash approval set to suggestion.",
             };
-            app.set_runtime_phase(RuntimePhase::LocalCommand, Some("updating approval mode".into()));
+            app.set_runtime_phase(
+                RuntimePhase::LocalCommand,
+                Some("updating approval mode".into()),
+            );
             app.push_notice(notice);
         }
         LocalCommandKind::Compact => {

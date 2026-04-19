@@ -51,10 +51,7 @@ pub(crate) fn status_plan_text(app: &TuiApp) -> String {
     )
 }
 
-pub(crate) fn updated_plan_text(
-    steps: &[(String, String)],
-    explanation: Option<&str>,
-) -> String {
+pub(crate) fn updated_plan_text(steps: &[(String, String)], explanation: Option<&str>) -> String {
     if steps.is_empty() {
         return "No structured plan captured yet.".to_string();
     }
@@ -128,7 +125,10 @@ mod tests {
         let rendered = updated_plan_text(
             &[
                 ("completed".into(), "Inspect the current workflow".into()),
-                ("in_progress".into(), "Generalize instruction discovery".into()),
+                (
+                    "in_progress".into(),
+                    "Generalize instruction discovery".into(),
+                ),
                 ("pending".into(), "Validate restore behavior".into()),
             ],
             Some("Keep the explanation short and decision-complete."),
@@ -144,7 +144,10 @@ mod tests {
     #[test]
     fn updated_plan_lines_render_title_and_steps() {
         let rendered = updated_plan_lines(
-            &[("pending".into(), "Capture the next implementation step".into())],
+            &[(
+                "pending".into(),
+                "Capture the next implementation step".into(),
+            )],
             Some("Do not claim execution in planning mode."),
         )
         .into_iter()
