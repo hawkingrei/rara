@@ -7,7 +7,8 @@ use crate::agent::{AnthropicResponse, ContentBlock, Message};
 use crate::redaction::{redact_secrets, sanitize_url_for_display};
 
 use super::shared::{
-    extract_message_text, http_client_for_target, model_context_budget, parse_tool_arguments,
+    collect_assistant_content, extract_message_text, extract_single_tool_result,
+    http_client_for_target, model_context_budget, parse_tool_arguments,
     render_openai_message_content, ContextBudget, LlmBackend,
 };
 
@@ -204,36 +205,21 @@ pub(super) fn to_openai_messages(messages: &[Message]) -> Vec<Value> {
 }
 
 fn render_openai_assistant_message(content: &Value) -> Value {
-    let mut text_parts = Vec::new();
-    let mut tool_calls = Vec::new();
-    if let Some(items) = content.as_array() {
-        for item in items {
-            match item.get("type").and_then(Value::as_str) {
-                Some("text") => {
-                    if let Some(text) = item.get("text").and_then(Value::as_str) {
-                        if !text.trim().is_empty() {
-                            text_parts.push(text.to_string());
-                        }
-                    }
+    let (text_parts, assistant_tool_uses) = collect_assistant_content(content);
+    let tool_calls = assistant_tool_uses
+        .into_iter()
+        .map(|tool_use| {
+            json!({
+                "id": tool_use.id,
+                "type": "function",
+                "function": {
+                    "name": tool_use.name,
+                    "arguments": serde_json::to_string(&tool_use.input)
+                        .unwrap_or_else(|_| "{}".to_string()),
                 }
-                Some("tool_use") => {
-                    tool_calls.push(json!({
-                        "id": item.get("id").and_then(Value::as_str).unwrap_or_default(),
-                        "type": "function",
-                        "function": {
-                            "name": item.get("name").and_then(Value::as_str).unwrap_or_default(),
-                            "arguments": serde_json::to_string(
-                                &item.get("input").cloned().unwrap_or_else(|| json!({}))
-                            ).unwrap_or_else(|_| "{}".to_string()),
-                        }
-                    }));
-                }
-                _ => {}
-            }
-        }
-    } else if let Some(text) = content.as_str() {
-        text_parts.push(text.to_string());
-    }
+            })
+        })
+        .collect::<Vec<_>>();
 
     let mut message = json!({
         "role": "assistant",
@@ -250,18 +236,11 @@ fn render_openai_assistant_message(content: &Value) -> Value {
 }
 
 fn extract_tool_result_message(content: &Value) -> Option<Value> {
-    let items = content.as_array()?;
-    if items.len() != 1 {
-        return None;
-    }
-    let item = &items[0];
-    if item.get("type").and_then(Value::as_str) != Some("tool_result") {
-        return None;
-    }
+    let (tool_use_id, tool_content) = extract_single_tool_result(content)?;
     Some(json!({
         "role": "tool",
-        "tool_call_id": item.get("tool_use_id").and_then(Value::as_str).unwrap_or_default(),
-        "content": item.get("content").and_then(Value::as_str).unwrap_or(""),
+        "tool_call_id": tool_use_id,
+        "content": tool_content,
     }))
 }
 

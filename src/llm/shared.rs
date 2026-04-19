@@ -1,9 +1,17 @@
 use async_trait::async_trait;
 use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
+use std::time::Duration;
 use url::Url;
 
 use crate::agent::{AnthropicResponse, ContentBlock, Message};
+
+#[derive(Debug, Clone, PartialEq)]
+pub(super) struct AssistantToolUse {
+    pub id: String,
+    pub name: String,
+    pub input: Value,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ContextBudget {
@@ -113,6 +121,66 @@ pub(super) fn extract_message_text(content: Option<&Value>) -> Option<String> {
     }
 }
 
+pub(super) fn collect_assistant_content(content: &Value) -> (Vec<String>, Vec<AssistantToolUse>) {
+    let mut text_parts = Vec::new();
+    let mut tool_uses = Vec::new();
+
+    if let Some(items) = content.as_array() {
+        for item in items {
+            match item.get("type").and_then(Value::as_str) {
+                Some("text") => {
+                    if let Some(text) = item.get("text").and_then(Value::as_str) {
+                        if !text.trim().is_empty() {
+                            text_parts.push(text.to_string());
+                        }
+                    }
+                }
+                Some("tool_use") => {
+                    tool_uses.push(AssistantToolUse {
+                        id: item
+                            .get("id")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_string(),
+                        name: item
+                            .get("name")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_string(),
+                        input: item.get("input").cloned().unwrap_or_else(|| json!({})),
+                    });
+                }
+                _ => {}
+            }
+        }
+    } else if let Some(text) = content.as_str() {
+        text_parts.push(text.to_string());
+    }
+
+    (text_parts, tool_uses)
+}
+
+pub(super) fn extract_single_tool_result(content: &Value) -> Option<(String, String)> {
+    let items = content.as_array()?;
+    if items.len() != 1 {
+        return None;
+    }
+    let item = &items[0];
+    if item.get("type").and_then(Value::as_str) != Some("tool_result") {
+        return None;
+    }
+    Some((
+        item.get("tool_use_id")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        item.get("content")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string(),
+    ))
+}
+
 pub(super) fn parse_tool_arguments(arguments: &Value) -> Result<Value> {
     match arguments {
         Value::String(raw) => serde_json::from_str(raw).map_err(Into::into),
@@ -122,8 +190,13 @@ pub(super) fn parse_tool_arguments(arguments: &Value) -> Result<Value> {
     }
 }
 
+const HTTP_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+const HTTP_READ_TIMEOUT: Duration = Duration::from_secs(300);
+
 pub(super) fn http_client_for_target(base_url: &str) -> Result<reqwest::Client> {
-    let mut builder = reqwest::Client::builder();
+    let mut builder = reqwest::Client::builder()
+        .connect_timeout(HTTP_CONNECT_TIMEOUT)
+        .read_timeout(HTTP_READ_TIMEOUT);
     if should_bypass_proxy(base_url) {
         builder = builder.no_proxy();
     }

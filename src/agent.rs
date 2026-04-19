@@ -21,7 +21,9 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 pub use self::compact::{latest_compact_boundary_metadata, CompactBoundaryMetadata, CompactState};
-use self::planning::{tool_result_message, InspectionProgress, RuntimeContinuationPhase};
+use self::planning::{
+    tool_result_message, InspectionProgress, PlanningOutcomeContract, RuntimeContinuationPhase,
+};
 pub use self::planning::{
     CompletedInteraction, PendingApproval, PendingUserInput, PlanStep, PlanStepStatus,
 };
@@ -110,6 +112,7 @@ struct TurnOutput {
     tool_calls: Vec<ToolCall>,
     plan_updated: bool,
     continue_inspection: bool,
+    had_text_response: bool,
 }
 
 pub struct Agent {
@@ -281,6 +284,7 @@ impl Agent {
         let mut tool_calls = Vec::new();
         let mut plan_updated = false;
         let mut continue_inspection = false;
+        let mut had_text_response = false;
         let mut sanitized_content = Vec::new();
         for block in &response.content {
             match block {
@@ -289,6 +293,7 @@ impl Agent {
                         planning::strip_continue_inspection_control(text);
                     continue_inspection |= block_requests_continue;
                     if !clean_text.trim().is_empty() {
+                        had_text_response = true;
                         sanitized_content.push(ContentBlock::Text {
                             text: clean_text.clone(),
                         });
@@ -330,6 +335,7 @@ impl Agent {
             tool_calls,
             plan_updated,
             continue_inspection,
+            had_text_response,
         })
     }
 
@@ -375,16 +381,33 @@ impl Agent {
                 if self.should_continue_plan_without_tools(
                     turn_output.plan_updated,
                     turn_output.continue_inspection,
+                    turn_output.had_text_response,
                     *tool_rounds,
                     *plan_continuations,
                 ) {
                     *plan_continuations += 1;
-                    report(AgentEvent::Status(
-                        "Plan needs more repository inspection. Continuing in read-only mode."
-                            .to_string(),
-                    ));
+                    let phase = if matches!(
+                        self.planning_outcome_contract(
+                            turn_output.plan_updated,
+                            turn_output.continue_inspection,
+                            turn_output.had_text_response,
+                        ),
+                        PlanningOutcomeContract::StructuredOutcomeRequired
+                    ) {
+                        report(AgentEvent::Status(
+                            "Planning mode needs a concrete plan, question, or explicit continue signal. Continuing in read-only mode."
+                                .to_string(),
+                        ));
+                        RuntimeContinuationPhase::PlanStructuredOutcomeRequired
+                    } else {
+                        report(AgentEvent::Status(
+                            "Plan needs more repository inspection. Continuing in read-only mode."
+                                .to_string(),
+                        ));
+                        RuntimeContinuationPhase::PlanContinuationRequired
+                    };
                     self.push_history_message(self.runtime_continuation_message(
-                        RuntimeContinuationPhase::PlanContinuationRequired,
+                        phase,
                         *tool_rounds,
                     ));
                     continue;

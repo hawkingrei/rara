@@ -391,10 +391,7 @@ pub(crate) fn rendered_markdown_lines(
 }
 
 fn is_exploration_tool(name: &str) -> bool {
-    matches!(
-        name,
-        "list_files" | "read_file" | "glob" | "grep" | "search_files"
-    )
+    matches!(name, "list_files" | "read_file" | "glob" | "grep")
 }
 
 fn exploration_action_label(message: &str) -> Option<String> {
@@ -424,14 +421,6 @@ fn exploration_action_label(message: &str) -> Option<String> {
         )),
         "grep" => Some(format!(
             "Search {}",
-            if rest.is_empty() {
-                "workspace"
-            } else {
-                rest.as_str()
-            }
-        )),
-        "search_files" => Some(format!(
-            "Search files {}",
             if rest.is_empty() {
                 "workspace"
             } else {

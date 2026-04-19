@@ -47,8 +47,16 @@ pub(super) struct InspectionProgress {
 pub(super) enum RuntimeContinuationPhase {
     ToolResultsAvailable,
     PlanContinuationRequired,
+    PlanStructuredOutcomeRequired,
     ExecutionContinuationRequired,
     PlanApproved,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum PlanningOutcomeContract {
+    Satisfied,
+    StructuredOutcomeRequired,
+    MoreInspectionRequired,
 }
 
 #[derive(Serialize)]
@@ -386,6 +394,7 @@ impl Agent {
         &self,
         plan_updated: bool,
         continue_inspection: bool,
+        had_text_response: bool,
         tool_rounds: usize,
         plan_continuations: usize,
     ) -> bool {
@@ -396,15 +405,46 @@ impl Agent {
             && has_inspection_evidence
             && !self.inspection_progress.has_minimum_review_evidence();
         let needs_plan_synthesis = tool_rounds > 0 && has_inspection_evidence && !plan_updated;
-        matches!(self.execution_mode, AgentExecutionMode::Plan)
+        !matches!(
+            self.planning_outcome_contract(plan_updated, continue_inspection, had_text_response),
+            PlanningOutcomeContract::Satisfied
+        ) && matches!(self.execution_mode, AgentExecutionMode::Plan)
             && (continue_inspection
                 || shallow_initial_plan
                 || still_missing_inspection_evidence
-                || needs_plan_synthesis)
+                || needs_plan_synthesis
+                || (had_text_response
+                    && !plan_updated
+                    && !continue_inspection
+                    && self.pending_user_input.is_none()))
             && plan_continuations < MAX_PLAN_CONTINUATIONS_PER_TURN
             && self.pending_user_input.is_none()
             && self.pending_approval.is_none()
-            && (continue_inspection || has_inspection_evidence || !self.current_plan.is_empty())
+            && (continue_inspection
+                || has_inspection_evidence
+                || !self.current_plan.is_empty()
+                || had_text_response)
+    }
+
+    pub(super) fn planning_outcome_contract(
+        &self,
+        plan_updated: bool,
+        continue_inspection: bool,
+        had_text_response: bool,
+    ) -> PlanningOutcomeContract {
+        if !matches!(self.execution_mode, AgentExecutionMode::Plan) {
+            return PlanningOutcomeContract::Satisfied;
+        }
+        if self.pending_approval.is_some() || self.pending_user_input.is_some() || plan_updated {
+            return PlanningOutcomeContract::Satisfied;
+        }
+        if continue_inspection {
+            return PlanningOutcomeContract::MoreInspectionRequired;
+        }
+        if had_text_response {
+            return PlanningOutcomeContract::StructuredOutcomeRequired;
+        }
+        PlanningOutcomeContract::Satisfied
     }
 
     pub(super) fn should_continue_execute_without_tools(
@@ -612,6 +652,7 @@ impl RuntimeContinuationPhase {
         match self {
             Self::ToolResultsAvailable => "tool_results_available",
             Self::PlanContinuationRequired => "plan_continuation_required",
+            Self::PlanStructuredOutcomeRequired => "plan_structured_outcome_required",
             Self::ExecutionContinuationRequired => "execution_continuation_required",
             Self::PlanApproved => "plan_approved",
         }
@@ -633,6 +674,14 @@ impl RuntimeContinuationPhase {
                 "End the turn with exactly one of: <plan>, <request_user_input>, or <continue_inspection/>.",
                 "Expand the plan into multiple concrete steps grounded in the inspected code.",
                 "Only stop planning when you have either produced the plan, requested structured user input, or explicitly requested more inspection.",
+                "Do not ask the user to continue.",
+            ],
+            Self::PlanStructuredOutcomeRequired => vec![
+                "Planning mode is still active and the last turn ended without a valid planning artifact.",
+                "Do not stop with narration alone.",
+                "Continue immediately and end the turn with exactly one of: <plan>, <request_user_input>, or <continue_inspection/>.",
+                "If you already inspected enough code, synthesize the concrete plan now.",
+                "If a key decision is still unresolved, emit <request_user_input> instead of asking informally in prose.",
                 "Do not ask the user to continue.",
             ],
             Self::ExecutionContinuationRequired => vec![

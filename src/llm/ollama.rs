@@ -9,8 +9,9 @@ use crate::agent::{AnthropicResponse, ContentBlock, Message};
 use crate::redaction::{redact_secrets, sanitize_url_for_display};
 
 use super::shared::{
-    context_budget_from_window, hashed_embedding, http_client_for_target, parse_tool_arguments,
-    render_openai_message_content, ContextBudget, LlmBackend,
+    collect_assistant_content, context_budget_from_window, extract_single_tool_result,
+    hashed_embedding, http_client_for_target, parse_tool_arguments, render_openai_message_content,
+    ContextBudget, LlmBackend,
 };
 
 pub struct OllamaBackend {
@@ -168,6 +169,7 @@ impl LlmBackend for OllamaBackend {
         let mut stop_reason = None;
         let mut input_tokens = 0u32;
         let mut output_tokens = 0u32;
+        let mut saw_done = false;
 
         while let Some(chunk) = stream.next().await {
             let chunk = chunk?;
@@ -180,7 +182,7 @@ impl LlmBackend for OllamaBackend {
                     continue;
                 }
                 let event: Value = serde_json::from_slice(&payload)?;
-                apply_ollama_stream_event(
+                saw_done |= apply_ollama_stream_event(
                     &event,
                     &mut streamed_text,
                     &mut streamed_tool_calls,
@@ -195,7 +197,7 @@ impl LlmBackend for OllamaBackend {
         let payload = normalize_ollama_stream_line(&buffer);
         if !payload.is_empty() {
             let event: Value = serde_json::from_slice(&payload)?;
-            apply_ollama_stream_event(
+            saw_done |= apply_ollama_stream_event(
                 &event,
                 &mut streamed_text,
                 &mut streamed_tool_calls,
@@ -206,6 +208,8 @@ impl LlmBackend for OllamaBackend {
             )?;
         }
 
+        ensure_ollama_stream_completed(saw_done, &endpoint)?;
+
         let mut content = Vec::new();
         if !streamed_text.trim().is_empty() {
             content.push(ContentBlock::Text { text: streamed_text });
@@ -213,11 +217,8 @@ impl LlmBackend for OllamaBackend {
         for (idx, call) in streamed_tool_calls.iter().enumerate() {
             content.push(ContentBlock::ToolUse {
                 id: format!("ollama-tool-{}", idx + 1),
-                name: call["function"]["name"]
-                    .as_str()
-                    .unwrap_or_default()
-                    .to_string(),
-                input: parse_tool_arguments(&call["function"]["arguments"])?,
+                name: call.name.clone(),
+                input: call.arguments.clone(),
             });
         }
 
@@ -275,12 +276,12 @@ fn normalize_ollama_stream_line(line: &[u8]) -> Vec<u8> {
 pub(super) fn apply_ollama_stream_event(
     event: &Value,
     streamed_text: &mut String,
-    streamed_tool_calls: &mut Vec<Value>,
+    streamed_tool_calls: &mut Vec<OllamaToolCall>,
     stop_reason: &mut Option<String>,
     input_tokens: &mut u32,
     output_tokens: &mut u32,
     on_text_delta: &mut (dyn FnMut(String) + Send),
-) -> Result<()> {
+) -> Result<bool> {
     if let Some(delta) = event
         .get("message")
         .and_then(|message| message.get("content"))
@@ -298,7 +299,7 @@ pub(super) fn apply_ollama_stream_event(
         .and_then(Value::as_array)
     {
         if !tool_calls.is_empty() {
-            streamed_tool_calls.extend(tool_calls.iter().cloned());
+            merge_ollama_stream_tool_calls(streamed_tool_calls, tool_calls);
         }
     }
 
@@ -315,9 +316,54 @@ pub(super) fn apply_ollama_stream_event(
             .get("eval_count")
             .and_then(Value::as_u64)
             .unwrap_or(0) as u32;
+        return Ok(true);
     }
 
-    Ok(())
+    Ok(false)
+}
+
+pub(super) fn ensure_ollama_stream_completed(saw_done: bool, endpoint: &str) -> Result<()> {
+    if saw_done {
+        return Ok(());
+    }
+    Err(anyhow!(
+        "Ollama stream at {} ended before the final done event",
+        sanitize_url_for_display(endpoint)
+    ))
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(super) struct OllamaToolCall {
+    pub name: String,
+    pub arguments: Value,
+}
+
+fn merge_ollama_stream_tool_calls(
+    streamed_tool_calls: &mut Vec<OllamaToolCall>,
+    tool_calls: &[Value],
+) {
+    for tool_call in tool_calls {
+        let Some(normalized) = normalize_ollama_tool_call(tool_call) else {
+            continue;
+        };
+        if streamed_tool_calls.iter().any(|existing| existing == &normalized) {
+            continue;
+        }
+        streamed_tool_calls.push(normalized);
+    }
+}
+
+fn normalize_ollama_tool_call(tool_call: &Value) -> Option<OllamaToolCall> {
+    let function = tool_call.get("function")?;
+    let name = function.get("name").and_then(Value::as_str)?.trim();
+    if name.is_empty() {
+        return None;
+    }
+    let arguments = parse_tool_arguments(function.get("arguments").unwrap_or(&Value::Null)).ok()?;
+    Some(OllamaToolCall {
+        name: name.to_string(),
+        arguments,
+    })
 }
 
 pub(super) fn to_ollama_messages(messages: &[Message]) -> Vec<Value> {
@@ -435,39 +481,18 @@ fn render_ollama_assistant_message(
     content: &Value,
     tool_names_by_id: &mut HashMap<String, String>,
 ) -> Value {
-    let mut text_parts = Vec::new();
+    let (text_parts, assistant_tool_uses) = collect_assistant_content(content);
     let mut tool_calls = Vec::new();
-    if let Some(items) = content.as_array() {
-        for item in items {
-            match item.get("type").and_then(Value::as_str) {
-                Some("text") => {
-                    if let Some(text) = item.get("text").and_then(Value::as_str) {
-                        if !text.trim().is_empty() {
-                            text_parts.push(text.to_string());
-                        }
-                    }
-                }
-                Some("tool_use") => {
-                    let tool_name = item
-                        .get("name")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default()
-                        .to_string();
-                    if let Some(id) = item.get("id").and_then(Value::as_str) {
-                        tool_names_by_id.insert(id.to_string(), tool_name.clone());
-                    }
-                    tool_calls.push(json!({
-                        "function": {
-                            "name": tool_name,
-                            "arguments": item.get("input").cloned().unwrap_or_else(|| json!({})),
-                        }
-                    }));
-                }
-                _ => {}
-            }
+    for tool_use in assistant_tool_uses {
+        if !tool_use.id.is_empty() {
+            tool_names_by_id.insert(tool_use.id.clone(), tool_use.name.clone());
         }
-    } else if let Some(text) = content.as_str() {
-        text_parts.push(text.to_string());
+        tool_calls.push(json!({
+            "function": {
+                "name": tool_use.name,
+                "arguments": tool_use.input,
+            }
+        }));
     }
 
     let mut message = json!({
@@ -484,21 +509,10 @@ fn extract_ollama_tool_result_message(
     content: &Value,
     tool_names_by_id: &HashMap<String, String>,
 ) -> Option<Value> {
-    let items = content.as_array()?;
-    if items.len() != 1 {
-        return None;
-    }
-    let item = &items[0];
-    if item.get("type").and_then(Value::as_str) != Some("tool_result") {
-        return None;
-    }
-    let tool_use_id = item
-        .get("tool_use_id")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
+    let (tool_use_id, tool_content) = extract_single_tool_result(content)?;
     Some(json!({
         "role": "tool",
-        "tool_name": tool_names_by_id.get(tool_use_id).cloned().unwrap_or_default(),
-        "content": item.get("content").and_then(Value::as_str).unwrap_or(""),
+        "tool_name": tool_names_by_id.get(tool_use_id.as_str()).cloned().unwrap_or_default(),
+        "content": tool_content,
     }))
 }

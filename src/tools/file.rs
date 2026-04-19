@@ -138,26 +138,6 @@ impl Tool for ListFilesTool {
     }
 }
 
-pub struct SearchFilesTool;
-#[async_trait]
-impl Tool for SearchFilesTool {
-    fn name(&self) -> &str { "search_files" }
-    fn description(&self) -> &str { "Search for pattern in files" }
-    fn input_schema(&self) -> Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "path": { "type": "string" },
-                "pattern": { "type": "string" }
-            },
-            "required": ["path", "pattern"]
-        })
-    }
-    async fn call(&self, _i: Value) -> Result<Value, ToolError> {
-        Ok(json!({ "status": "not_fully_implemented" }))
-    }
-}
-
 fn is_ignored_path(path: &Path) -> bool {
     path.components().any(|component| {
         let name = component.as_os_str().to_string_lossy();

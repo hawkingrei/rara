@@ -34,7 +34,7 @@ impl SubAgentKind {
                 "## Sub-Agent Role\n- You are a read-only exploration sub-agent.\n- Inspect the repository and summarize concrete findings.\n- Do not propose edits you cannot justify from inspected code.\n- Do not narrate each next tool call; call the tool directly.\n- End with a concise findings summary."
             }
             SubAgentKind::Plan => {
-                "## Sub-Agent Role\n- You are a read-only planning sub-agent.\n- Inspect the repository and refine an implementation approach.\n- Keep plans shallow and grouped by behavior.\n- Use <plan> only when the plan is decision-complete.\n- If the plan is not ready, summarize what additional inspection is still needed."
+                "## Sub-Agent Role\n- You are a read-only planning sub-agent.\n- Inspect the repository and refine an implementation approach.\n- Keep plans shallow and grouped by behavior.\n- Use <plan> only when the plan is decision-complete.\n- If the plan is not ready, summarize what additional inspection is still needed and end with <continue_inspection/>.\n- Do not stop with narration alone.\n- End with exactly one of: <plan>, <request_user_input>, or <continue_inspection/>."
             }
         }
     }
@@ -281,9 +281,12 @@ async fn run_sub_agent(
     let mut sub = Agent::new(tool_manager, backend, vdb, session_manager, workspace);
     sub.set_execution_mode(kind.execution_mode());
     sub.set_prompt_config(append_subagent_prompt(prompt_config, kind.append_prompt()));
-    sub.query_with_mode(instruction.to_string(), crate::agent::AgentOutputMode::Silent)
-        .await
-        .map_err(|e| ToolError::ExecutionFailed(e.to_string()))?;
+    sub.query_with_mode(
+        instruction.to_string(),
+        crate::agent::AgentOutputMode::Silent,
+    )
+    .await
+    .map_err(|e| ToolError::ExecutionFailed(e.to_string()))?;
 
     Ok(SubAgentResult {
         status: kind.result_status(),
@@ -391,6 +394,7 @@ mod tests {
         assert!(manager.get_tool("list_files").is_some());
         assert!(manager.get_tool("glob").is_some());
         assert!(manager.get_tool("grep").is_some());
+        assert!(manager.get_tool("search_files").is_none());
         assert!(manager.get_tool("write_file").is_none());
         assert!(manager.get_tool("apply_patch").is_none());
         assert!(manager.get_tool("bash").is_none());

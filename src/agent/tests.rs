@@ -124,7 +124,12 @@ impl LlmBackend for SequencedBackend {
                 .filter_map(|tool| tool.get("name").and_then(Value::as_str).map(str::to_string))
                 .collect(),
         );
-        Ok(self.responses.lock().expect("lock").remove(0))
+        let mut responses = self.responses.lock().expect("lock");
+        assert!(
+            !responses.is_empty(),
+            "test backend ran out of scripted responses"
+        );
+        Ok(responses.remove(0))
     }
 
     async fn embed(&self, _text: &str) -> Result<Vec<f32>> {
@@ -302,7 +307,8 @@ async fn errors_when_tool_loop_exceeds_limit() {
 async fn plan_mode_filters_write_tools_from_schema() {
     let backend = Arc::new(SequencedBackend::new(vec![AnthropicResponse {
         content: vec![ContentBlock::Text {
-            text: "plan".to_string(),
+            text: "<plan>\n- [pending] Review the current project structure\n</plan>"
+                .to_string(),
         }],
         stop_reason: Some("end_turn".to_string()),
         usage: Some(TokenUsage::default()),
@@ -334,23 +340,14 @@ async fn plan_mode_filters_write_tools_from_schema() {
 }
 
 #[tokio::test]
-async fn continues_plan_mode_after_shallow_initial_plan() {
-    let backend = Arc::new(SequencedBackend::new(vec![
-        AnthropicResponse {
-            content: vec![ContentBlock::Text {
-                text: "<plan>\n- [pending] Inspect the repository structure\n</plan>\nStart with the top-level layout.".to_string(),
-            }],
-            stop_reason: Some("end_turn".to_string()),
-            usage: Some(TokenUsage::default()),
-        },
-        AnthropicResponse {
-            content: vec![ContentBlock::Text {
-                text: "done".to_string(),
-            }],
-            stop_reason: Some("end_turn".to_string()),
-            usage: Some(TokenUsage::default()),
-        },
-    ]));
+async fn accepts_shallow_initial_plan_as_structured_outcome() {
+    let backend = Arc::new(SequencedBackend::new(vec![AnthropicResponse {
+        content: vec![ContentBlock::Text {
+            text: "<plan>\n- [pending] Inspect the repository structure\n</plan>\nStart with the top-level layout.".to_string(),
+        }],
+        stop_reason: Some("end_turn".to_string()),
+        usage: Some(TokenUsage::default()),
+    }]));
 
     let mut tool_manager = ToolManager::new();
     tool_manager.register(Box::new(StubTool));
@@ -369,8 +366,8 @@ async fn continues_plan_mode_after_shallow_initial_plan() {
         .expect("query should succeed");
 
     let observed = backend.observed_messages.lock().expect("lock");
-    assert_eq!(observed.len(), 2);
-    assert!(agent.history.iter().any(|message| message
+    assert_eq!(observed.len(), 1);
+    assert!(!agent.history.iter().any(|message| message
         .content
         .to_string()
         .contains("plan_continuation_required")));
@@ -392,14 +389,15 @@ async fn last_query_plan_updated_tracks_only_the_final_planning_turn() {
     let backend = Arc::new(SequencedBackend::new(vec![
         AnthropicResponse {
             content: vec![ContentBlock::Text {
-                text: "<plan>\n- [pending] Inspect the repository structure\n</plan>\nStart with the top-level layout.".to_string(),
+                text: "I inspected the top-level layout and still need a structured follow-up."
+                    .to_string(),
             }],
             stop_reason: Some("end_turn".to_string()),
             usage: Some(TokenUsage::default()),
         },
         AnthropicResponse {
             content: vec![ContentBlock::Text {
-                text: "I inspected the top-level layout and need a bit more context before finalizing the plan.".to_string(),
+                text: "<request_user_input>\nquestion: Which area should the plan focus on first?\noption: Prompt runtime | Tighten the planning prompt and continuation phases.\noption: TUI lifecycle | Improve the planning and approval interaction flow.\n</request_user_input>".to_string(),
             }],
             stop_reason: Some("end_turn".to_string()),
             usage: Some(TokenUsage::default()),
@@ -481,7 +479,8 @@ async fn continues_plan_mode_after_exploration_if_assistant_still_signals_more_w
         },
         AnthropicResponse {
             content: vec![ContentBlock::Text {
-                text: "done".to_string(),
+                text: "<plan>\n- [pending] Inspect src/main.rs bootstrap flow\n- [pending] Review the prompt runtime wiring\n</plan>\nThe inspection path is now complete."
+                    .to_string(),
             }],
             stop_reason: Some("end_turn".to_string()),
             usage: Some(TokenUsage::default()),
@@ -526,7 +525,8 @@ async fn continues_plan_mode_to_synthesize_plan_after_exploration_evidence() {
         },
         AnthropicResponse {
             content: vec![ContentBlock::Text {
-                text: "I inspected the repository structure and the current planning flow.".to_string(),
+                text: "I inspected the repository structure and the current planning flow."
+                    .to_string(),
             }],
             stop_reason: Some("end_turn".to_string()),
             usage: Some(TokenUsage::default()),
@@ -561,7 +561,55 @@ async fn continues_plan_mode_to_synthesize_plan_after_exploration_evidence() {
     assert!(agent.history.iter().any(|message| message
         .content
         .to_string()
-        .contains("plan_continuation_required")));
+        .contains("plan_structured_outcome_required")));
+    assert_eq!(agent.current_plan.len(), 2);
+}
+
+#[tokio::test]
+async fn narration_only_planning_turn_requires_structured_followup() {
+    let backend = Arc::new(SequencedBackend::new(vec![
+        AnthropicResponse {
+            content: vec![ContentBlock::Text {
+                text: "I reviewed the prompt runtime and the workspace discovery flow."
+                    .to_string(),
+            }],
+            stop_reason: Some("end_turn".to_string()),
+            usage: Some(TokenUsage::default()),
+        },
+        AnthropicResponse {
+            content: vec![ContentBlock::Text {
+                text: "<plan>\n- [pending] Generalize instruction discovery\n- [pending] Preserve current cache behavior\n</plan>\nThe inspected code now supports a concrete refactor path.".to_string(),
+            }],
+            stop_reason: Some("end_turn".to_string()),
+            usage: Some(TokenUsage::default()),
+        },
+    ]));
+
+    let (_temp, session_manager, workspace, rara_dir) = test_runtime_storage();
+    let mut agent = Agent::new(
+        ToolManager::new(),
+        backend.clone(),
+        Arc::new(VectorDB::new("data/lancedb")),
+        session_manager,
+        workspace,
+    );
+    agent.tool_result_store =
+        ToolResultStore::new(rara_dir.join("tool-results")).expect("tool result store");
+    agent.set_execution_mode(AgentExecutionMode::Plan);
+
+    agent
+        .query_with_mode("inspect".to_string(), super::AgentOutputMode::Silent)
+        .await
+        .expect("query should succeed");
+
+    let observed = backend.observed_messages.lock().expect("lock");
+    assert_eq!(observed.len(), 2);
+    assert!(agent.history.iter().any(|message| {
+        message
+            .content
+            .to_string()
+            .contains("plan_structured_outcome_required")
+    }));
     assert_eq!(agent.current_plan.len(), 2);
 }
 

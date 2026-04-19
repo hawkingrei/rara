@@ -17,7 +17,7 @@ use crate::tools::agent::{AgentTool, ExploreAgentTool, PlanAgentTool, TeamCreate
 use crate::tools::bash::BashTool;
 use crate::tools::context::RetrieveSessionContextTool;
 use crate::tools::file::{
-    ListFilesTool, ReadFileTool, ReplaceTool, SearchFilesTool, WriteFileTool,
+    ListFilesTool, ReadFileTool, ReplaceTool, WriteFileTool,
 };
 use crate::tools::patch::ApplyPatchTool;
 use crate::tools::search::{GlobTool, GrepTool};
@@ -627,7 +627,6 @@ fn create_full_tool_manager(
     tm.register(Box::new(ApplyPatchTool));
     tm.register(Box::new(WriteFileTool));
     tm.register(Box::new(ListFilesTool));
-    tm.register(Box::new(SearchFilesTool));
     tm.register(Box::new(ReplaceTool));
     tm.register(Box::new(WebFetchTool));
     tm.register(Box::new(GlobTool));
