@@ -1,25 +1,26 @@
-# Team Runtime Mode
+# AgentHub Team Mode
 
 ## Problem
 
-RARA already has delegated planning and exploration tools, but it does not have a worker-side
-runtime mode that can cheaply reject irrelevant work before handing every turn to a larger and
-more expensive model.
+RARA already has delegated planning and exploration tools, but it does not have an ACP-backed
+AgentHub worker runtime that can cheaply reject irrelevant work before handing every turn to a
+larger and more expensive model.
 
-For multi-worker or role-specialized sessions, this means every incoming turn currently pays the
-full worker-model cost even when the request is clearly meant for a different worker.
+For multi-worker or role-specialized AgentHub sessions, this means every incoming turn currently
+pays the full worker-model cost even when the request is clearly meant for a different worker.
 
-This spec is intentionally written for the future `hawkingrei/agenthub` integration path:
+This spec is intentionally written for the future `hawkingrei/agenthub` integration path and is
+intentionally distinct from any future local-only team mode:
 
 - RARA acts as the worker runtime;
 - AgentHub provides the higher-level leader / team orchestration;
-- RARA team mode decides whether the local worker should spend its expensive model budget on the
-  current request.
+- RARA AgentHub team mode decides whether the local worker should spend its expensive model budget
+  on the current request.
 - The integration boundary is ACP, not a RARA-specific mailbox or custom RPC layer.
 
 ## Scope
 
-- An ACP-oriented `team` runtime mode for worker sessions.
+- An ACP-oriented `AgentHub team mode` for worker sessions.
 - A lightweight router model that classifies whether the current request is relevant to the worker.
 - A worker-model handoff when the router says the request is relevant.
 
@@ -36,17 +37,17 @@ This spec is intentionally written for the future `hawkingrei/agenthub` integrat
 ### 0) ACP Boundary First
 
 - AgentHub should talk to RARA through ACP session and prompt requests.
-- Team mode is therefore a worker-runtime concern inside ACP request handling, not a parallel CLI
-  surface with a separate protocol.
+- AgentHub team mode is therefore a worker-runtime concern inside ACP request handling, not a
+  parallel CLI surface with a separate protocol.
 - The first implementation target is:
   - ACP prompt arrives;
   - team router evaluates worker relevance;
   - relevant prompts go to the expensive worker backend;
   - irrelevant prompts return a structured worker decline through ACP.
 
-### 1) Team Runtime Wrapper
+### 1) AgentHub Team Runtime Wrapper
 
-- Team mode wraps the normal worker backend with a routing backend.
+- AgentHub team mode wraps the normal worker backend with a routing backend.
 - The routing backend runs before the expensive worker backend on:
   - `ask`
   - `ask_streaming`
@@ -63,8 +64,8 @@ This spec is intentionally written for the future `hawkingrei/agenthub` integrat
 
 ### 3) Router Backend Selection
 
-- Team mode is enabled by CLI/runtime configuration and must also be representable in ACP session
-  initialization.
+- AgentHub team mode is enabled by CLI/runtime configuration and must also be representable in ACP
+  session initialization.
 - The router backend uses the same provider and credentials as the worker backend where possible.
 - The router model may be provided explicitly by CLI.
 - If not provided, RARA derives a provider-specific small-model default when one is known.
@@ -94,8 +95,8 @@ The router must return strict JSON:
 
 ### 3) ACP Response Semantics
 
-- Team-mode routing decisions must be reflected in ACP prompt handling rather than hidden in local
-  CLI-only state.
+- AgentHub team-mode routing decisions must be reflected in ACP prompt handling rather than hidden
+  in local CLI-only state.
 - `skip` should produce a structured worker decline/deferral response suitable for AgentHub to
   re-route or ignore.
 - `handle` should continue the normal ACP-backed worker turn.
@@ -118,4 +119,4 @@ The router must return strict JSON:
 - Add TUI/router observability.
 - Route sub-agent or worker approvals through the same team runtime boundary.
 - Complete the ACP runtime path so AgentHub can actually use RARA as a worker runtime.
-- Integrate the ACP-backed worker-local team runtime with AgentHub leader / worker orchestration.
+- Integrate the ACP-backed AgentHub team runtime with AgentHub leader / worker orchestration.
