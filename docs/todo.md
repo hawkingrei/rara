@@ -20,6 +20,9 @@ Active backlog only. Keep this file small and current.
 
 - [ ] Add a first-run onboarding flow that explains workspace, provider/model selection, local model download behavior, cache location, and tool loop expectations before the user lands in a blank chat.
 - [ ] Continue aligning the TUI status and transcript surfaces with Codex/Claude so runtime state stays visible without leaking bottom-pane chrome into transcript history.
+- [ ] Continue making tool-action transcript summaries more source-aware and file-aware so edit tools such as `write_file` / `replace` / `apply_patch` consistently show what they touched instead of only generic action labels.
+- [ ] Turn `bash` execution into a real evented TUI transcript path so long-running commands can stream stdout/stderr live instead of only surfacing a post-hoc result summary.
+- [ ] Upgrade queued follow-up messages from "run after the current task finishes" to a true "submit after the next tool call boundary" steer path, matching the Codex-style pending input contract more closely.
 - [ ] Harden local model prompting contracts for Gemma 4 and Qwen3: chat template handling, stop sequences, and tool-call JSON framing should be explicit and regression-tested.
 - [ ] Replace the current hash-based local embedding fallback with a real embedding backend so project memory retrieval quality is good enough for normal coding sessions.
 - [ ] Replace the mock `VectorDB` implementation in `src/vectordb.rs` with real LanceDB-backed search/upsert behavior, or feature-gate the memory tools until the backend is real.

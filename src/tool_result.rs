@@ -34,6 +34,8 @@ impl ToolResultStore {
         let summary = summarize_tool_result(tool_name, input, result);
         let inline = match tool_name {
             "apply_patch" => compact_apply_patch(result),
+            "write_file" => compact_write_file(result),
+            "replace" => compact_replace(result),
             "list_files" => compact_list_files(input, result),
             "read_file" => compact_read_file(input, result),
             "glob" => compact_glob(result),
@@ -41,9 +43,10 @@ impl ToolResultStore {
             "web_fetch" => compact_web_fetch(input, result),
             _ => compact_generic(&summary, result),
         };
-        let full_rendered = serde_json::to_string_pretty(result).unwrap_or_else(|_| result.to_string());
-        let should_persist =
-            full_rendered.chars().count() > INLINE_CHAR_BUDGET || inline.chars().count() > INLINE_CHAR_BUDGET;
+        let full_rendered =
+            serde_json::to_string_pretty(result).unwrap_or_else(|_| result.to_string());
+        let should_persist = full_rendered.chars().count() > INLINE_CHAR_BUDGET
+            || inline.chars().count() > INLINE_CHAR_BUDGET;
 
         if !should_persist {
             return Ok(inline);
@@ -97,10 +100,12 @@ pub fn repair_tool_result_history(history: &[Message]) -> Vec<Message> {
             if let Some(items) = message.content.as_array() {
                 for item in items {
                     if item.get("type").and_then(Value::as_str) == Some("tool_result") {
-                        let Some(tool_use_id) = item.get("tool_use_id").and_then(Value::as_str) else {
+                        let Some(tool_use_id) = item.get("tool_use_id").and_then(Value::as_str)
+                        else {
                             continue;
                         };
-                        if let Some(pos) = pending_tool_uses.iter().position(|id| id == tool_use_id) {
+                        if let Some(pos) = pending_tool_uses.iter().position(|id| id == tool_use_id)
+                        {
                             pending_tool_uses.remove(pos);
                             kept_blocks.push(item.clone());
                         }
@@ -161,9 +166,11 @@ fn extract_tool_use_ids(content: &Value) -> Vec<String> {
 }
 
 fn has_tool_result_blocks(content: &Value) -> bool {
-    content
-        .as_array()
-        .is_some_and(|items| items.iter().any(|item| item.get("type").and_then(Value::as_str) == Some("tool_result")))
+    content.as_array().is_some_and(|items| {
+        items
+            .iter()
+            .any(|item| item.get("type").and_then(Value::as_str) == Some("tool_result"))
+    })
 }
 
 fn compact_list_files(input: &Value, result: &Value) -> String {
@@ -182,14 +189,15 @@ fn compact_list_files(input: &Value, result: &Value) -> String {
 }
 
 fn compact_read_file(input: &Value, result: &Value) -> String {
-    let content = result.get("content").and_then(Value::as_str).unwrap_or_default();
+    let content = result
+        .get("content")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
     let total_chars = content.chars().count();
     let preview = truncate_text(content, INLINE_CHAR_BUDGET.min(LARGE_PREVIEW_HEAD));
     let summary = summarize_tool_result("read_file", input, result);
     if preview.chars().count() < total_chars {
-        format!(
-            "{summary}\nContent preview:\n{preview}\n... truncated."
-        )
+        format!("{summary}\nContent preview:\n{preview}\n... truncated.")
     } else {
         format!("{summary}\nContent:\n{preview}")
     }
@@ -228,9 +236,15 @@ fn compact_grep(result: &Value) -> String {
         .iter()
         .take(MATCH_PREVIEW_LIMIT)
         .map(|entry| {
-            let file = entry.get("file").and_then(Value::as_str).unwrap_or("<unknown>");
+            let file = entry
+                .get("file")
+                .and_then(Value::as_str)
+                .unwrap_or("<unknown>");
             let line = entry.get("line").and_then(Value::as_u64).unwrap_or(0);
-            let content = entry.get("content").and_then(Value::as_str).unwrap_or_default();
+            let content = entry
+                .get("content")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
             format!("{file}:{line}: {content}")
         })
         .collect::<Vec<_>>()
@@ -245,7 +259,10 @@ fn compact_grep(result: &Value) -> String {
 }
 
 fn compact_web_fetch(input: &Value, result: &Value) -> String {
-    let content = result.get("content").and_then(Value::as_str).unwrap_or_default();
+    let content = result
+        .get("content")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
     let total_chars = content.chars().count();
     let preview = truncate_text(content, LARGE_PREVIEW_HEAD);
     let summary = summarize_tool_result("web_fetch", input, result);
@@ -257,7 +274,10 @@ fn compact_web_fetch(input: &Value, result: &Value) -> String {
 }
 
 fn compact_apply_patch(result: &Value) -> String {
-    let status = result.get("status").and_then(Value::as_str).unwrap_or("unknown");
+    let status = result
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
     let files_changed = result
         .get("files_changed")
         .and_then(Value::as_u64)
@@ -291,7 +311,67 @@ fn compact_apply_patch(result: &Value) -> String {
 
 fn compact_generic(summary: &str, result: &Value) -> String {
     let rendered = serde_json::to_string_pretty(result).unwrap_or_else(|_| result.to_string());
-    format!("{summary}\nPayload:\n{}", truncate_text(&rendered, LARGE_PREVIEW_HEAD))
+    format!(
+        "{summary}\nPayload:\n{}",
+        truncate_text(&rendered, LARGE_PREVIEW_HEAD)
+    )
+}
+
+fn compact_write_file(result: &Value) -> String {
+    let path = result
+        .get("path")
+        .and_then(Value::as_str)
+        .unwrap_or("<unknown>");
+    let operation = result
+        .get("operation")
+        .and_then(Value::as_str)
+        .unwrap_or("updated");
+    let line_count = result
+        .get("line_count")
+        .and_then(Value::as_u64)
+        .unwrap_or_default();
+    let bytes_written = result
+        .get("bytes_written")
+        .and_then(Value::as_u64)
+        .unwrap_or_default();
+    let mut rendered =
+        format!("write_file {operation} {path}\nlines={line_count} bytes={bytes_written}");
+    if let Some(previous_bytes) = result.get("previous_bytes").and_then(Value::as_u64) {
+        let previous_lines = result
+            .get("previous_line_count")
+            .and_then(Value::as_u64)
+            .unwrap_or_default();
+        rendered.push_str(&format!(
+            "\nprevious_lines={previous_lines} previous_bytes={previous_bytes}"
+        ));
+    }
+    rendered
+}
+
+fn compact_replace(result: &Value) -> String {
+    let path = result
+        .get("path")
+        .and_then(Value::as_str)
+        .unwrap_or("<unknown>");
+    let replacements = result
+        .get("replacements")
+        .and_then(Value::as_u64)
+        .unwrap_or_default();
+    let line_delta = result
+        .get("line_delta")
+        .and_then(Value::as_i64)
+        .unwrap_or_default();
+    let old_preview = result
+        .get("old_preview")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let new_preview = result
+        .get("new_preview")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    format!(
+        "replace {path}\nreplacements={replacements} line_delta={line_delta}\nold={old_preview}\nnew={new_preview}"
+    )
 }
 
 fn summarize_tool_result(tool_name: &str, input: &Value, result: &Value) -> String {
@@ -305,7 +385,10 @@ fn summarize_tool_result(tool_name: &str, input: &Value, result: &Value) -> Stri
             format!("Listed {total} path(s) under {root}.")
         }
         "read_file" => {
-            let path = input.get("path").and_then(Value::as_str).unwrap_or("<unknown>");
+            let path = input
+                .get("path")
+                .and_then(Value::as_str)
+                .unwrap_or("<unknown>");
             let total_chars = result
                 .get("content")
                 .and_then(Value::as_str)
@@ -346,7 +429,10 @@ fn summarize_tool_result(tool_name: &str, input: &Value, result: &Value) -> Stri
             format!("Grep found {total} match(es).")
         }
         "web_fetch" => {
-            let url = input.get("url").and_then(Value::as_str).unwrap_or("<unknown>");
+            let url = input
+                .get("url")
+                .and_then(Value::as_str)
+                .unwrap_or("<unknown>");
             let total_chars = result
                 .get("content")
                 .and_then(Value::as_str)
@@ -355,7 +441,10 @@ fn summarize_tool_result(tool_name: &str, input: &Value, result: &Value) -> Stri
             format!("Fetched {url} ({total_chars} chars).")
         }
         "apply_patch" => {
-            let status = result.get("status").and_then(Value::as_str).unwrap_or("unknown");
+            let status = result
+                .get("status")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown");
             let files_changed = result
                 .get("files_changed")
                 .and_then(Value::as_u64)
@@ -365,6 +454,38 @@ fn summarize_tool_result(tool_name: &str, input: &Value, result: &Value) -> Stri
                 .and_then(Value::as_u64)
                 .unwrap_or_default();
             format!("Patch {status}: {files_changed} file(s), {hunks_applied} hunk(s).")
+        }
+        "write_file" => {
+            let path = result
+                .get("path")
+                .and_then(Value::as_str)
+                .or_else(|| input.get("path").and_then(Value::as_str))
+                .unwrap_or("<unknown>");
+            let operation = result
+                .get("operation")
+                .and_then(Value::as_str)
+                .unwrap_or("updated");
+            let line_count = result
+                .get("line_count")
+                .and_then(Value::as_u64)
+                .unwrap_or_default();
+            let bytes_written = result
+                .get("bytes_written")
+                .and_then(Value::as_u64)
+                .unwrap_or_default();
+            format!("Write file {path}: {operation} ({line_count} lines, {bytes_written} bytes).")
+        }
+        "replace" => {
+            let path = result
+                .get("path")
+                .and_then(Value::as_str)
+                .or_else(|| input.get("path").and_then(Value::as_str))
+                .unwrap_or("<unknown>");
+            let replacements = result
+                .get("replacements")
+                .and_then(Value::as_u64)
+                .unwrap_or_default();
+            format!("Replace in {path}: {replacements} replacement(s).")
         }
         _ => {
             let keys = result
@@ -391,7 +512,10 @@ pub fn default_tool_result_store_dir() -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use super::{compact_read_file, default_tool_result_store_dir, repair_tool_result_history, ToolResultStore};
+    use super::{
+        compact_read_file, default_tool_result_store_dir, repair_tool_result_history,
+        ToolResultStore,
+    };
     use crate::agent::Message;
     use serde_json::json;
     use std::path::Path;
@@ -439,6 +563,9 @@ mod tests {
         assert!(output.contains("full_result_path="));
         assert!(output.contains("Fetched https://example.com"));
         assert!(tempdir.path().join("tool-1.json").exists());
-        assert_eq!(default_tool_result_store_dir(), Path::new(".rara").join("tool-results"));
+        assert_eq!(
+            default_tool_result_store_dir(),
+            Path::new(".rara").join("tool-results")
+        );
     }
 }

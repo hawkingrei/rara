@@ -412,7 +412,14 @@ fn tool_action_label(message: &str) -> Option<String> {
                 rest.as_str()
             }
         )),
-        "apply_patch" => Some("Apply patch".to_string()),
+        "apply_patch" => Some(format!(
+            "Apply patch {}",
+            if rest.is_empty() {
+                "changes"
+            } else {
+                rest.as_str()
+            }
+        )),
         "write_file" => Some(format!(
             "Write {}",
             if rest.is_empty() {
@@ -1377,7 +1384,7 @@ mod tests {
     use crate::tui::state::TranscriptEntry;
 
     use super::cells::HistoryCell;
-    use super::{committed_turn_cell, desired_viewport_height};
+    use super::{committed_turn_cell, current_turn_tool_summary, desired_viewport_height};
 
     #[test]
     fn committed_turn_does_not_truncate_agent_response() {
@@ -1423,5 +1430,17 @@ mod tests {
         let height = desired_viewport_height(&app, 120, 24);
         assert!(height > 5);
         assert!(height < 24);
+    }
+
+    #[test]
+    fn tool_summary_includes_apply_patch_target_files() {
+        let entries = vec![TranscriptEntry {
+            role: "Tool".into(),
+            message: "apply_patch src/tui/render.rs, src/tui/runtime/events.rs".into(),
+        }];
+        let refs = entries.iter().collect::<Vec<_>>();
+
+        let rendered = current_turn_tool_summary(&refs, false, None).expect("tool summary");
+        assert!(rendered.contains("Apply patch src/tui/render.rs, src/tui/runtime/events.rs"));
     }
 }

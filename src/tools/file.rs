@@ -1,6 +1,6 @@
 use crate::tool::{Tool, ToolError};
 use async_trait::async_trait;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::fs;
 use std::path::Path;
 use walkdir::WalkDir;
@@ -8,8 +8,12 @@ use walkdir::WalkDir;
 pub struct ReadFileTool;
 #[async_trait]
 impl Tool for ReadFileTool {
-    fn name(&self) -> &str { "read_file" }
-    fn description(&self) -> &str { "Read the content of a file" }
+    fn name(&self) -> &str {
+        "read_file"
+    }
+    fn description(&self) -> &str {
+        "Read the content of a file"
+    }
     fn input_schema(&self) -> Value {
         json!({
             "type": "object",
@@ -22,12 +26,20 @@ impl Tool for ReadFileTool {
         })
     }
     async fn call(&self, i: Value) -> Result<Value, ToolError> {
-        let p = i["path"].as_str().ok_or(ToolError::InvalidInput("path".into()))?;
+        let p = i["path"]
+            .as_str()
+            .ok_or(ToolError::InvalidInput("path".into()))?;
         let content = fs::read_to_string(p)?;
         let lines = content.lines().collect::<Vec<_>>();
         let total_lines = lines.len();
-        let start_line = i.get("start_line").and_then(Value::as_u64).map(|v| v as usize);
-        let end_line = i.get("end_line").and_then(Value::as_u64).map(|v| v as usize);
+        let start_line = i
+            .get("start_line")
+            .and_then(Value::as_u64)
+            .map(|v| v as usize);
+        let end_line = i
+            .get("end_line")
+            .and_then(Value::as_u64)
+            .map(|v| v as usize);
 
         let sliced_content = match (start_line, end_line) {
             (None, None) => content,
@@ -35,10 +47,14 @@ impl Tool for ReadFileTool {
                 let start = start.unwrap_or(1);
                 let end = end.unwrap_or(total_lines.max(1));
                 if start == 0 || end == 0 {
-                    return Err(ToolError::InvalidInput("start_line/end_line must be >= 1".into()));
+                    return Err(ToolError::InvalidInput(
+                        "start_line/end_line must be >= 1".into(),
+                    ));
                 }
                 if start > end {
-                    return Err(ToolError::InvalidInput("start_line must be <= end_line".into()));
+                    return Err(ToolError::InvalidInput(
+                        "start_line must be <= end_line".into(),
+                    ));
                 }
                 if total_lines == 0 {
                     String::new()
@@ -62,8 +78,12 @@ impl Tool for ReadFileTool {
 pub struct WriteFileTool;
 #[async_trait]
 impl Tool for WriteFileTool {
-    fn name(&self) -> &str { "write_file" }
-    fn description(&self) -> &str { "Write content to a file" }
+    fn name(&self) -> &str {
+        "write_file"
+    }
+    fn description(&self) -> &str {
+        "Write content to a file"
+    }
     fn input_schema(&self) -> Value {
         json!({
             "type": "object",
@@ -75,17 +95,40 @@ impl Tool for WriteFileTool {
         })
     }
     async fn call(&self, i: Value) -> Result<Value, ToolError> {
-        let p = i["path"].as_str().ok_or(ToolError::InvalidInput("path".into()))?;
-        let c = i["content"].as_str().ok_or(ToolError::InvalidInput("content".into()))?;
-        fs::write(p, c)?; Ok(json!({ "status": "ok" }))
+        let p = i["path"]
+            .as_str()
+            .ok_or(ToolError::InvalidInput("path".into()))?;
+        let c = i["content"]
+            .as_str()
+            .ok_or(ToolError::InvalidInput("content".into()))?;
+        let existing = fs::read_to_string(p).ok();
+        let operation = if existing.is_some() {
+            "overwritten"
+        } else {
+            "created"
+        };
+        fs::write(p, c)?;
+        Ok(json!({
+            "status": "ok",
+            "path": p,
+            "operation": operation,
+            "bytes_written": c.len(),
+            "line_count": c.lines().count(),
+            "previous_bytes": existing.as_ref().map(|value| value.len()),
+            "previous_line_count": existing.as_ref().map(|value| value.lines().count()),
+        }))
     }
 }
 
 pub struct ReplaceTool;
 #[async_trait]
 impl Tool for ReplaceTool {
-    fn name(&self) -> &str { "replace" }
-    fn description(&self) -> &str { "Replace a specific string in a file" }
+    fn name(&self) -> &str {
+        "replace"
+    }
+    fn description(&self) -> &str {
+        "Replace a specific string in a file"
+    }
     fn input_schema(&self) -> Value {
         json!({
             "type": "object",
@@ -98,20 +141,43 @@ impl Tool for ReplaceTool {
         })
     }
     async fn call(&self, i: Value) -> Result<Value, ToolError> {
-        let p = i["path"].as_str().ok_or(ToolError::InvalidInput("path".into()))?;
-        let o = i["old_string"].as_str().ok_or(ToolError::InvalidInput("old".into()))?;
-        let n = i["new_string"].as_str().ok_or(ToolError::InvalidInput("new".into()))?;
+        let p = i["path"]
+            .as_str()
+            .ok_or(ToolError::InvalidInput("path".into()))?;
+        let o = i["old_string"]
+            .as_str()
+            .ok_or(ToolError::InvalidInput("old".into()))?;
+        let n = i["new_string"]
+            .as_str()
+            .ok_or(ToolError::InvalidInput("new".into()))?;
         let c = fs::read_to_string(p)?;
-        if c.matches(o).count() != 1 { return Err(ToolError::ExecutionFailed("String not unique".into())); }
-        fs::write(p, c.replace(o, n))?; Ok(json!({ "status": "ok" }))
+        if c.matches(o).count() != 1 {
+            return Err(ToolError::ExecutionFailed("String not unique".into()));
+        }
+        let updated = c.replace(o, n);
+        fs::write(p, &updated)?;
+        Ok(json!({
+            "status": "ok",
+            "path": p,
+            "replacements": 1,
+            "old_preview": preview_snippet(o),
+            "new_preview": preview_snippet(n),
+            "old_bytes": o.len(),
+            "new_bytes": n.len(),
+            "line_delta": updated.lines().count() as i64 - c.lines().count() as i64,
+        }))
     }
 }
 
 pub struct ListFilesTool;
 #[async_trait]
 impl Tool for ListFilesTool {
-    fn name(&self) -> &str { "list_files" }
-    fn description(&self) -> &str { "Recursively list files" }
+    fn name(&self) -> &str {
+        "list_files"
+    }
+    fn description(&self) -> &str {
+        "Recursively list files"
+    }
     fn input_schema(&self) -> Value {
         json!({
             "type": "object",
@@ -123,7 +189,9 @@ impl Tool for ListFilesTool {
         })
     }
     async fn call(&self, i: Value) -> Result<Value, ToolError> {
-        let p = i["path"].as_str().ok_or(ToolError::InvalidInput("path".into()))?;
+        let p = i["path"]
+            .as_str()
+            .ok_or(ToolError::InvalidInput("path".into()))?;
         let include_ignored = i
             .get("include_ignored")
             .and_then(Value::as_bool)
@@ -157,9 +225,19 @@ fn is_ignored_path(path: &Path) -> bool {
     })
 }
 
+fn preview_snippet(value: &str) -> String {
+    let mut preview = value.replace('\n', "\\n");
+    const MAX_PREVIEW: usize = 80;
+    if preview.chars().count() > MAX_PREVIEW {
+        preview = preview.chars().take(MAX_PREVIEW).collect::<String>();
+        preview.push_str("...");
+    }
+    preview
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{ListFilesTool, ReadFileTool};
+    use super::{ListFilesTool, ReadFileTool, ReplaceTool, WriteFileTool};
     use crate::tool::Tool;
     use serde_json::json;
 
@@ -208,5 +286,54 @@ mod tests {
 
         assert!(rendered.contains("src/main.rs"));
         assert!(!rendered.contains("target/debug/app"));
+    }
+
+    #[tokio::test]
+    async fn write_file_reports_created_or_overwritten() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("sample.txt");
+
+        let tool = WriteFileTool;
+        let created = tool
+            .call(json!({
+                "path": path.display().to_string(),
+                "content": "hello\nworld\n"
+            }))
+            .await
+            .expect("write created");
+        assert_eq!(created["operation"], "created");
+        assert_eq!(created["line_count"], 2);
+
+        let overwritten = tool
+            .call(json!({
+                "path": path.display().to_string(),
+                "content": "updated\n"
+            }))
+            .await
+            .expect("write overwritten");
+        assert_eq!(overwritten["operation"], "overwritten");
+        assert_eq!(overwritten["previous_line_count"], 2);
+    }
+
+    #[tokio::test]
+    async fn replace_reports_preview_and_line_delta() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("sample.txt");
+        std::fs::write(&path, "hello old value\n").expect("write sample");
+
+        let tool = ReplaceTool;
+        let result = tool
+            .call(json!({
+                "path": path.display().to_string(),
+                "old_string": "old value",
+                "new_string": "new\nvalue"
+            }))
+            .await
+            .expect("replace content");
+
+        assert_eq!(result["replacements"], 1);
+        assert_eq!(result["old_preview"], "old value");
+        assert_eq!(result["new_preview"], "new\\nvalue");
+        assert_eq!(result["line_delta"], 1);
     }
 }

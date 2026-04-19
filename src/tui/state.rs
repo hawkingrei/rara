@@ -320,6 +320,7 @@ pub struct TuiApp {
     pub agent_markdown_stream: Option<AgentMarkdownStreamState>,
     pub active_live: ActiveLiveSections,
     pub pending_planning_suggestion: Option<String>,
+    pub queued_follow_up_messages: Vec<String>,
     pub terminal_focused: bool,
     pub state_db: Option<Arc<StateDb>>,
     pub state_db_status: Option<String>,
@@ -433,6 +434,7 @@ impl TuiApp {
             agent_markdown_stream: None,
             active_live: ActiveLiveSections::default(),
             pending_planning_suggestion: None,
+            queued_follow_up_messages: Vec::new(),
             terminal_focused: true,
             state_db: None,
             state_db_status: None,
@@ -726,6 +728,7 @@ impl TuiApp {
         self.agent_markdown_stream = None;
         self.clear_active_live_sections();
         self.pending_planning_suggestion = None;
+        self.queued_follow_up_messages.clear();
         self.set_plan_approval_interaction(false);
         self.notice = Some("Cleared local transcript view.".into());
     }
@@ -835,6 +838,34 @@ impl TuiApp {
 
     pub fn has_pending_planning_suggestion(&self) -> bool {
         self.pending_planning_suggestion.is_some()
+    }
+
+    pub fn has_queued_follow_up_messages(&self) -> bool {
+        !self.queued_follow_up_messages.is_empty()
+    }
+
+    pub fn queued_follow_up_count(&self) -> usize {
+        self.queued_follow_up_messages.len()
+    }
+
+    pub fn queued_follow_up_preview(&self) -> Option<&str> {
+        self.queued_follow_up_messages.first().map(String::as_str)
+    }
+
+    pub fn queue_follow_up_message(&mut self, message: impl Into<String>) -> usize {
+        let message = message.into();
+        if !message.trim().is_empty() {
+            self.queued_follow_up_messages.push(message);
+        }
+        self.queued_follow_up_messages.len()
+    }
+
+    pub fn pop_queued_follow_up_message(&mut self) -> Option<String> {
+        if self.queued_follow_up_messages.is_empty() {
+            None
+        } else {
+            Some(self.queued_follow_up_messages.remove(0))
+        }
     }
 
     pub fn queue_planning_suggestion(&mut self, prompt: impl Into<String>) {
@@ -1393,5 +1424,24 @@ mod tests {
             .expect("pending interaction");
         assert_eq!(active.kind, ActivePendingInteractionKind::PlanApproval);
         assert_eq!(active._snapshot.title, "Plan Ready");
+    }
+
+    #[test]
+    fn queued_follow_up_messages_preserve_fifo_order() {
+        let dir = tempdir().expect("tempdir");
+        let cm = ConfigManager {
+            path: dir.path().join("config.json"),
+        };
+        let mut app = TuiApp::new(cm).expect("app");
+
+        assert_eq!(app.queue_follow_up_message("first"), 1);
+        assert_eq!(app.queue_follow_up_message("second"), 2);
+        assert_eq!(app.queued_follow_up_preview(), Some("first"));
+        assert_eq!(app.pop_queued_follow_up_message().as_deref(), Some("first"));
+        assert_eq!(
+            app.pop_queued_follow_up_message().as_deref(),
+            Some("second")
+        );
+        assert_eq!(app.pop_queued_follow_up_message(), None);
     }
 }
