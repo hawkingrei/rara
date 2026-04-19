@@ -3,6 +3,7 @@ mod command;
 mod custom_terminal;
 mod event_stream;
 mod highlight;
+mod interaction_text;
 mod insert_history;
 mod line_utils;
 mod markdown;
@@ -224,25 +225,30 @@ fn map_key_to_event(key: KeyCode, app: &TuiApp) -> AppEvent {
             KeyCode::PageDown if app.input.is_empty() => AppEvent::ScrollTranscript(8),
             KeyCode::Char('1')
                 if app.input.is_empty()
-                    && (app.snapshot.pending_question.is_some()
-                        || app.has_pending_plan_approval()
+                    && (app.active_pending_interaction().is_some()
                         || app.has_pending_planning_suggestion()) =>
             {
                 AppEvent::SelectPendingOption(0)
             }
             KeyCode::Char('2')
                 if app.input.is_empty()
-                    && (app.snapshot.pending_question.is_some()
-                        || app.has_pending_plan_approval()
+                    && (app.active_pending_interaction().is_some()
                         || app.has_pending_planning_suggestion()) =>
             {
                 AppEvent::SelectPendingOption(1)
             }
             KeyCode::Char('3')
-                if app.input.is_empty() && app.snapshot.pending_question.is_some() =>
-            {
-                AppEvent::SelectPendingOption(2)
-            }
+                if app.input.is_empty()
+                    && matches!(
+                        app.active_pending_interaction().map(|pending| pending.kind),
+                        Some(
+                            self::state::ActivePendingInteractionKind::ShellApproval
+                                | self::state::ActivePendingInteractionKind::PlanningQuestion
+                                | self::state::ActivePendingInteractionKind::ExplorationQuestion
+                                | self::state::ActivePendingInteractionKind::SubAgentQuestion
+                                | self::state::ActivePendingInteractionKind::RequestInput
+                        )
+                    ) => AppEvent::SelectPendingOption(2),
             KeyCode::Char('s') => AppEvent::OpenOverlay(Overlay::Setup),
             KeyCode::Backspace => AppEvent::Backspace,
             KeyCode::Char(c) => AppEvent::InputChar(c),
@@ -382,39 +388,50 @@ async fn dispatch_event(
                         );
                     }
                 }
-            } else if app.has_pending_plan_approval() {
-                match idx {
-                    0 => {
+            } else if let Some(pending) = app.active_pending_interaction() {
+                match pending.kind {
+                    self::state::ActivePendingInteractionKind::PlanApproval => match idx {
+                        0 => {
+                            if let Some(agent) = agent_slot.take() {
+                                start_plan_approval_resume_task(app, false, agent);
+                            }
+                        }
+                        1 => {
+                            if let Some(agent) = agent_slot.take() {
+                                start_plan_approval_resume_task(app, true, agent);
+                            }
+                        }
+                        _ => {
+                            app.push_notice(
+                                "Select 1 to implement now or 2 to continue planning.",
+                            );
+                        }
+                    },
+                    self::state::ActivePendingInteractionKind::ShellApproval => {
                         if let Some(agent) = agent_slot.take() {
-                            start_plan_approval_resume_task(app, false, agent);
+                            let selection = match idx {
+                                0 => BashApprovalMode::Once,
+                                1 => BashApprovalMode::Always,
+                                _ => BashApprovalMode::Suggestion,
+                            };
+                            start_pending_approval_task(app, selection, agent);
                         }
                     }
-                    1 => {
-                        if let Some(agent) = agent_slot.take() {
-                            start_plan_approval_resume_task(app, true, agent);
+                    self::state::ActivePendingInteractionKind::PlanningQuestion
+                    | self::state::ActivePendingInteractionKind::ExplorationQuestion
+                    | self::state::ActivePendingInteractionKind::SubAgentQuestion
+                    | self::state::ActivePendingInteractionKind::RequestInput => {
+                        if let Some(label) = app.pending_question_option_label(idx) {
+                            if let Some(agent) = agent_slot.as_mut() {
+                                agent.consume_pending_user_input(&label);
+                                app.sync_snapshot(agent);
+                            }
+                            app.input = label;
+                            if handle_submit(app, agent_slot, oauth_manager).await? {
+                                return Ok(true);
+                            }
                         }
                     }
-                    _ => {
-                        app.push_notice("Select 1 to implement now or 2 to continue planning.");
-                    }
-                }
-            } else if app.has_pending_approval() {
-                if let Some(agent) = agent_slot.take() {
-                    let selection = match idx {
-                        0 => BashApprovalMode::Once,
-                        1 => BashApprovalMode::Always,
-                        _ => BashApprovalMode::Suggestion,
-                    };
-                    start_pending_approval_task(app, selection, agent);
-                }
-            } else if let Some(label) = app.pending_question_option_label(idx) {
-                if let Some(agent) = agent_slot.as_mut() {
-                    agent.consume_pending_user_input(&label);
-                    app.sync_snapshot(agent);
-                }
-                app.input = label;
-                if handle_submit(app, agent_slot, oauth_manager).await? {
-                    return Ok(true);
                 }
             }
         }
@@ -578,8 +595,37 @@ async fn handle_submit(
         app.push_notice(format!("Unknown command '{}'. Use /help.", input.trim()));
     } else if let Some(agent) = agent_slot.take() {
         let mut agent = agent;
-        if app.snapshot.pending_question.is_some() {
-            agent.consume_pending_user_input(input.trim());
+        if app.pending_request_input().is_some() {
+            if app.has_local_pending_request_input() {
+                let interaction = app.pending_request_input().cloned();
+                if let Some(interaction) = interaction {
+                    let source = interaction
+                        .source
+                        .clone()
+                        .unwrap_or_else(|| "sub-agent".to_string());
+                    let answer = input.trim().to_string();
+                    app.record_completed_interaction(
+                        crate::tui::state::InteractionKind::RequestInput,
+                        interaction.title.clone(),
+                        format!("Answered with: {}", answer),
+                        interaction.source.clone(),
+                    );
+                    app.clear_local_request_input();
+                    let mut prompt = format!(
+                        "Continue the same task. A delegated {source} requested additional user input.\nQuestion: {}\nAnswer: {}",
+                        interaction.title, answer
+                    );
+                    if let Some(note) = interaction.note.as_deref() {
+                        if !note.trim().is_empty() {
+                            prompt.push_str(&format!("\nContext: {}", note.trim()));
+                        }
+                    }
+                    start_query_task(app, prompt, agent);
+                    return Ok(false);
+                }
+            } else {
+                agent.consume_pending_user_input(input.trim());
+            }
         }
         let prompt = input.trim().to_string();
         if should_suggest_planning_mode(app, prompt.as_str()) {

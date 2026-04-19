@@ -521,69 +521,6 @@ pub fn status_plan_text(app: &TuiApp) -> String {
     }
 }
 
-pub fn status_plan_approval_text(app: &TuiApp) -> String {
-    let plan_summary = if app.snapshot.plan_steps.is_empty() {
-        "No structured plan captured yet.".to_string()
-    } else {
-        app.snapshot
-            .plan_steps
-            .iter()
-            .enumerate()
-            .take(5)
-            .map(|(idx, (_, step))| format!("{}. {}", idx + 1, step))
-            .collect::<Vec<_>>()
-            .join("\n")
-    };
-
-    let explanation = app
-        .snapshot
-        .plan_explanation
-        .as_deref()
-        .unwrap_or("Review the proposed implementation plan before starting code changes.");
-
-    format!(
-        "ready to implement:\n{}\n\nsummary:\n{}\n\noptions:\n1. Start implementation now\n2. Continue planning",
-        plan_summary, explanation
-    )
-}
-
-pub fn status_planning_suggestion_text(app: &TuiApp) -> String {
-    let _ = app.pending_planning_suggestion.as_deref();
-    "suggestion:\nThis looks like a non-trivial task. Enter planning mode first so RARA can analyze the repository, refine the approach, and only stop once a concrete plan is ready.\n\noptions:\n1. Enter planning mode\n2. Continue in execute mode".to_string()
-}
-
-pub fn status_request_user_input_text(app: &TuiApp) -> String {
-    let Some((question, options, note)) = app.snapshot.pending_question.as_ref() else {
-        return "No pending structured question.".to_string();
-    };
-
-    let options_text = if options.is_empty() {
-        "No predefined options.".to_string()
-    } else {
-        options
-            .iter()
-            .enumerate()
-            .map(|(idx, (label, description))| {
-                if description.is_empty() {
-                    format!("{}. {}", idx + 1, label)
-                } else {
-                    format!("{}. {} — {}", idx + 1, label, description)
-                }
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
-    };
-
-    if let Some(note) = note {
-        format!(
-            "question:\n{}\n\noptions:\n{}\n\nnote:\n{}",
-            question, options_text, note
-        )
-    } else {
-        format!("question:\n{}\n\noptions:\n{}", question, options_text)
-    }
-}
-
 pub fn current_turn_preview(app: &TuiApp, limit: usize) -> String {
     if app.active_turn.entries.is_empty() {
         return "No active turn yet.".to_string();

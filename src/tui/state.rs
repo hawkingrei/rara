@@ -116,15 +116,19 @@ pub struct RuntimeSnapshot {
     pub last_compaction_after_tokens: Option<usize>,
     pub plan_steps: Vec<(String, String)>,
     pub plan_explanation: Option<String>,
-    pub pending_question: Option<(String, Vec<(String, String)>, Option<String>)>,
-    pub pending_approval: Option<PendingApprovalSnapshot>,
-    pub pending_plan_approval: bool,
-    pub completed_question: Option<(String, String)>,
-    pub completed_approval: Option<(String, String)>,
+    pub pending_interactions: Vec<PendingInteractionSnapshot>,
+    pub completed_interactions: Vec<CompletedInteractionSnapshot>,
     pub prompt_base_kind: String,
     pub prompt_section_keys: Vec<String>,
     pub prompt_source_status_lines: Vec<String>,
     pub prompt_warnings: Vec<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InteractionKind {
+    RequestInput,
+    Approval,
+    PlanApproval,
 }
 
 #[derive(Default, Clone)]
@@ -133,6 +137,53 @@ pub struct PendingApprovalSnapshot {
     pub command: String,
     pub allow_net: bool,
     pub payload: BashCommandInput,
+}
+
+#[derive(Clone)]
+pub struct PendingInteractionSnapshot {
+    pub kind: InteractionKind,
+    pub title: String,
+    pub summary: String,
+    pub options: Vec<(String, String)>,
+    pub note: Option<String>,
+    pub approval: Option<PendingApprovalSnapshot>,
+    pub source: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ActivePendingInteractionKind {
+    PlanApproval,
+    ShellApproval,
+    PlanningQuestion,
+    ExplorationQuestion,
+    SubAgentQuestion,
+    RequestInput,
+}
+
+pub struct ActivePendingInteraction<'a> {
+    pub kind: ActivePendingInteractionKind,
+    pub _snapshot: &'a PendingInteractionSnapshot,
+}
+
+#[derive(Clone)]
+pub struct CompletedInteractionSnapshot {
+    pub kind: InteractionKind,
+    pub title: String,
+    pub summary: String,
+    pub source: Option<String>,
+}
+
+fn completed_interaction_role(kind: InteractionKind, source: Option<&str>) -> &'static str {
+    match kind {
+        InteractionKind::Approval => "Shell Approval Completed",
+        InteractionKind::PlanApproval => "Plan Decision",
+        InteractionKind::RequestInput => match source {
+            Some("plan_agent") => "Planning Question Answered",
+            Some("explore_agent") => "Exploration Question Answered",
+            Some(_) => "Sub-agent Question Answered",
+            None => "Question Answered",
+        },
+    }
 }
 
 pub enum TaskKind {
@@ -232,6 +283,7 @@ pub struct ActiveLiveSections {
     pub exploration_actions: Vec<String>,
     pub exploration_notes: Vec<String>,
     pub planning_actions: Vec<String>,
+    pub planning_notes: Vec<String>,
     pub running_actions: Vec<String>,
 }
 
@@ -263,7 +315,6 @@ pub struct TuiApp {
     pub agent_markdown_stream: Option<AgentMarkdownStreamState>,
     pub active_live: ActiveLiveSections,
     pub pending_planning_suggestion: Option<String>,
-    pub pending_plan_approval: bool,
     pub terminal_focused: bool,
     pub state_db: Option<Arc<StateDb>>,
     pub state_db_status: Option<String>,
@@ -283,6 +334,52 @@ fn state_db_status_error(prefix: &str, message: impl Into<String>) -> String {
 }
 
 impl TuiApp {
+    fn ensure_completed_interaction_entry(
+        &mut self,
+        kind: InteractionKind,
+        title: &str,
+        summary: &str,
+        source: Option<&str>,
+    ) {
+        let role = completed_interaction_role(kind, source).to_string();
+        let message = format!("{title}: {summary}");
+        let exists = self
+            .active_turn
+            .entries
+            .iter()
+            .any(|entry| entry.role == role && entry.message == message);
+        if !exists {
+            self.active_turn.entries.push(TranscriptEntry { role, message });
+        }
+    }
+
+    fn plan_approval_interaction(&self) -> PendingInteractionSnapshot {
+        PendingInteractionSnapshot {
+            kind: InteractionKind::PlanApproval,
+            title: "Plan Ready".to_string(),
+            summary: self
+                .snapshot
+                .plan_explanation
+                .clone()
+                .unwrap_or_else(|| "Review the proposed plan before implementation.".to_string()),
+            options: Vec::new(),
+            note: None,
+            approval: None,
+            source: None,
+        }
+    }
+
+    fn set_plan_approval_interaction(&mut self, pending: bool) {
+        self.snapshot
+            .pending_interactions
+            .retain(|item| item.kind != InteractionKind::PlanApproval);
+        if pending {
+            self.snapshot
+                .pending_interactions
+                .push(self.plan_approval_interaction());
+        }
+    }
+
     pub fn new(cm: ConfigManager) -> anyhow::Result<Self> {
         let cfg = cm.load()?;
         let overlay = if !cfg.has_api_key() && super::provider_requires_api_key(&cfg.provider) {
@@ -324,7 +421,6 @@ impl TuiApp {
             agent_markdown_stream: None,
             active_live: ActiveLiveSections::default(),
             pending_planning_suggestion: None,
-            pending_plan_approval: false,
             terminal_focused: true,
             state_db: None,
             state_db_status: None,
@@ -393,6 +489,87 @@ impl TuiApp {
     pub fn sync_snapshot(&mut self, agent: &Agent) {
         let (cwd, branch) = agent.workspace.get_env_info();
         let effective_prompt = agent.effective_prompt();
+        let existing_plan_completion = self
+            .completed_interaction(InteractionKind::PlanApproval)
+            .cloned();
+        let existing_pending_plan_approval =
+            self.pending_plan_approval_interaction().cloned();
+        let existing_local_request_completion = self
+            .snapshot
+            .completed_interactions
+            .iter()
+            .find(|item| {
+                item.kind == InteractionKind::RequestInput
+                    && item.source.as_deref().is_some()
+            })
+            .cloned();
+        let existing_local_request_inputs = self
+            .snapshot
+            .pending_interactions
+            .iter()
+            .filter(|item| {
+                item.kind == InteractionKind::RequestInput
+                    && item.source.as_deref().is_some()
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut pending_interactions = Vec::new();
+        if let Some(question) = agent.pending_user_input.as_ref() {
+            pending_interactions.push(PendingInteractionSnapshot {
+                kind: InteractionKind::RequestInput,
+                title: question.question.clone(),
+                summary: question.note.clone().unwrap_or_default(),
+                options: question.options.clone(),
+                note: question.note.clone(),
+                approval: None,
+                source: None,
+            });
+        }
+        if agent.pending_user_input.is_none() {
+            pending_interactions.extend(existing_local_request_inputs);
+        }
+        if let Some(item) = existing_pending_plan_approval {
+            pending_interactions.push(item);
+        }
+        if let Some(pending) = agent.pending_approval.as_ref() {
+            pending_interactions.push(PendingInteractionSnapshot {
+                kind: InteractionKind::Approval,
+                title: "Pending Approval".to_string(),
+                summary: pending.request.summary(),
+                options: Vec::new(),
+                note: None,
+                approval: Some(PendingApprovalSnapshot {
+                    tool_use_id: pending.tool_use_id.clone(),
+                    command: pending.request.summary(),
+                    allow_net: pending.request.allow_net,
+                    payload: pending.request.clone(),
+                }),
+                source: None,
+            });
+        }
+        let mut completed_interactions = Vec::new();
+        if let Some(item) = agent.completed_user_input.as_ref() {
+            completed_interactions.push(CompletedInteractionSnapshot {
+                kind: InteractionKind::RequestInput,
+                title: item.title.clone(),
+                summary: item.summary.clone(),
+                source: None,
+            });
+        }
+        if let Some(item) = agent.completed_approval.as_ref() {
+            completed_interactions.push(CompletedInteractionSnapshot {
+                kind: InteractionKind::Approval,
+                title: item.title.clone(),
+                summary: item.summary.clone(),
+                source: None,
+            });
+        }
+        if let Some(item) = existing_local_request_completion {
+            completed_interactions.push(item);
+        }
+        if let Some(item) = existing_plan_completion {
+            completed_interactions.push(item);
+        }
         self.snapshot = RuntimeSnapshot {
             cwd,
             branch,
@@ -417,33 +594,11 @@ impl TuiApp {
                         crate::agent::PlanStepStatus::Completed => "completed",
                     };
                     (status.to_string(), step.step.clone())
-                })
+            })
                 .collect(),
             plan_explanation: agent.plan_explanation.clone(),
-            pending_question: agent.pending_user_input.as_ref().map(|question| {
-                (
-                    question.question.clone(),
-                    question.options.clone(),
-                    question.note.clone(),
-                )
-            }),
-            pending_approval: agent.pending_approval.as_ref().map(|pending| {
-                PendingApprovalSnapshot {
-                    tool_use_id: pending.tool_use_id.clone(),
-                    command: pending.request.summary(),
-                    allow_net: pending.request.allow_net,
-                    payload: pending.request.clone(),
-                }
-            }),
-            pending_plan_approval: self.pending_plan_approval,
-            completed_question: agent
-                .completed_user_input
-                .as_ref()
-                .map(|item| (item.title.clone(), item.summary.clone())),
-            completed_approval: agent
-                .completed_approval
-                .as_ref()
-                .map(|item| (item.title.clone(), item.summary.clone())),
+            pending_interactions,
+            completed_interactions,
             prompt_base_kind: effective_prompt.base_prompt_kind.label().to_string(),
             prompt_section_keys: effective_prompt
                 .section_keys
@@ -457,6 +612,14 @@ impl TuiApp {
                 .collect(),
             prompt_warnings: agent.prompt_config().warnings.clone(),
         };
+        for interaction in &self.snapshot.completed_interactions.clone() {
+            self.ensure_completed_interaction_entry(
+                interaction.kind,
+                interaction.title.as_str(),
+                interaction.summary.as_str(),
+                interaction.source.as_deref(),
+            );
+        }
         self.agent_execution_mode = agent.execution_mode;
         self.bash_approval_mode = agent.bash_approval_mode;
         self.persist_runtime_state();
@@ -541,7 +704,7 @@ impl TuiApp {
         self.agent_markdown_stream = None;
         self.clear_active_live_sections();
         self.pending_planning_suggestion = None;
-        self.pending_plan_approval = false;
+        self.set_plan_approval_interaction(false);
         self.notice = Some("Cleared local transcript view.".into());
     }
 
@@ -639,15 +802,13 @@ impl TuiApp {
     }
 
     pub fn pending_question_option_label(&self, index: usize) -> Option<String> {
-        self.snapshot
-            .pending_question
-            .as_ref()
-            .and_then(|(_, options, _)| options.get(index))
+        self.pending_request_input()
+            .and_then(|interaction| interaction.options.get(index))
             .map(|(label, _)| label.clone())
     }
 
     pub fn has_pending_approval(&self) -> bool {
-        self.snapshot.pending_approval.is_some()
+        self.pending_command_approval().is_some()
     }
 
     pub fn has_pending_planning_suggestion(&self) -> bool {
@@ -672,12 +833,133 @@ impl TuiApp {
     }
 
     pub fn has_pending_plan_approval(&self) -> bool {
-        self.pending_plan_approval
+        self.pending_plan_approval_interaction().is_some()
+    }
+
+    pub fn active_pending_interaction(&self) -> Option<ActivePendingInteraction<'_>> {
+        if let Some(snapshot) = self.pending_plan_approval_interaction() {
+            return Some(ActivePendingInteraction {
+                kind: ActivePendingInteractionKind::PlanApproval,
+                _snapshot: snapshot,
+            });
+        }
+        if let Some(snapshot) = self.pending_command_approval() {
+            return Some(ActivePendingInteraction {
+                kind: ActivePendingInteractionKind::ShellApproval,
+                _snapshot: snapshot,
+            });
+        }
+        if let Some(snapshot) = self.pending_request_input() {
+            let kind = match snapshot.source.as_deref() {
+                Some("plan_agent") => ActivePendingInteractionKind::PlanningQuestion,
+                Some("explore_agent") => ActivePendingInteractionKind::ExplorationQuestion,
+                Some(_) => ActivePendingInteractionKind::SubAgentQuestion,
+                None => ActivePendingInteractionKind::RequestInput,
+            };
+            return Some(ActivePendingInteraction {
+                kind,
+                _snapshot: snapshot,
+            });
+        }
+        None
     }
 
     pub fn set_pending_plan_approval(&mut self, pending: bool) {
-        self.pending_plan_approval = pending;
-        self.snapshot.pending_plan_approval = pending;
+        self.set_plan_approval_interaction(pending);
+        self.persist_runtime_state();
+    }
+
+    pub fn pending_request_input(&self) -> Option<&PendingInteractionSnapshot> {
+        self.snapshot
+            .pending_interactions
+            .iter()
+            .find(|item| item.kind == InteractionKind::RequestInput)
+    }
+
+    pub fn has_local_pending_request_input(&self) -> bool {
+        self.pending_request_input()
+            .and_then(|item| item.source.as_deref())
+            .is_some()
+    }
+
+    pub fn pending_command_approval(&self) -> Option<&PendingInteractionSnapshot> {
+        self.snapshot
+            .pending_interactions
+            .iter()
+            .find(|item| item.kind == InteractionKind::Approval)
+    }
+
+    pub fn pending_plan_approval_interaction(&self) -> Option<&PendingInteractionSnapshot> {
+        self.snapshot
+            .pending_interactions
+            .iter()
+            .find(|item| item.kind == InteractionKind::PlanApproval)
+    }
+
+    pub fn completed_interaction(
+        &self,
+        kind: InteractionKind,
+    ) -> Option<&CompletedInteractionSnapshot> {
+        self.snapshot
+            .completed_interactions
+            .iter()
+            .find(|item| item.kind == kind)
+    }
+
+    pub fn record_completed_interaction(
+        &mut self,
+        kind: InteractionKind,
+        title: impl Into<String>,
+        summary: impl Into<String>,
+        source: Option<String>,
+    ) {
+        let title = title.into();
+        let summary = summary.into();
+        self.snapshot
+            .completed_interactions
+            .retain(|item| item.kind != kind);
+        self.snapshot
+            .completed_interactions
+            .push(CompletedInteractionSnapshot {
+                kind,
+                title: title.clone(),
+                summary: summary.clone(),
+                source: source.clone(),
+            });
+        self.ensure_completed_interaction_entry(kind, title.as_str(), summary.as_str(), source.as_deref());
+        self.persist_runtime_state();
+    }
+
+    pub fn record_local_request_input(
+        &mut self,
+        source: impl Into<String>,
+        title: impl Into<String>,
+        options: Vec<(String, String)>,
+        note: Option<String>,
+    ) {
+        self.snapshot.pending_interactions.retain(|item| {
+            !(item.kind == InteractionKind::RequestInput && item.source.as_deref().is_some())
+        });
+        let title = title.into();
+        self.snapshot
+            .pending_interactions
+            .push(PendingInteractionSnapshot {
+                kind: InteractionKind::RequestInput,
+                title: title.clone(),
+                summary: note.clone().unwrap_or_default(),
+                options,
+                note,
+                approval: None,
+                source: Some(source.into()),
+            });
+        self.notice = Some(format!("{title}"));
+        self.persist_runtime_state();
+    }
+
+    pub fn clear_local_request_input(&mut self) {
+        self.snapshot.pending_interactions.retain(|item| {
+            !(item.kind == InteractionKind::RequestInput && item.source.as_deref().is_some())
+        });
         self.persist_runtime_state();
     }
 
@@ -709,8 +991,46 @@ impl TuiApp {
             .sum()
     }
 
+    fn materialize_active_live_entries(&mut self) {
+        let sections = [
+            (
+                "Exploring",
+                self.active_live
+                    .exploration_actions
+                    .iter()
+                    .chain(self.active_live.exploration_notes.iter())
+                    .cloned()
+                    .collect::<Vec<_>>(),
+            ),
+            (
+                "Planning",
+                self.active_live
+                    .planning_actions
+                    .iter()
+                    .chain(self.active_live.planning_notes.iter())
+                    .cloned()
+                    .collect::<Vec<_>>(),
+            ),
+            (
+                "Running",
+                self.active_live.running_actions.to_vec(),
+            ),
+        ];
+
+        for (role, lines) in sections {
+            if lines.is_empty() {
+                continue;
+            }
+            self.active_turn.entries.push(TranscriptEntry {
+                role: role.to_string(),
+                message: lines.join("\n"),
+            });
+        }
+    }
+
     fn commit_active_turn(&mut self) {
         self.finalize_agent_stream(None);
+        self.materialize_active_live_entries();
         if self.active_turn.entries.is_empty() {
             self.clear_active_live_sections();
             return;
@@ -788,6 +1108,18 @@ impl TuiApp {
         }
     }
 
+    pub fn record_planning_note(&mut self, note: impl Into<String>) {
+        let note = note.into();
+        if !self
+            .active_live
+            .planning_notes
+            .iter()
+            .any(|item| item == &note)
+        {
+            self.active_live.planning_notes.push(note);
+        }
+    }
+
     pub fn attach_state_db(&mut self, state_db: Arc<StateDb>) {
         let status = state_db.path().display().to_string();
         self.recent_sessions = state_db.list_recent_sessions(20).unwrap_or_default();
@@ -846,71 +1178,73 @@ impl TuiApp {
         }
 
         let mut interactions = Vec::new();
-        if let Some((question, options, note)) = self.snapshot.pending_question.as_ref() {
-            let options_summary = options
-                .iter()
-                .map(|(label, _)| label.as_str())
-                .collect::<Vec<_>>()
-                .join(", ");
-            let summary = match note {
-                Some(note) if !note.is_empty() => format!("{options_summary} | {note}"),
-                _ => options_summary,
+        for interaction in &self.snapshot.pending_interactions {
+            match interaction.kind {
+                InteractionKind::RequestInput => {
+                    let options_summary = interaction
+                        .options
+                        .iter()
+                        .map(|(label, _)| label.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    let summary = match interaction.note.as_deref() {
+                        Some(note) if !note.is_empty() => format!("{options_summary} | {note}"),
+                        _ => options_summary,
+                    };
+                    interactions.push(PersistedInteraction {
+                        kind: "request_input".to_string(),
+                        status: "pending".to_string(),
+                        title: interaction.title.clone(),
+                        summary,
+                        payload: Some(json!({
+                            "question": interaction.title,
+                            "options": interaction.options,
+                            "note": interaction.note,
+                            "source": interaction.source,
+                        })),
+                    });
+                }
+                InteractionKind::PlanApproval => {
+                    interactions.push(PersistedInteraction {
+                        kind: "plan_approval".to_string(),
+                        status: "pending".to_string(),
+                        title: interaction.title.clone(),
+                        summary: interaction.summary.clone(),
+                        payload: None,
+                    });
+                }
+                InteractionKind::Approval => {
+                    if let Some(approval) = interaction.approval.as_ref() {
+                        interactions.push(PersistedInteraction {
+                            kind: "approval".to_string(),
+                            status: "pending".to_string(),
+                            title: interaction.title.clone(),
+                            summary: approval.command.clone(),
+                            payload: Some(json!({
+                                "tool_use_id": approval.tool_use_id,
+                                "command": approval.command,
+                                "allow_net": approval.allow_net,
+                                "program": approval.payload.program,
+                                "args": approval.payload.args,
+                                "cwd": approval.payload.cwd,
+                                "env": approval.payload.env,
+                            })),
+                        });
+                    }
+                }
+            }
+        }
+        for interaction in &self.snapshot.completed_interactions {
+            let kind = match interaction.kind {
+                InteractionKind::RequestInput => "request_input",
+                InteractionKind::Approval => "approval",
+                InteractionKind::PlanApproval => "plan_approval",
             };
             interactions.push(PersistedInteraction {
-                kind: "request_input".to_string(),
-                status: "pending".to_string(),
-                title: question.clone(),
-                summary,
-                payload: Some(json!({
-                    "question": question,
-                    "options": options,
-                    "note": note,
-                })),
-            });
-        }
-        if self.snapshot.pending_plan_approval {
-            interactions.push(PersistedInteraction {
-                kind: "plan_approval".to_string(),
-                status: "pending".to_string(),
-                title: "Plan Ready".to_string(),
-                summary: self.snapshot.plan_explanation.clone().unwrap_or_else(|| {
-                    "Review the proposed plan before implementation.".to_string()
-                }),
-                payload: None,
-            });
-        }
-        if let Some(approval) = self.snapshot.pending_approval.as_ref() {
-            interactions.push(PersistedInteraction {
-                kind: "approval".to_string(),
-                status: "pending".to_string(),
-                title: "Pending Approval".to_string(),
-                summary: approval.command.clone(),
-                payload: Some(json!({
-                    "tool_use_id": approval.tool_use_id,
-                    "command": approval.command,
-                    "allow_net": approval.allow_net,
-                    "program": approval.payload.program,
-                    "args": approval.payload.args,
-                    "cwd": approval.payload.cwd,
-                    "env": approval.payload.env,
-                })),
-            });
-        }
-        if let Some((title, summary)) = self.snapshot.completed_question.as_ref() {
-            interactions.push(PersistedInteraction {
-                kind: "request_input".to_string(),
+                kind: kind.to_string(),
                 status: "completed".to_string(),
-                title: title.clone(),
-                summary: summary.clone(),
-                payload: None,
-            });
-        }
-        if let Some((title, summary)) = self.snapshot.completed_approval.as_ref() {
-            interactions.push(PersistedInteraction {
-                kind: "approval".to_string(),
-                status: "completed".to_string(),
-                title: title.clone(),
-                summary: summary.clone(),
+                title: interaction.title.clone(),
+                summary: interaction.summary.clone(),
                 payload: None,
             });
         }
@@ -951,7 +1285,12 @@ impl TuiApp {
 
 #[cfg(test)]
 mod tests {
-    use super::{input_requests_command_palette, state_db_status_error};
+    use super::{
+        input_requests_command_palette, state_db_status_error, ActivePendingInteractionKind,
+        InteractionKind, PendingInteractionSnapshot, RuntimeSnapshot, TuiApp,
+    };
+    use crate::config::{ConfigManager, RaraConfig};
+    use tempfile::tempdir;
 
     #[test]
     fn detects_slash_command_input() {
@@ -973,5 +1312,53 @@ mod tests {
         assert!(rendered.contains("[REDACTED_SECRET]"));
         assert!(!rendered.contains("supersecretvalue"));
         assert!(!rendered.contains("abcdefghijklmnopqrstuvwxyz"));
+    }
+
+    #[test]
+    fn prioritizes_active_pending_interaction_in_ui_order() {
+        let dir = tempdir().expect("tempdir");
+        let cm = ConfigManager {
+            path: dir.path().join("config.json"),
+        };
+        let mut app = TuiApp::new(cm).expect("app");
+        app.config = RaraConfig::default();
+        app.snapshot = RuntimeSnapshot {
+            pending_interactions: vec![
+                PendingInteractionSnapshot {
+                    kind: InteractionKind::RequestInput,
+                    title: "Question".to_string(),
+                    summary: String::new(),
+                    options: Vec::new(),
+                    note: None,
+                    approval: None,
+                    source: Some("plan_agent".to_string()),
+                },
+                PendingInteractionSnapshot {
+                    kind: InteractionKind::Approval,
+                    title: "Pending Approval".to_string(),
+                    summary: "run cargo test".to_string(),
+                    options: Vec::new(),
+                    note: None,
+                    approval: None,
+                    source: None,
+                },
+                PendingInteractionSnapshot {
+                    kind: InteractionKind::PlanApproval,
+                    title: "Plan Ready".to_string(),
+                    summary: "Review the plan.".to_string(),
+                    options: Vec::new(),
+                    note: None,
+                    approval: None,
+                    source: None,
+                },
+            ],
+            ..RuntimeSnapshot::default()
+        };
+
+        let active = app
+            .active_pending_interaction()
+            .expect("pending interaction");
+        assert_eq!(active.kind, ActivePendingInteractionKind::PlanApproval);
+        assert_eq!(active._snapshot.title, "Plan Ready");
     }
 }

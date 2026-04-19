@@ -30,6 +30,45 @@ pub(super) fn apply_tui_event(app: &mut TuiApp, event: TuiEvent) {
                     } else if let Some(action) = tool_action_label(&message) {
                         app.record_running_action(action);
                     }
+                } else if let Some(note) = exploration_result_note(&message) {
+                    app.record_exploration_note(note);
+                    app.set_runtime_phase(
+                        RuntimePhase::RunningTool,
+                        Some(message.lines().next().unwrap_or(role).trim().to_string()),
+                    );
+                    return;
+                } else if let Some(note) = planning_result_note(&message) {
+                    app.record_planning_note(note);
+                    app.set_runtime_phase(
+                        RuntimePhase::RunningTool,
+                        Some(message.lines().next().unwrap_or(role).trim().to_string()),
+                    );
+                    if let Some(request) = subagent_request_input(&message) {
+                        app.record_local_request_input(
+                            "plan_agent",
+                            request.question,
+                            request.options,
+                            request.note,
+                        );
+                    }
+                    return;
+                } else if let Some(request) = subagent_request_input(&message) {
+                    let source = if message.starts_with("explore_agent ") {
+                        "explore_agent"
+                    } else {
+                        "plan_agent"
+                    };
+                    app.record_local_request_input(
+                        source,
+                        request.question,
+                        request.options,
+                        request.note,
+                    );
+                    app.set_runtime_phase(
+                        RuntimePhase::RunningTool,
+                        Some(message.lines().next().unwrap_or(role).trim().to_string()),
+                    );
+                    return;
                 }
                 app.set_runtime_phase(
                     RuntimePhase::RunningTool,
@@ -337,6 +376,43 @@ fn format_tool_use(name: &str, input: &serde_json::Value) -> String {
 }
 
 fn format_tool_result(name: &str, content: &str) -> String {
+    if matches!(name, "explore_agent" | "plan_agent") {
+        if let Ok(value) = serde_json::from_str::<serde_json::Value>(content) {
+            let summary = value
+                .get("summary")
+                .and_then(serde_json::Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or_else(|| first_non_empty_line(content));
+            let mut rendered = format!("{name} {summary}");
+            if let Some(request) = value.get("request_user_input") {
+                if let Some(question) = request.get("question").and_then(serde_json::Value::as_str) {
+                    rendered.push_str(&format!("\nrequest_user_input: {}", question.trim()));
+                }
+                if let Some(options) = request.get("options").and_then(serde_json::Value::as_array) {
+                    for option in options {
+                        if let Some((label, description)) = option
+                            .as_array()
+                            .and_then(|pair| {
+                                Some((
+                                    pair.first()?.as_str()?,
+                                    pair.get(1).and_then(serde_json::Value::as_str).unwrap_or(""),
+                                ))
+                            })
+                        {
+                            rendered.push_str(&format!("\noption: {} | {}", label.trim(), description.trim()));
+                        }
+                    }
+                }
+                if let Some(note) = request.get("note").and_then(serde_json::Value::as_str) {
+                    if !note.trim().is_empty() {
+                        rendered.push_str(&format!("\nnote: {}", note.trim()));
+                    }
+                }
+            }
+            return rendered;
+        }
+        return format!("{name} {}", first_non_empty_line(content));
+    }
     if name == "bash" {
         if let Ok(value) = serde_json::from_str::<serde_json::Value>(content) {
             let exit_code = value
@@ -385,6 +461,67 @@ fn format_tool_result(name: &str, content: &str) -> String {
     format!("{name}: {content}")
 }
 
+fn exploration_result_note(message: &str) -> Option<String> {
+    message
+        .strip_prefix("explore_agent ")
+        .map(|summary| {
+            let first_line = summary.lines().next().unwrap_or(summary).trim();
+            format!("Sub-agent summary: {first_line}")
+        })
+}
+
+fn planning_result_note(message: &str) -> Option<String> {
+    message
+        .strip_prefix("plan_agent ")
+        .map(|summary| {
+            let first_line = summary.lines().next().unwrap_or(summary).trim();
+            format!("Sub-agent summary: {first_line}")
+        })
+}
+
+struct DelegatedRequestInput {
+    question: String,
+    options: Vec<(String, String)>,
+    note: Option<String>,
+}
+
+fn subagent_request_input(message: &str) -> Option<DelegatedRequestInput> {
+    if !(message.starts_with("explore_agent ") || message.starts_with("plan_agent ")) {
+        return None;
+    }
+
+    let mut question = None;
+    let mut options = Vec::new();
+    let mut note = None;
+    for line in message.lines().map(str::trim).filter(|line| !line.is_empty()) {
+        if let Some(value) = line.strip_prefix("request_user_input:") {
+            question = Some(value.trim().to_string());
+            continue;
+        }
+        if let Some(value) = line.strip_prefix("option:") {
+            let value = value.trim();
+            if let Some((label, description)) = value.split_once('|') {
+                options.push((label.trim().to_string(), description.trim().to_string()));
+            } else {
+                options.push((value.to_string(), String::new()));
+            }
+            continue;
+        }
+        if let Some(value) = line.strip_prefix("note:") {
+            let value = value.trim();
+            if !value.is_empty() {
+                note = Some(value.to_string());
+            }
+        }
+    }
+
+    Some(DelegatedRequestInput {
+        question: question?,
+        options,
+        note,
+    })
+}
+
 fn first_non_empty_line(text: &str) -> &str {
     text.lines()
         .find(|line| !line.trim().is_empty())
@@ -404,3 +541,25 @@ pub(super) fn format_error_chain(err: &anyhow::Error) -> String {
     lines.join("\n")
 }
 use crate::redaction::redact_secrets;
+
+#[cfg(test)]
+mod tests {
+    use super::subagent_request_input;
+
+    #[test]
+    fn parses_delegated_request_input_from_subagent_result() {
+        let parsed = subagent_request_input(
+            "plan_agent refine the workspace logic\nrequest_user_input: Which discovery strategy should we keep?\noption: Minimal | Keep the current root-level files.\noption: Generic | Scan all instruction markdown files.\nnote: We need one product decision before editing.",
+        )
+        .expect("delegated request input should parse");
+
+        assert_eq!(parsed.question, "Which discovery strategy should we keep?");
+        assert_eq!(parsed.options.len(), 2);
+        assert_eq!(parsed.options[0].0, "Minimal");
+        assert_eq!(parsed.options[1].0, "Generic");
+        assert_eq!(
+            parsed.note.as_deref(),
+            Some("We need one product decision before editing.")
+        );
+    }
+}
