@@ -76,7 +76,7 @@ pub(super) fn should_suggest_planning_mode(app: &TuiApp, prompt: &str) -> bool {
     if app.is_busy()
         || app.has_pending_plan_approval()
         || app.has_pending_approval()
-        || app.snapshot.pending_question.is_some()
+        || app.pending_request_input().is_some()
         || matches!(
             app.agent_execution_mode,
             crate::agent::AgentExecutionMode::Plan
@@ -213,6 +213,16 @@ pub(super) fn start_plan_approval_resume_task(
     let (sender, receiver) = mpsc::unbounded_channel();
     app.clear_active_live_sections();
     app.set_pending_plan_approval(false);
+    app.record_completed_interaction(
+        crate::tui::state::InteractionKind::PlanApproval,
+        "Plan Decision",
+        if continue_planning {
+            "Continued planning"
+        } else {
+            "Approved and started implementation"
+        },
+        None,
+    );
     app.notice = Some(if continue_planning {
         "Continuing plan refinement.".into()
     } else {

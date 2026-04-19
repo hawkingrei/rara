@@ -1,15 +1,18 @@
 use std::path::Path;
 
 use ratatui::{
-    style::Color,
+    style::{Color, Modifier, Style},
     text::{Line, Span},
 };
 
-use crate::tui::command::{
-    status_plan_text, status_planning_suggestion_text, status_request_user_input_text,
+use crate::tui::command::status_plan_text;
+use crate::tui::interaction_text::{
+    status_command_approval_text, status_plan_approval_text, status_planning_suggestion_text,
+    status_request_user_input_text,
 };
 use crate::tui::state::{
-    contains_structured_planning_output, RuntimePhase, TranscriptEntry, TuiApp,
+    contains_structured_planning_output, ActivePendingInteractionKind, RuntimePhase,
+    TranscriptEntry, TuiApp,
 };
 
 use super::{
@@ -33,6 +36,62 @@ pub(crate) trait ActiveCell {
 fn trim_trailing_empty_lines(lines: &mut Vec<Line<'static>>) {
     while matches!(lines.last(), Some(line) if line.spans.iter().all(|span| span.content == "")) {
         lines.pop();
+    }
+}
+
+#[derive(Clone, Copy)]
+enum InteractionCompletionKind {
+    ShellApprovalCompleted,
+    PlanDecision,
+    QuestionAnswered,
+    PlanningQuestionAnswered,
+    ExplorationQuestionAnswered,
+    SubAgentQuestionAnswered,
+}
+
+impl InteractionCompletionKind {
+    fn from_role(role: &str) -> Option<Self> {
+        match role {
+            "Shell Approval Completed" => Some(Self::ShellApprovalCompleted),
+            "Plan Decision" => Some(Self::PlanDecision),
+            "Question Answered" => Some(Self::QuestionAnswered),
+            "Planning Question Answered" => Some(Self::PlanningQuestionAnswered),
+            "Exploration Question Answered" => Some(Self::ExplorationQuestionAnswered),
+            "Sub-agent Question Answered" => Some(Self::SubAgentQuestionAnswered),
+            _ => None,
+        }
+    }
+
+    fn title(self) -> &'static str {
+        match self {
+            Self::ShellApprovalCompleted => "Shell Approval Completed",
+            Self::PlanDecision => "Plan Decision",
+            Self::QuestionAnswered => "Question Answered",
+            Self::PlanningQuestionAnswered => "Planning Question Answered",
+            Self::ExplorationQuestionAnswered => "Exploration Question Answered",
+            Self::SubAgentQuestionAnswered => "Sub-agent Question Answered",
+        }
+    }
+
+    fn color(self) -> Color {
+        match self {
+            Self::PlanDecision => Color::LightBlue,
+            Self::ShellApprovalCompleted
+            | Self::QuestionAnswered
+            | Self::PlanningQuestionAnswered
+            | Self::ExplorationQuestionAnswered
+            | Self::SubAgentQuestionAnswered => Color::LightGreen,
+        }
+    }
+}
+
+fn completion_role_color(role: &str) -> Option<Color> {
+    InteractionCompletionKind::from_role(role).map(InteractionCompletionKind::color)
+}
+
+fn completion_role_kind(role: &str) -> Option<InteractionCompletionKind> {
+    match role {
+        _ => InteractionCompletionKind::from_role(role),
     }
 }
 
@@ -233,6 +292,55 @@ impl HistoryCell for ApprovalCell {
     }
 }
 
+#[derive(Clone, Copy)]
+enum PendingInteractionKind {
+    PlanApproval,
+    ShellApproval,
+    PlanningQuestion,
+    ExplorationQuestion,
+    SubAgentQuestion,
+    RequestInput,
+}
+
+impl PendingInteractionKind {
+    fn title(self) -> &'static str {
+        match self {
+            Self::PlanApproval => "Awaiting Approval",
+            Self::ShellApproval => "Shell Approval",
+            Self::PlanningQuestion => "Planning Question",
+            Self::ExplorationQuestion => "Exploration Question",
+            Self::SubAgentQuestion => "Sub-agent Question",
+            Self::RequestInput => "Request Input",
+        }
+    }
+
+    fn color(self) -> Color {
+        match self {
+            Self::PlanApproval | Self::PlanningQuestion => Color::LightBlue,
+            Self::ShellApproval | Self::ExplorationQuestion => Color::Yellow,
+            Self::SubAgentQuestion | Self::RequestInput => Color::LightGreen,
+        }
+    }
+}
+
+struct PendingInteractionCell {
+    inner: ApprovalCell,
+}
+
+impl PendingInteractionCell {
+    fn new(kind: PendingInteractionKind, lines: Vec<String>) -> Self {
+        Self {
+            inner: ApprovalCell::new(kind.title(), kind.color(), lines),
+        }
+    }
+}
+
+impl HistoryCell for PendingInteractionCell {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        self.inner.display_lines(width)
+    }
+}
+
 struct PlanningSuggestionCell {
     text: String,
 }
@@ -259,25 +367,49 @@ impl HistoryCell for PlanningSuggestionCell {
 }
 
 struct CompletionCell {
-    title: &'static str,
+    title: String,
     color: Color,
     summary: String,
 }
 
 impl CompletionCell {
-    fn new(title: &'static str, color: Color, summary: impl Into<String>) -> Self {
+    fn new(title: impl Into<String>, color: Color, summary: impl Into<String>) -> Self {
         Self {
-            title,
+            title: title.into(),
             color,
             summary: summary.into(),
         }
     }
 }
 
+struct CommittedInteractionCell {
+    inner: CompletionCell,
+}
+
+impl CommittedInteractionCell {
+    fn new(kind: InteractionCompletionKind, summary: impl Into<String>) -> Self {
+        Self {
+            inner: CompletionCell::new(kind.title(), kind.color(), summary),
+        }
+    }
+}
+
+impl HistoryCell for CommittedInteractionCell {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        self.inner.display_lines(width)
+    }
+}
+
 impl HistoryCell for CompletionCell {
     fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
         vec![
-            Line::from(section_span(self.title, self.color)),
+            Line::from(Span::styled(
+                format!(" {} ", self.title),
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(self.color)
+                    .add_modifier(Modifier::BOLD),
+            )),
             Line::from(format!("  {}", self.summary)),
         ]
     }
@@ -484,32 +616,55 @@ impl HistoryCell for CommittedTurnCell<'_> {
         }
 
         let entry_refs = self.entries.iter().collect::<Vec<_>>();
+        let explicit_exploration = self
+            .entries
+            .iter()
+            .find(|entry| entry.role == "Exploring")
+            .map(|entry| entry.message.clone());
+        let explicit_planning = self
+            .entries
+            .iter()
+            .find(|entry| entry.role == "Planning")
+            .map(|entry| entry.message.clone());
+        let explicit_running = self
+            .entries
+            .iter()
+            .find(|entry| entry.role == "Running")
+            .map(|entry| entry.message.clone());
         let has_tool_activity = entry_refs
             .iter()
             .any(|entry| matches!(entry.role.as_str(), "Tool" | "Tool Result" | "Tool Error"));
-        if let Some(summary) =
+        if let Some(summary) = explicit_exploration.or_else(|| {
             current_turn_exploration_summary_from_entries(entry_refs.as_slice(), false, None)
-        {
+        }) {
             cells.push(Box::new(ExploredCell::new(summary)));
         }
 
-        if let Some(summary) = current_turn_tool_summary(entry_refs.as_slice(), false, None) {
+        if let Some(summary) = explicit_planning {
+            cells.push(Box::new(PlanningCell::new(summary, false)));
+        }
+
+        if let Some(summary) =
+            explicit_running.or_else(|| current_turn_tool_summary(entry_refs.as_slice(), false, None))
+        {
             cells.push(Box::new(RanCell::new(summary)));
         }
 
-        let tail_entries: Vec<&TranscriptEntry> = if has_tool_activity {
+        let completion_entries: Vec<&TranscriptEntry> = self
+            .entries
+            .iter()
+            .filter(|entry| completion_role_color(entry.role.as_str()).is_some())
+            .collect();
+        let narrative_entries: Vec<&TranscriptEntry> = if has_tool_activity {
             self.entries
                 .iter()
                 .rev()
-                .filter(|entry| {
+                .find(|entry| {
                     entry.role == "Agent"
                         || (entry.role == "System"
                             && is_renderable_system_message(entry.message.as_str()))
                 })
-                .take(1)
-                .collect::<Vec<_>>()
                 .into_iter()
-                .rev()
                 .collect()
         } else {
             self.entries
@@ -522,7 +677,16 @@ impl HistoryCell for CommittedTurnCell<'_> {
                 .collect()
         };
 
-        for entry in tail_entries {
+        for entry in completion_entries {
+            if let Some(kind) = completion_role_kind(entry.role.as_str()) {
+                cells.push(Box::new(CommittedInteractionCell::new(
+                    kind,
+                    entry.message.clone(),
+                )));
+            }
+        }
+
+        for entry in narrative_entries {
             let max_lines = if entry.role == "Agent" { usize::MAX } else { 4 };
             cells.push(Box::new(MessageCell::new(
                 &entry.role,
@@ -612,10 +776,15 @@ impl ActiveCell for ActiveTurnCell<'_> {
             .rev()
             .find(|entry| entry.role == "Tool Result" || entry.role == "Tool Error")
             .map(|entry| (entry.role.as_str(), entry.message.as_str()));
+        let latest_completion = current_turn
+            .iter()
+            .rev()
+            .find(|entry| completion_role_color(entry.role.as_str()).is_some());
         let mut cells: Vec<Box<dyn HistoryCell + '_>> = Vec::new();
         let has_live_exploration = !self.app.active_live.exploration_actions.is_empty()
             || !self.app.active_live.exploration_notes.is_empty();
-        let has_live_planning = !self.app.active_live.planning_actions.is_empty();
+        let has_live_planning = !self.app.active_live.planning_actions.is_empty()
+            || !self.app.active_live.planning_notes.is_empty();
         let has_live_running = !self.app.active_live.running_actions.is_empty();
 
         if !user_message.is_empty() {
@@ -668,6 +837,13 @@ impl ActiveCell for ActiveTurnCell<'_> {
                 .iter()
                 .map(|action| format!("└ {action}"))
                 .collect::<Vec<_>>();
+            lines.extend(
+                self.app
+                    .active_live
+                    .planning_notes
+                    .iter()
+                    .map(|note| format!("└ {note}")),
+            );
             if turn_live {
                 lines.push(format!(
                     "└ {}",
@@ -725,19 +901,73 @@ impl ActiveCell for ActiveTurnCell<'_> {
             )));
         }
 
-        if self.app.snapshot.pending_question.is_some() {
-            let (title, color) = if self.app.has_pending_approval() {
-                ("Approval", Color::Yellow)
-            } else {
-                ("Request Input", Color::LightGreen)
+        if let Some(pending) = self.app.active_pending_interaction() {
+            let (kind, mut request_lines) = match pending.kind {
+                ActivePendingInteractionKind::PlanApproval => (
+                    PendingInteractionKind::PlanApproval,
+                    status_plan_approval_text(self.app)
+                        .lines()
+                        .take(10)
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>(),
+                ),
+                ActivePendingInteractionKind::ShellApproval => (
+                    PendingInteractionKind::ShellApproval,
+                    status_command_approval_text(self.app)
+                        .lines()
+                        .take(10)
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>(),
+                ),
+                ActivePendingInteractionKind::PlanningQuestion => (
+                    PendingInteractionKind::PlanningQuestion,
+                    status_request_user_input_text(self.app)
+                        .lines()
+                        .take(8)
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>(),
+                ),
+                ActivePendingInteractionKind::ExplorationQuestion => (
+                    PendingInteractionKind::ExplorationQuestion,
+                    status_request_user_input_text(self.app)
+                        .lines()
+                        .take(8)
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>(),
+                ),
+                ActivePendingInteractionKind::SubAgentQuestion => (
+                    PendingInteractionKind::SubAgentQuestion,
+                    status_request_user_input_text(self.app)
+                        .lines()
+                        .take(8)
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>(),
+                ),
+                ActivePendingInteractionKind::RequestInput => (
+                    PendingInteractionKind::RequestInput,
+                    status_request_user_input_text(self.app)
+                        .lines()
+                        .take(8)
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>(),
+                ),
             };
-            let mut request_lines = status_request_user_input_text(self.app)
-                .lines()
-                .take(8)
-                .map(ToString::to_string)
-                .collect::<Vec<_>>();
-            request_lines.push("shortcuts: press 1/2/3 to answer immediately".to_string());
-            cells.push(Box::new(ApprovalCell::new(title, color, request_lines)));
+            match pending.kind {
+                ActivePendingInteractionKind::PlanApproval => request_lines.push(
+                    "shortcuts: press 1 to start implementation, 2 to continue planning"
+                        .to_string(),
+                ),
+                ActivePendingInteractionKind::ShellApproval => request_lines.push(
+                    "shortcuts: press 1 to approve once, 2 to approve for session, 3 to keep as suggestion"
+                        .to_string(),
+                ),
+                ActivePendingInteractionKind::PlanningQuestion
+                | ActivePendingInteractionKind::ExplorationQuestion
+                | ActivePendingInteractionKind::SubAgentQuestion
+                | ActivePendingInteractionKind::RequestInput => request_lines
+                    .push("shortcuts: press 1/2/3 to answer immediately".to_string()),
+            }
+            cells.push(Box::new(PendingInteractionCell::new(kind, request_lines)));
         }
 
         if self.app.pending_planning_suggestion.is_some() {
@@ -746,20 +976,51 @@ impl ActiveCell for ActiveTurnCell<'_> {
             )));
         }
 
-        if let Some((title, summary)) = self.app.snapshot.completed_approval.as_ref() {
-            cells.push(Box::new(CompletionCell::new(
-                "Approval Completed",
-                Color::LightGreen,
-                format!("{title}: {summary}"),
-            )));
-        }
+        if latest_completion.is_none() {
+            if let Some(interaction) = self
+                .app
+                .completed_interaction(crate::tui::state::InteractionKind::Approval)
+            {
+                cells.push(Box::new(CommittedInteractionCell::new(
+                    InteractionCompletionKind::ShellApprovalCompleted,
+                    format!("{}: {}", interaction.title, interaction.summary),
+                )));
+            }
 
-        if let Some((title, summary)) = self.app.snapshot.completed_question.as_ref() {
-            cells.push(Box::new(CompletionCell::new(
-                "Question Answered",
-                Color::LightGreen,
-                format!("{title}: {summary}"),
-            )));
+            if let Some(interaction) = self
+                .app
+                .completed_interaction(crate::tui::state::InteractionKind::RequestInput)
+            {
+                let kind = match interaction.source.as_deref() {
+                    Some("plan_agent") => InteractionCompletionKind::PlanningQuestionAnswered,
+                    Some("explore_agent") => {
+                        InteractionCompletionKind::ExplorationQuestionAnswered
+                    }
+                    Some(_) => InteractionCompletionKind::SubAgentQuestionAnswered,
+                    None => InteractionCompletionKind::QuestionAnswered,
+                };
+                cells.push(Box::new(CommittedInteractionCell::new(
+                    kind,
+                    format!("{}: {}", interaction.title, interaction.summary),
+                )));
+            }
+
+            if let Some(interaction) = self
+                .app
+                .completed_interaction(crate::tui::state::InteractionKind::PlanApproval)
+            {
+                cells.push(Box::new(CommittedInteractionCell::new(
+                    InteractionCompletionKind::PlanDecision,
+                    format!("{}: {}", interaction.title, interaction.summary),
+                )));
+            }
+        } else if let Some(entry) = latest_completion {
+            if let Some(kind) = completion_role_kind(entry.role.as_str()) {
+                cells.push(Box::new(CommittedInteractionCell::new(
+                    kind,
+                    entry.message.clone(),
+                )));
+            }
         }
 
         let suppress_intermediate_agent = turn_live
@@ -774,7 +1035,7 @@ impl ActiveCell for ActiveTurnCell<'_> {
         ) && has_exploration_summary
             && latest_agent.is_some_and(|message| !contains_structured_planning_output(message))
             && self.app.snapshot.plan_steps.is_empty()
-            && self.app.snapshot.pending_question.is_none()
+            && self.app.pending_request_input().is_none()
             && !self.app.has_pending_plan_approval();
 
         let responding_role = if turn_live { "Responding" } else { "Agent" };
@@ -914,11 +1175,15 @@ mod tests {
         };
         app.snapshot = RuntimeSnapshot {
             plan_steps: vec![("pending".into(), "Review architecture".into())],
-            pending_question: Some((
-                "Approve plan".into(),
-                vec![("1".into(), "Implement".into())],
-                None,
-            )),
+            pending_interactions: vec![crate::tui::state::PendingInteractionSnapshot {
+                kind: crate::tui::state::InteractionKind::RequestInput,
+                title: "Approve plan".into(),
+                summary: String::new(),
+                options: vec![("1".into(), "Implement".into())],
+                note: None,
+                approval: None,
+                source: None,
+            }],
             ..RuntimeSnapshot::default()
         };
 
@@ -1131,6 +1396,7 @@ mod tests {
             }],
         };
         app.record_planning_action("Delegate plan refinement: refine the plan");
+        app.record_planning_note("Sub-agent summary: reuse the workspace traversal helper");
 
         let rendered = ActiveTurnCell::new(&app, Some(Path::new(".")))
             .display_lines(100)
@@ -1141,6 +1407,7 @@ mod tests {
 
         assert!(rendered.contains(" Planning "));
         assert!(rendered.contains("Delegate plan refinement: refine the plan"));
+        assert!(rendered.contains("Sub-agent summary: reuse the workspace traversal helper"));
     }
 
     #[test]
@@ -1170,5 +1437,265 @@ mod tests {
         assert!(rendered.contains("Agent\n  Final recommendation"));
         assert!(!rendered.contains("System"));
         assert!(!rendered.contains("prompt finished"));
+    }
+
+    #[test]
+    fn committed_turn_cell_renders_materialized_sidecar_sections() {
+        let entries = vec![
+            TranscriptEntry {
+                role: "You".into(),
+                message: "Review the workspace logic".into(),
+            },
+            TranscriptEntry {
+                role: "Exploring".into(),
+                message: "Delegate repository exploration: inspect instruction discovery\nSub-agent summary: current discovery is hardcoded".into(),
+            },
+            TranscriptEntry {
+                role: "Planning".into(),
+                message: "Delegate plan refinement: generalize instruction discovery\nSub-agent summary: reuse the workspace traversal helper".into(),
+            },
+            TranscriptEntry {
+                role: "Agent".into(),
+                message: "Here is the final recommendation.".into(),
+            },
+        ];
+
+        let rendered = CommittedTurnCell::new(entries.as_slice(), Some(Path::new(".")))
+            .display_lines(100)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let you_idx = rendered.find("You: Review the workspace logic").unwrap();
+        let explored_idx = rendered.find(" Explored ").unwrap();
+        let planning_idx = rendered.find(" Planned ").unwrap();
+        let agent_idx = rendered.find("Agent\n  Here is the final recommendation.").unwrap();
+
+        assert!(you_idx < explored_idx);
+        assert!(explored_idx < planning_idx);
+        assert!(planning_idx < agent_idx);
+        assert!(rendered.contains("Sub-agent summary: current discovery is hardcoded"));
+        assert!(rendered.contains("Sub-agent summary: reuse the workspace traversal helper"));
+    }
+
+    #[test]
+    fn committed_turn_cell_places_completion_records_before_final_agent_message() {
+        let entries = vec![
+            TranscriptEntry {
+                role: "You".into(),
+                message: "Inspect the repo and decide whether to run the migration".into(),
+            },
+            TranscriptEntry {
+                role: "Exploring".into(),
+                message: "└ Read crates/instructions/src/workspace.rs".into(),
+            },
+            TranscriptEntry {
+                role: "Shell Approval Completed".into(),
+                message: "Bash approval: Approved once for command: bash ./scripts/migrate.sh"
+                    .into(),
+            },
+            TranscriptEntry {
+                role: "Agent".into(),
+                message: "I approved the one-off shell step and can now continue with the final recommendation.".into(),
+            },
+        ];
+
+        let rendered = CommittedTurnCell::new(entries.as_slice(), Some(Path::new(".")))
+            .display_lines(100)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let explored_idx = rendered.find(" Explored ").unwrap();
+        let approval_idx = rendered.find(" Shell Approval Completed ").unwrap();
+        let agent_idx = rendered
+            .find("Agent\n  I approved the one-off shell step")
+            .unwrap();
+
+        assert!(explored_idx < approval_idx);
+        assert!(approval_idx < agent_idx);
+    }
+
+    #[test]
+    fn active_turn_cell_renders_plan_approval_as_interaction_card() {
+        let temp = tempdir().unwrap();
+        let mut app = TuiApp::new(ConfigManager {
+            path: temp.path().join("config.json"),
+        })
+        .expect("build tui app");
+        app.active_turn = TranscriptTurn {
+            entries: vec![TranscriptEntry {
+                role: "You".into(),
+                message: "Review the codebase and propose changes".into(),
+            }],
+        };
+        app.snapshot.plan_steps = vec![
+            ("pending".into(), "Generalize instruction discovery".into()),
+            ("pending".into(), "Preserve cache and path resolution behavior".into()),
+        ];
+        app.snapshot.plan_explanation = Some("The current discovery path is hardcoded and should be generalized.".into());
+        app.set_pending_plan_approval(true);
+
+        let rendered = ActiveTurnCell::new(&app, Some(Path::new(".")))
+            .display_lines(100)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(rendered.contains(" Awaiting Approval "));
+        assert!(rendered.contains("Start implementation now"));
+        assert!(rendered.contains("Continue planning"));
+        assert!(rendered.contains("Generalize instruction discovery"));
+    }
+
+    #[test]
+    fn active_turn_cell_renders_shell_approval_as_interaction_card() {
+        let temp = tempdir().unwrap();
+        let mut app = TuiApp::new(ConfigManager {
+            path: temp.path().join("config.json"),
+        })
+        .expect("build tui app");
+        app.active_turn = TranscriptTurn {
+            entries: vec![TranscriptEntry {
+                role: "You".into(),
+                message: "Run the migration helper".into(),
+            }],
+        };
+        app.snapshot.pending_interactions.push(
+            crate::tui::state::PendingInteractionSnapshot {
+                kind: crate::tui::state::InteractionKind::Approval,
+                title: "Pending Approval".into(),
+                summary: "bash ./scripts/migrate.sh".into(),
+                options: Vec::new(),
+                note: None,
+                approval: Some(crate::tui::state::PendingApprovalSnapshot {
+                    tool_use_id: "toolu_123".into(),
+                    command: "bash ./scripts/migrate.sh".into(),
+                    allow_net: false,
+                    payload: crate::tools::bash::BashCommandInput {
+                        command: None,
+                        program: Some("bash".into()),
+                        args: vec!["./scripts/migrate.sh".into()],
+                        cwd: Some("/repo".into()),
+                        env: Default::default(),
+                        allow_net: false,
+                    },
+                }),
+                source: None,
+            },
+        );
+
+        let rendered = ActiveTurnCell::new(&app, Some(Path::new(".")))
+            .display_lines(100)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(rendered.contains(" Shell Approval "));
+        assert!(rendered.contains("command:"));
+        assert!(rendered.contains("cwd:"));
+        assert!(rendered.contains("bash ./scripts/migrate.sh"));
+    }
+
+    #[test]
+    fn active_turn_cell_renders_completed_plan_decision() {
+        let temp = tempdir().unwrap();
+        let mut app = TuiApp::new(ConfigManager {
+            path: temp.path().join("config.json"),
+        })
+        .expect("build tui app");
+        app.active_turn = TranscriptTurn {
+            entries: vec![TranscriptEntry {
+                role: "You".into(),
+                message: "Review the codebase and propose changes".into(),
+            }],
+        };
+        app.record_completed_interaction(
+            crate::tui::state::InteractionKind::PlanApproval,
+            "Plan Decision",
+            "Approved and started implementation",
+            None,
+        );
+
+        let rendered = ActiveTurnCell::new(&app, Some(Path::new(".")))
+            .display_lines(100)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(rendered.contains(" Plan Decision "));
+        assert!(rendered.contains("Approved and started implementation"));
+    }
+
+    #[test]
+    fn active_turn_cell_labels_delegated_plan_questions() {
+        let temp = tempdir().unwrap();
+        let mut app = TuiApp::new(ConfigManager {
+            path: temp.path().join("config.json"),
+        })
+        .expect("build tui app");
+        app.active_turn = TranscriptTurn {
+            entries: vec![TranscriptEntry {
+                role: "You".into(),
+                message: "Review the codebase and propose changes".into(),
+            }],
+        };
+        app.record_local_request_input(
+            "plan_agent",
+            "Which discovery strategy should we keep?",
+            vec![
+                ("Minimal".into(), "Keep root-only files.".into()),
+                ("Generic".into(), "Scan all instruction markdown files.".into()),
+            ],
+            Some("A product decision is needed before editing.".into()),
+        );
+
+        let rendered = ActiveTurnCell::new(&app, Some(Path::new(".")))
+            .display_lines(100)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(rendered.contains(" Planning Question "));
+        assert!(rendered.contains("source:"));
+        assert!(rendered.contains("plan_agent"));
+        assert!(rendered.contains("Which discovery strategy should we keep?"));
+    }
+
+    #[test]
+    fn active_turn_cell_labels_delegated_completed_questions() {
+        let temp = tempdir().unwrap();
+        let mut app = TuiApp::new(ConfigManager {
+            path: temp.path().join("config.json"),
+        })
+        .expect("build tui app");
+        app.active_turn = TranscriptTurn {
+            entries: vec![TranscriptEntry {
+                role: "You".into(),
+                message: "Review the codebase and propose changes".into(),
+            }],
+        };
+        app.record_completed_interaction(
+            crate::tui::state::InteractionKind::RequestInput,
+            "Which discovery strategy should we keep?",
+            "Answered with: Generic",
+            Some("plan_agent".into()),
+        );
+
+        let rendered = ActiveTurnCell::new(&app, Some(Path::new(".")))
+            .display_lines(100)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(rendered.contains(" Planning Question Answered "));
+        assert!(rendered.contains("Answered with: Generic"));
     }
 }

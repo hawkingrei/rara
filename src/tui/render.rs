@@ -16,10 +16,11 @@ use super::command::{
     api_key_status, command_detail_text, command_spec_by_index, current_turn_preview,
     download_status_text, general_help_text, help_text, matching_commands, model_help_text,
     palette_command_by_index, palette_commands, quick_actions_text, recent_transcript_preview,
-    status_plan_text, status_prompt_sources_text, status_request_user_input_text,
-    status_resources_text, status_runtime_text, status_workspace_text,
+    status_plan_text, status_prompt_sources_text, status_resources_text, status_runtime_text,
+    status_workspace_text,
 };
 use super::custom_terminal::Frame;
+use super::interaction_text::status_active_pending_interaction_text;
 use super::line_utils::prefix_lines;
 use super::state::{
     current_model_presets, HelpTab, Overlay, TaskKind, TranscriptEntry, TuiApp, PROVIDER_FAMILIES,
@@ -595,12 +596,23 @@ fn render_composer(f: &mut Frame, app: &TuiApp, area: Rect) -> Option<(u16, u16)
         "slash command  Enter run  Esc close"
     } else if app.is_busy() {
         "busy  wait for the current task to finish"
-    } else if app.has_pending_approval() {
-        "approval pending  1 once  2 always  3 suggestion"
     } else if app.has_pending_planning_suggestion() {
         "planning suggested  1 enter planning mode  2 continue in execute mode"
-    } else if app.snapshot.pending_question.is_some() {
-        "question pending  press 1/2/3 or type a reply"
+    } else if let Some(pending) = app.active_pending_interaction() {
+        match pending.kind {
+            crate::tui::state::ActivePendingInteractionKind::PlanApproval => {
+                "plan approval pending  1 start implementation  2 continue planning"
+            }
+            crate::tui::state::ActivePendingInteractionKind::ShellApproval => {
+                "shell approval pending  1 once  2 session  3 suggestion"
+            }
+            crate::tui::state::ActivePendingInteractionKind::PlanningQuestion
+            | crate::tui::state::ActivePendingInteractionKind::ExplorationQuestion
+            | crate::tui::state::ActivePendingInteractionKind::SubAgentQuestion
+            | crate::tui::state::ActivePendingInteractionKind::RequestInput => {
+                "question pending  press 1/2/3 or type a reply"
+            }
+        }
     } else if app.agent_execution_mode_label() == "plan" {
         "planning mode  analyze, refine, or finalize a plan"
     } else {
@@ -1032,13 +1044,14 @@ fn render_status_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
         .split(chunks[3]);
+    let (interaction_title, interaction_text) =
+        status_active_pending_interaction_text(app).unwrap_or((
+            " Request Input ",
+            "No pending interaction.".to_string(),
+        ));
     f.render_widget(
-        Paragraph::new(status_request_user_input_text(app))
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title(" Request Input "),
-            )
+        Paragraph::new(interaction_text)
+            .block(Block::default().borders(Borders::ALL).title(interaction_title))
             .wrap(Wrap { trim: false }),
         lower[0],
     );

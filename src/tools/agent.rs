@@ -1,4 +1,4 @@
-use crate::agent::{Agent, AgentExecutionMode, Message, PlanStep};
+use crate::agent::{Agent, AgentExecutionMode, Message, PendingUserInput, PlanStep};
 use crate::llm::LlmBackend;
 use crate::prompt::PromptRuntimeConfig;
 use crate::session::SessionManager;
@@ -99,6 +99,10 @@ impl Tool for AgentTool {
             "name": name,
             "status": result.status,
             "summary": result.summary,
+            "request_user_input": result
+                .request_user_input
+                .as_ref()
+                .map(serialize_pending_user_input),
         }))
     }
 }
@@ -148,6 +152,10 @@ impl Tool for ExploreAgentTool {
         Ok(json!({
             "status": result.status,
             "summary": result.summary,
+            "request_user_input": result
+                .request_user_input
+                .as_ref()
+                .map(serialize_pending_user_input),
         }))
     }
 }
@@ -202,6 +210,10 @@ impl Tool for PlanAgentTool {
                 .as_ref()
                 .map(|steps| serialize_plan_steps(steps)),
             "plan_explanation": result.plan_explanation,
+            "request_user_input": result
+                .request_user_input
+                .as_ref()
+                .map(serialize_pending_user_input),
         }))
     }
 }
@@ -249,6 +261,7 @@ struct SubAgentResult {
     summary: String,
     plan: Option<Vec<PlanStep>>,
     plan_explanation: Option<String>,
+    request_user_input: Option<PendingUserInput>,
 }
 
 async fn run_sub_agent(
@@ -277,6 +290,7 @@ async fn run_sub_agent(
         summary: latest_assistant_text(&sub).unwrap_or_else(|| "Sub-agent finished.".to_string()),
         plan: (!sub.current_plan.is_empty()).then_some(sub.current_plan.clone()),
         plan_explanation: sub.plan_explanation.clone(),
+        request_user_input: sub.pending_user_input.clone(),
     })
 }
 
@@ -351,6 +365,14 @@ fn serialize_plan_steps(steps: &[PlanStep]) -> Vec<Value> {
             })
         })
         .collect()
+}
+
+fn serialize_pending_user_input(request: &PendingUserInput) -> Value {
+    json!({
+        "question": request.question,
+        "options": request.options,
+        "note": request.note,
+    })
 }
 
 #[cfg(test)]
