@@ -416,7 +416,28 @@ fn plan_mode_prompt() -> &'static str {
 }
 
 fn default_compact_prompt() -> String {
-    "Summarize the earlier conversation for continued coding work.\nPreserve the current objective, key constraints, important repository findings, plan state, pending approvals or user-input questions, concrete file paths already inspected or edited, and any unresolved risks.\nKeep the summary compact and directly usable for the next turn.".to_string()
+    "Summarize the earlier conversation for continued coding work using this exact markdown structure:\n\
+## User Intent\n\
+- Preserve the current user goal as close to the user's wording as practical.\n\
+## Constraints\n\
+- Keep key technical, product, and workflow constraints.\n\
+## Repository Findings\n\
+- Capture the concrete findings that matter for the next turn.\n\
+## Files Touched Or Inspected\n\
+- List concrete file paths already inspected or edited.\n\
+## Plan State\n\
+- Preserve the current plan state and what is already done versus still pending.\n\
+## Pending Interactions\n\
+- Preserve approvals, questions, or other pending interaction state.\n\
+## Unresolved Risks\n\
+- Preserve unresolved technical risks, blockers, or uncertainty.\n\
+## Next Best Action\n\
+- End with the single most useful next action for continuing the task.\n\
+\n\
+Do not write a generic prose recap.\n\
+Do not assume the user can see compacted tool output.\n\
+Keep the summary compact, concrete, and directly reusable by the next turn."
+        .to_string()
 }
 
 fn section(title: &str, items: &[&str]) -> String {
@@ -504,6 +525,15 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(build_compact_instruction(&runtime), "custom compact");
+    }
+
+    #[test]
+    fn default_compact_prompt_uses_structured_schema() {
+        let prompt = super::default_compact_prompt();
+        assert!(prompt.contains("## User Intent"));
+        assert!(prompt.contains("## Files Touched Or Inspected"));
+        assert!(prompt.contains("## Next Best Action"));
+        assert!(prompt.contains("Do not write a generic prose recap."));
     }
 
     #[test]

@@ -1,6 +1,6 @@
 use super::*;
-use anyhow::anyhow;
 use crate::tools::bash::BashCommandInput;
+use anyhow::anyhow;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PlanStepStatus {
@@ -213,18 +213,21 @@ impl Agent {
                     content: error_text.clone(),
                     is_error: true,
                 });
-                self.history.push(tool_result_message(&pending.tool_use_id, error_text, true));
-                self.history.push(
-                    self.runtime_continuation_message(
-                        RuntimeContinuationPhase::ToolResultsAvailable,
-                        0,
-                    ),
-                );
+                self.push_history_message(tool_result_message(
+                    &pending.tool_use_id,
+                    error_text,
+                    true,
+                ));
+                self.push_history_message(self.runtime_continuation_message(
+                    RuntimeContinuationPhase::ToolResultsAvailable,
+                    0,
+                ));
                 self.run_agent_loop(output_mode, &mut report).await?;
             }
         }
 
-        self.session_manager.save_session(&self.session_id, &self.history)?;
+        self.session_manager
+            .save_session(&self.session_id, &self.history)?;
         Ok(())
     }
 
@@ -247,7 +250,9 @@ impl Agent {
             .tool_manager
             .get_tool("bash")
             .ok_or_else(|| anyhow!("bash tool is unavailable"))?;
-        report(AgentEvent::Status("Running approved bash command.".to_string()));
+        report(AgentEvent::Status(
+            "Running approved bash command.".to_string(),
+        ));
         match tool.call(input.clone()).await {
             Ok(result) => {
                 let result_text = self.tool_result_store.compact_result(
@@ -261,7 +266,7 @@ impl Agent {
                     content: result_text.clone(),
                     is_error: false,
                 });
-                self.history.push(tool_result_message(
+                self.push_history_message(tool_result_message(
                     &pending.tool_use_id,
                     result_text,
                     false,
@@ -274,14 +279,14 @@ impl Agent {
                     content: error_text.clone(),
                     is_error: true,
                 });
-                self.history.push(tool_result_message(
+                self.push_history_message(tool_result_message(
                     &pending.tool_use_id,
                     error_text,
                     true,
                 ));
             }
         }
-        self.history.push(
+        self.push_history_message(
             self.runtime_continuation_message(RuntimeContinuationPhase::ToolResultsAvailable, 1),
         );
         if !keep_always {
@@ -298,11 +303,11 @@ impl Agent {
     ) where
         F: FnMut(AgentEvent) + Send,
     {
-        self.history.extend(tool_results);
+        self.extend_history_messages(tool_results);
         report(AgentEvent::Status(
             "Tool results recorded. Advancing to the next agent step.".to_string(),
         ));
-        self.history.push(self.runtime_continuation_message(
+        self.push_history_message(self.runtime_continuation_message(
             RuntimeContinuationPhase::ToolResultsAvailable,
             tool_rounds,
         ));
@@ -347,7 +352,7 @@ impl Agent {
             report(AgentEvent::Status(
                 "Continuing plan refinement from the current plan state.".to_string(),
             ));
-            self.history.push(self.runtime_continuation_message(
+            self.push_history_message(self.runtime_continuation_message(
                 RuntimeContinuationPhase::PlanContinuationRequired,
                 0,
             ));
@@ -356,10 +361,9 @@ impl Agent {
             report(AgentEvent::Status(
                 "Plan approved. Continuing with implementation.".to_string(),
             ));
-            self.history.push(self.runtime_continuation_message(
-                RuntimeContinuationPhase::PlanApproved,
-                0,
-            ));
+            self.push_history_message(
+                self.runtime_continuation_message(RuntimeContinuationPhase::PlanApproved, 0),
+            );
         }
 
         self.run_agent_loop(output_mode, &mut report).await
@@ -393,12 +397,10 @@ impl Agent {
             && !self.inspection_progress.has_minimum_review_evidence();
         let needs_plan_synthesis = tool_rounds > 0 && has_inspection_evidence && !plan_updated;
         matches!(self.execution_mode, AgentExecutionMode::Plan)
-            && (
-                continue_inspection
-                    || shallow_initial_plan
-                    || still_missing_inspection_evidence
-                    || needs_plan_synthesis
-            )
+            && (continue_inspection
+                || shallow_initial_plan
+                || still_missing_inspection_evidence
+                || needs_plan_synthesis)
             && plan_continuations < MAX_PLAN_CONTINUATIONS_PER_TURN
             && self.pending_user_input.is_none()
             && self.pending_approval.is_none()
@@ -421,7 +423,9 @@ impl Agent {
     }
 
     pub(super) fn ensure_active_plan_step(&mut self) {
-        if !matches!(self.execution_mode, AgentExecutionMode::Execute) || self.current_plan.is_empty() {
+        if !matches!(self.execution_mode, AgentExecutionMode::Execute)
+            || self.current_plan.is_empty()
+        {
             return;
         }
         if self
@@ -441,7 +445,9 @@ impl Agent {
     }
 
     pub(super) fn advance_plan_step(&mut self) {
-        if !matches!(self.execution_mode, AgentExecutionMode::Execute) || self.current_plan.is_empty() {
+        if !matches!(self.execution_mode, AgentExecutionMode::Execute)
+            || self.current_plan.is_empty()
+        {
             return;
         }
         if let Some(step) = self
@@ -461,7 +467,9 @@ impl Agent {
     }
 
     pub(super) fn complete_remaining_plan_steps(&mut self) {
-        if !matches!(self.execution_mode, AgentExecutionMode::Execute) || self.current_plan.is_empty() {
+        if !matches!(self.execution_mode, AgentExecutionMode::Execute)
+            || self.current_plan.is_empty()
+        {
             return;
         }
         for step in &mut self.current_plan {
@@ -554,7 +562,10 @@ pub(super) fn parse_plan_block(text: &str) -> Option<(Vec<PlanStep>, Option<Stri
     }
 
     let explanation = text[end + "</plan>".len()..].trim();
-    Some((steps, (!explanation.is_empty()).then(|| explanation.to_string())))
+    Some((
+        steps,
+        (!explanation.is_empty()).then(|| explanation.to_string()),
+    ))
 }
 
 pub(super) fn parse_request_user_input_block(text: &str) -> Option<PendingUserInput> {

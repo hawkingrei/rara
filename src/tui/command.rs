@@ -329,13 +329,40 @@ pub fn status_resources_text(app: &TuiApp) -> String {
         (Some(before), Some(after)) => format!("{before} -> {after}"),
         _ => "-".to_string(),
     };
+    let recent_compact_files = if app.snapshot.last_compaction_recent_files.is_empty() {
+        "-".to_string()
+    } else {
+        app.snapshot.last_compaction_recent_files.join(", ")
+    };
+    let recent_compact_file_count = app.snapshot.last_compaction_recent_files.len();
+    let last_compact_ratio = match (
+        app.snapshot.last_compaction_before_tokens,
+        app.snapshot.last_compaction_after_tokens,
+    ) {
+        (Some(before), Some(after)) if before > 0 => format!("{:.2}", after as f64 / before as f64),
+        _ => "-".to_string(),
+    };
+    let compact_boundary = match (
+        app.snapshot.last_compaction_boundary_version,
+        app.snapshot.last_compaction_boundary_before_tokens,
+        app.snapshot.last_compaction_boundary_recent_file_count,
+    ) {
+        (Some(version), Some(before), Some(file_count)) => {
+            format!("v{version} (before_tokens={before}, recent_file_count={file_count})")
+        }
+        _ => "-".to_string(),
+    };
     format!(
-        "tokens={} in / {} out\ncontext_estimate={}\ncompactions={} (last: {})\ncache={}\nstate_db={}",
+        "tokens={} in / {} out\ncontext_estimate={}\ncompactions={} (last: {}, ratio: {})\ncompact_boundary={}\nrecent_compact_file_count={}\nrecent_compact_files={}\ncache={}\nstate_db={}",
         app.snapshot.total_input_tokens,
         app.snapshot.total_output_tokens,
         context,
         app.snapshot.compaction_count,
         last_compact,
+        last_compact_ratio,
+        compact_boundary,
+        recent_compact_file_count,
+        recent_compact_files,
         cache,
         state_db,
     )
@@ -609,8 +636,12 @@ pub fn normalize_command_token(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        matching_commands, normalize_command_token, parse_local_command, LocalCommandKind,
+        matching_commands, normalize_command_token, parse_local_command, status_resources_text,
+        LocalCommandKind,
     };
+    use crate::config::ConfigManager;
+    use crate::tui::state::{RuntimeSnapshot, TuiApp};
+    use tempfile::tempdir;
 
     #[test]
     fn parses_model_command_argument() {
@@ -688,5 +719,35 @@ mod tests {
             .map(|spec| spec.name)
             .collect::<Vec<_>>();
         assert_eq!(names.first().copied(), Some("model"));
+    }
+
+    #[test]
+    fn status_resources_text_includes_recent_compacted_files() {
+        let dir = tempdir().expect("tempdir");
+        let cm = ConfigManager {
+            path: dir.path().join("config.json"),
+        };
+        let mut app = TuiApp::new(cm).expect("app");
+        app.snapshot = RuntimeSnapshot {
+            compaction_count: 2,
+            last_compaction_before_tokens: Some(12_000),
+            last_compaction_after_tokens: Some(4_500),
+            last_compaction_recent_files: vec![
+                "src/agent/compact.rs".to_string(),
+                "crates/instructions/src/prompt.rs".to_string(),
+            ],
+            last_compaction_boundary_version: Some(1),
+            last_compaction_boundary_before_tokens: Some(12_000),
+            last_compaction_boundary_recent_file_count: Some(2),
+            ..RuntimeSnapshot::default()
+        };
+
+        let rendered = status_resources_text(&app);
+        assert!(rendered.contains("compactions=2 (last: 12000 -> 4500, ratio: 0.38)"));
+        assert!(rendered.contains("compact_boundary=v1 (before_tokens=12000, recent_file_count=2)"));
+        assert!(rendered.contains("recent_compact_file_count=2"));
+        assert!(rendered.contains(
+            "recent_compact_files=src/agent/compact.rs, crates/instructions/src/prompt.rs"
+        ));
     }
 }
