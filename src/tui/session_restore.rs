@@ -3,7 +3,8 @@ use std::sync::Arc;
 use anyhow::Result;
 
 use crate::agent::{
-    Agent, CompletedInteraction, PendingApproval, PendingUserInput, PlanStep, PlanStepStatus,
+    latest_compact_boundary_metadata, Agent, CompactBoundaryMetadata, CompletedInteraction,
+    PendingApproval, PendingUserInput, PlanStep, PlanStepStatus,
 };
 use crate::state_db::StateDb;
 use crate::tools::bash::BashCommandInput;
@@ -36,6 +37,25 @@ pub(super) fn restore_session_by_id(
         agent.history = history;
         agent.session_id = session_id.to_string();
     }
+    let persisted_compact_state = state_db.load_session_compact_state(session_id)?;
+    agent.compact_state.compaction_count = persisted_compact_state.compaction_count;
+    agent.compact_state.last_compaction_before_tokens =
+        persisted_compact_state.last_compaction_before_tokens;
+    agent.compact_state.last_compaction_after_tokens =
+        persisted_compact_state.last_compaction_after_tokens;
+    agent.compact_state.last_compaction_boundary =
+        match persisted_compact_state.last_compaction_boundary_version {
+            Some(version) => Some(CompactBoundaryMetadata {
+                version,
+                before_tokens: persisted_compact_state
+                    .last_compaction_before_tokens
+                    .unwrap_or_default(),
+                recent_file_count: persisted_compact_state
+                    .last_compaction_recent_file_count
+                    .unwrap_or_default(),
+            }),
+            None => latest_compact_boundary_metadata(&agent.history),
+        };
     let persisted_steps = state_db.load_plan_steps(session_id)?;
     if !persisted_steps.is_empty() {
         agent.current_plan = persisted_steps

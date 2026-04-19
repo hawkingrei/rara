@@ -46,6 +46,20 @@ pub struct PersistedSessionSummary {
     pub branch: String,
     pub updated_at: i64,
     pub preview: String,
+    pub compaction_count: usize,
+    pub last_compaction_before_tokens: Option<usize>,
+    pub last_compaction_after_tokens: Option<usize>,
+    pub last_compaction_recent_file_count: Option<usize>,
+    pub last_compaction_boundary_version: Option<u32>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct PersistedCompactState {
+    pub compaction_count: usize,
+    pub last_compaction_before_tokens: Option<usize>,
+    pub last_compaction_after_tokens: Option<usize>,
+    pub last_compaction_recent_file_count: Option<usize>,
+    pub last_compaction_boundary_version: Option<u32>,
 }
 
 pub struct StateDb {
@@ -99,14 +113,18 @@ impl StateDb {
         plan_explanation: Option<&str>,
         history_len: usize,
         transcript_len: usize,
+        compact_state: &PersistedCompactState,
     ) -> Result<()> {
         let now = epoch_seconds();
         let conn = self.conn.lock().expect("state db mutex poisoned");
         conn.execute(
             "INSERT INTO sessions (
                 id, cwd, branch, provider, model, base_url, agent_mode, bash_approval,
-                plan_explanation, history_len, transcript_len, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                plan_explanation, history_len, transcript_len, compaction_count,
+                last_compaction_before_tokens, last_compaction_after_tokens,
+                last_compaction_recent_file_count, last_compaction_boundary_version,
+                created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 cwd = excluded.cwd,
                 branch = excluded.branch,
@@ -118,6 +136,11 @@ impl StateDb {
                 plan_explanation = excluded.plan_explanation,
                 history_len = excluded.history_len,
                 transcript_len = excluded.transcript_len,
+                compaction_count = excluded.compaction_count,
+                last_compaction_before_tokens = excluded.last_compaction_before_tokens,
+                last_compaction_after_tokens = excluded.last_compaction_after_tokens,
+                last_compaction_recent_file_count = excluded.last_compaction_recent_file_count,
+                last_compaction_boundary_version = excluded.last_compaction_boundary_version,
                 updated_at = excluded.updated_at",
             params![
                 session_id,
@@ -131,6 +154,19 @@ impl StateDb {
                 plan_explanation,
                 history_len as i64,
                 transcript_len as i64,
+                compact_state.compaction_count as i64,
+                compact_state
+                    .last_compaction_before_tokens
+                    .map(|value| value as i64),
+                compact_state
+                    .last_compaction_after_tokens
+                    .map(|value| value as i64),
+                compact_state
+                    .last_compaction_recent_file_count
+                    .map(|value| value as i64),
+                compact_state
+                    .last_compaction_boundary_version
+                    .map(|value| value as i64),
                 now,
                 now
             ],
@@ -141,7 +177,10 @@ impl StateDb {
     pub fn replace_plan_steps(&self, session_id: &str, steps: &[PersistedPlanStep]) -> Result<()> {
         let mut conn = self.conn.lock().expect("state db mutex poisoned");
         let tx = conn.transaction()?;
-        tx.execute("DELETE FROM plan_steps WHERE session_id = ?", params![session_id])?;
+        tx.execute(
+            "DELETE FROM plan_steps WHERE session_id = ?",
+            params![session_id],
+        )?;
         for step in steps {
             tx.execute(
                 "INSERT INTO plan_steps (session_id, step_index, status, step, updated_at)
@@ -166,7 +205,10 @@ impl StateDb {
     ) -> Result<()> {
         let mut conn = self.conn.lock().expect("state db mutex poisoned");
         let tx = conn.transaction()?;
-        tx.execute("DELETE FROM interactions WHERE session_id = ?", params![session_id])?;
+        tx.execute(
+            "DELETE FROM interactions WHERE session_id = ?",
+            params![session_id],
+        )?;
         for interaction in interactions {
             tx.execute(
                 "INSERT INTO interactions (session_id, kind, status, title, summary, payload_json, updated_at)
@@ -235,7 +277,9 @@ impl StateDb {
         session_id: &str,
         ordinal: usize,
     ) -> Result<Vec<PersistedTurnEntry>> {
-        let path = self.rollout_root().join(self.artifact_relative_path(session_id, ordinal));
+        let path = self
+            .rollout_root()
+            .join(self.artifact_relative_path(session_id, ordinal));
         if !path.exists() {
             return Ok(Vec::new());
         }
@@ -334,6 +378,40 @@ impl StateDb {
         Ok(explanation)
     }
 
+    pub fn load_session_compact_state(&self, session_id: &str) -> Result<PersistedCompactState> {
+        let conn = self.conn.lock().expect("state db mutex poisoned");
+        let compact_state = conn.query_row(
+            "SELECT compaction_count, last_compaction_before_tokens,
+                    last_compaction_after_tokens, last_compaction_recent_file_count,
+                    last_compaction_boundary_version
+             FROM sessions
+             WHERE id = ?",
+            params![session_id],
+            |row| {
+                Ok(PersistedCompactState {
+                    compaction_count: row.get::<_, i64>(0)? as usize,
+                    last_compaction_before_tokens: row
+                        .get::<_, Option<i64>>(1)?
+                        .map(|value| value as usize),
+                    last_compaction_after_tokens: row
+                        .get::<_, Option<i64>>(2)?
+                        .map(|value| value as usize),
+                    last_compaction_recent_file_count: row
+                        .get::<_, Option<i64>>(3)?
+                        .map(|value| value as usize),
+                    last_compaction_boundary_version: row
+                        .get::<_, Option<i64>>(4)?
+                        .map(|value| value as u32),
+                })
+            },
+        );
+        match compact_state {
+            Ok(compact_state) => Ok(compact_state),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(PersistedCompactState::default()),
+            Err(err) => Err(err.into()),
+        }
+    }
+
     pub fn latest_session_id(&self) -> Result<Option<String>> {
         let conn = self.conn.lock().expect("state db mutex poisoned");
         let session_id = conn.query_row(
@@ -352,6 +430,9 @@ impl StateDb {
         let conn = self.conn.lock().expect("state db mutex poisoned");
         let mut stmt = conn.prepare(
             "SELECT s.id, s.provider, s.model, s.branch, s.updated_at,
+                    s.compaction_count, s.last_compaction_before_tokens,
+                    s.last_compaction_after_tokens, s.last_compaction_recent_file_count,
+                    s.last_compaction_boundary_version,
                     COALESCE((
                         SELECT preview FROM turns
                         WHERE session_id = s.id
@@ -369,7 +450,20 @@ impl StateDb {
                 model: row.get(2)?,
                 branch: row.get(3)?,
                 updated_at: row.get(4)?,
-                preview: row.get(5)?,
+                preview: row.get(10)?,
+                compaction_count: row.get::<_, i64>(5)? as usize,
+                last_compaction_before_tokens: row
+                    .get::<_, Option<i64>>(6)?
+                    .map(|value| value as usize),
+                last_compaction_after_tokens: row
+                    .get::<_, Option<i64>>(7)?
+                    .map(|value| value as usize),
+                last_compaction_recent_file_count: row
+                    .get::<_, Option<i64>>(8)?
+                    .map(|value| value as usize),
+                last_compaction_boundary_version: row
+                    .get::<_, Option<i64>>(9)?
+                    .map(|value| value as u32),
             })
         })?;
         let mut sessions = Vec::new();
@@ -415,6 +509,11 @@ impl StateDb {
                 plan_explanation TEXT,
                 history_len INTEGER NOT NULL DEFAULT 0,
                 transcript_len INTEGER NOT NULL DEFAULT 0,
+                compaction_count INTEGER NOT NULL DEFAULT 0,
+                last_compaction_before_tokens INTEGER,
+                last_compaction_after_tokens INTEGER,
+                last_compaction_recent_file_count INTEGER,
+                last_compaction_boundary_version INTEGER,
                 created_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL
             );
@@ -460,6 +559,31 @@ impl StateDb {
             ",
         )?;
         ensure_column(&conn, "sessions", "plan_explanation", "TEXT")?;
+        ensure_column(
+            &conn,
+            "sessions",
+            "compaction_count",
+            "INTEGER NOT NULL DEFAULT 0",
+        )?;
+        ensure_column(
+            &conn,
+            "sessions",
+            "last_compaction_before_tokens",
+            "INTEGER",
+        )?;
+        ensure_column(&conn, "sessions", "last_compaction_after_tokens", "INTEGER")?;
+        ensure_column(
+            &conn,
+            "sessions",
+            "last_compaction_recent_file_count",
+            "INTEGER",
+        )?;
+        ensure_column(
+            &conn,
+            "sessions",
+            "last_compaction_boundary_version",
+            "INTEGER",
+        )?;
         ensure_column(&conn, "interactions", "payload_json", "TEXT")?;
         Ok(())
     }
@@ -503,7 +627,9 @@ fn ensure_column(conn: &Connection, table: &str, column: &str, definition: &str)
 
 #[cfg(test)]
 mod tests {
-    use super::{PersistedInteraction, PersistedPlanStep, PersistedTurnEntry, StateDb};
+    use super::{
+        PersistedCompactState, PersistedInteraction, PersistedPlanStep, PersistedTurnEntry, StateDb,
+    };
     use anyhow::Result;
     use rusqlite::Connection;
     use tempfile::tempdir;
@@ -525,6 +651,7 @@ mod tests {
             Some("Inspect the repository and summarize issues."),
             4,
             3,
+            &PersistedCompactState::default(),
         )?;
         db.replace_plan_steps(
             "session-1",
@@ -587,10 +714,7 @@ mod tests {
         assert_eq!(interaction_count, 1);
         assert_eq!(summary.event_count, 2);
 
-        let artifact = db
-            .rollout_root()
-            .join("session-1")
-            .join("000000.json");
+        let artifact = db.rollout_root().join("session-1").join("000000.json");
         assert!(artifact.exists());
         let loaded = db.load_turn_entries("session-1", 0)?;
         assert_eq!(loaded.len(), 2);
@@ -614,6 +738,7 @@ mod tests {
             None,
             2,
             1,
+            &PersistedCompactState::default(),
         )?;
         db.replace_interactions(
             "session-2",
@@ -633,9 +758,18 @@ mod tests {
         let interactions = db.load_interactions("session-2")?;
         assert_eq!(interactions.len(), 1);
         let payload = interactions[0].payload.as_ref().expect("payload");
-        assert_eq!(payload.get("tool_use_id").and_then(|v| v.as_str()), Some("tool-42"));
-        assert_eq!(payload.get("command").and_then(|v| v.as_str()), Some("cargo test"));
-        assert_eq!(payload.get("allow_net").and_then(|v| v.as_bool()), Some(true));
+        assert_eq!(
+            payload.get("tool_use_id").and_then(|v| v.as_str()),
+            Some("tool-42")
+        );
+        assert_eq!(
+            payload.get("command").and_then(|v| v.as_str()),
+            Some("cargo test")
+        );
+        assert_eq!(
+            payload.get("allow_net").and_then(|v| v.as_bool()),
+            Some(true)
+        );
         Ok(())
     }
 
@@ -656,6 +790,7 @@ mod tests {
             None,
             2,
             1,
+            &PersistedCompactState::default(),
         )?;
         db.replace_interactions(
             "session-structured",
@@ -678,8 +813,14 @@ mod tests {
         let interactions = db.load_interactions("session-structured")?;
         assert_eq!(interactions.len(), 1);
         let payload = interactions[0].payload.as_ref().expect("payload");
-        assert_eq!(payload.get("tool_use_id").and_then(|v| v.as_str()), Some("tool-99"));
-        assert_eq!(payload.get("program").and_then(|v| v.as_str()), Some("cargo"));
+        assert_eq!(
+            payload.get("tool_use_id").and_then(|v| v.as_str()),
+            Some("tool-99")
+        );
+        assert_eq!(
+            payload.get("program").and_then(|v| v.as_str()),
+            Some("cargo")
+        );
         assert_eq!(
             payload
                 .get("args")
@@ -688,7 +829,10 @@ mod tests {
                 .and_then(|v| v.as_str()),
             Some("check")
         );
-        assert_eq!(payload.get("cwd").and_then(|v| v.as_str()), Some("/tmp/workspace"));
+        assert_eq!(
+            payload.get("cwd").and_then(|v| v.as_str()),
+            Some("/tmp/workspace")
+        );
         assert_eq!(
             payload
                 .get("env")
@@ -696,7 +840,56 @@ mod tests {
                 .and_then(|v| v.as_str()),
             Some("debug")
         );
-        assert_eq!(payload.get("allow_net").and_then(|v| v.as_bool()), Some(false));
+        assert_eq!(
+            payload.get("allow_net").and_then(|v| v.as_bool()),
+            Some(false)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn persists_compact_state_for_restore() -> Result<()> {
+        let temp = tempdir()?;
+        std::env::set_current_dir(temp.path())?;
+        let db = StateDb::new()?;
+        db.upsert_session(
+            "session-compact",
+            "/tmp/workspace",
+            "main",
+            "ollama",
+            "gemma4",
+            Some("http://localhost:11434"),
+            "execute",
+            "suggestion",
+            None,
+            6,
+            2,
+            &PersistedCompactState {
+                compaction_count: 3,
+                last_compaction_before_tokens: Some(12_000),
+                last_compaction_after_tokens: Some(4_200),
+                last_compaction_recent_file_count: Some(2),
+                last_compaction_boundary_version: Some(1),
+            },
+        )?;
+
+        let compact_state = db.load_session_compact_state("session-compact")?;
+        assert_eq!(compact_state.compaction_count, 3);
+        assert_eq!(compact_state.last_compaction_before_tokens, Some(12_000));
+        assert_eq!(compact_state.last_compaction_after_tokens, Some(4_200));
+        assert_eq!(compact_state.last_compaction_recent_file_count, Some(2));
+        assert_eq!(compact_state.last_compaction_boundary_version, Some(1));
+
+        let sessions = db.list_recent_sessions(5)?;
+        let summary = sessions
+            .iter()
+            .find(|item| item.session_id == "session-compact")
+            .expect("session summary");
+        assert_eq!(summary.compaction_count, 3);
+        assert_eq!(summary.last_compaction_before_tokens, Some(12_000));
+        assert_eq!(summary.last_compaction_after_tokens, Some(4_200));
+        assert_eq!(summary.last_compaction_recent_file_count, Some(2));
+        assert_eq!(summary.last_compaction_boundary_version, Some(1));
         Ok(())
     }
 }
