@@ -285,11 +285,7 @@ impl LocalRuntime {
     }
 
     fn summarize(&mut self, messages: &[Message], instruction: &str) -> Result<String> {
-        let prompt = format!(
-            "{}\n\n{}",
-            instruction,
-            render_messages(messages)
-        );
+        let prompt = format!("{}\n\n{}", instruction, render_messages(messages));
         let prompt = self.spec.format_prompt(&prompt);
         self.model.clear_kv_cache();
 

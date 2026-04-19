@@ -5,7 +5,7 @@ use super::state::{
     PROVIDER_FAMILIES,
 };
 
-pub const COMMAND_SPECS: [CommandSpec; 12] = [
+pub const COMMAND_SPECS: [CommandSpec; 13] = [
     CommandSpec {
         category: "Session",
         name: "help",
@@ -80,8 +80,15 @@ pub const COMMAND_SPECS: [CommandSpec; 12] = [
         category: "Setup",
         name: "login",
         usage: "/login",
-        summary: "Start OAuth login in the background.",
-        detail: "Start OAuth without blocking the TUI. Progress and completion are written back into the transcript and notice line.",
+        summary: "Open the provider auth picker.",
+        detail: "Open the auth-mode picker for the active provider. For codex, this includes browser login, device-code login, and API-key auth.",
+    },
+    CommandSpec {
+        category: "Setup",
+        name: "logout",
+        usage: "/logout",
+        summary: "Clear the saved provider credential.",
+        detail: "Clear the saved access token or API key from local config for the active provider. If the active provider is codex, RARA rebuilds the backend so the running session no longer uses the old credential.",
     },
     CommandSpec {
         category: "Session",
@@ -115,6 +122,7 @@ pub fn parse_local_command(input: &str) -> Option<LocalCommand> {
         "model" => LocalCommandKind::Model,
         "base-url" => LocalCommandKind::BaseUrl,
         "login" => LocalCommandKind::Login,
+        "logout" => LocalCommandKind::Logout,
         "quit" | "exit" => LocalCommandKind::Quit,
         _ => return None,
     };
@@ -148,8 +156,8 @@ pub fn recommended_commands(app: &TuiApp) -> Vec<&'static CommandSpec> {
         &["status", "help", "clear"]
     } else {
         &[
-            "compact", "resume", "plan", "approval", "model", "base-url", "status", "help",
-            "clear", "setup",
+            "compact", "resume", "plan", "approval", "model", "base-url", "login", "logout",
+            "status", "help", "clear", "setup",
         ]
     };
     names
@@ -196,7 +204,7 @@ pub fn command_detail_text(spec: &CommandSpec) -> String {
 }
 
 pub fn general_help_text() -> &'static str {
-    "RARA uses a single composer as the control surface.\n\nNormal input goes to the current agent.\nSlash commands stay local and open overlays or update runtime state.\n\nCompaction:\n  /compact forces one history compaction pass\n\nModes:\n  /plan enters planning mode for the current task\n  RARA may suggest planning mode first for non-trivial repository work\n  /approval toggles bash approval between suggestion and always\n\nEditing:\n  apply_patch is the default tool for updating existing files\n  write_file is for new files or full rewrites\n  replace is only a simple fallback for unique string swaps\n\nKeyboard:\n  Enter submit current composer input\n  Esc close the current overlay only\n  Up/Down or j/k move inside lists\n  1/2/3 switch help tabs or choose guided model options\n\nExit:\n  /quit or /exit leave the TUI."
+    "RARA uses a single composer as the control surface.\n\nNormal input goes to the current agent.\nSlash commands stay local and open overlays or update runtime state.\n\nCompaction:\n  /compact forces one history compaction pass\n\nModes:\n  /plan enters planning mode for the current task\n  RARA may suggest planning mode first for non-trivial repository work\n  /approval toggles bash approval between suggestion and always\n\nAuth:\n  /login opens the provider auth picker\n  /logout clears the saved provider credential\n\nEditing:\n  apply_patch is the default tool for updating existing files\n  write_file is for new files or full rewrites\n  replace is only a simple fallback for unique string swaps\n\nKeyboard:\n  Enter submit current composer input\n  Esc close the current overlay only\n  Up/Down or j/k move inside lists\n  1/2/3 switch help tabs or choose guided model options\n\nExit:\n  /quit or /exit leave the TUI."
 }
 
 fn command_score(spec: &CommandSpec, query: &str) -> Option<u8> {
@@ -242,7 +250,7 @@ pub fn help_text() -> String {
         .collect::<Vec<_>>()
         .join("\n");
     format!(
-        "Built-in commands:\n{}\n\nCompaction:\n  /compact   summarize older conversation history now\n\nSessions:\n  /resume    reopen a recent local session\n\nModes:\n  /plan      enter planning mode for the current task\n  RARA may suggest planning mode for non-trivial tasks\n  /approval  toggle bash approval mode\n\nEditing:\n  apply_patch  preferred for editing existing files\n  write_file   use for new files or full rewrites\n  replace      simple fallback for unique string replacement\n\nKeyboard:\n  Enter submit\n  Esc close current overlay\n  S open setup\n\nExit:\n  /quit\n  /exit\n\nModel switching:\n  /model\n\nProvider URL:\n  /base-url",
+        "Built-in commands:\n{}\n\nCompaction:\n  /compact   summarize older conversation history now\n\nSessions:\n  /resume    reopen a recent local session\n\nModes:\n  /plan      enter planning mode for the current task\n  RARA may suggest planning mode for non-trivial tasks\n  /approval  toggle bash approval mode\n\nAuth:\n  /login     open the provider auth picker\n  /logout    clear the saved provider credential\n\nEditing:\n  apply_patch  preferred for editing existing files\n  write_file   use for new files or full rewrites\n  replace      simple fallback for unique string replacement\n\nKeyboard:\n  Enter submit\n  Esc close current overlay\n  S open setup\n\nExit:\n  /quit\n  /exit\n\nModel switching:\n  /model\n\nProvider URL:\n  /base-url",
         commands
     )
 }
@@ -666,6 +674,17 @@ mod tests {
         let command = parse_local_command("/compact").expect("compact should parse");
         assert!(matches!(command.kind, LocalCommandKind::Compact));
         assert_eq!(command.arg.as_deref(), None);
+    }
+
+    #[test]
+    fn parses_login_and_logout_commands() {
+        let login = parse_local_command("/login").expect("login should parse");
+        assert!(matches!(login.kind, LocalCommandKind::Login));
+        assert_eq!(login.arg.as_deref(), None);
+
+        let logout = parse_local_command("/logout").expect("logout should parse");
+        assert!(matches!(logout.kind, LocalCommandKind::Logout));
+        assert_eq!(logout.arg.as_deref(), None);
     }
 
     #[test]

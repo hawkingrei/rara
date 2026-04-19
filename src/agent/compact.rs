@@ -272,11 +272,7 @@ fn collect_recent_files(history: &[Message], limit: usize) -> Vec<String> {
             };
             if !matches!(
                 tool_name,
-                "read_file"
-                    | "list_files"
-                    | "write_file"
-                    | "replace"
-                    | "apply_patch"
+                "read_file" | "list_files" | "write_file" | "replace" | "apply_patch"
             ) {
                 continue;
             }

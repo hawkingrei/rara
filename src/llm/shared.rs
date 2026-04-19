@@ -1,5 +1,5 @@
-use async_trait::async_trait;
 use anyhow::{anyhow, Result};
+use async_trait::async_trait;
 use serde_json::{json, Value};
 use std::time::Duration;
 use url::Url;

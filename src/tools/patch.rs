@@ -136,7 +136,9 @@ impl Tool for ApplyPatchTool {
                             .unwrap_or_default()
                     ));
                     if let Some(target) = &move_to {
-                        stats.moved_files.push(json!({ "from": path, "to": target }));
+                        stats
+                            .moved_files
+                            .push(json!({ "from": path, "to": target }));
                     }
                     if !dry_run {
                         let write_path = move_to.as_deref().unwrap_or(&path);
@@ -394,7 +396,10 @@ mod tests {
             .await
             .expect("validate patch");
 
-        assert_eq!(std::fs::read_to_string(&file).expect("read"), "hello\nworld\n");
+        assert_eq!(
+            std::fs::read_to_string(&file).expect("read"),
+            "hello\nworld\n"
+        );
         assert_eq!(result["status"], "validated");
     }
 
@@ -414,7 +419,10 @@ mod tests {
             .await
             .expect("create file");
 
-        assert_eq!(std::fs::read_to_string(&file).expect("read"), "hello\nworld\n");
+        assert_eq!(
+            std::fs::read_to_string(&file).expect("read"),
+            "hello\nworld\n"
+        );
         assert_eq!(result["status"], "applied");
         assert_eq!(result["created_files"][0], file.display().to_string());
     }

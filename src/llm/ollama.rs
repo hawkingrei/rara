@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
-use async_trait::async_trait;
 use anyhow::{anyhow, Result};
+use async_trait::async_trait;
 use futures::StreamExt;
 use serde_json::{json, Value};
 
@@ -54,7 +54,8 @@ impl LlmBackend for OllamaBackend {
         }
         if !tools.is_empty() {
             body["tools"] = Value::Array(
-                tools.iter()
+                tools
+                    .iter()
                     .map(|tool| {
                         json!({
                             "type": "function",
@@ -138,7 +139,8 @@ impl LlmBackend for OllamaBackend {
         }
         if !tools.is_empty() {
             body["tools"] = Value::Array(
-                tools.iter()
+                tools
+                    .iter()
                     .map(|tool| {
                         json!({
                             "type": "function",
@@ -212,7 +214,9 @@ impl LlmBackend for OllamaBackend {
 
         let mut content = Vec::new();
         if !streamed_text.trim().is_empty() {
-            content.push(ContentBlock::Text { text: streamed_text });
+            content.push(ContentBlock::Text {
+                text: streamed_text,
+            });
         }
         for (idx, call) in streamed_tool_calls.iter().enumerate() {
             content.push(ContentBlock::ToolUse {
@@ -256,12 +260,9 @@ impl LlmBackend for OllamaBackend {
     }
 
     fn context_budget(&self, messages: &[Message], tools: &[Value]) -> Option<ContextBudget> {
-        let context_window_tokens = self
-            .num_ctx
-            .map(|value| value as usize)
-            .or_else(|| {
-                suggest_ollama_num_ctx(messages, tools, self.thinking).map(|value| value as usize)
-            })?;
+        let context_window_tokens = self.num_ctx.map(|value| value as usize).or_else(|| {
+            suggest_ollama_num_ctx(messages, tools, self.thinking).map(|value| value as usize)
+        })?;
         Some(context_budget_from_window(context_window_tokens))
     }
 }
@@ -312,10 +313,7 @@ pub(super) fn apply_ollama_stream_event(
             .get("prompt_eval_count")
             .and_then(Value::as_u64)
             .unwrap_or(0) as u32;
-        *output_tokens = event
-            .get("eval_count")
-            .and_then(Value::as_u64)
-            .unwrap_or(0) as u32;
+        *output_tokens = event.get("eval_count").and_then(Value::as_u64).unwrap_or(0) as u32;
         return Ok(true);
     }
 
@@ -346,7 +344,10 @@ fn merge_ollama_stream_tool_calls(
         let Some(normalized) = normalize_ollama_tool_call(tool_call) else {
             continue;
         };
-        if streamed_tool_calls.iter().any(|existing| existing == &normalized) {
+        if streamed_tool_calls
+            .iter()
+            .any(|existing| existing == &normalized)
+        {
             continue;
         }
         streamed_tool_calls.push(normalized);

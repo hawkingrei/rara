@@ -31,7 +31,10 @@ fn converts_assistant_tool_history_to_openai_messages() {
 
     let openai_messages = to_openai_messages(&messages);
     assert_eq!(openai_messages[0]["role"], "assistant");
-    assert_eq!(openai_messages[0]["tool_calls"][0]["function"]["name"], "read_file");
+    assert_eq!(
+        openai_messages[0]["tool_calls"][0]["function"]["name"],
+        "read_file"
+    );
     assert_eq!(openai_messages[1]["role"], "tool");
     assert_eq!(openai_messages[1]["tool_call_id"], "tool-1");
 }
@@ -79,7 +82,10 @@ fn converts_tool_history_to_ollama_messages() {
 
     let ollama_messages = to_ollama_messages(&messages);
     assert_eq!(ollama_messages[0]["role"], "assistant");
-    assert_eq!(ollama_messages[0]["tool_calls"][0]["function"]["name"], "read_file");
+    assert_eq!(
+        ollama_messages[0]["tool_calls"][0]["function"]["name"],
+        "read_file"
+    );
     assert_eq!(ollama_messages[1]["role"], "tool");
     assert_eq!(ollama_messages[1]["tool_name"], "read_file");
 }

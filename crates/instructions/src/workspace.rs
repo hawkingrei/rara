@@ -302,8 +302,7 @@ mod tests {
         let git_dir = root.join(".git");
         fs::create_dir_all(&rara_dir).expect("mkdir rara");
         fs::create_dir_all(&git_dir).expect("mkdir git");
-        fs::write(git_dir.join("HEAD"), "ref: refs/heads/feature/fix-issue\n")
-            .expect("write head");
+        fs::write(git_dir.join("HEAD"), "ref: refs/heads/feature/fix-issue\n").expect("write head");
 
         let workspace = WorkspaceMemory::from_paths(root, rara_dir);
         assert_eq!(workspace.read_git_branch(), "feature/fix-issue");

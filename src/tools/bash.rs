@@ -1,15 +1,17 @@
+use crate::sandbox::SandboxManager;
 use crate::tool::{Tool, ToolError};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
-use tokio::process::Command;
-use crate::sandbox::SandboxManager;
-use tokio::fs;
+use serde_json::{json, Value};
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::env;
+use std::sync::Arc;
+use tokio::fs;
+use tokio::process::Command;
 
-pub struct BashTool { pub sandbox: Arc<SandboxManager> }
+pub struct BashTool {
+    pub sandbox: Arc<SandboxManager>,
+}
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct BashCommandInput {
@@ -36,8 +38,14 @@ impl BashCommandInput {
     }
 
     pub fn validate(&self) -> Result<(), ToolError> {
-        let has_command = self.command.as_ref().is_some_and(|value| !value.trim().is_empty());
-        let has_program = self.program.as_ref().is_some_and(|value| !value.trim().is_empty());
+        let has_command = self
+            .command
+            .as_ref()
+            .is_some_and(|value| !value.trim().is_empty());
+        let has_program = self
+            .program
+            .as_ref()
+            .is_some_and(|value| !value.trim().is_empty());
         if !has_command && !has_program {
             return Err(ToolError::InvalidInput(
                 "bash payload requires either command or program".into(),
@@ -82,8 +90,12 @@ impl BashCommandInput {
 
 #[async_trait]
 impl Tool for BashTool {
-    fn name(&self) -> &str { "bash" }
-    fn description(&self) -> &str { "Run shell command in sandbox" }
+    fn name(&self) -> &str {
+        "bash"
+    }
+    fn description(&self) -> &str {
+        "Run shell command in sandbox"
+    }
     fn input_schema(&self) -> Value {
         json!({
             "type": "object",
@@ -137,7 +149,10 @@ impl Tool for BashTool {
         };
 
         let mut command = Command::new(&wrapped.program);
-        command.args(&wrapped.args).current_dir(&cwd).envs(&request.env);
+        command
+            .args(&wrapped.args)
+            .current_dir(&cwd)
+            .envs(&request.env);
         let out = command.output().await?;
         if let Some(path) = wrapped.cleanup_path.as_ref() {
             let _ = fs::remove_file(path).await;
@@ -180,7 +195,10 @@ mod tests {
         .expect("structured payload");
 
         assert_eq!(input.program.as_deref(), Some("cargo"));
-        assert_eq!(input.args, vec!["check".to_string(), "--workspace".to_string()]);
+        assert_eq!(
+            input.args,
+            vec!["check".to_string(), "--workspace".to_string()]
+        );
         assert_eq!(input.cwd.as_deref(), Some("/tmp/workspace"));
         assert_eq!(input.env.get("RUST_LOG").map(String::as_str), Some("debug"));
         assert_eq!(input.summary(), "cargo check --workspace");

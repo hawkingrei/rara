@@ -12,17 +12,15 @@ use crate::tui::interaction_text::{
 use crate::tui::plan_display::updated_plan_lines;
 use crate::tui::state::{
     contains_structured_planning_output, ActivePendingInteractionKind, InteractionKind,
-    RuntimePhase,
-    TranscriptEntry, TuiApp,
+    RuntimePhase, TranscriptEntry, TuiApp,
 };
 
 use super::{
-    history_pipeline::{
-        narrative_entries, ordered_completion_entries,
-    },
     current_turn_exploration_summary, current_turn_exploration_summary_from_entries,
-    current_turn_tool_summary, formatted_message_lines, prefixed_message_lines,
-    rendered_markdown_lines, section_span, with_border, wrapped_history_line_count,
+    current_turn_tool_summary, formatted_message_lines,
+    history_pipeline::{narrative_entries, ordered_completion_entries},
+    prefixed_message_lines, rendered_markdown_lines, section_span, with_border,
+    wrapped_history_line_count,
 };
 
 pub(crate) trait HistoryCell {
@@ -635,15 +633,18 @@ impl HistoryCell for CommittedTurnCell<'_> {
             cells.push(Box::new(PlanningCell::new(summary, false)));
         }
 
-        if let Some(summary) =
-            explicit_running.or_else(|| current_turn_tool_summary(entry_refs.as_slice(), false, None))
+        if let Some(summary) = explicit_running
+            .or_else(|| current_turn_tool_summary(entry_refs.as_slice(), false, None))
         {
             cells.push(Box::new(RanCell::new(summary)));
         }
 
         let completion_entries = ordered_completion_entries(self.entries);
-        let narrative_entries =
-            narrative_entries(self.entries, has_tool_activity, is_renderable_system_message);
+        let narrative_entries = narrative_entries(
+            self.entries,
+            has_tool_activity,
+            is_renderable_system_message,
+        );
 
         for entry in completion_entries {
             let kind = match entry.kind {
@@ -1385,8 +1386,9 @@ mod tests {
                 },
                 TranscriptEntry {
                     role: "Agent".into(),
-                    message: "I have inspected the main module and will continue with the tool layer."
-                        .into(),
+                    message:
+                        "I have inspected the main module and will continue with the tool layer."
+                            .into(),
                 },
             ],
         };
@@ -1492,7 +1494,9 @@ mod tests {
         let you_idx = rendered.find("You: Review the workspace logic").unwrap();
         let explored_idx = rendered.find(" Explored ").unwrap();
         let planning_idx = rendered.find(" Planned ").unwrap();
-        let agent_idx = rendered.find("Agent\n  Here is the final recommendation.").unwrap();
+        let agent_idx = rendered
+            .find("Agent\n  Here is the final recommendation.")
+            .unwrap();
 
         assert!(you_idx < explored_idx);
         assert!(explored_idx < planning_idx);
@@ -1605,9 +1609,13 @@ mod tests {
         };
         app.snapshot.plan_steps = vec![
             ("pending".into(), "Generalize instruction discovery".into()),
-            ("pending".into(), "Preserve cache and path resolution behavior".into()),
+            (
+                "pending".into(),
+                "Preserve cache and path resolution behavior".into(),
+            ),
         ];
-        app.snapshot.plan_explanation = Some("The current discovery path is hardcoded and should be generalized.".into());
+        app.snapshot.plan_explanation =
+            Some("The current discovery path is hardcoded and should be generalized.".into());
         app.set_pending_plan_approval(true);
 
         let rendered = ActiveTurnCell::new(&app, Some(Path::new(".")))
@@ -1639,8 +1647,14 @@ mod tests {
         };
         app.snapshot.plan_steps = vec![
             ("completed".into(), "Inspect the current plan UI".into()),
-            ("in_progress".into(), "Introduce a dedicated plan formatter".into()),
-            ("pending".into(), "Unify status and transcript rendering".into()),
+            (
+                "in_progress".into(),
+                "Introduce a dedicated plan formatter".into(),
+            ),
+            (
+                "pending".into(),
+                "Unify status and transcript rendering".into(),
+            ),
         ];
         app.snapshot.plan_explanation =
             Some("Keep the plan display aligned with Codex checklist semantics.".into());
@@ -1672,8 +1686,9 @@ mod tests {
                 message: "Run the migration helper".into(),
             }],
         };
-        app.snapshot.pending_interactions.push(
-            crate::tui::state::PendingInteractionSnapshot {
+        app.snapshot
+            .pending_interactions
+            .push(crate::tui::state::PendingInteractionSnapshot {
                 kind: crate::tui::state::InteractionKind::Approval,
                 title: "Pending Approval".into(),
                 summary: "bash ./scripts/migrate.sh".into(),
@@ -1693,8 +1708,7 @@ mod tests {
                     },
                 }),
                 source: None,
-            },
-        );
+            });
 
         let rendered = ActiveTurnCell::new(&app, Some(Path::new(".")))
             .display_lines(100)
@@ -1758,7 +1772,10 @@ mod tests {
             "Which discovery strategy should we keep?",
             vec![
                 ("Minimal".into(), "Keep root-only files.".into()),
-                ("Generic".into(), "Scan all instruction markdown files.".into()),
+                (
+                    "Generic".into(),
+                    "Scan all instruction markdown files.".into(),
+                ),
             ],
             Some("A product decision is needed before editing.".into()),
         );

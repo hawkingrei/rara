@@ -1,4 +1,5 @@
 mod app_event;
+mod auth_mode_picker;
 mod command;
 mod custom_terminal;
 mod event_stream;
@@ -156,7 +157,7 @@ fn map_key_to_event(key: KeyCode, app: &TuiApp) -> AppEvent {
             KeyCode::Char('2') => AppEvent::SetModelSelection(1),
             KeyCode::Char('3') => AppEvent::SetModelSelection(2),
             KeyCode::Char('m') => AppEvent::CycleModelSelection,
-            KeyCode::Char('l') => AppEvent::StartOAuth,
+            KeyCode::Char('l') => AppEvent::OpenOverlay(Overlay::AuthModePicker),
             KeyCode::Enter => AppEvent::ApplyOverlaySelection,
             _ => AppEvent::Noop,
         },
@@ -192,11 +193,15 @@ fn map_key_to_event(key: KeyCode, app: &TuiApp) -> AppEvent {
             KeyCode::Enter => AppEvent::ApplyOverlaySelection,
             _ => AppEvent::Noop,
         },
-        Some(Overlay::CodexAuthGuide) => match key {
+        Some(Overlay::AuthModePicker) => match key {
             KeyCode::Esc => AppEvent::CloseOverlay,
-            KeyCode::Char('1') | KeyCode::Char('o') => AppEvent::StartOAuth,
-            KeyCode::Char('2') | KeyCode::Char('a') => AppEvent::OpenOverlay(Overlay::ApiKeyEditor),
-            KeyCode::Enter => AppEvent::StartOAuth,
+            KeyCode::Up | KeyCode::Char('k') => AppEvent::MoveAuthModeSelection(-1),
+            KeyCode::Down | KeyCode::Char('j') => AppEvent::MoveAuthModeSelection(1),
+            KeyCode::Char('1') => AppEvent::SetAuthModeSelection(0),
+            KeyCode::Char('2') => AppEvent::SetAuthModeSelection(1),
+            KeyCode::Char('3') => AppEvent::SetAuthModeSelection(2),
+            KeyCode::Char('4') => AppEvent::SetAuthModeSelection(3),
+            KeyCode::Enter => AppEvent::ApplyOverlaySelection,
             _ => AppEvent::Noop,
         },
         Some(Overlay::BaseUrlEditor) => match key {
@@ -316,9 +321,16 @@ async fn dispatch_event(
             );
             app.model_picker_idx = next as usize;
         }
+        AppEvent::MoveAuthModeSelection(delta) => {
+            let next = (app.auth_mode_idx as i32 + delta).clamp(0, 3);
+            app.auth_mode_idx = next as usize;
+        }
         AppEvent::SetProviderSelection(idx) => {
             app.provider_picker_idx = idx.min(PROVIDER_FAMILIES.len() - 1);
             app.model_picker_idx = 0;
+        }
+        AppEvent::SetAuthModeSelection(idx) => {
+            app.auth_mode_idx = idx.min(3);
         }
         AppEvent::SetResumeSelection(idx) => {
             if !app.recent_sessions.is_empty() {
@@ -333,7 +345,7 @@ async fn dispatch_event(
             } else if matches!(app.overlay, Some(Overlay::ModelPicker)) && !app.is_busy() {
                 if should_open_codex_auth_guide(app) {
                     app.select_local_model(app.model_picker_idx);
-                    app.open_overlay(Overlay::CodexAuthGuide);
+                    app.open_overlay(Overlay::AuthModePicker);
                 } else {
                     app.select_local_model(app.model_picker_idx);
                     start_rebuild_task(app);
@@ -468,15 +480,6 @@ async fn dispatch_event(
         AppEvent::SelectHelpTab(tab) => {
             app.open_overlay(Overlay::Help(tab));
         }
-        AppEvent::StartOAuth => {
-            if app.is_busy() {
-                app.push_notice("Wait for the current task before starting login.");
-            } else if is_ssh_session() {
-                app.push_notice("OAuth browser login is unavailable in SSH/headless sessions. Use Codex API key instead.");
-            } else {
-                start_oauth_task(app, Arc::clone(oauth_manager));
-            }
-        }
         AppEvent::ApplyOverlaySelection => match app.overlay {
             Some(Overlay::CommandPalette) => {
                 let query = app.input.trim_start().trim_start_matches('/');
@@ -527,7 +530,7 @@ async fn dispatch_event(
                 } else {
                     app.select_local_model(app.model_picker_idx);
                     if should_open_codex_auth_guide(app) {
-                        app.open_overlay(Overlay::CodexAuthGuide);
+                        app.open_overlay(Overlay::AuthModePicker);
                     } else {
                         start_rebuild_task(app);
                     }
@@ -540,15 +543,46 @@ async fn dispatch_event(
                     start_rebuild_task(app);
                 }
             }
-            Some(Overlay::CodexAuthGuide) => {
-                if app.is_busy() {
-                    app.push_notice("A task is already running. Wait for it to finish.");
-                } else if is_ssh_session() {
-                    app.push_notice("OAuth browser login is unavailable in SSH/headless sessions. Use Codex API key instead.");
-                } else {
-                    start_oauth_task(app, Arc::clone(oauth_manager));
+            Some(Overlay::AuthModePicker) => match app.auth_mode_idx {
+                0 => {
+                    if app.is_busy() {
+                        app.push_notice("A task is already running. Wait for it to finish.");
+                    } else if is_ssh_session() {
+                        app.push_notice("Browser login is unavailable in SSH/headless sessions. Choose device code or API key instead.");
+                    } else {
+                        start_oauth_task(
+                            app,
+                            Arc::clone(oauth_manager),
+                            self::state::OAuthLoginMode::Browser,
+                        );
+                    }
                 }
-            }
+                1 => {
+                    if app.is_busy() {
+                        app.push_notice("A task is already running. Wait for it to finish.");
+                    } else {
+                        start_oauth_task(
+                            app,
+                            Arc::clone(oauth_manager),
+                            self::state::OAuthLoginMode::DeviceCode,
+                        );
+                    }
+                }
+                2 => app.open_overlay(Overlay::ApiKeyEditor),
+                3 => {
+                    if app.is_busy() {
+                        app.push_notice("A task is already running. Wait for it to finish.");
+                    } else {
+                        app.config.clear_api_key();
+                        app.config_manager.save(&app.config)?;
+                        app.notice = Some("Cleared the saved provider credential.".into());
+                        if app.config.provider == "codex" {
+                            start_rebuild_task(app);
+                        }
+                    }
+                }
+                _ => {}
+            },
             _ => {}
         },
     }
@@ -767,9 +801,13 @@ fn should_open_codex_auth_guide(app: &TuiApp) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{classify_pending_plan_approval_input, PendingPlanApprovalAction};
+    use super::{
+        classify_pending_plan_approval_input, map_key_to_event, PendingPlanApprovalAction,
+    };
     use crate::config::ConfigManager;
-    use crate::tui::state::{RunningTask, TaskKind, TuiApp};
+    use crate::tui::app_event::AppEvent;
+    use crate::tui::state::{Overlay, RunningTask, TaskKind, TuiApp};
+    use crossterm::event::KeyCode;
     use std::sync::Arc;
     use std::time::{Duration, Instant};
     use tempfile::tempdir;
@@ -841,5 +879,28 @@ mod tests {
         if let Some(task) = app.running_task.take() {
             task.handle.abort();
         }
+    }
+
+    #[test]
+    fn auth_mode_picker_prefers_selection_navigation() {
+        let temp = tempdir().expect("tempdir");
+        let mut app = TuiApp::new(ConfigManager {
+            path: temp.path().join("config.json"),
+        })
+        .expect("app");
+        app.open_overlay(Overlay::AuthModePicker);
+
+        assert!(matches!(
+            map_key_to_event(KeyCode::Down, &app),
+            AppEvent::MoveAuthModeSelection(1)
+        ));
+        assert!(matches!(
+            map_key_to_event(KeyCode::Enter, &app),
+            AppEvent::ApplyOverlaySelection
+        ));
+        assert!(matches!(
+            map_key_to_event(KeyCode::Char('3'), &app),
+            AppEvent::SetAuthModeSelection(2)
+        ));
     }
 }

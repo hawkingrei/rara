@@ -1,0 +1,225 @@
+# Codex Auth Login
+
+## Summary
+
+RARA currently supports a lightweight provider-specific OAuth flow for the
+Codex preset in `src/oauth.rs`. If the goal is to support Codex's own login
+mode more faithfully, the primary reference is Codex's `codex login` flow, not
+the MCP/appserver OAuth flow.
+
+Codex's first-party login flow is implemented around `codex_login` and supports:
+
+- browser login via a local callback server;
+- device-code login for headless/remote environments;
+- API key login;
+- logout and persistent credential storage.
+
+RARA should align with that behavior first. MCP/appserver OAuth remains relevant
+later, but it is a separate second-layer concern.
+
+## Goals
+
+- Support Codex-style first-party login modes:
+  - browser login
+  - device-code login
+  - API key login
+- Keep provider auth/runtime state compatible with Codex-style credential
+  persistence and login choices.
+- Prefer reusing Codex crates for login execution and credential handling
+  instead of maintaining a parallel OAuth implementation in RARA.
+- Make the Codex-auth path usable from:
+  - CLI
+  - TUI login flows
+  - future appserver/ACP integration that depends on Codex-authenticated
+    provider access
+
+## Non-Goals
+
+- Implementing MCP server OAuth login in the same change.
+- Implementing the full ACP runtime in the same change.
+- Recreating the entire Codex CLI/config/runtime stack inside RARA.
+
+## Current State
+
+RARA now has a first implementation pass of Codex-style first-party auth:
+
+- `rara login`
+  - browser login by default;
+  - `--device-auth` for headless/remote flows;
+  - `--with-api-key` for stdin-fed API keys;
+- `rara logout`;
+- a Codex auth picker in the TUI with:
+  - browser login
+  - device code
+  - API key
+  - logout
+
+This implementation is still a thin local runtime in `src/oauth.rs`. It mirrors
+Codex behavior, but it does not yet directly reuse `codex_login`.
+
+Codex has a richer first-party login stack:
+
+- `codex_login`
+  - browser login callback server
+  - device-code login
+  - API key login
+  - logout
+  - credential storage helpers
+- `cli/src/login.rs`
+  - direct-user login UX
+  - headless fallback behavior
+  - login-specific logging
+
+## Required Boundary
+
+RARA should distinguish:
+
+1. Codex first-party/provider auth
+   - This is the current target of the work.
+   - It should align with Codex's browser/device/API-key login model.
+
+2. MCP/appserver OAuth
+   - This is a later, separate concern.
+   - It should not be conflated with Codex provider login state.
+
+They should not share one undifferentiated OAuth surface in TUI or CLI.
+
+## Codex Alignment
+
+RARA should align with Codex's first-party login flow and reuse Codex crates
+where practical.
+
+### Reuse Targets
+
+Prefer reusing:
+
+- `codex_login`
+  - `run_login_server(...)`
+  - `run_device_code_login(...)`
+  - `login_with_api_key(...)`
+  - `logout(...)`
+  - `ServerOptions`
+  - credential storage types and helpers where the dependency shape is
+    acceptable
+- small, isolated config/auth types from Codex when needed
+
+### What Not To Reuse Blindly
+
+Do not pull in Codex's entire config/runtime stack just to add login. In
+particular, RARA should avoid tightly coupling to:
+
+- Codex home-directory layout assumptions;
+- Codex-specific TUI/login telemetry stack;
+- Codex-only config indirection that RARA does not otherwise use.
+
+RARA should wrap the reusable Codex login pieces behind its own thin auth
+boundary.
+
+## Target Architecture
+
+### 1. First-Party Auth Manager
+
+RARA should keep evolving the current `OAuthManager` into a Codex-aligned auth
+manager that supports:
+
+- browser login;
+- device-code login;
+- API key login;
+- logout;
+- durable credential loading/saving.
+
+### 2. Runtime Entry Points
+
+The Codex-auth path should be callable from:
+
+- CLI:
+  - `rara login`
+  - `rara login --device-auth`
+  - `rara login --with-api-key`
+  - `rara logout`
+- TUI:
+  - a richer auth-mode picker that mirrors Codex:
+    - browser login
+    - device-code login
+    - API key login
+- future appserver/ACP integration:
+  - can reuse the same provider auth state when the appserver path depends on
+    Codex-authenticated provider access
+
+## CLI Behavior
+
+Codex-style behavior should be the baseline.
+
+- `login`
+  - starts browser login by default when local callback is practical.
+- `login --device-auth`
+  - uses device-code flow for SSH/headless environments.
+- `login --with-api-key`
+  - reads the API key from stdin, matching Codex's safer CLI pattern.
+- `logout`
+  - removes stored first-party auth credentials.
+
+## TUI Behavior
+
+The TUI `/login` path should remain an explicit mode picker similar to Codex:
+
+- `Browser Login`
+- `Device Code Login`
+- `API Key Login`
+
+The TUI should still keep provider login distinct from any future MCP/appserver
+server login surface.
+
+## Appserver / MCP Relationship
+
+This feature is related to appserver support, but it is not the same feature.
+
+The expected dependency order is:
+
+1. Codex first-party auth parity
+2. real ACP/appserver runtime
+3. optional MCP/appserver server-scoped OAuth where needed
+
+If later appserver work needs MCP/server-scoped auth, that should be specified
+and implemented separately.
+
+## Validation
+
+Minimum validation for implementation:
+
+- unit tests:
+  - browser login callback handling
+  - device-code path selection
+  - API key login persistence
+  - logout removes stored auth correctly
+- CLI tests:
+  - `login --with-api-key` requires stdin input
+  - `login --device-auth` works in headless-friendly mode
+- integration tests:
+  - browser callback flow works with configured callback port/url
+  - TUI and CLI both load the same saved auth state
+
+## Current Checkpoint
+
+Implemented in the first pass:
+
+- Codex issuer/client-id based browser login
+- device-code login
+- stdin-fed API-key login
+- logout
+- TUI auth picker with selection-list UX instead of a browser-only action
+
+Still intentionally left open:
+
+- direct reuse of `codex_login` primitives instead of a local mirror
+- richer credential persistence semantics if Codex later requires more than the
+  current stored access token/API key path
+- more complete tests around callback handling and TUI auth flow edges
+
+## Follow-Up Work
+
+- Refactor `src/oauth.rs` toward a Codex-aligned auth manager.
+- Add device-code login and API-key login CLI/TUI surfaces.
+- Reuse `codex_login` primitives where practical instead of extending the
+  current bespoke flow.
+- Specify MCP/appserver OAuth separately if later appserver work truly needs it.

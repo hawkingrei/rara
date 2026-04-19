@@ -2,9 +2,7 @@ use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
 use dirs::home_dir;
-use pulldown_cmark::{
-    CodeBlockKind, CowStr, Event, HeadingLevel, Options, Parser, Tag, TagEnd,
-};
+use pulldown_cmark::{CodeBlockKind, CowStr, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 use ratatui::{
     style::Style,
     text::{Line, Span, Text},
@@ -307,11 +305,8 @@ where
             self.push_blank_line();
             self.needs_newline = false;
         }
-        self.indent_stack.push(IndentContext::new(
-            vec![Span::from("> ")],
-            None,
-            false,
-        ));
+        self.indent_stack
+            .push(IndentContext::new(vec![Span::from("> ")], None, false));
     }
 
     fn end_blockquote(&mut self) {

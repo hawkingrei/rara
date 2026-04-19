@@ -89,7 +89,9 @@ pub(super) fn render_content(content: &Value) -> String {
                 ),
                 Some("tool_result") => rendered.push(format!(
                     "tool_result(id={}): {}",
-                    item.get("tool_use_id").and_then(Value::as_str).unwrap_or(""),
+                    item.get("tool_use_id")
+                        .and_then(Value::as_str)
+                        .unwrap_or(""),
                     item.get("content").and_then(Value::as_str).unwrap_or("")
                 )),
                 Some("tool_use") => rendered.push(format!(

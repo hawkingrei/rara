@@ -5,9 +5,7 @@ use ratatui::{
 use std::sync::{OnceLock, RwLock};
 use syntect::{
     easy::HighlightLines,
-    highlighting::{
-        Color as SyntectColor, FontStyle, Style as SyntectStyle, Theme,
-    },
+    highlighting::{Color as SyntectColor, FontStyle, Style as SyntectStyle, Theme},
     parsing::SyntaxReference,
     util::LinesWithEndings,
 };
@@ -154,8 +152,10 @@ pub(crate) fn highlight_code_to_lines(code: &str, lang: &str) -> Vec<Line<'stati
     if let Some(line_spans) = highlight_to_line_spans(code, lang) {
         line_spans.into_iter().map(Line::from).collect()
     } else {
-        let mut result: Vec<Line<'static>> =
-            code.lines().map(|line| Line::from(line.to_string())).collect();
+        let mut result: Vec<Line<'static>> = code
+            .lines()
+            .map(|line| Line::from(line.to_string()))
+            .collect();
         if result.is_empty() {
             result.push(Line::from(String::new()));
         }

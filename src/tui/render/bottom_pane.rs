@@ -37,14 +37,14 @@ pub(crate) fn desired_viewport_height(app: &TuiApp, _width: u16, rows: u16) -> u
         .max(1)
 }
 
-pub(super) fn render_bottom_pane(
-    f: &mut Frame,
-    app: &TuiApp,
-    area: Rect,
-) -> Option<(u16, u16)> {
+pub(super) fn render_bottom_pane(f: &mut Frame, app: &TuiApp, area: Rect) -> Option<(u16, u16)> {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Min(3), Constraint::Length(1)])
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Min(3),
+            Constraint::Length(1),
+        ])
         .split(area);
     render_activity_bar(f, app, chunks[0]);
     let cursor = render_composer(f, app, chunks[1]);
@@ -54,12 +54,10 @@ pub(super) fn render_bottom_pane(
 
 fn render_activity_bar(f: &mut Frame, app: &TuiApp, area: Rect) {
     let (label, color, detail) = activity_status_line(app);
-    let mut spans = vec![
-        Span::styled(
-            animated_activity_label(app, label),
-            Style::default().fg(color).add_modifier(Modifier::BOLD),
-        ),
-    ];
+    let mut spans = vec![Span::styled(
+        animated_activity_label(app, label),
+        Style::default().fg(color).add_modifier(Modifier::BOLD),
+    )];
     let label_already_reflects_planning = matches!(
         app.active_pending_interaction().map(|item| item.kind),
         Some(
@@ -99,9 +97,15 @@ fn activity_status_line(app: &TuiApp) -> (&'static str, Color, String) {
         let (label, color) = match pending.kind {
             ActivePendingInteractionKind::PlanApproval => ("Plan Approval", Color::LightBlue),
             ActivePendingInteractionKind::ShellApproval => ("Shell Approval", Color::Yellow),
-            ActivePendingInteractionKind::PlanningQuestion => ("Planning Question", Color::LightBlue),
-            ActivePendingInteractionKind::ExplorationQuestion => ("Exploration Question", Color::Yellow),
-            ActivePendingInteractionKind::SubAgentQuestion => ("Sub-agent Question", Color::LightGreen),
+            ActivePendingInteractionKind::PlanningQuestion => {
+                ("Planning Question", Color::LightBlue)
+            }
+            ActivePendingInteractionKind::ExplorationQuestion => {
+                ("Exploration Question", Color::Yellow)
+            }
+            ActivePendingInteractionKind::SubAgentQuestion => {
+                ("Sub-agent Question", Color::LightGreen)
+            }
             ActivePendingInteractionKind::RequestInput => ("Request Input", Color::LightGreen),
         };
         let detail = match pending.kind {
@@ -145,11 +149,7 @@ fn activity_status_line(app: &TuiApp) -> (&'static str, Color, String) {
                 app.queued_follow_up_count()
             ));
         }
-        return (
-            "Working",
-            Color::Yellow,
-            detail,
-        );
+        return ("Working", Color::Yellow, detail);
     }
 
     if app.agent_execution_mode_label() == "plan" {
@@ -195,7 +195,12 @@ fn render_composer(f: &mut Frame, app: &TuiApp, area: Rect) -> Option<(u16, u16)
         queued_follow_up_preview_lines(app)
     } else if app.input.is_empty() {
         vec![Line::from(vec![
-            Span::styled("› ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "› ",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled(
                 "Ask about the repo, request a code change, or type ",
                 Style::default().fg(Color::DarkGray),
@@ -213,7 +218,12 @@ fn render_composer(f: &mut Frame, app: &TuiApp, area: Rect) -> Option<(u16, u16)
             .lines()
             .map(|line| {
                 Line::from(vec![
-                    Span::styled("› ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                    Span::styled(
+                        "› ",
+                        Style::default()
+                            .fg(Color::Cyan)
+                            .add_modifier(Modifier::BOLD),
+                    ),
                     Span::raw(line.to_string()),
                 ])
             })
@@ -243,7 +253,12 @@ fn queued_follow_up_preview_lines(app: &TuiApp) -> Vec<Line<'static>> {
         .unwrap_or("Queued follow-up");
     let mut lines = vec![
         Line::from(vec![
-            Span::styled("› ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "› ",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled(
                 "Queued for after the current task:",
                 Style::default().fg(Color::DarkGray),
@@ -444,15 +459,17 @@ mod tests {
             path: temp.path().join("config.json"),
         })
         .expect("build tui app");
-        app.snapshot.pending_interactions.push(PendingInteractionSnapshot {
-            kind: InteractionKind::PlanApproval,
-            title: "Approve plan".into(),
-            summary: "ready".into(),
-            options: Vec::new(),
-            note: None,
-            approval: None,
-            source: None,
-        });
+        app.snapshot
+            .pending_interactions
+            .push(PendingInteractionSnapshot {
+                kind: InteractionKind::PlanApproval,
+                title: "Approve plan".into(),
+                summary: "ready".into(),
+                options: Vec::new(),
+                note: None,
+                approval: None,
+                source: None,
+            });
 
         let (label, _, detail) = activity_status_line(&app);
         assert_eq!(label, "Plan Approval");
