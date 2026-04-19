@@ -152,7 +152,6 @@ impl Agent {
             .save_session(&self.session_id, &self.history)?;
 
         let compacted_tokens = self.compact_state.estimated_history_tokens;
-        self.compact_state.estimated_history_tokens = compacted_tokens;
         self.compact_state.compaction_count += 1;
         self.compact_state.last_compaction_before_tokens = Some(current_tokens);
         self.compact_state.last_compaction_after_tokens = Some(compacted_tokens);
@@ -259,7 +258,12 @@ fn collect_recent_files(history: &[Message], limit: usize) -> Vec<String> {
             };
             if !matches!(
                 tool_name,
-                "read_file" | "list_files" | "write_file" | "replace" | "search_files"
+                "read_file"
+                    | "list_files"
+                    | "write_file"
+                    | "replace"
+                    | "search_files"
+                    | "apply_patch"
             ) {
                 continue;
             }
@@ -343,12 +347,7 @@ fn collect_recent_file_excerpts(
                     let Some(snippet) = snippet else {
                         continue;
                     };
-                    if excerpts
-                        .iter()
-                        .any(|existing: &RecentFileExcerpt| existing.path == path)
-                    {
-                        continue;
-                    }
+                    excerpts.retain(|existing: &RecentFileExcerpt| existing.path != path);
                     excerpts.push(RecentFileExcerpt {
                         path,
                         line_range,

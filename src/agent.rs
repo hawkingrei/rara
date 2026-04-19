@@ -43,7 +43,7 @@ pub enum BashApprovalMode {
     Suggestion,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct Message {
     pub role: String,
     pub content: Value,
@@ -202,7 +202,10 @@ impl Agent {
         self.inspection_progress = InspectionProgress::default();
         self.last_query_plan_updated = false;
         self.compact_if_needed_with_reporter(&mut report).await?;
-        self.replace_history(repair_tool_result_history(&self.history));
+        let repaired_history = repair_tool_result_history(&self.history);
+        if repaired_history != self.history {
+            self.replace_history(repaired_history);
+        }
         self.clear_completed_interactions();
 
         self.push_history_message(Message {

@@ -933,3 +933,60 @@ async fn manual_compact_carries_recent_files_forward() {
     assert!(excerpts.contains("### src/main.rs"));
     assert!(excerpts.contains("fn main() {}"));
 }
+
+#[tokio::test]
+async fn manual_compact_prefers_latest_excerpt_and_tracks_apply_patch() {
+    let backend = Arc::new(SequencedBackend::new(Vec::new()));
+    let mut agent = Agent::new(
+        ToolManager::new(),
+        backend,
+        Arc::new(VectorDB::new("data/lancedb")),
+        Arc::new(SessionManager::new().expect("session manager")),
+        Arc::new(WorkspaceMemory::new().expect("workspace memory")),
+    );
+    agent.history = vec![
+        Message {
+            role: "assistant".to_string(),
+            content: json!([
+                {"type":"tool_use","id":"tool-1","name":"read_file","input":{"path":"src/main.rs","start_line":1,"end_line":2}},
+                {"type":"tool_use","id":"tool-2","name":"apply_patch","input":{"path":"src/lib.rs"}}
+            ]),
+        },
+        Message {
+            role: "user".to_string(),
+            content: json!([
+                {"type":"tool_result","tool_use_id":"tool-1","content":"old snippet"},
+                {"type":"tool_result","tool_use_id":"tool-2","content":"patch applied"}
+            ]),
+        },
+        Message {
+            role: "assistant".to_string(),
+            content: json!([
+                {"type":"tool_use","id":"tool-3","name":"read_file","input":{"path":"src/main.rs","start_line":10,"end_line":12}}
+            ]),
+        },
+        Message {
+            role: "user".to_string(),
+            content: json!([
+                {"type":"tool_result","tool_use_id":"tool-3","content":"new snippet"}
+            ]),
+        },
+        Message {
+            role: "assistant".to_string(),
+            content: json!("I updated the inspection notes."),
+        },
+    ];
+
+    let compacted = agent
+        .compact_now_with_reporter(|_| {})
+        .await
+        .expect("compact should succeed");
+
+    assert!(compacted);
+    let recent_files = agent.history[2].content.to_string();
+    assert!(recent_files.contains("src/lib.rs"));
+    let excerpts = agent.history[3].content.to_string();
+    assert!(excerpts.contains("new snippet"));
+    assert!(!excerpts.contains("old snippet"));
+    assert!(excerpts.contains("lines 10-12"));
+}
