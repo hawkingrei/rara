@@ -274,7 +274,7 @@ fn cleanup_stale_profiles(profile_dir: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::SandboxManager;
-    use std::path::{Path, PathBuf};
+    use std::path::PathBuf;
     use tempfile::tempdir;
 
     #[test]
@@ -328,16 +328,11 @@ mod tests {
         let stale_profile = profile_dir.join("sandbox-stale.sb");
         std::fs::write(&stale_profile, "(version 1)").expect("stale profile");
 
-        let current_dir = std::env::current_dir().expect("cwd");
-        std::env::set_current_dir(tempdir.path()).expect("switch cwd");
-        let manager = SandboxManager::new().expect("sandbox manager");
-        std::env::set_current_dir(current_dir).expect("restore cwd");
+        let manager = SandboxManager::new_for_rara_dir(rara_dir.clone()).expect("sandbox manager");
 
         assert!(
-            manager
-                .profile_dir
-                .ends_with(Path::new(".rara").join("sandbox")),
-            "sandbox manager should point at the workspace-local sandbox dir"
+            manager.profile_dir == rara_dir.join("sandbox"),
+            "sandbox manager should point at the configured sandbox dir"
         );
         assert!(
             !stale_profile.exists(),
