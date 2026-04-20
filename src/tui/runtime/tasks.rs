@@ -336,6 +336,21 @@ pub(super) fn start_oauth_task(
     oauth_manager: Arc<OAuthManager>,
     mode: OAuthLoginMode,
 ) {
+    if matches!(mode, OAuthLoginMode::Browser) && super::super::is_ssh_session() {
+        app.set_runtime_phase(
+            RuntimePhase::Failed,
+            Some("browser oauth unavailable in ssh".into()),
+        );
+        app.push_notice(
+            "Browser login is unavailable in SSH/headless sessions. Choose device code or API key instead.",
+        );
+        app.push_entry(
+            "Runtime",
+            "Browser login is unavailable in SSH/headless sessions. Use device-code login or API key instead.",
+        );
+        return;
+    }
+
     let (sender, receiver) = mpsc::unbounded_channel();
     let mode_label = match mode {
         OAuthLoginMode::Browser => "browser login",
@@ -545,11 +560,11 @@ pub(super) async fn finish_running_task_if_ready(
         },
         TaskCompletion::OAuth { mode, result } => match result {
             Ok(credential) => {
+                app.config.set_provider("codex");
                 app.config
                     .set_api_key(credential.expose_secret().to_string());
-                app.config.provider = "codex".into();
                 if app.config.model.is_none() {
-                    app.config.model = Some("codex".into());
+                    app.config.set_model(Some("codex".into()));
                 }
                 app.config_manager.save(&app.config)?;
                 let saved_message = match mode {
@@ -616,27 +631,24 @@ async fn run_oauth_login(
     match mode {
         OAuthLoginMode::Browser => {
             let is_ssh = super::super::is_ssh_session();
-            let session = oauth_manager.start_browser_login(true)?;
-            let _ = sender.send(TuiEvent::Transcript {
-                role: "Runtime",
-                message: if is_ssh {
-                    format!(
-                        "SSH session detected. Browser login is not reliable from a remote shell because the callback listens on localhost.\nUse device-code login or API key instead, or open this URL from the same machine running the TUI:\n{}",
-                        session.auth_url()
-                    )
-                } else {
-                    format!(
-                        "Starting Codex browser login.\nOpen this URL if the browser does not launch automatically:\n{auth_url}"
-                        ,
-                        auth_url = session.auth_url()
-                    )
-                },
-            });
             if is_ssh {
+                let _ = sender.send(TuiEvent::Transcript {
+                    role: "Runtime",
+                    message: "SSH session detected. Browser login is unavailable because the callback listens on localhost.\nUse device-code login or API key instead."
+                        .into(),
+                });
                 return Err(anyhow!(
                     "browser login is unavailable in SSH/headless sessions; use device-code login or API key instead"
                 ));
             }
+            let session = oauth_manager.start_browser_login(true)?;
+            let _ = sender.send(TuiEvent::Transcript {
+                role: "Runtime",
+                message: format!(
+                    "Starting Codex browser login.\nOpen this URL if the browser does not launch automatically:\n{auth_url}",
+                    auth_url = session.auth_url()
+                ),
+            });
             let _ = sender.send(TuiEvent::Transcript {
                 role: "Runtime",
                 message: "Waiting for browser callback.".into(),
@@ -768,7 +780,10 @@ mod tests {
     use crate::tui::state::TuiApp;
     use tempfile::tempdir;
 
-    use super::should_suggest_planning_mode;
+    use super::{should_suggest_planning_mode, start_oauth_task};
+    use crate::oauth::OAuthManager;
+    use crate::tui::state::OAuthLoginMode;
+    use std::sync::Arc;
 
     #[test]
     fn suggests_planning_for_repo_review_requests() {
@@ -802,5 +817,34 @@ mod tests {
             &app,
             "What does this function do?"
         ));
+    }
+
+    #[test]
+    fn browser_oauth_is_rejected_before_task_start_in_ssh() {
+        let temp = tempdir().unwrap();
+        let old_ssh = std::env::var_os("SSH_CONNECTION");
+        std::env::set_var("SSH_CONNECTION", "test");
+
+        let mut app = TuiApp::new(ConfigManager {
+            path: temp.path().join("config.json"),
+        })
+        .expect("build tui app");
+        let oauth_manager = Arc::new(
+            OAuthManager::new_for_config_dir(temp.path().join(".rara")).expect("oauth manager"),
+        );
+
+        start_oauth_task(&mut app, oauth_manager, OAuthLoginMode::Browser);
+
+        assert!(app.running_task.is_none());
+        assert!(app
+            .notice
+            .as_deref()
+            .is_some_and(|value| value.contains("Browser login is unavailable")));
+
+        if let Some(value) = old_ssh {
+            std::env::set_var("SSH_CONNECTION", value);
+        } else {
+            std::env::remove_var("SSH_CONNECTION");
+        }
     }
 }

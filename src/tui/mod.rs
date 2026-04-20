@@ -448,11 +448,7 @@ async fn dispatch_event(
         }
         AppEvent::SaveBaseUrlInput => {
             let value = app.base_url_input.trim();
-            app.config.base_url = if value.is_empty() {
-                None
-            } else {
-                Some(value.to_string())
-            };
+            app.config.set_base_url((!value.is_empty()).then(|| value.to_string()));
             app.config_manager.save(&app.config)?;
             app.notice = Some(format!(
                 "Saved base URL: {}",
@@ -467,10 +463,10 @@ async fn dispatch_event(
             } else if app.is_busy() {
                 app.push_notice("Wait for the current task before saving the API key.");
             } else {
+                app.config.set_provider("codex");
                 app.config.set_api_key(value.to_string());
-                app.config.provider = "codex".into();
                 if app.config.model.is_none() {
-                    app.config.model = Some("codex".into());
+                    app.config.set_model(Some("codex".into()));
                 }
                 app.config_manager.save(&app.config)?;
                 app.notice = Some("Saved Codex API key. Rebuilding backend.".into());
@@ -513,11 +509,8 @@ async fn dispatch_event(
             }
             Some(Overlay::BaseUrlEditor) => {
                 let value = app.base_url_input.trim();
-                app.config.base_url = if value.is_empty() {
-                    None
-                } else {
-                    Some(value.to_string())
-                };
+                app.config
+                    .set_base_url((!value.is_empty()).then(|| value.to_string()));
                 app.config_manager.save(&app.config)?;
                 app.notice = Some(format!(
                     "Saved base URL: {}",
@@ -574,10 +567,14 @@ async fn dispatch_event(
                     if app.is_busy() {
                         app.push_notice("A task is already running. Wait for it to finish.");
                     } else {
-                        let _ = oauth_manager.clear_saved_auth();
-                        app.config.clear_api_key();
+                        let removed = oauth_manager.clear_saved_auth()?;
+                        app.config.clear_provider_api_key("codex");
                         app.config_manager.save(&app.config)?;
-                        app.notice = Some("Cleared the saved provider credential.".into());
+                        app.notice = Some(if removed {
+                            "Cleared the saved provider credential.".into()
+                        } else {
+                            "No saved provider credential was present.".into()
+                        });
                         if app.config.provider == "codex" {
                             start_rebuild_task(app);
                         }

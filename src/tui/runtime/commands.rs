@@ -109,10 +109,14 @@ pub(super) async fn execute_local_command(
             if app.is_busy() {
                 app.push_notice("A task is already running. Wait for it to finish.");
             } else {
-                let _ = oauth_manager.clear_saved_auth();
-                app.config.clear_api_key();
+                let removed = oauth_manager.clear_saved_auth()?;
+                app.config.clear_provider_api_key("codex");
                 app.config_manager.save(&app.config)?;
-                app.push_notice("Cleared the saved provider credential.");
+                app.push_notice(if removed {
+                    "Cleared the saved provider credential.".to_string()
+                } else {
+                    "No saved provider credential was present.".to_string()
+                });
                 if app.config.provider == "codex" {
                     start_rebuild_task(app);
                 }

@@ -8245,6 +8245,7 @@ name = "rara-config"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "dirs",
  "secrecy",
  "serde",
  "serde_json",

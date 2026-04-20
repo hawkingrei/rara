@@ -32,7 +32,8 @@ const LINUX_RUNTIME_READ_ROOTS: &[&str] = &[
 impl SandboxManager {
     pub fn new() -> Result<Self> {
         let os = std::env::consts::OS.to_string();
-        let rara_dir = std::env::current_dir()?.join(".rara");
+        let root = std::env::current_dir()?;
+        let rara_dir = rara_config::workspace_data_dir_for(&root)?;
         Self::new_with_rara_dir(os, rara_dir)
     }
 

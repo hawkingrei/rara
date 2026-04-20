@@ -43,7 +43,7 @@ pub struct OAuthManager {
 
 impl OAuthManager {
     pub fn new() -> Result<Self> {
-        let config_dir = std::env::current_dir()?.join(".rara");
+        let config_dir = rara_config::ensure_rara_home_dir()?;
         Self::new_for_config_dir(config_dir)
     }
 

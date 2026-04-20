@@ -1,5 +1,6 @@
 use crate::prompt::{PromptSource, PromptSourceKind};
 use anyhow::Result;
+use rara_config::workspace_data_dir_for;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -34,10 +35,7 @@ struct CachedEnvInfo {
 impl WorkspaceMemory {
     pub fn new() -> Result<Self> {
         let root = std::env::current_dir()?;
-        let rara_dir = root.join(".rara");
-        if !rara_dir.exists() {
-            fs::create_dir_all(&rara_dir)?;
-        }
+        let rara_dir = workspace_data_dir_for(&root)?;
         Ok(Self::from_paths(root, rara_dir))
     }
 
@@ -103,7 +101,7 @@ impl WorkspaceMemory {
             sources.push(PromptSource {
                 kind: PromptSourceKind::LocalInstruction,
                 label: "RARA Local Instruction".to_string(),
-                display_path: ".rara/instructions.md".to_string(),
+                display_path: rara_inst.display().to_string(),
                 content,
             });
         }
@@ -112,7 +110,7 @@ impl WorkspaceMemory {
             sources.push(PromptSource {
                 kind: PromptSourceKind::LocalMemory,
                 label: "Local Project Memory".to_string(),
-                display_path: ".rara/memory.md".to_string(),
+                display_path: memory.display().to_string(),
                 content,
             });
         }

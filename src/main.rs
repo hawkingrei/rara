@@ -100,19 +100,19 @@ async fn main_impl() -> Result<()> {
     let mut config = config_manager.load()?;
 
     if let Some(p) = cli.provider {
-        config.provider = p;
+        config.set_provider(p);
     }
     if let Some(k) = cli.api_key {
         config.set_api_key(k);
     }
     if let Some(b) = cli.base_url {
-        config.base_url = Some(b);
+        config.set_base_url(Some(b));
     }
     if let Some(m) = cli.model {
-        config.model = Some(m);
+        config.set_model(Some(m));
     }
     if let Some(r) = cli.revision {
-        config.revision = Some(r);
+        config.set_revision(Some(r));
     }
 
     let oauth_manager = OAuthManager::new()?;
@@ -203,10 +203,14 @@ async fn main_impl() -> Result<()> {
             }
         }
         Commands::Logout => {
-            let _ = oauth_manager.clear_saved_auth();
-            config.clear_api_key();
+            let removed = oauth_manager.clear_saved_auth()?;
+            config.clear_provider_api_key("codex");
             config_manager.save(&config)?;
-            println!("Removed the saved Codex credential.");
+            if removed {
+                println!("Removed the saved Codex credential.");
+            } else {
+                println!("No saved Codex credential was present.");
+            }
         }
         Commands::Tui => {
             let mut agent = Agent::new(tool_manager, backend_arc, vdb, session_manager, workspace);
@@ -222,10 +226,10 @@ fn save_codex_credential(
     config_manager: &ConfigManager,
     credential: &str,
 ) -> Result<()> {
+    config.set_provider("codex");
     config.set_api_key(credential.to_string());
-    config.provider = "codex".into();
     if config.model.is_none() {
-        config.model = Some("codex".into());
+        config.set_model(Some("codex".into()));
     }
     config_manager.save(config)
 }

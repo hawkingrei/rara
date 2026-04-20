@@ -210,6 +210,10 @@ Implemented in the current pass:
 - logout now uses `codex_login::logout(...)`
 - RARA still persists the resulting provider credential into its local config
 - the TUI auth picker keeps the Codex-style selection-list UX
+- Codex auth storage now lives under `~/.rara/codex-auth` instead of a
+  project-local `.rara`
+- the main RARA config now lives under `~/.rara/config.json`, with
+  provider-scoped remembered state for multi-provider/model use
 - focused auth regression tests now cover:
   - stored API-key persistence
   - logout cleanup
