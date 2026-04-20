@@ -11,8 +11,7 @@ Active backlog only. Keep this file small and current.
 
 ## LLM and Networking
 
-- [ ] Replace the current Codex-auth mirror in `src/oauth.rs` with direct reuse of the smallest useful `codex_login` primitives so browser login, device-code login, API-key login, and logout stop drifting from Codex behavior over time.
-- [ ] Broaden Codex-auth validation after the first parity pass: add callback-flow, persistence, and TUI auth-picker tests so the new browser/device/API-key/logout paths stay regression-tested.
+- [ ] Broaden Codex-auth validation beyond the current bridge tests: add stronger callback-flow coverage and more end-to-end persistence checks so the browser/device/API-key/logout paths stay regression-tested even as `codex_login` evolves.
 - [ ] Add an `AgentHub team mode` on top of ACP: for role-specialized worker sessions, use a small model first for intent routing and only hand the task to the larger worker model when the intent is relevant to that worker, instead of sending every ACP turn directly to the expensive model.
 - [ ] Deepen the `AgentHub team mode` spec before implementation: define the ACP session metadata, worker-role contract, router prompt/output schema, and the exact `skip` / `handle` response semantics so the worker runtime can be implemented without inventing a parallel protocol later.
 
@@ -20,7 +19,7 @@ Active backlog only. Keep this file small and current.
 
 - [ ] Add a first-run onboarding flow that explains workspace, provider/model selection, local model download behavior, cache location, and tool loop expectations before the user lands in a blank chat.
 - [ ] Continue aligning the TUI status and transcript surfaces with Codex/Claude so runtime state stays visible without leaking bottom-pane chrome into transcript history.
-- [ ] Add Codex-style TUI snapshot coverage for popups, status surfaces, and transcript-heavy widgets so layout/text regressions are caught by golden snapshots instead of only narrow string assertions.
+- [ ] Expand the new Codex-style TUI snapshot coverage beyond the first auth-picker / queued-follow-up / Updated Plan snapshots so more popups, status surfaces, and transcript-heavy widgets are protected by golden tests.
 - [ ] Continue making tool-action transcript summaries more source-aware and file-aware so edit tools such as `write_file` / `replace` / `apply_patch` consistently show what they touched instead of only generic action labels.
 - [ ] Continue refining the live `bash` transcript path so command execution behaves more like Codex: keep the streamed stdout/stderr surface, then add richer lifecycle details such as clearer command-start/finish framing and better long-output folding.
 - [ ] Continue refining queued follow-up steering toward the full Codex contract: keep the new next-tool-boundary queue, then add the explicit interrupt/send-now path and clearer separation between pending steers and ordinary queued follow-ups.
@@ -45,7 +44,7 @@ Active backlog only. Keep this file small and current.
 
 - [ ] Continue the internal-crate rollout after `rara-config`, `rara-instructions`, and `rara-skills`: move more skill runtime behavior behind `rara-skills`, then extract the next stable boundary instead of growing the root crate back toward a monolith.
 - [ ] Revisit direct reuse of `codex-core-skills` after the Codex-compatible root-discovery phase: keep `rara-skills` as the adaptation boundary, but replace more of the custom loader/render/invocation stack once the dependency surface is acceptable.
-- [ ] Refine instruction resolution so `AGENTS.md` / instruction files behave more like Codex and Claude Code: keep hierarchical lookup, then define clearer precedence and merge rules for nested project instructions versus local `.rara` instructions.
+- [ ] Refine instruction resolution so `AGENTS.md` / instruction files behave more like Codex and Claude Code: keep hierarchical lookup, then define clearer precedence and merge rules for nested project instructions versus workspace-local RARA instructions.
 - [ ] Continue splitting remaining oversized TUI files such as `src/tui/state.rs` and `src/tui/markdown_render.rs` so the 800-line guideline holds across the main interaction path.
 - [ ] Add module-level documentation for the agent lifecycle, tool loop, plan/update flow, and sandbox model so the runtime architecture is easier to reason about.
 - [ ] Add a security section to `AGENTS.md` or a dedicated security doc covering sandbox expectations, command execution rules, and secret-handling standards.

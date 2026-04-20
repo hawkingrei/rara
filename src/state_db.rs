@@ -70,7 +70,12 @@ pub struct StateDb {
 
 impl StateDb {
     pub fn new() -> Result<Self> {
-        let root_dir = std::env::current_dir()?.join(".rara");
+        let root = std::env::current_dir()?;
+        let root_dir = rara_config::workspace_data_dir_for(&root)?;
+        Self::new_for_root_dir(root_dir)
+    }
+
+    pub fn new_for_root_dir(root_dir: PathBuf) -> Result<Self> {
         if !root_dir.exists() {
             fs::create_dir_all(&root_dir)?;
         }
@@ -637,8 +642,7 @@ mod tests {
     #[test]
     fn persists_metadata_and_rollout_artifact() -> Result<()> {
         let temp = tempdir()?;
-        std::env::set_current_dir(temp.path())?;
-        let db = StateDb::new()?;
+        let db = StateDb::new_for_root_dir(temp.path().join(".rara"))?;
         db.upsert_session(
             "session-1",
             "/tmp/workspace",
@@ -724,8 +728,7 @@ mod tests {
     #[test]
     fn persists_interaction_payloads_for_restore() -> Result<()> {
         let temp = tempdir()?;
-        std::env::set_current_dir(temp.path())?;
-        let db = StateDb::new()?;
+        let db = StateDb::new_for_root_dir(temp.path().join(".rara"))?;
         db.upsert_session(
             "session-2",
             "/tmp/workspace",
@@ -776,8 +779,7 @@ mod tests {
     #[test]
     fn persists_structured_approval_payloads_for_restore() -> Result<()> {
         let temp = tempdir()?;
-        std::env::set_current_dir(temp.path())?;
-        let db = StateDb::new()?;
+        let db = StateDb::new_for_root_dir(temp.path().join(".rara"))?;
         db.upsert_session(
             "session-structured",
             "/tmp/workspace",
@@ -850,8 +852,7 @@ mod tests {
     #[test]
     fn persists_compact_state_for_restore() -> Result<()> {
         let temp = tempdir()?;
-        std::env::set_current_dir(temp.path())?;
-        let db = StateDb::new()?;
+        let db = StateDb::new_for_root_dir(temp.path().join(".rara"))?;
         db.upsert_session(
             "session-compact",
             "/tmp/workspace",

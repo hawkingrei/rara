@@ -1,0 +1,9 @@
+---
+source: src/tui/render/bottom_pane.rs
+expression: rendered
+---
+› Messages to be submitted after next tool call
+  apply the feedback to the auth picker and rerun focused tests
+
+› Queued follow-up messages
+  then summarize the remaining TODOs

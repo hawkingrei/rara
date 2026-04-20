@@ -1,5 +1,5 @@
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use anyhow::Result;
 use serde_json::{json, Value};
@@ -506,8 +506,9 @@ fn truncate_text(text: &str, max_chars: usize) -> String {
     collected
 }
 
-pub fn default_tool_result_store_dir() -> PathBuf {
-    Path::new(".rara").join("tool-results")
+pub fn default_tool_result_store_dir() -> Result<PathBuf> {
+    let root = std::env::current_dir()?;
+    Ok(rara_config::workspace_data_dir_for(&root)?.join("tool-results"))
 }
 
 #[cfg(test)]
@@ -518,7 +519,6 @@ mod tests {
     };
     use crate::agent::Message;
     use serde_json::json;
-    use std::path::Path;
 
     #[test]
     fn repairs_missing_tool_results() {
@@ -563,9 +563,8 @@ mod tests {
         assert!(output.contains("full_result_path="));
         assert!(output.contains("Fetched https://example.com"));
         assert!(tempdir.path().join("tool-1.json").exists());
-        assert_eq!(
-            default_tool_result_store_dir(),
-            Path::new(".rara").join("tool-results")
-        );
+        assert!(default_tool_result_store_dir()
+            .expect("default tool result dir")
+            .ends_with(std::path::Path::new("tool-results")));
     }
 }

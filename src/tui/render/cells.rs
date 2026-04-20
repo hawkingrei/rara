@@ -1055,6 +1055,7 @@ mod tests {
     use crate::tui::state::{
         RuntimePhase, RuntimeSnapshot, TranscriptEntry, TranscriptTurn, TuiApp,
     };
+    use insta::assert_snapshot;
     use tempfile::tempdir;
 
     use super::{ActiveCell, ActiveTurnCell, CommittedTurnCell, HistoryCell};
@@ -1255,6 +1256,45 @@ mod tests {
         assert!(rendered.contains("Read src/tools/vector.rs"));
         assert!(rendered.contains("I have inspected the repository structure."));
         assert!(rendered.contains("waiting for model response · 20s elapsed"));
+    }
+
+    #[test]
+    fn active_turn_cell_updated_plan_snapshot() {
+        let temp = tempdir().unwrap();
+        let mut app = TuiApp::new(ConfigManager {
+            path: temp.path().join("config.json"),
+        })
+        .expect("build tui app");
+        app.runtime_phase = RuntimePhase::ProcessingResponse;
+        app.runtime_phase_detail = Some("waiting for model response · 3s elapsed".into());
+        app.active_turn = TranscriptTurn {
+            entries: vec![TranscriptEntry {
+                role: "You".into(),
+                message: "Read the local codebase and propose the next refactor".into(),
+            }],
+        };
+        app.record_planning_note("The auth flow should reuse codex_login instead of mirroring it.");
+        app.record_exploration_action("Read src/oauth.rs");
+        app.snapshot = RuntimeSnapshot {
+            plan_steps: vec![
+                ("completed".into(), "Inspect the current auth bridge".into()),
+                ("in_progress".into(), "Replace the bespoke OAuth flow".into()),
+                ("pending".into(), "Add snapshot tests for the auth picker".into()),
+            ],
+            plan_explanation: Some(
+                "Prefer direct Codex auth reuse before extending more TUI flows.".into(),
+            ),
+            ..RuntimeSnapshot::default()
+        };
+
+        let rendered = ActiveTurnCell::new(&app, Some(Path::new(".")))
+            .display_lines(100)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert_snapshot!("active_turn_cell_updated_plan", rendered);
     }
 
     #[test]

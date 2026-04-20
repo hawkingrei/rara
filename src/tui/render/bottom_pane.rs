@@ -426,6 +426,7 @@ fn wrapped_text_cursor_position(
 
 #[cfg(test)]
 mod tests {
+    use insta::assert_snapshot;
     use tempfile::tempdir;
 
     use crate::config::ConfigManager;
@@ -522,6 +523,28 @@ mod tests {
         assert!(rendered.contains("Queued follow-up messages"));
         assert!(rendered.contains("first follow-up"));
         assert!(rendered.contains("second follow-up"));
+    }
+
+    #[test]
+    fn queued_follow_up_preview_snapshot() {
+        let temp = tempdir().unwrap();
+        let mut app = TuiApp::new(ConfigManager {
+            path: temp.path().join("config.json"),
+        })
+        .expect("build tui app");
+        app.begin_running_turn();
+        app.queue_follow_up_message_after_next_tool_boundary(
+            "apply the feedback to the auth picker and rerun focused tests",
+        );
+        app.queue_follow_up_message("then summarize the remaining TODOs");
+
+        let rendered = queued_follow_up_preview_lines(&app)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert_snapshot!("queued_follow_up_preview", rendered);
     }
 
     #[test]

@@ -1,8 +1,26 @@
 use anyhow::Result;
+use dirs::home_dir;
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
+use std::collections::{hash_map::DefaultHasher, BTreeMap};
 use std::fs;
-use std::path::PathBuf;
+use std::hash::{Hash, Hasher};
+use std::path::{Path, PathBuf};
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct ProviderConfigState {
+    #[serde(
+        default,
+        serialize_with = "serialize_secret_option",
+        deserialize_with = "deserialize_secret_option"
+    )]
+    pub api_key: Option<SecretString>,
+    pub base_url: Option<String>,
+    pub model: Option<String>,
+    pub revision: Option<String>,
+    pub thinking: Option<bool>,
+    pub num_ctx: Option<u32>,
+}
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct RaraConfig {
@@ -24,6 +42,8 @@ pub struct RaraConfig {
     pub append_system_prompt_file: Option<String>,
     pub compact_prompt: Option<String>,
     pub compact_prompt_file: Option<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub provider_states: BTreeMap<String, ProviderConfigState>,
 }
 
 impl RaraConfig {
@@ -37,11 +57,164 @@ impl RaraConfig {
 
     pub fn set_api_key(&mut self, value: impl Into<String>) {
         self.api_key = Some(SecretString::from(value.into()));
+        self.sync_active_provider_state();
     }
 
     pub fn clear_api_key(&mut self) {
         self.api_key = None;
+        self.sync_active_provider_state();
     }
+
+    pub fn clear_provider_api_key(&mut self, provider: &str) {
+        if self.provider == provider {
+            self.clear_api_key();
+            return;
+        }
+        if let Some(state) = self.provider_states.get_mut(provider) {
+            state.api_key = None;
+        }
+    }
+
+    pub fn set_provider(&mut self, provider: impl Into<String>) {
+        self.sync_active_provider_state();
+        self.provider = provider.into();
+        self.reset_provider_scoped_fields();
+        if let Some(state) = self.provider_states.get(&self.provider).cloned() {
+            self.apply_provider_state(state);
+        }
+    }
+
+    pub fn set_base_url(&mut self, value: Option<String>) {
+        self.base_url = normalize_optional_string(value);
+        self.sync_active_provider_state();
+    }
+
+    pub fn set_model(&mut self, value: Option<String>) {
+        self.model = normalize_optional_string(value);
+        self.sync_active_provider_state();
+    }
+
+    pub fn set_revision(&mut self, value: Option<String>) {
+        self.revision = normalize_optional_string(value);
+        self.sync_active_provider_state();
+    }
+
+    pub fn set_thinking(&mut self, value: Option<bool>) {
+        self.thinking = value;
+        self.sync_active_provider_state();
+    }
+
+    pub fn set_num_ctx(&mut self, value: Option<u32>) {
+        self.num_ctx = value;
+        self.sync_active_provider_state();
+    }
+
+    fn sync_active_provider_state(&mut self) {
+        if self.provider.trim().is_empty() {
+            return;
+        }
+        self.provider_states
+            .insert(self.provider.clone(), self.current_provider_state());
+    }
+
+    fn current_provider_state(&self) -> ProviderConfigState {
+        ProviderConfigState {
+            api_key: self.api_key.clone(),
+            base_url: self.base_url.clone(),
+            model: self.model.clone(),
+            revision: self.revision.clone(),
+            thinking: self.thinking,
+            num_ctx: self.num_ctx,
+        }
+    }
+
+    fn apply_provider_state(&mut self, state: ProviderConfigState) {
+        self.api_key = state.api_key;
+        self.base_url = state.base_url;
+        self.model = state.model;
+        self.revision = state.revision;
+        self.thinking = state.thinking;
+        self.num_ctx = state.num_ctx;
+    }
+
+    fn reset_provider_scoped_fields(&mut self) {
+        self.api_key = None;
+        self.base_url = None;
+        self.model = None;
+        self.revision = None;
+        self.thinking = None;
+        self.num_ctx = None;
+    }
+}
+
+pub fn rara_home_dir() -> Result<PathBuf> {
+    Ok(home_dir()
+        .ok_or_else(|| anyhow::anyhow!("failed to resolve home directory for ~/.rara"))?
+        .join(".rara"))
+}
+
+pub fn ensure_rara_home_dir() -> Result<PathBuf> {
+    let rara_home = rara_home_dir()?;
+    fs::create_dir_all(&rara_home)?;
+    Ok(rara_home)
+}
+
+pub fn workspace_data_dir_for(root: &Path) -> Result<PathBuf> {
+    let rara_home = ensure_rara_home_dir()?;
+    workspace_data_dir_for_home(root, &rara_home)
+}
+
+pub fn workspace_data_dir_for_home(root: &Path, rara_home: &Path) -> Result<PathBuf> {
+    let canonical_root = fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+    let slug = workspace_slug(&canonical_root);
+    let hash = stable_path_hash(&canonical_root);
+    let dir = rara_home
+        .join("workspaces")
+        .join(format!("{slug}-{hash:016x}"));
+    fs::create_dir_all(&dir)?;
+    Ok(dir)
+}
+
+fn workspace_slug(root: &Path) -> String {
+    let raw = root
+        .file_name()
+        .and_then(|value| value.to_str())
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or("workspace");
+    let mut slug = String::new();
+    let mut last_dash = false;
+    for ch in raw.chars().flat_map(char::to_lowercase) {
+        if ch.is_ascii_alphanumeric() {
+            slug.push(ch);
+            last_dash = false;
+        } else if !last_dash {
+            slug.push('-');
+            last_dash = true;
+        }
+    }
+    let slug = slug.trim_matches('-');
+    if slug.is_empty() {
+        "workspace".to_string()
+    } else {
+        slug.chars().take(40).collect()
+    }
+}
+
+fn stable_path_hash(root: &Path) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    root.hash(&mut hasher);
+    hasher.finish()
+}
+
+fn normalize_optional_string(value: Option<String>) -> Option<String> {
+    value.and_then(|value| {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    })
 }
 
 fn serialize_secret_option<S>(
@@ -73,12 +246,13 @@ pub struct ConfigManager {
 
 impl ConfigManager {
     pub fn new() -> Result<Self> {
-        let rara_dir = std::env::current_dir()?.join(".rara");
-        if !rara_dir.exists() {
-            fs::create_dir_all(&rara_dir)?;
-        }
+        Self::new_for_rara_home(ensure_rara_home_dir()?)
+    }
+
+    pub fn new_for_rara_home(rara_home: PathBuf) -> Result<Self> {
+        fs::create_dir_all(&rara_home)?;
         Ok(Self {
-            path: rara_dir.join("config.json"),
+            path: rara_home.join("config.json"),
         })
     }
 
@@ -108,7 +282,7 @@ impl ConfigManager {
 
 #[cfg(test)]
 mod tests {
-    use super::{ConfigManager, RaraConfig};
+    use super::{workspace_data_dir_for_home, ConfigManager, RaraConfig};
     use std::fs;
     use tempfile::tempdir;
 
@@ -132,6 +306,59 @@ mod tests {
         let mut config = RaraConfig::default();
         config.set_api_key("");
         assert!(!config.has_api_key());
+    }
+
+    #[test]
+    fn provider_switch_restores_provider_specific_settings() {
+        let mut config = RaraConfig {
+            provider: "codex".to_string(),
+            ..Default::default()
+        };
+        config.set_api_key("sk-codex");
+        config.set_model(Some("codex".to_string()));
+        config.set_base_url(Some("http://localhost:8080".to_string()));
+
+        config.set_provider("ollama");
+        assert_eq!(config.provider, "ollama");
+        assert!(config.api_key().is_none());
+        assert!(config.model.is_none());
+        assert!(config.base_url.is_none());
+
+        config.set_model(Some("qwen3".to_string()));
+        config.set_base_url(Some("http://localhost:11434".to_string()));
+        config.set_num_ctx(Some(32768));
+
+        config.set_provider("codex");
+        assert_eq!(config.api_key(), Some("sk-codex"));
+        assert_eq!(config.model.as_deref(), Some("codex"));
+        assert_eq!(config.base_url.as_deref(), Some("http://localhost:8080"));
+        assert_eq!(config.num_ctx, None);
+
+        config.set_provider("ollama");
+        assert_eq!(config.model.as_deref(), Some("qwen3"));
+        assert_eq!(config.base_url.as_deref(), Some("http://localhost:11434"));
+        assert_eq!(config.num_ctx, Some(32768));
+    }
+
+    #[test]
+    fn config_manager_uses_rara_home() {
+        let dir = tempdir().expect("tempdir");
+        let manager =
+            ConfigManager::new_for_rara_home(dir.path().join(".rara")).expect("config manager");
+        assert_eq!(manager.path, dir.path().join(".rara").join("config.json"));
+    }
+
+    #[test]
+    fn workspace_data_dir_lives_under_global_rara_home() {
+        let temp = tempdir().expect("tempdir");
+        let root = temp.path().join("repo");
+        fs::create_dir_all(&root).expect("mkdir root");
+
+        let rara_home = temp.path().join(".rara-home");
+        let data_dir = workspace_data_dir_for_home(&root, &rara_home).expect("workspace data dir");
+
+        assert!(data_dir.starts_with(rara_home.join("workspaces")));
+        assert!(data_dir.exists());
     }
 
     #[test]

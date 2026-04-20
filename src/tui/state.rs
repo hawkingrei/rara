@@ -486,10 +486,10 @@ impl TuiApp {
         let presets = current_model_presets(self.provider_picker_idx);
         let (_, provider, model) = presets[idx];
         self.model_picker_idx = idx;
-        self.config.provider = provider.to_string();
-        self.config.model = Some(model.to_string());
+        self.config.set_provider(provider.to_string());
+        self.config.set_model(Some(model.to_string()));
         if provider == "ollama" {
-            self.config.revision = None;
+            self.config.set_revision(None);
             if self
                 .config
                 .base_url
@@ -498,10 +498,11 @@ impl TuiApp {
                 .filter(|value| !value.is_empty())
                 .is_none()
             {
-                self.config.base_url = Some("http://localhost:11434".to_string());
+                self.config
+                    .set_base_url(Some("http://localhost:11434".to_string()));
             }
         } else if provider == "codex" {
-            self.config.revision = None;
+            self.config.set_revision(None);
             if self
                 .config
                 .base_url
@@ -510,11 +511,12 @@ impl TuiApp {
                 .filter(|value| !value.is_empty())
                 .is_none()
             {
-                self.config.base_url = Some("http://localhost:8080".to_string());
+                self.config
+                    .set_base_url(Some("http://localhost:8080".to_string()));
             }
         } else {
-            self.config.revision = Some("main".to_string());
-            self.config.base_url = None;
+            self.config.set_revision(Some("main".to_string()));
+            self.config.set_base_url(None);
         }
     }
 

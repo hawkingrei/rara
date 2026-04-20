@@ -10,7 +10,7 @@ pub(super) async fn execute_local_command(
     command: LocalCommand,
     app: &mut TuiApp,
     agent_slot: &mut Option<Agent>,
-    _oauth_manager: &Arc<OAuthManager>,
+    oauth_manager: &Arc<OAuthManager>,
 ) -> anyhow::Result<bool> {
     app.remember_command(match command.kind {
         LocalCommandKind::Help => "help",
@@ -109,9 +109,14 @@ pub(super) async fn execute_local_command(
             if app.is_busy() {
                 app.push_notice("A task is already running. Wait for it to finish.");
             } else {
-                app.config.clear_api_key();
+                let removed = oauth_manager.clear_saved_auth()?;
+                app.config.clear_provider_api_key("codex");
                 app.config_manager.save(&app.config)?;
-                app.push_notice("Cleared the saved provider credential.");
+                app.push_notice(if removed {
+                    "Cleared the saved provider credential.".to_string()
+                } else {
+                    "No saved provider credential was present.".to_string()
+                });
                 if app.config.provider == "codex" {
                     start_rebuild_task(app);
                 }

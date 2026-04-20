@@ -164,7 +164,9 @@ impl Agent {
             session_id: Uuid::new_v4().to_string(),
             total_input_tokens: 0,
             total_output_tokens: 0,
-            tool_result_store: ToolResultStore::new(default_tool_result_store_dir())
+            tool_result_store: ToolResultStore::new(
+                default_tool_result_store_dir().expect("tool result store dir"),
+            )
                 .expect("tool result store"),
             execution_mode: AgentExecutionMode::Execute,
             bash_approval_mode: BashApprovalMode::Always,

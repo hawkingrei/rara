@@ -10,7 +10,12 @@ pub struct SessionManager {
 
 impl SessionManager {
     pub fn new() -> Result<Self> {
-        let rara_dir = std::env::current_dir()?.join(".rara");
+        let root = std::env::current_dir()?;
+        let rara_dir = rara_config::workspace_data_dir_for(&root)?;
+        Self::new_for_rara_dir(rara_dir)
+    }
+
+    pub fn new_for_rara_dir(rara_dir: PathBuf) -> Result<Self> {
         let local_dir = rara_dir.join("rollouts");
         let legacy_storage_dir = rara_dir.join("sessions");
         if !local_dir.exists() {

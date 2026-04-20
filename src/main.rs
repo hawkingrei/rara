@@ -100,19 +100,19 @@ async fn main_impl() -> Result<()> {
     let mut config = config_manager.load()?;
 
     if let Some(p) = cli.provider {
-        config.provider = p;
+        config.set_provider(p);
     }
     if let Some(k) = cli.api_key {
         config.set_api_key(k);
     }
     if let Some(b) = cli.base_url {
-        config.base_url = Some(b);
+        config.set_base_url(Some(b));
     }
     if let Some(m) = cli.model {
-        config.model = Some(m);
+        config.set_model(Some(m));
     }
     if let Some(r) = cli.revision {
-        config.revision = Some(r);
+        config.set_revision(Some(r));
     }
 
     let oauth_manager = OAuthManager::new()?;
@@ -160,11 +160,16 @@ async fn main_impl() -> Result<()> {
                 bail!("choose either --device-auth or --with-api-key, not both");
             }
             if with_api_key {
-                let oauth_manager = oauth_manager.clone();
+                let oauth_reader = oauth_manager.clone();
                 let api_key =
-                    tokio::task::spawn_blocking(move || oauth_manager.read_api_key_from_stdin())
+                    tokio::task::spawn_blocking(move || oauth_reader.read_api_key_from_stdin())
                         .await??;
-                save_codex_credential(&mut config, &config_manager, api_key.expose_secret())?;
+                let credential = oauth_manager.save_api_key(api_key.expose_secret())?;
+                save_codex_credential(
+                    &mut config,
+                    &config_manager,
+                    credential.expose_secret(),
+                )?;
                 println!("Successfully saved Codex API key.");
             } else if device_auth {
                 let token = oauth_manager.request_device_code().await?;
@@ -172,38 +177,40 @@ async fn main_impl() -> Result<()> {
                     "Open this URL and enter the one-time code:\n{}\n\nCode: {}",
                     token.verification_url, token.user_code
                 );
-                let token = oauth_manager.complete_device_code_login(&token).await?;
+                let credential = oauth_manager.complete_device_code_login(&token).await?;
                 save_codex_credential(
                     &mut config,
                     &config_manager,
-                    token.access_token.expose_secret(),
+                    credential.expose_secret(),
                 )?;
                 println!("Successfully logged in with device code.");
             } else {
                 if std::env::var_os("SSH_CONNECTION").is_some() {
                     bail!("browser login is not reliable in SSH/headless sessions; use --device-auth or --with-api-key");
                 }
-                let (verifier, challenge) = oauth_manager.generate_pkce();
-                let (port, receiver) = oauth_manager.start_callback_server().await?;
-                let auth_url = oauth_manager.get_authorize_url(&challenge, port);
+                let session = oauth_manager.start_browser_login(true)?;
                 eprintln!(
-                    "Starting local login server on http://localhost:{port}.\nIf your browser did not open, navigate to this URL:\n\n{auth_url}"
+                    "Starting local login flow.\nIf your browser did not open, navigate to this URL:\n\n{}",
+                    session.auth_url()
                 );
-                let _ = open::that(&auth_url);
-                let code = receiver.await?;
-                let token = oauth_manager.exchange_code(&code, &verifier, port).await?;
+                let credential = session.complete(&oauth_manager).await?;
                 save_codex_credential(
                     &mut config,
                     &config_manager,
-                    token.access_token.expose_secret(),
+                    credential.expose_secret(),
                 )?;
                 println!("Successfully logged in.");
             }
         }
         Commands::Logout => {
-            config.clear_api_key();
+            let removed = oauth_manager.clear_saved_auth()?;
+            config.clear_provider_api_key("codex");
             config_manager.save(&config)?;
-            println!("Removed the saved Codex credential.");
+            if removed {
+                println!("Removed the saved Codex credential.");
+            } else {
+                println!("No saved Codex credential was present.");
+            }
         }
         Commands::Tui => {
             let mut agent = Agent::new(tool_manager, backend_arc, vdb, session_manager, workspace);
@@ -219,10 +226,10 @@ fn save_codex_credential(
     config_manager: &ConfigManager,
     credential: &str,
 ) -> Result<()> {
+    config.set_provider("codex");
     config.set_api_key(credential.to_string());
-    config.provider = "codex".into();
     if config.model.is_none() {
-        config.model = Some("codex".into());
+        config.set_model(Some("codex".into()));
     }
     config_manager.save(config)
 }
