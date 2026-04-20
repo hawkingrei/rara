@@ -59,3 +59,49 @@ pub(crate) fn build_auth_mode_picker_view(app: &TuiApp, ssh_session: bool) -> Au
         footer,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use insta::assert_snapshot;
+    use tempfile::tempdir;
+
+    use crate::config::ConfigManager;
+    use crate::tui::state::TuiApp;
+
+    use super::build_auth_mode_picker_view;
+
+    #[test]
+    fn auth_mode_picker_local_snapshot() {
+        let temp = tempdir().expect("tempdir");
+        let app = TuiApp::new(ConfigManager {
+            path: temp.path().join("config.json"),
+        })
+        .expect("app");
+
+        let popup = render_picker(&app, false);
+        assert_snapshot!("auth_mode_picker_local", popup);
+    }
+
+    #[test]
+    fn auth_mode_picker_ssh_snapshot() {
+        let temp = tempdir().expect("tempdir");
+        let mut app = TuiApp::new(ConfigManager {
+            path: temp.path().join("config.json"),
+        })
+        .expect("app");
+        app.auth_mode_idx = 1;
+
+        let popup = render_picker(&app, true);
+        assert_snapshot!("auth_mode_picker_ssh", popup);
+    }
+
+    fn render_picker(app: &TuiApp, ssh_session: bool) -> String {
+        let view = build_auth_mode_picker_view(app, ssh_session);
+        format!(
+            "{}\n\n{}\n\n{}",
+            view.intro,
+            view.lines.join("\n"),
+            view.footer
+        )
+    }
+}

@@ -544,17 +544,21 @@ pub(super) async fn finish_running_task_if_ready(
             }
         },
         TaskCompletion::OAuth { mode, result } => match result {
-            Ok(access_token) => {
+            Ok(credential) => {
                 app.config
-                    .set_api_key(access_token.expose_secret().to_string());
+                    .set_api_key(credential.expose_secret().to_string());
                 app.config.provider = "codex".into();
                 if app.config.model.is_none() {
                     app.config.model = Some("codex".into());
                 }
                 app.config_manager.save(&app.config)?;
                 let saved_message = match mode {
-                    OAuthLoginMode::Browser => "Saved browser login token to local config.",
-                    OAuthLoginMode::DeviceCode => "Saved device-code login token to local config.",
+                    OAuthLoginMode::Browser => {
+                        "Saved Codex browser login credential to local config."
+                    }
+                    OAuthLoginMode::DeviceCode => {
+                        "Saved Codex device-code login credential to local config."
+                    }
                 };
                 app.setup_status = Some(saved_message.into());
                 app.notice = app.setup_status.clone();
@@ -611,19 +615,20 @@ async fn run_oauth_login(
 ) -> anyhow::Result<SecretString> {
     match mode {
         OAuthLoginMode::Browser => {
-            let (verifier, challenge) = oauth_manager.generate_pkce();
-            let (port, receiver) = oauth_manager.start_callback_server().await?;
-            let auth_url = oauth_manager.get_authorize_url(&challenge, port);
             let is_ssh = super::super::is_ssh_session();
+            let session = oauth_manager.start_browser_login(true)?;
             let _ = sender.send(TuiEvent::Transcript {
                 role: "Runtime",
                 message: if is_ssh {
                     format!(
-                        "SSH session detected. Browser login is not reliable from a remote shell because the callback listens on localhost:{port}.\nUse device-code login or API key instead, or open this URL from the same machine running the TUI:\n{auth_url}"
+                        "SSH session detected. Browser login is not reliable from a remote shell because the callback listens on localhost.\nUse device-code login or API key instead, or open this URL from the same machine running the TUI:\n{}",
+                        session.auth_url()
                     )
                 } else {
                     format!(
                         "Starting Codex browser login.\nOpen this URL if the browser does not launch automatically:\n{auth_url}"
+                        ,
+                        auth_url = session.auth_url()
                     )
                 },
             });
@@ -632,19 +637,15 @@ async fn run_oauth_login(
                     "browser login is unavailable in SSH/headless sessions; use device-code login or API key instead"
                 ));
             }
-            let _ = open::that(&auth_url);
-
             let _ = sender.send(TuiEvent::Transcript {
                 role: "Runtime",
                 message: "Waiting for browser callback.".into(),
             });
-            let code = receiver.await?;
             let _ = sender.send(TuiEvent::Transcript {
                 role: "Runtime",
                 message: "Received browser callback, exchanging token.".into(),
             });
-            let token = oauth_manager.exchange_code(&code, &verifier, port).await?;
-            Ok(token.access_token)
+            session.complete(&oauth_manager).await
         }
         OAuthLoginMode::DeviceCode => {
             let device_code = oauth_manager.request_device_code().await?;
@@ -655,10 +656,7 @@ async fn run_oauth_login(
                     device_code.verification_url, device_code.user_code
                 ),
             });
-            let token = oauth_manager
-                .complete_device_code_login(&device_code)
-                .await?;
-            Ok(token.access_token)
+            oauth_manager.complete_device_code_login(&device_code).await
         }
     }
 }

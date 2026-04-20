@@ -1,0 +1,24 @@
+---
+source: src/tui/auth_mode_picker.rs
+expression: popup
+---
+Codex needs authentication before this preset can be used.
+
+Choose one auth mode below.
+
+SSH session detected. Browser login on a remote shell usually cannot complete the localhost callback. Device-code login or API key is recommended in SSH/headless sessions.
+
+Current model: -
+Provider: codex
+Credential status: not-required
+
+  Browser login
+    Best for local desktop sessions with a localhost callback.
+> Device code
+    Best for SSH/headless sessions. Open the URL elsewhere and enter the one-time code.
+  API key
+    Paste an existing Codex-compatible API key and save it locally.
+  Logout
+    Clear the saved provider credential and rebuild the current codex backend.
+
+Up/Down move  Enter choose  number keys jump  default: device code  Esc back

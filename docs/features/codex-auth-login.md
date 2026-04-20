@@ -54,8 +54,8 @@ RARA now has a first implementation pass of Codex-style first-party auth:
   - API key
   - logout
 
-This implementation is still a thin local runtime in `src/oauth.rs`. It mirrors
-Codex behavior, but it does not yet directly reuse `codex_login`.
+This implementation now routes the core login actions through `codex_login`
+instead of keeping a separate local OAuth protocol mirror in RARA.
 
 Codex has a richer first-party login stack:
 
@@ -119,8 +119,8 @@ boundary.
 
 ### 1. First-Party Auth Manager
 
-RARA should keep evolving the current `OAuthManager` into a Codex-aligned auth
-manager that supports:
+RARA's `OAuthManager` should stay as a thin adaptation layer around
+`codex_login`, while continuing to expose a RARA-local surface for:
 
 - browser login;
 - device-code login;
@@ -201,25 +201,34 @@ Minimum validation for implementation:
 
 ## Current Checkpoint
 
-Implemented in the first pass:
+Implemented in the current pass:
 
-- Codex issuer/client-id based browser login
-- device-code login
-- stdin-fed API-key login
-- logout
-- TUI auth picker with selection-list UX instead of a browser-only action
+- browser login now uses `codex_login::run_login_server(...)`
+- device-code login now uses `codex_login::request_device_code(...)` and
+  `codex_login::complete_device_code_login(...)`
+- API-key login now uses `codex_login::login_with_api_key(...)`
+- logout now uses `codex_login::logout(...)`
+- RARA still persists the resulting provider credential into its local config
+- the TUI auth picker keeps the Codex-style selection-list UX
+- focused auth regression tests now cover:
+  - stored API-key persistence
+  - logout cleanup
+  - credential loading precedence
+  - auth-picker navigation
+- initial snapshot coverage now exists for:
+  - auth picker popup
+  - queued follow-up preview
+  - Updated Plan active-turn rendering
 
 Still intentionally left open:
 
-- direct reuse of `codex_login` primitives instead of a local mirror
+- fuller browser callback-path validation beyond the `codex_login` server bridge
+- broader snapshot coverage for more TUI popups and transcript-heavy surfaces
 - richer credential persistence semantics if Codex later requires more than the
   current stored access token/API key path
-- more complete tests around callback handling and TUI auth flow edges
 
 ## Follow-Up Work
 
-- Refactor `src/oauth.rs` toward a Codex-aligned auth manager.
-- Add device-code login and API-key login CLI/TUI surfaces.
-- Reuse `codex_login` primitives where practical instead of extending the
-  current bespoke flow.
+- Expand auth-path tests around browser callback handling and shared persistence.
+- Expand snapshot coverage across more Codex-style TUI surfaces.
 - Specify MCP/appserver OAuth separately if later appserver work truly needs it.

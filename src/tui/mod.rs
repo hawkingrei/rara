@@ -574,6 +574,7 @@ async fn dispatch_event(
                     if app.is_busy() {
                         app.push_notice("A task is already running. Wait for it to finish.");
                     } else {
+                        let _ = oauth_manager.clear_saved_auth();
                         app.config.clear_api_key();
                         app.config_manager.save(&app.config)?;
                         app.notice = Some("Cleared the saved provider credential.".into());
@@ -873,9 +874,10 @@ mod tests {
         });
 
         let mut agent_slot = None;
-        let oauth_manager = Arc::new(crate::oauth::OAuthManager {
-            config_dir: temp.path().join(".rara"),
-        });
+        let oauth_manager = Arc::new(
+            crate::oauth::OAuthManager::new_for_config_dir(temp.path().join(".rara"))
+                .expect("oauth manager"),
+        );
         let should_quit = super::handle_submit(&mut app, &mut agent_slot, &oauth_manager)
             .await
             .expect("submit");
