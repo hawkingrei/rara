@@ -660,13 +660,21 @@ async fn run_oauth_login(
             session.complete(&oauth_manager).await
         }
         OAuthLoginMode::DeviceCode => {
+            let _ = sender.send(TuiEvent::Transcript {
+                role: "Runtime",
+                message: "Requesting Codex device code from OpenAI.".into(),
+            });
             let device_code = oauth_manager.request_device_code().await?;
             let _ = sender.send(TuiEvent::Transcript {
                 role: "Runtime",
                 message: format!(
-                    "Starting Codex device-code login.\nOpen this URL in a browser and enter the one-time code:\n{}\n\nCode: {}",
+                    "Open this URL in a browser and enter the one-time code:\n{}\n\nCode: {}",
                     device_code.verification_url, device_code.user_code
                 ),
+            });
+            let _ = sender.send(TuiEvent::Transcript {
+                role: "Runtime",
+                message: "Waiting for device-code confirmation.".into(),
             });
             oauth_manager.complete_device_code_login(&device_code).await
         }
