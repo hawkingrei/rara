@@ -82,17 +82,25 @@ pub(super) fn apply_tui_event(app: &mut TuiApp, event: TuiEvent) {
                     Some(message.lines().next().unwrap_or(role).trim().to_string()),
                 );
             } else if role == "Agent" {
+                let message = scrub_internal_control_tokens(&message);
                 let planning_mode = matches!(
                     app.agent_execution_mode,
                     crate::agent::AgentExecutionMode::Plan
                 );
                 let has_live_exploration = !app.active_live.exploration_actions.is_empty()
                     || !app.active_live.exploration_notes.is_empty();
+                let planning_notes = if planning_mode && !contains_structured_planning_output(&message)
+                {
+                    planning_note_lines(&message)
+                } else {
+                    Vec::new()
+                };
                 if !app.active_live.exploration_actions.is_empty()
                     && matches!(
                         app.runtime_phase,
                         RuntimePhase::RunningTool | RuntimePhase::SendingPrompt
                     )
+                    && (!planning_mode || planning_notes.is_empty())
                 {
                     for note in exploration_note_lines(&message, planning_mode) {
                         app.record_exploration_note(note);
@@ -103,7 +111,7 @@ pub(super) fn apply_tui_event(app: &mut TuiApp, event: TuiEvent) {
                     Some("receiving model output".into()),
                 );
                 if planning_mode && !contains_structured_planning_output(&message) {
-                    for note in planning_note_lines(&message) {
+                    for note in planning_notes {
                         app.record_planning_note(note);
                     }
                     if has_live_exploration
@@ -332,7 +340,7 @@ fn tool_action_label(message: &str) -> Option<String> {
 
 fn exploration_note_lines(message: &str, planning_mode: bool) -> Vec<String> {
     let mut notes = Vec::new();
-    for line in message
+    for line in scrub_internal_control_tokens(message)
         .lines()
         .map(str::trim)
         .filter(|line| !line.is_empty())
@@ -349,7 +357,7 @@ fn exploration_note_lines(message: &str, planning_mode: bool) -> Vec<String> {
         {
             continue;
         }
-        if planning_mode && is_planning_chatter(line) {
+        if planning_mode && (is_planning_chatter(line) || looks_like_planning_summary(line)) {
             continue;
         }
         if !notes.iter().any(|existing| existing == line) {
@@ -376,7 +384,7 @@ fn is_planning_chatter(line: &str) -> bool {
 
 fn planning_note_lines(message: &str) -> Vec<String> {
     let mut notes = Vec::new();
-    for line in message
+    for line in scrub_internal_control_tokens(message)
         .lines()
         .map(str::trim)
         .filter(|line| !line.is_empty())
@@ -386,6 +394,7 @@ fn planning_note_lines(message: &str) -> Vec<String> {
             || line.starts_with("/quit ")
             || line.starts_with("waiting for model response")
             || is_planning_chatter(line)
+            || looks_like_planning_summary(line)
             || mentions_mutating_plan_action(line)
         {
             continue;
@@ -395,6 +404,41 @@ fn planning_note_lines(message: &str) -> Vec<String> {
         }
     }
     notes
+}
+
+fn scrub_internal_control_tokens(message: &str) -> String {
+    let mut cleaned = String::with_capacity(message.len());
+    let mut chars = message.char_indices().peekable();
+
+    while let Some((idx, ch)) = chars.next() {
+        if ch == '<' {
+            if let Some(end) = message[idx..].find("|>") {
+                let end_idx = idx + end;
+                let candidate = &message[idx + 1..end_idx];
+                if !candidate.is_empty()
+                    && candidate
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+                {
+                    if cleaned.chars().last().is_some_and(|c| !c.is_whitespace()) {
+                        cleaned.push('\n');
+                    }
+                    let skip_to = end_idx + 2;
+                    while let Some(&(next_idx, _)) = chars.peek() {
+                        if next_idx < skip_to {
+                            chars.next();
+                        } else {
+                            break;
+                        }
+                    }
+                    continue;
+                }
+            }
+        }
+        cleaned.push(ch);
+    }
+
+    cleaned
 }
 
 fn mentions_mutating_plan_action(line: &str) -> bool {
@@ -410,6 +454,17 @@ fn mentions_mutating_plan_action(line: &str) -> bool {
         || lower.contains("edit files")
         || lower.contains("modify the code")
         || lower.contains("implement the change")
+}
+
+fn looks_like_planning_summary(line: &str) -> bool {
+    let lower = line.trim().to_ascii_lowercase();
+    lower.starts_with("i propose the following plan")
+        || lower.starts_with("i propose the following")
+        || lower.starts_with("based on the inspection")
+        || lower.starts_with("based on the existing code")
+        || lower.starts_with("the primary suggestions center on")
+        || lower.starts_with("the core logic")
+        || lower.starts_with("to provide comprehensive suggestions")
 }
 
 fn format_tool_use(name: &str, input: &serde_json::Value) -> String {
@@ -935,8 +990,10 @@ mod tests {
     use super::{
         apply_tui_event, format_apply_patch_result, format_apply_patch_use, format_tool_progress,
         format_tool_result, limit_tool_progress_entry, planning_note_lines,
+        scrub_internal_control_tokens,
         subagent_request_input,
     };
+    use crate::agent::AgentExecutionMode;
     use crate::config::ConfigManager;
     use crate::tool::ToolOutputStream;
     use crate::tui::state::{RuntimePhase, TuiApp, TuiEvent};
@@ -968,6 +1025,46 @@ mod tests {
         assert_eq!(
             notes,
             vec!["The current discovery is hardcoded to root-level markdown files.".to_string()]
+        );
+    }
+
+    #[test]
+    fn scrub_internal_channel_markers_preserves_text_boundaries() {
+        let cleaned = scrub_internal_control_tokens(
+            "Inspecting prompt sources.<channel|>I have a concrete implementation plan.",
+        );
+        assert_eq!(
+            cleaned,
+            "Inspecting prompt sources.\nI have a concrete implementation plan."
+        );
+    }
+
+    #[test]
+    fn plan_mode_routes_planning_prose_to_planning_not_exploring() {
+        let temp = tempdir().expect("tempdir");
+        let mut app = TuiApp::new(ConfigManager {
+            path: temp.path().join("config.json"),
+        })
+        .expect("app");
+        app.set_agent_execution_mode(AgentExecutionMode::Plan);
+        app.record_exploration_action("Read crates/instructions/src/workspace.rs");
+        app.runtime_phase = RuntimePhase::RunningTool;
+
+        apply_tui_event(
+            &mut app,
+            TuiEvent::Transcript {
+                role: "Agent",
+                message: "Based on the inspection of `crates/instructions/src/workspace.rs`, I propose the following plan:<channel|>\n1. Generalize prompt discovery.\n2. Keep the current merge semantics.".into(),
+            },
+        );
+
+        assert!(app.active_live.exploration_notes.is_empty());
+        assert_eq!(
+            app.active_live.planning_notes,
+            vec![
+                "1. Generalize prompt discovery.".to_string(),
+                "2. Keep the current merge semantics.".to_string()
+            ]
         );
     }
 
