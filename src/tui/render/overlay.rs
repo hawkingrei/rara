@@ -608,11 +608,15 @@ fn render_base_url_editor_modal(
     app: &TuiApp,
     area: Rect,
 ) -> Option<(u16, u16)> {
+    let is_openai_compatible = matches!(
+        app.selected_provider_family(),
+        super::super::state::ProviderFamily::OpenAiCompatible
+    );
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(4), Constraint::Length(3), Constraint::Length(2)])
         .split(area);
-    let intro = Paragraph::new(if app.config.provider == "openai-compatible" {
+    let intro = Paragraph::new(if is_openai_compatible {
         "Edit the OpenAI-compatible base URL for this provider.\nLeave it empty to restore the default. Default: https://api.openai.com/v1"
     } else {
         "Edit the Ollama base URL for this provider.\nLeave it empty to clear the override. Default: http://localhost:11434"
@@ -657,11 +661,15 @@ fn render_api_key_editor_modal(
     app: &TuiApp,
     area: Rect,
 ) -> Option<(u16, u16)> {
+    let is_openai_compatible = matches!(
+        app.selected_provider_family(),
+        super::super::state::ProviderFamily::OpenAiCompatible
+    );
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(4), Constraint::Length(3), Constraint::Length(2)])
         .split(area);
-    let (intro_text, title, footer_text) = if app.config.provider == "openai-compatible" {
+    let (intro_text, title, footer_text) = if is_openai_compatible {
         (
             "Paste the API key for the selected OpenAI-compatible endpoint.",
             " API Key ",
@@ -675,12 +683,11 @@ fn render_api_key_editor_modal(
         )
     };
     let intro = Paragraph::new(intro_text)
-    .block(Block::default().borders(Borders::ALL).title(title))
-    .wrap(Wrap { trim: false });
+        .block(Block::default().borders(Borders::ALL).title(title))
+        .wrap(Wrap { trim: false });
     let editor = Paragraph::new(app.api_key_input.as_str())
         .block(Block::default().borders(Borders::ALL).title(" Value "));
-    let footer = Paragraph::new(footer_text)
-        .alignment(Alignment::Center);
+    let footer = Paragraph::new(footer_text).alignment(Alignment::Center);
     f.render_widget(intro, chunks[0]);
     f.render_widget(editor, chunks[1]);
     f.render_widget(footer, chunks[2]);

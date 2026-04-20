@@ -27,7 +27,8 @@ use super::interaction_text::status_active_pending_interaction_text;
 use super::line_utils::prefix_lines;
 use super::plan_display::status_plan_text;
 use super::state::{
-    current_model_presets, HelpTab, Overlay, TranscriptEntry, TuiApp, PROVIDER_FAMILIES,
+    current_model_presets, HelpTab, Overlay, ProviderFamily, TranscriptEntry, TuiApp,
+    PROVIDER_FAMILIES,
 };
 
 pub fn render(f: &mut Frame, app: &TuiApp) {
@@ -1132,6 +1133,10 @@ fn render_model_picker_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
 }
 
 fn render_base_url_editor_modal(f: &mut Frame, app: &TuiApp, area: Rect) -> Option<(u16, u16)> {
+    let is_openai_compatible = matches!(
+        app.selected_provider_family(),
+        ProviderFamily::OpenAiCompatible
+    );
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -1140,7 +1145,7 @@ fn render_base_url_editor_modal(f: &mut Frame, app: &TuiApp, area: Rect) -> Opti
             Constraint::Length(2),
         ])
         .split(area);
-    let intro = Paragraph::new(if app.config.provider == "openai-compatible" {
+    let intro = Paragraph::new(if is_openai_compatible {
         "Edit the OpenAI-compatible base URL for this provider.\nLeave it empty to restore the default. Default: https://api.openai.com/v1"
     } else {
         "Edit the Ollama base URL for this provider.\nLeave it empty to clear the override. Default: http://localhost:11434"
@@ -1196,6 +1201,10 @@ fn render_auth_mode_picker_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
 }
 
 fn render_api_key_editor_modal(f: &mut Frame, app: &TuiApp, area: Rect) -> Option<(u16, u16)> {
+    let is_openai_compatible = matches!(
+        app.selected_provider_family(),
+        ProviderFamily::OpenAiCompatible
+    );
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -1204,7 +1213,7 @@ fn render_api_key_editor_modal(f: &mut Frame, app: &TuiApp, area: Rect) -> Optio
             Constraint::Length(2),
         ])
         .split(area);
-    let (intro_text, title, footer_text) = if app.config.provider == "openai-compatible" {
+    let (intro_text, title, footer_text) = if is_openai_compatible {
         (
             "Paste the API key for the selected OpenAI-compatible endpoint.",
             " API Key ",

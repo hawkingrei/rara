@@ -25,8 +25,8 @@ pub const OLLAMA_MODEL_PRESETS: [(&str, &str, &str); 3] = [
 pub fn selected_provider_family_idx_for_config(config: &RaraConfig) -> usize {
     match config.provider.as_str() {
         "codex" => 0,
-        "openai-compatible" | "kimi" | "gemini" => 1,
-        "ollama" => 3,
+        "openai-compatible" => 1,
+        "ollama" | "ollama-native" | "ollama-openai" => 3,
         "gemma4" | "qwn3" | "qwen3" => 2,
         _ => 0,
     }
@@ -58,18 +58,13 @@ mod tests {
     use crate::config::RaraConfig;
 
     #[test]
-    fn groups_openai_compatible_providers_with_openai_family() {
-        let kimi = RaraConfig {
-            provider: "kimi".to_string(),
-            ..RaraConfig::default()
-        };
-        let gemini = RaraConfig {
-            provider: "gemini".to_string(),
+    fn keeps_generic_openai_compatible_provider_in_its_own_family() {
+        let config = RaraConfig {
+            provider: "openai-compatible".to_string(),
             ..RaraConfig::default()
         };
 
-        assert_eq!(selected_provider_family_idx_for_config(&kimi), 1);
-        assert_eq!(selected_provider_family_idx_for_config(&gemini), 1);
+        assert_eq!(selected_provider_family_idx_for_config(&config), 1);
     }
 
     #[test]
@@ -82,8 +77,18 @@ mod tests {
             provider: "ollama".to_string(),
             ..RaraConfig::default()
         };
+        let ollama_native = RaraConfig {
+            provider: "ollama-native".to_string(),
+            ..RaraConfig::default()
+        };
+        let ollama_openai = RaraConfig {
+            provider: "ollama-openai".to_string(),
+            ..RaraConfig::default()
+        };
 
         assert_eq!(selected_provider_family_idx_for_config(&local), 2);
         assert_eq!(selected_provider_family_idx_for_config(&ollama), 3);
+        assert_eq!(selected_provider_family_idx_for_config(&ollama_native), 3);
+        assert_eq!(selected_provider_family_idx_for_config(&ollama_openai), 3);
     }
 }

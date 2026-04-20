@@ -499,8 +499,8 @@ impl TuiApp {
         let (_, provider, model) = presets[idx];
         self.model_picker_idx = idx;
         self.config.set_provider(provider.to_string());
-        self.config.set_model(Some(model.to_string()));
         if provider == "ollama" {
+            self.config.set_model(Some(model.to_string()));
             self.config.set_revision(None);
             if self
                 .config
@@ -527,6 +527,16 @@ impl TuiApp {
                     .set_base_url(Some("http://localhost:8080".to_string()));
             }
         } else if provider == "openai-compatible" {
+            if self
+                .config
+                .model
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .is_none()
+            {
+                self.config.set_model(Some(model.to_string()));
+            }
             self.config.set_revision(None);
             if self
                 .config
@@ -540,6 +550,7 @@ impl TuiApp {
                     .set_base_url(Some("https://api.openai.com/v1".to_string()));
             }
         } else {
+            self.config.set_model(Some(model.to_string()));
             self.config.set_revision(Some("main".to_string()));
             self.config.set_base_url(None);
         }
@@ -840,8 +851,10 @@ impl TuiApp {
             self.model_picker_idx = self.selected_preset_idx();
         }
         if matches!(overlay, Overlay::BaseUrlEditor) {
+            let provider_family =
+                PROVIDER_FAMILIES[selected_provider_family_idx_for_config(&self.config)].0;
             self.base_url_input = self.config.base_url.clone().unwrap_or_else(|| {
-                if self.config.provider == "openai-compatible" {
+                if matches!(provider_family, ProviderFamily::OpenAiCompatible) {
                     "https://api.openai.com/v1".to_string()
                 } else {
                     "http://localhost:11434".to_string()
@@ -1639,5 +1652,23 @@ mod tests {
             Some("https://api.openai.com/v1")
         );
         assert_eq!(app.config.revision, None);
+    }
+
+    #[test]
+    fn openai_compatible_preset_preserves_custom_model_name() {
+        let dir = tempdir().expect("tempdir");
+        let cm = ConfigManager {
+            path: dir.path().join("config.json"),
+        };
+        let mut app = TuiApp::new(cm).expect("app");
+
+        app.config.set_provider("openai-compatible");
+        app.config.set_model(Some("custom-model".to_string()));
+        app.provider_picker_idx = 1;
+
+        app.select_local_model(0);
+
+        assert_eq!(app.config.provider, "openai-compatible");
+        assert_eq!(app.config.model.as_deref(), Some("custom-model"));
     }
 }
