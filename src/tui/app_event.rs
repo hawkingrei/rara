@@ -22,6 +22,7 @@ pub enum AppEvent {
     CycleModelSelection,
     SaveBaseUrlInput,
     SaveApiKeyInput,
+    SaveModelNameInput,
     SelectHelpTab(HelpTab),
     ApplyOverlaySelection,
 }

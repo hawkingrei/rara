@@ -165,11 +165,7 @@ async fn main_impl() -> Result<()> {
                     tokio::task::spawn_blocking(move || oauth_reader.read_api_key_from_stdin())
                         .await??;
                 let credential = oauth_manager.save_api_key(api_key.expose_secret())?;
-                save_codex_credential(
-                    &mut config,
-                    &config_manager,
-                    credential.expose_secret(),
-                )?;
+                save_codex_credential(&mut config, &config_manager, credential.expose_secret())?;
                 println!("Successfully saved Codex API key.");
             } else if device_auth {
                 let token = oauth_manager.request_device_code().await?;
@@ -178,11 +174,7 @@ async fn main_impl() -> Result<()> {
                     token.verification_url, token.user_code
                 );
                 let credential = oauth_manager.complete_device_code_login(&token).await?;
-                save_codex_credential(
-                    &mut config,
-                    &config_manager,
-                    credential.expose_secret(),
-                )?;
+                save_codex_credential(&mut config, &config_manager, credential.expose_secret())?;
                 println!("Successfully logged in with device code.");
             } else {
                 if std::env::var_os("SSH_CONNECTION").is_some() {
@@ -194,11 +186,7 @@ async fn main_impl() -> Result<()> {
                     session.auth_url()
                 );
                 let credential = session.complete(&oauth_manager).await?;
-                save_codex_credential(
-                    &mut config,
-                    &config_manager,
-                    credential.expose_secret(),
-                )?;
+                save_codex_credential(&mut config, &config_manager, credential.expose_secret())?;
                 println!("Successfully logged in.");
             }
         }
@@ -333,6 +321,17 @@ pub(crate) async fn build_backend_with_progress(
                 .clone()
                 .unwrap_or_else(|| "http://localhost:8080".to_string()),
             config.model.clone().unwrap_or_else(|| "codex".to_string()),
+        )?)),
+        "openai-compatible" => Ok(Box::new(OpenAiCompatibleBackend::new(
+            config.api_key.clone(),
+            config
+                .base_url
+                .clone()
+                .unwrap_or_else(|| "https://api.openai.com/v1".to_string()),
+            config
+                .model
+                .clone()
+                .unwrap_or_else(|| "gpt-4.1-mini".to_string()),
         )?)),
         "ollama" | "ollama-native" => Ok(Box::new(OllamaBackend::new(
             config

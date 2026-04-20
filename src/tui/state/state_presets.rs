@@ -7,6 +7,9 @@ pub const CODEX_MODEL_PRESETS: [(&str, &str, &str); 2] = [
     ("Codex (API Key)", "codex", "codex"),
 ];
 
+pub const OPENAI_COMPATIBLE_MODEL_PRESETS: [(&str, &str, &str); 1] =
+    [("Custom endpoint", "openai-compatible", "gpt-4.1-mini")];
+
 pub const LOCAL_MODEL_PRESETS: [(&str, &str, &str); 3] = [
     ("Gemma 4 E4B (Experimental)", "gemma4", "gemma4-e4b"),
     ("Gemma 4 E2B (Experimental)", "gemma4", "gemma4-e2b"),
@@ -22,8 +25,9 @@ pub const OLLAMA_MODEL_PRESETS: [(&str, &str, &str); 3] = [
 pub fn selected_provider_family_idx_for_config(config: &RaraConfig) -> usize {
     match config.provider.as_str() {
         "codex" => 0,
-        "ollama" => 2,
-        "gemma4" | "qwn3" => 1,
+        "openai-compatible" | "kimi" | "gemini" => 1,
+        "ollama" => 3,
+        "gemma4" | "qwn3" | "qwen3" => 2,
         _ => 0,
     }
 }
@@ -33,6 +37,7 @@ pub fn current_model_presets(
 ) -> &'static [(&'static str, &'static str, &'static str)] {
     match super::PROVIDER_FAMILIES[provider_picker_idx].0 {
         ProviderFamily::Codex => &CODEX_MODEL_PRESETS,
+        ProviderFamily::OpenAiCompatible => &OPENAI_COMPATIBLE_MODEL_PRESETS,
         ProviderFamily::CandleLocal => &LOCAL_MODEL_PRESETS,
         ProviderFamily::Ollama => &OLLAMA_MODEL_PRESETS,
     }
@@ -53,7 +58,7 @@ mod tests {
     use crate::config::RaraConfig;
 
     #[test]
-    fn groups_openai_compatible_providers_with_codex_family() {
+    fn groups_openai_compatible_providers_with_openai_family() {
         let kimi = RaraConfig {
             provider: "kimi".to_string(),
             ..RaraConfig::default()
@@ -63,8 +68,8 @@ mod tests {
             ..RaraConfig::default()
         };
 
-        assert_eq!(selected_provider_family_idx_for_config(&kimi), 0);
-        assert_eq!(selected_provider_family_idx_for_config(&gemini), 0);
+        assert_eq!(selected_provider_family_idx_for_config(&kimi), 1);
+        assert_eq!(selected_provider_family_idx_for_config(&gemini), 1);
     }
 
     #[test]
@@ -78,7 +83,7 @@ mod tests {
             ..RaraConfig::default()
         };
 
-        assert_eq!(selected_provider_family_idx_for_config(&local), 1);
-        assert_eq!(selected_provider_family_idx_for_config(&ollama), 2);
+        assert_eq!(selected_provider_family_idx_for_config(&local), 2);
+        assert_eq!(selected_provider_family_idx_for_config(&ollama), 3);
     }
 }
