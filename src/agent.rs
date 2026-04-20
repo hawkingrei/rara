@@ -417,10 +417,9 @@ impl Agent {
                         ));
                         RuntimeContinuationPhase::PlanContinuationRequired
                     };
-                    self.push_history_message(self.runtime_continuation_message(
-                        phase,
-                        *tool_rounds,
-                    ));
+                    self.push_history_message(
+                        self.runtime_continuation_message(phase, *tool_rounds),
+                    );
                     continue;
                 }
                 if self.should_continue_execute_without_tools(
@@ -597,9 +596,5 @@ impl Agent {
 
 fn is_compact_boundary_message(message: &Message) -> bool {
     message.role == "system"
-        && message
-            .content
-            .get("type")
-            .and_then(Value::as_str)
-            == Some("compact_boundary")
+        && message.content.get("type").and_then(Value::as_str) == Some("compact_boundary")
 }

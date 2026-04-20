@@ -8,8 +8,11 @@ pub(crate) fn append_markdown(
     cwd: Option<&Path>,
     lines: &mut Vec<Line<'static>>,
 ) {
-    let rendered =
-        crate::tui::markdown_render::render_markdown_text_with_width_and_cwd(markdown_source, width, cwd);
+    let rendered = crate::tui::markdown_render::render_markdown_text_with_width_and_cwd(
+        markdown_source,
+        width,
+        cwd,
+    );
     crate::tui::line_utils::push_owned_lines(&rendered.lines, lines);
 }
 
@@ -18,7 +21,8 @@ mod tests {
     use super::*;
 
     fn lines_to_strings(lines: &[Line<'static>]) -> Vec<String> {
-        lines.iter()
+        lines
+            .iter()
             .map(|line| {
                 line.spans
                     .iter()

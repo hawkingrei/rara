@@ -1,5 +1,5 @@
-pub(crate) mod cells;
 mod bottom_pane;
+pub(crate) mod cells;
 mod history_pipeline;
 
 use ratatui::{
@@ -11,16 +11,16 @@ use ratatui::{
 use std::path::Path;
 use unicode_width::UnicodeWidthStr;
 
-pub(crate) use self::cells::{ActiveCell, HistoryCell};
 pub(crate) use self::bottom_pane::desired_viewport_height;
 use self::bottom_pane::{editor_cursor_position, render_bottom_pane};
+pub(crate) use self::cells::{ActiveCell, HistoryCell};
 use self::cells::{ActiveTurnCell, CommittedTurnCell, StartupCardCell};
+use super::auth_mode_picker::build_auth_mode_picker_view;
 use super::command::{
     api_key_status, command_detail_text, command_spec_by_index, current_turn_preview,
     download_status_text, general_help_text, help_text, matching_commands, model_help_text,
     palette_command_by_index, palette_commands, quick_actions_text, recent_transcript_preview,
-    status_prompt_sources_text, status_resources_text, status_runtime_text,
-    status_workspace_text,
+    status_prompt_sources_text, status_resources_text, status_runtime_text, status_workspace_text,
 };
 use super::custom_terminal::Frame;
 use super::interaction_text::status_active_pending_interaction_text;
@@ -484,8 +484,8 @@ fn render_overlay(f: &mut Frame, app: &TuiApp, overlay: Overlay) -> Option<(u16,
             None
         }
         Overlay::BaseUrlEditor => render_base_url_editor_modal(f, app, popup),
-        Overlay::CodexAuthGuide => {
-            render_codex_auth_guide_modal(f, app, popup);
+        Overlay::AuthModePicker => {
+            render_auth_mode_picker_modal(f, app, popup);
             None
         }
         Overlay::ApiKeyEditor => render_api_key_editor_modal(f, app, popup),
@@ -837,7 +837,11 @@ fn render_status_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
     );
     f.render_widget(
         Paragraph::new(status_plan_text(app))
-            .block(Block::default().borders(Borders::ALL).title(" Updated Plan "))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(" Updated Plan "),
+            )
             .wrap(Wrap { trim: false }),
         chunks[2],
     );
@@ -845,14 +849,15 @@ fn render_status_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
         .split(chunks[3]);
-    let (interaction_title, interaction_text) =
-        status_active_pending_interaction_text(app).unwrap_or((
-            " Request Input ",
-            "No pending interaction.".to_string(),
-        ));
+    let (interaction_title, interaction_text) = status_active_pending_interaction_text(app)
+        .unwrap_or((" Request Input ", "No pending interaction.".to_string()));
     f.render_widget(
         Paragraph::new(interaction_text)
-            .block(Block::default().borders(Borders::ALL).title(interaction_title))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(interaction_title),
+            )
             .wrap(Wrap { trim: false }),
         lower[0],
     );
@@ -902,9 +907,9 @@ fn render_setup_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
     let text = format!(
         "Provider: {}\nModel: {}\nBase URL: {}\nAPI key: {}\nRevision: {}\n\n\
          Presets:\n{}\n\n\
-         [1/2/3] Select preset\n[M] Cycle preset\n[Enter] Apply and rebuild\n[L] OAuth login\n[Esc] Close\n\n\
+         [1/2/3] Select preset\n[M] Cycle preset\n[Enter] Apply and rebuild\n[L] Auth modes\n[Esc] Close\n\n\
          Use /model for the full provider menu.\n\
-         Codex supports both OAuth login and API key auth.\n\
+         Codex supports browser login, device-code login, and API key auth.\n\
          Recommended: Qwn3 8B for stable local use.",
         app.config.provider,
         app.current_model_label(),
@@ -1139,7 +1144,7 @@ fn render_base_url_editor_modal(f: &mut Frame, app: &TuiApp, area: Rect) -> Opti
     ))
 }
 
-fn render_codex_auth_guide_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
+fn render_auth_mode_picker_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -1148,19 +1153,9 @@ fn render_codex_auth_guide_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
             Constraint::Length(2),
         ])
         .split(area);
-    let ssh_hint = if super::is_ssh_session() {
-        "\n\nSSH session detected. Browser OAuth on a remote shell usually cannot complete the localhost callback. Use API key in SSH/headless sessions."
-    } else {
-        ""
-    };
-    let intro = format!(
-        "Codex needs authentication before this preset can be used.\n\n\
-         [1] OAuth login\n\
-         [2] API key\n\n\
-         OAuth matches the Codex desktop flow when this TUI is running locally.{ssh_hint}"
-    );
+    let view = build_auth_mode_picker_view(app, super::is_ssh_session());
     f.render_widget(
-        Paragraph::new(intro)
+        Paragraph::new(view.intro)
             .block(
                 Block::default()
                     .borders(Borders::ALL)
@@ -1170,22 +1165,17 @@ fn render_codex_auth_guide_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
         chunks[0],
     );
 
-    let body = Paragraph::new(format!(
-        "Current model: {}\nProvider: codex\nKey status: {}\n\n\
-         Pick OAuth for local desktop login, or API key for headless / SSH usage.",
-        app.current_model_label(),
-        api_key_status(&app.config),
-    ))
-    .block(
-        Block::default()
-            .borders(Borders::LEFT | Borders::RIGHT)
-            .title(" Details "),
-    )
-    .wrap(Wrap { trim: false });
+    let body = Paragraph::new(view.lines.join("\n"))
+        .block(
+            Block::default()
+                .borders(Borders::LEFT | Borders::RIGHT)
+                .title(" Details "),
+        )
+        .wrap(Wrap { trim: false });
     f.render_widget(body, chunks[1]);
 
     f.render_widget(
-        Paragraph::new("1 OAuth  2 API key  Enter OAuth  Esc back").alignment(Alignment::Center),
+        Paragraph::new(view.footer).alignment(Alignment::Center),
         chunks[2],
     );
 }

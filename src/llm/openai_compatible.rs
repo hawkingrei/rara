@@ -1,5 +1,5 @@
-use async_trait::async_trait;
 use anyhow::{anyhow, Result};
+use async_trait::async_trait;
 use secrecy::{ExposeSecret, SecretString};
 use serde_json::{json, Value};
 
@@ -167,8 +167,10 @@ impl LlmBackend for OpenAiCompatibleBackend {
             ));
         }
         let resp_json: Value = res.json().await?;
-        Ok(extract_message_text(resp_json["choices"][0]["message"].get("content"))
-            .unwrap_or_default())
+        Ok(
+            extract_message_text(resp_json["choices"][0]["message"].get("content"))
+                .unwrap_or_default(),
+        )
     }
 
     fn context_budget(&self, _messages: &[Message], _tools: &[Value]) -> Option<ContextBudget> {

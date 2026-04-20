@@ -22,6 +22,7 @@ use crate::state_db::{
 };
 use crate::tool::ToolOutputStream;
 use crate::tools::bash::BashCommandInput;
+use crate::tui::is_ssh_session;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum HelpTab {
@@ -40,7 +41,7 @@ pub enum Overlay {
     ModelPicker,
     ResumePicker,
     BaseUrlEditor,
-    CodexAuthGuide,
+    AuthModePicker,
     ApiKeyEditor,
 }
 
@@ -64,6 +65,7 @@ pub enum LocalCommandKind {
     Model,
     BaseUrl,
     Login,
+    Logout,
     Quit,
 }
 
@@ -92,6 +94,8 @@ pub enum RuntimePhase {
     OAuthStarting,
     OAuthWaitingCallback,
     OAuthExchangingToken,
+    OAuthDeviceCodePrompt,
+    OAuthPollingDeviceCode,
     OAuthSaved,
     Failed,
 }
@@ -200,6 +204,12 @@ pub enum TaskKind {
     OAuth,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OAuthLoginMode {
+    Browser,
+    DeviceCode,
+}
+
 pub enum TaskCompletion {
     Query {
         agent: Agent,
@@ -213,6 +223,7 @@ pub enum TaskCompletion {
         result: anyhow::Result<Agent>,
     },
     OAuth {
+        mode: OAuthLoginMode,
         result: anyhow::Result<secrecy::SecretString>,
     },
 }
@@ -238,7 +249,7 @@ pub const PROVIDER_FAMILIES: [(ProviderFamily, &str, &str); 3] = [
     (
         ProviderFamily::Codex,
         "Codex",
-        "Use the Codex-compatible API with either OAuth login or an API key.",
+        "Use the Codex-compatible API with browser login, device-code login, or an API key.",
     ),
     (
         ProviderFamily::CandleLocal,
@@ -317,6 +328,7 @@ pub struct TuiApp {
     pub bash_approval_mode: BashApprovalMode,
     pub provider_picker_idx: usize,
     pub model_picker_idx: usize,
+    pub auth_mode_idx: usize,
     pub command_palette_idx: usize,
     pub base_url_input: String,
     pub api_key_input: String,
@@ -406,7 +418,7 @@ impl TuiApp {
         let cfg = cm.load()?;
         let overlay = if !cfg.has_api_key() && super::provider_requires_api_key(&cfg.provider) {
             if cfg.provider == "codex" {
-                Some(Overlay::CodexAuthGuide)
+                Some(Overlay::AuthModePicker)
             } else {
                 Some(Overlay::Setup)
             }
@@ -433,6 +445,7 @@ impl TuiApp {
             bash_approval_mode: BashApprovalMode::Suggestion,
             provider_picker_idx,
             model_picker_idx,
+            auth_mode_idx: 0,
             command_palette_idx: 0,
             base_url_input: String::new(),
             api_key_input: String::new(),
@@ -773,6 +786,8 @@ impl TuiApp {
             RuntimePhase::OAuthStarting => "oauth-starting",
             RuntimePhase::OAuthWaitingCallback => "oauth-waiting-callback",
             RuntimePhase::OAuthExchangingToken => "oauth-exchanging-token",
+            RuntimePhase::OAuthDeviceCodePrompt => "oauth-device-code-prompt",
+            RuntimePhase::OAuthPollingDeviceCode => "oauth-polling-device-code",
             RuntimePhase::OAuthSaved => "oauth-saved",
             RuntimePhase::Failed => "failed",
         }
@@ -806,6 +821,9 @@ impl TuiApp {
         }
         if matches!(overlay, Overlay::ApiKeyEditor) {
             self.api_key_input.clear();
+        }
+        if matches!(overlay, Overlay::AuthModePicker) {
+            self.auth_mode_idx = if is_ssh_session() { 1 } else { 0 };
         }
         self.overlay = Some(overlay);
     }
@@ -1107,8 +1125,8 @@ impl TuiApp {
     pub fn close_overlay(&mut self) {
         self.overlay = match self.overlay {
             Some(Overlay::BaseUrlEditor) => Some(Overlay::ModelPicker),
-            Some(Overlay::ApiKeyEditor) => Some(Overlay::CodexAuthGuide),
-            Some(Overlay::CodexAuthGuide) => Some(Overlay::ModelPicker),
+            Some(Overlay::ApiKeyEditor) => Some(Overlay::AuthModePicker),
+            Some(Overlay::AuthModePicker) => Some(Overlay::ModelPicker),
             _ => None,
         };
     }

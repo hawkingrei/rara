@@ -85,6 +85,9 @@ fn uses_smaller_budget_for_short_and_tool_prompts() {
         role: "user".to_string(),
         content: json!([{"type": "text", "text": "Explain this repository structure."}]),
     }];
-    assert_eq!(scenario_token_cap(&normal_messages, &[json!({"name":"read_file"})]), 128);
+    assert_eq!(
+        scenario_token_cap(&normal_messages, &[json!({"name":"read_file"})]),
+        128
+    );
     assert_eq!(scenario_token_cap(&normal_messages, &[]), 192);
 }

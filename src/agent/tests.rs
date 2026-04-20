@@ -307,8 +307,7 @@ async fn errors_when_tool_loop_exceeds_limit() {
 async fn plan_mode_filters_write_tools_from_schema() {
     let backend = Arc::new(SequencedBackend::new(vec![AnthropicResponse {
         content: vec![ContentBlock::Text {
-            text: "<plan>\n- [pending] Review the current project structure\n</plan>"
-                .to_string(),
+            text: "<plan>\n- [pending] Review the current project structure\n</plan>".to_string(),
         }],
         stop_reason: Some("end_turn".to_string()),
         usage: Some(TokenUsage::default()),

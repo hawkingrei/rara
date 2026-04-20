@@ -9,9 +9,7 @@ use candle_transformers::models::gemma4::{
     Model as Gemma4Model,
 };
 use candle_transformers::models::qwen3::{Config as Qwen3Config, ModelForCausalLM as Qwen3Model};
-use hf_hub::{
-    api::sync::{ApiBuilder, ApiRepo},
-};
+use hf_hub::api::sync::{ApiBuilder, ApiRepo};
 use serde_json::Value;
 use tokenizers::Tokenizer;
 
@@ -61,8 +59,7 @@ impl LocalModelSpec {
             return Ok(Self::Qwen3_8B);
         }
         if provider == "gemma4" {
-            if model.eq_ignore_ascii_case("gemma4-e2b")
-                || model.eq_ignore_ascii_case("gemma-4-e2b")
+            if model.eq_ignore_ascii_case("gemma4-e2b") || model.eq_ignore_ascii_case("gemma-4-e2b")
             {
                 return Ok(Self::Gemma4E2B);
             }
@@ -115,9 +112,7 @@ impl LocalModelSpec {
     pub(super) fn format_prompt(self, prompt: &str) -> String {
         match self {
             Self::Qwen3_8B => {
-                format!(
-                    "<|im_start|>user\n{prompt} /no_think<|im_end|>\n<|im_start|>assistant\n"
-                )
+                format!("<|im_start|>user\n{prompt} /no_think<|im_end|>\n<|im_start|>assistant\n")
             }
             Self::Gemma4E2B | Self::Gemma4E4B => prompt.to_string(),
         }
@@ -250,7 +245,10 @@ pub fn default_local_model_cache_dir() -> PathBuf {
 pub fn local_runtime_target() -> Result<(String, String)> {
     let device = select_device()?;
     let dtype = preferred_dtype(&device);
-    Ok((device_label(&device).to_string(), dtype_label(dtype).to_string()))
+    Ok((
+        device_label(&device).to_string(),
+        dtype_label(dtype).to_string(),
+    ))
 }
 
 pub(super) fn load_safetensors(repo: &ApiRepo) -> Result<Vec<PathBuf>> {

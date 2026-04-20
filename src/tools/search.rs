@@ -1,16 +1,20 @@
 use crate::tool::{Tool, ToolError};
 use async_trait::async_trait;
-use serde_json::{Value, json};
 use glob::glob;
 use regex::Regex;
+use serde_json::{json, Value};
 use std::fs;
 use std::path::Path;
 
 pub struct GlobTool;
 #[async_trait]
 impl Tool for GlobTool {
-    fn name(&self) -> &str { "glob" }
-    fn description(&self) -> &str { "Find files matching glob pattern" }
+    fn name(&self) -> &str {
+        "glob"
+    }
+    fn description(&self) -> &str {
+        "Find files matching glob pattern"
+    }
     fn input_schema(&self) -> Value {
         json!({
             "type": "object",
@@ -19,10 +23,14 @@ impl Tool for GlobTool {
         })
     }
     async fn call(&self, i: Value) -> Result<Value, ToolError> {
-        let p = i["pattern"].as_str().ok_or(ToolError::InvalidInput("pattern".into()))?;
+        let p = i["pattern"]
+            .as_str()
+            .ok_or(ToolError::InvalidInput("pattern".into()))?;
         let mut matches = Vec::new();
         for entry in glob(p).map_err(|e| ToolError::InvalidInput(e.to_string()))? {
-            if let Ok(path) = entry { matches.push(path.display().to_string()); }
+            if let Ok(path) = entry {
+                matches.push(path.display().to_string());
+            }
         }
         Ok(json!({ "matches": matches }))
     }
@@ -31,8 +39,12 @@ impl Tool for GlobTool {
 pub struct GrepTool;
 #[async_trait]
 impl Tool for GrepTool {
-    fn name(&self) -> &str { "grep" }
-    fn description(&self) -> &str { "Regex search in files" }
+    fn name(&self) -> &str {
+        "grep"
+    }
+    fn description(&self) -> &str {
+        "Regex search in files"
+    }
     fn input_schema(&self) -> Value {
         json!({
             "type": "object",
@@ -45,7 +57,9 @@ impl Tool for GrepTool {
         })
     }
     async fn call(&self, i: Value) -> Result<Value, ToolError> {
-        let p = i["pattern"].as_str().ok_or(ToolError::InvalidInput("pattern".into()))?;
+        let p = i["pattern"]
+            .as_str()
+            .ok_or(ToolError::InvalidInput("pattern".into()))?;
         let search_path = i["path"].as_str().unwrap_or(".");
         let include_ignored = i
             .get("include_ignored")
@@ -67,7 +81,9 @@ impl Tool for GrepTool {
                     }
                 }
             }
-            if results.len() > 100 { break; }
+            if results.len() > 100 {
+                break;
+            }
         }
         Ok(json!({ "results": results }))
     }

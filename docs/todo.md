@@ -11,6 +11,8 @@ Active backlog only. Keep this file small and current.
 
 ## LLM and Networking
 
+- [ ] Replace the current Codex-auth mirror in `src/oauth.rs` with direct reuse of the smallest useful `codex_login` primitives so browser login, device-code login, API-key login, and logout stop drifting from Codex behavior over time.
+- [ ] Broaden Codex-auth validation after the first parity pass: add callback-flow, persistence, and TUI auth-picker tests so the new browser/device/API-key/logout paths stay regression-tested.
 - [ ] Add an `AgentHub team mode` on top of ACP: for role-specialized worker sessions, use a small model first for intent routing and only hand the task to the larger worker model when the intent is relevant to that worker, instead of sending every ACP turn directly to the expensive model.
 - [ ] Deepen the `AgentHub team mode` spec before implementation: define the ACP session metadata, worker-role contract, router prompt/output schema, and the exact `skip` / `handle` response semantics so the worker runtime can be implemented without inventing a parallel protocol later.
 
@@ -18,6 +20,7 @@ Active backlog only. Keep this file small and current.
 
 - [ ] Add a first-run onboarding flow that explains workspace, provider/model selection, local model download behavior, cache location, and tool loop expectations before the user lands in a blank chat.
 - [ ] Continue aligning the TUI status and transcript surfaces with Codex/Claude so runtime state stays visible without leaking bottom-pane chrome into transcript history.
+- [ ] Add Codex-style TUI snapshot coverage for popups, status surfaces, and transcript-heavy widgets so layout/text regressions are caught by golden snapshots instead of only narrow string assertions.
 - [ ] Continue making tool-action transcript summaries more source-aware and file-aware so edit tools such as `write_file` / `replace` / `apply_patch` consistently show what they touched instead of only generic action labels.
 - [ ] Continue refining the live `bash` transcript path so command execution behaves more like Codex: keep the streamed stdout/stderr surface, then add richer lifecycle details such as clearer command-start/finish framing and better long-output folding.
 - [ ] Continue refining queued follow-up steering toward the full Codex contract: keep the new next-tool-boundary queue, then add the explicit interrupt/send-now path and clearer separation between pending steers and ordinary queued follow-ups.
@@ -29,6 +32,7 @@ Active backlog only. Keep this file small and current.
 - [ ] Implement session context retrieval on top of the existing session storage and vector/session managers instead of returning `no_context_found`.
 - [ ] Implement the vector memory tools against the real backend and LanceDB path instead of using placeholder save/retrieve responses.
 - [ ] Implement real parallel `team_create` execution instead of the current mocked result payload.
+- [ ] Evaluate and add a `thread-store`-style persistence boundary so thread/session metadata, rollout history, resume, archive, and future remote-backed thread storage do not stay split across unrelated local state surfaces.
 
 ## Performance and Runtime
 

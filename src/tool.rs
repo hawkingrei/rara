@@ -1,6 +1,6 @@
+use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::Value;
-use anyhow::Result;
 use std::collections::HashMap;
 
 #[derive(Debug, thiserror::Error)]
@@ -48,7 +48,9 @@ pub struct ToolManager {
 
 impl ToolManager {
     pub fn new() -> Self {
-        Self { tools: HashMap::new() }
+        Self {
+            tools: HashMap::new(),
+        }
     }
     pub fn register(&mut self, tool: Box<dyn Tool>) {
         self.tools.insert(tool.name().to_string(), tool);
@@ -63,15 +65,18 @@ impl ToolManager {
     where
         F: FnMut(&str) -> bool,
     {
-        self.tools.values().filter_map(|t| {
-            if !include(t.name()) {
-                return None;
-            }
-            Some(serde_json::json!({
-                "name": t.name(),
-                "description": t.description(),
-                "input_schema": t.input_schema(),
-            }))
-        }).collect()
+        self.tools
+            .values()
+            .filter_map(|t| {
+                if !include(t.name()) {
+                    return None;
+                }
+                Some(serde_json::json!({
+                    "name": t.name(),
+                    "description": t.description(),
+                    "input_schema": t.input_schema(),
+                }))
+            })
+            .collect()
     }
 }

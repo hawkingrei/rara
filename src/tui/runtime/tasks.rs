@@ -16,9 +16,7 @@ use crate::tool::ToolManager;
 use crate::tools::agent::{AgentTool, ExploreAgentTool, PlanAgentTool, TeamCreateTool};
 use crate::tools::bash::BashTool;
 use crate::tools::context::RetrieveSessionContextTool;
-use crate::tools::file::{
-    ListFilesTool, ReadFileTool, ReplaceTool, WriteFileTool,
-};
+use crate::tools::file::{ListFilesTool, ReadFileTool, ReplaceTool, WriteFileTool};
 use crate::tools::patch::ApplyPatchTool;
 use crate::tools::search::{GlobTool, GrepTool};
 use crate::tools::skill::SkillTool;
@@ -28,7 +26,9 @@ use crate::tools::workspace::UpdateProjectMemoryTool;
 use crate::vectordb::VectorDB;
 use crate::workspace::WorkspaceMemory;
 
-use super::super::state::{RunningTask, RuntimePhase, TaskCompletion, TaskKind, TuiApp, TuiEvent};
+use super::super::state::{
+    OAuthLoginMode, RunningTask, RuntimePhase, TaskCompletion, TaskKind, TuiApp, TuiEvent,
+};
 use super::events::{apply_tui_event, convert_agent_event, format_error_chain};
 
 fn restore_execute_mode_after_plan_turn(app: &mut TuiApp, agent: &mut Agent) {
@@ -331,15 +331,26 @@ pub(super) fn start_rebuild_task(app: &mut TuiApp) {
     });
 }
 
-pub(super) fn start_oauth_task(app: &mut TuiApp, oauth_manager: Arc<OAuthManager>) {
+pub(super) fn start_oauth_task(
+    app: &mut TuiApp,
+    oauth_manager: Arc<OAuthManager>,
+    mode: OAuthLoginMode,
+) {
     let (sender, receiver) = mpsc::unbounded_channel();
-    app.notice = Some("Starting OAuth login.".into());
-    app.set_runtime_phase(RuntimePhase::OAuthStarting, Some("starting oauth".into()));
-    app.push_entry("Runtime", "Starting OAuth login flow.");
+    let mode_label = match mode {
+        OAuthLoginMode::Browser => "browser login",
+        OAuthLoginMode::DeviceCode => "device-code login",
+    };
+    app.notice = Some(format!("Starting Codex {mode_label}."));
+    app.set_runtime_phase(
+        RuntimePhase::OAuthStarting,
+        Some(format!("starting {mode_label}")),
+    );
+    app.push_entry("Runtime", format!("Starting Codex {mode_label} flow."));
 
     let handle = tokio::spawn(async move {
-        let result = run_oauth_login(oauth_manager, sender.clone()).await;
-        TaskCompletion::OAuth { result }
+        let result = run_oauth_login(oauth_manager, mode, sender.clone()).await;
+        TaskCompletion::OAuth { mode, result }
     });
 
     app.running_task = Some(RunningTask {
@@ -532,7 +543,7 @@ pub(super) async fn finish_running_task_if_ready(
                 app.push_notice(message);
             }
         },
-        TaskCompletion::OAuth { result } => match result {
+        TaskCompletion::OAuth { mode, result } => match result {
             Ok(access_token) => {
                 app.config
                     .set_api_key(access_token.expose_secret().to_string());
@@ -541,11 +552,15 @@ pub(super) async fn finish_running_task_if_ready(
                     app.config.model = Some("codex".into());
                 }
                 app.config_manager.save(&app.config)?;
-                app.setup_status = Some("Saved OAuth token to local config.".into());
+                let saved_message = match mode {
+                    OAuthLoginMode::Browser => "Saved browser login token to local config.",
+                    OAuthLoginMode::DeviceCode => "Saved device-code login token to local config.",
+                };
+                app.setup_status = Some(saved_message.into());
                 app.notice = app.setup_status.clone();
                 app.set_runtime_phase(RuntimePhase::OAuthSaved, Some("oauth token saved".into()));
                 app.overlay = None;
-                app.push_entry("Runtime", "Saved OAuth token to local config.");
+                app.push_entry("Runtime", saved_message);
                 start_rebuild_task(app);
             }
             Err(err) => {
@@ -591,36 +606,61 @@ fn emit_query_heartbeat(app: &mut TuiApp) {
 
 async fn run_oauth_login(
     oauth_manager: Arc<OAuthManager>,
+    mode: OAuthLoginMode,
     sender: mpsc::UnboundedSender<TuiEvent>,
 ) -> anyhow::Result<SecretString> {
-    let (verifier, challenge) = oauth_manager.generate_pkce();
-    let (port, receiver) = oauth_manager.start_callback_server().await?;
-    let auth_url = oauth_manager.get_authorize_url(&challenge, port);
-    let is_ssh = super::super::is_ssh_session();
-    let _ = sender.send(TuiEvent::Transcript {
-        role: "Runtime",
-        message: if is_ssh {
-            format!(
-                "SSH session detected. OAuth browser login is not reliable from a remote shell because the callback listens on localhost:{port}.\nUse Codex API key instead, or open this URL from the same machine running the TUI:\n{auth_url}"
-            )
-        } else {
-            format!("Starting OAuth flow.\nOpen this URL if the browser does not launch automatically:\n{auth_url}")
-        },
-    });
-    if is_ssh {
-        return Err(anyhow!(
-            "OAuth browser login is unavailable in SSH/headless sessions; use Codex API key instead"
-        ));
-    }
-    let _ = open::that(&auth_url);
+    match mode {
+        OAuthLoginMode::Browser => {
+            let (verifier, challenge) = oauth_manager.generate_pkce();
+            let (port, receiver) = oauth_manager.start_callback_server().await?;
+            let auth_url = oauth_manager.get_authorize_url(&challenge, port);
+            let is_ssh = super::super::is_ssh_session();
+            let _ = sender.send(TuiEvent::Transcript {
+                role: "Runtime",
+                message: if is_ssh {
+                    format!(
+                        "SSH session detected. Browser login is not reliable from a remote shell because the callback listens on localhost:{port}.\nUse device-code login or API key instead, or open this URL from the same machine running the TUI:\n{auth_url}"
+                    )
+                } else {
+                    format!(
+                        "Starting Codex browser login.\nOpen this URL if the browser does not launch automatically:\n{auth_url}"
+                    )
+                },
+            });
+            if is_ssh {
+                return Err(anyhow!(
+                    "browser login is unavailable in SSH/headless sessions; use device-code login or API key instead"
+                ));
+            }
+            let _ = open::that(&auth_url);
 
-    let code = receiver.await?;
-    let _ = sender.send(TuiEvent::Transcript {
-        role: "Runtime",
-        message: "Received OAuth callback, exchanging token.".into(),
-    });
-    let token = oauth_manager.exchange_code(&code, &verifier, port).await?;
-    Ok(token.access_token)
+            let _ = sender.send(TuiEvent::Transcript {
+                role: "Runtime",
+                message: "Waiting for browser callback.".into(),
+            });
+            let code = receiver.await?;
+            let _ = sender.send(TuiEvent::Transcript {
+                role: "Runtime",
+                message: "Received browser callback, exchanging token.".into(),
+            });
+            let token = oauth_manager.exchange_code(&code, &verifier, port).await?;
+            Ok(token.access_token)
+        }
+        OAuthLoginMode::DeviceCode => {
+            let device_code = oauth_manager.request_device_code().await?;
+            let _ = sender.send(TuiEvent::Transcript {
+                role: "Runtime",
+                message: format!(
+                    "Starting Codex device-code login.\nOpen this URL in a browser and enter the one-time code:\n{}\n\nCode: {}",
+                    device_code.verification_url, device_code.user_code
+                ),
+            });
+            let token = oauth_manager
+                .complete_device_code_login(&device_code)
+                .await?;
+            Ok(token.access_token)
+        }
+    }
 }
 
 async fn rebuild_agent_with_progress(

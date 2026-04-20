@@ -1,7 +1,7 @@
+use crate::agent::Message;
+use anyhow::{anyhow, Result};
 use std::fs;
 use std::path::PathBuf;
-use anyhow::{Result, anyhow};
-use crate::agent::Message;
 
 pub struct SessionManager {
     pub storage_dir: PathBuf,
@@ -50,7 +50,12 @@ impl SessionManager {
         Ok(history)
     }
 
-    pub fn get_context(&self, session_id: &str, turn_index: usize, window: usize) -> Result<Vec<Message>> {
+    pub fn get_context(
+        &self,
+        session_id: &str,
+        turn_index: usize,
+        window: usize,
+    ) -> Result<Vec<Message>> {
         let history = self.load_session(session_id)?;
         let start = turn_index.saturating_sub(window);
         let end = (turn_index + window + 1).min(history.len());

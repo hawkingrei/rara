@@ -6,11 +6,7 @@ use crossterm::{
     execute,
     terminal::{disable_raw_mode, size as terminal_size},
 };
-use ratatui::{
-    backend::CrosstermBackend,
-    layout::Rect,
-    text::Line,
-};
+use ratatui::{backend::CrosstermBackend, layout::Rect, text::Line};
 
 use super::custom_terminal::Terminal;
 use super::insert_history::insert_history_lines;
@@ -78,7 +74,8 @@ pub(super) fn flush_committed_history(
     }
     while app.inserted_turns < app.committed_turns.len() {
         let turn = &app.committed_turns[app.inserted_turns];
-        let cwd = (!app.snapshot.cwd.is_empty()).then(|| std::path::Path::new(app.snapshot.cwd.as_str()));
+        let cwd =
+            (!app.snapshot.cwd.is_empty()).then(|| std::path::Path::new(app.snapshot.cwd.as_str()));
         let width = terminal.size()?.width;
         let mut lines = committed_turn_lines(turn.entries.as_slice(), cwd, width);
         if app.inserted_turns > 0 && !lines.is_empty() {
@@ -94,7 +91,12 @@ pub(super) fn flush_committed_history(
 
 fn viewport_area(width: u16, height: u16, viewport_height: u16) -> Rect {
     let viewport_height = viewport_height.max(1).min(height.max(1));
-    Rect::new(0, height.saturating_sub(viewport_height), width, viewport_height)
+    Rect::new(
+        0,
+        height.saturating_sub(viewport_height),
+        width,
+        viewport_height,
+    )
 }
 
 pub(crate) fn is_ssh_session() -> bool {

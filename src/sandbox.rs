@@ -4,7 +4,7 @@ use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
 
-use anyhow::{Result, bail};
+use anyhow::{bail, Result};
 use uuid::Uuid;
 
 pub struct SandboxManager {
@@ -34,9 +34,13 @@ impl SandboxManager {
     pub fn new() -> Result<Self> {
         let os = std::env::consts::OS.to_string();
         let rara_dir = std::env::current_dir()?.join(".rara");
-        if !rara_dir.exists() { fs::create_dir_all(&rara_dir)?; }
+        if !rara_dir.exists() {
+            fs::create_dir_all(&rara_dir)?;
+        }
         let profile_dir = rara_dir.join("sandbox");
-        if !profile_dir.exists() { fs::create_dir_all(&profile_dir)?; }
+        if !profile_dir.exists() {
+            fs::create_dir_all(&profile_dir)?;
+        }
         cleanup_stale_profiles(&profile_dir)?;
 
         Ok(Self { os, profile_dir })
@@ -47,7 +51,9 @@ impl SandboxManager {
         for var in &["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"] {
             if let Ok(url_str) = env::var(var) {
                 if let Ok(url) = url::Url::parse(&url_str) {
-                    if let Some(host) = url.host_str() { proxies.insert(host.to_string()); }
+                    if let Some(host) = url.host_str() {
+                        proxies.insert(host.to_string());
+                    }
                 }
             }
         }
@@ -60,13 +66,20 @@ impl SandboxManager {
         }
 
         let mut net_rules = String::new();
-        if allow_net { net_rules.push_str("(allow network*)"); }
-        else {
+        if allow_net {
+            net_rules.push_str("(allow network*)");
+        } else {
             net_rules.push_str("(deny network*)\n(allow network-outbound (literal \"/private/var/run/mDNSResponder\"))\n");
-            for host in self.get_proxy_hosts() { net_rules.push_str(&format!("(allow network-outbound (remote ip \"{}:*\"))\n", host)); }
+            for host in self.get_proxy_hosts() {
+                net_rules.push_str(&format!(
+                    "(allow network-outbound (remote ip \"{}:*\"))\n",
+                    host
+                ));
+            }
         }
 
-        let profile = format!(r#"(version 1)
+        let profile = format!(
+            r#"(version 1)
 (deny default)
 (deny file-read* (home-relative-path "/.ssh"))
 (deny file-read* (home-relative-path "/.aws"))
@@ -78,7 +91,9 @@ impl SandboxManager {
 (allow process*)
 (allow sysctl-read)
 {}
-"#, net_rules);
+"#,
+            net_rules
+        );
         let profile_path = self
             .profile_dir
             .join(format!("sandbox-{}.sb", Uuid::new_v4()));
@@ -140,7 +155,12 @@ impl SandboxManager {
         args
     }
 
-    pub fn wrap_shell_command(&self, original_cmd: &str, cwd: &str, allow_net: bool) -> Result<WrappedCommand> {
+    pub fn wrap_shell_command(
+        &self,
+        original_cmd: &str,
+        cwd: &str,
+        allow_net: bool,
+    ) -> Result<WrappedCommand> {
         match self.os.as_str() {
             "macos" => {
                 let profile_path = self.create_profile(allow_net)?;
@@ -170,7 +190,10 @@ impl SandboxManager {
                     cleanup_path: None,
                 })
             }
-            _ => bail!("sandboxed command execution is unsupported on platform {}", self.os),
+            _ => bail!(
+                "sandboxed command execution is unsupported on platform {}",
+                self.os
+            ),
         }
     }
 
@@ -209,12 +232,19 @@ impl SandboxManager {
                     cleanup_path: None,
                 })
             }
-            _ => bail!("sandboxed command execution is unsupported on platform {}", self.os),
+            _ => bail!(
+                "sandboxed command execution is unsupported on platform {}",
+                self.os
+            ),
         }
     }
 
     pub fn explain_violation(&self, stderr: &str) -> Option<String> {
-        if stderr.contains("Operation not permitted") || stderr.contains("Sandbox: Violation") { Some("Blocked by RARA Sandbox.".into()) } else { None }
+        if stderr.contains("Operation not permitted") || stderr.contains("Sandbox: Violation") {
+            Some("Blocked by RARA Sandbox.".into())
+        } else {
+            None
+        }
     }
 }
 
@@ -249,10 +279,9 @@ mod tests {
             .wrap_shell_command("echo test", "/tmp", false)
             .expect_err("unsupported platforms should not fall back to unsandboxed execution");
 
-        assert!(
-            err.to_string()
-                .contains("sandboxed command execution is unsupported on platform freebsd")
-        );
+        assert!(err
+            .to_string()
+            .contains("sandboxed command execution is unsupported on platform freebsd"));
     }
 
     #[test]
@@ -296,7 +325,9 @@ mod tests {
         std::env::set_current_dir(current_dir).expect("restore cwd");
 
         assert!(
-            manager.profile_dir.ends_with(Path::new(".rara").join("sandbox")),
+            manager
+                .profile_dir
+                .ends_with(Path::new(".rara").join("sandbox")),
             "sandbox manager should point at the workspace-local sandbox dir"
         );
         assert!(
@@ -318,19 +349,32 @@ mod tests {
 
         assert_eq!(wrapped.program, "bwrap");
         assert!(
-            !wrapped.args.windows(3).any(|window| window == [String::from("--ro-bind"), String::from("/"), String::from("/")]),
+            !wrapped.args.windows(3).any(|window| window
+                == [
+                    String::from("--ro-bind"),
+                    String::from("/"),
+                    String::from("/")
+                ]),
             "linux sandbox should no longer bind the entire filesystem read-only"
         );
         assert!(
-            wrapped.args.windows(2).any(|window| window == [String::from("--tmpfs"), String::from("/")]),
+            wrapped
+                .args
+                .windows(2)
+                .any(|window| window == [String::from("--tmpfs"), String::from("/")]),
             "linux sandbox should start from an empty root filesystem"
         );
         assert!(
-            wrapped.args.windows(2).any(|window| window == [String::from("--tmpfs"), String::from("/tmp")]),
+            wrapped
+                .args
+                .windows(2)
+                .any(|window| window == [String::from("--tmpfs"), String::from("/tmp")]),
             "linux sandbox should provide an isolated writable /tmp"
         );
         assert!(
-            wrapped.args.windows(2).any(|window| window == [String::from("--bind"), String::from("/workspace/project")]),
+            wrapped.args.windows(2).any(
+                |window| window == [String::from("--bind"), String::from("/workspace/project")]
+            ),
             "linux sandbox should bind the workspace path back in"
         );
         assert!(

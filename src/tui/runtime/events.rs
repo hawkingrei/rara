@@ -2,9 +2,7 @@ use crate::agent::AgentEvent;
 use crate::tool::ToolOutputStream;
 use crate::tools::bash::BashCommandInput;
 
-use super::super::state::{
-    contains_structured_planning_output, RuntimePhase, TuiApp, TuiEvent,
-};
+use super::super::state::{contains_structured_planning_output, RuntimePhase, TuiApp, TuiEvent};
 
 const TOOL_PROGRESS_LINE_LIMIT: usize = 16;
 
@@ -84,8 +82,10 @@ pub(super) fn apply_tui_event(app: &mut TuiApp, event: TuiEvent) {
                     Some(message.lines().next().unwrap_or(role).trim().to_string()),
                 );
             } else if role == "Agent" {
-                let planning_mode =
-                    matches!(app.agent_execution_mode, crate::agent::AgentExecutionMode::Plan);
+                let planning_mode = matches!(
+                    app.agent_execution_mode,
+                    crate::agent::AgentExecutionMode::Plan
+                );
                 let has_live_exploration = !app.active_live.exploration_actions.is_empty()
                     || !app.active_live.exploration_notes.is_empty();
                 if !app.active_live.exploration_actions.is_empty()
@@ -125,10 +125,22 @@ pub(super) fn apply_tui_event(app: &mut TuiApp, event: TuiEvent) {
                 }
             } else if role == "Runtime" {
                 let detail = message.lines().next().unwrap_or(role).trim().to_string();
-                if detail.contains("OAuth flow") {
+                let lower = detail.to_ascii_lowercase();
+                if lower.contains("device-code login")
+                    || lower.contains("one-time code")
+                    || lower.contains("open this url in a browser")
+                {
+                    app.set_runtime_phase(RuntimePhase::OAuthDeviceCodePrompt, Some(detail));
+                } else if lower.contains("waiting for browser callback") {
                     app.set_runtime_phase(RuntimePhase::OAuthWaitingCallback, Some(detail));
-                } else if detail.contains("exchanging token") {
+                } else if lower.contains("exchanging token") {
                     app.set_runtime_phase(RuntimePhase::OAuthExchangingToken, Some(detail));
+                } else if lower.contains("starting codex browser login")
+                    || lower.contains("starting codex browser")
+                {
+                    app.set_runtime_phase(RuntimePhase::OAuthWaitingCallback, Some(detail));
+                } else if lower.contains("starting codex device-code login") {
+                    app.set_runtime_phase(RuntimePhase::OAuthDeviceCodePrompt, Some(detail));
                 } else {
                     app.set_runtime_phase(RuntimePhase::RebuildingBackend, Some(detail));
                 }
@@ -493,21 +505,26 @@ fn format_tool_result(name: &str, content: &str) -> String {
                 .unwrap_or_else(|| first_non_empty_line(content));
             let mut rendered = format!("{name} {summary}");
             if let Some(request) = value.get("request_user_input") {
-                if let Some(question) = request.get("question").and_then(serde_json::Value::as_str) {
+                if let Some(question) = request.get("question").and_then(serde_json::Value::as_str)
+                {
                     rendered.push_str(&format!("\nrequest_user_input: {}", question.trim()));
                 }
-                if let Some(options) = request.get("options").and_then(serde_json::Value::as_array) {
+                if let Some(options) = request.get("options").and_then(serde_json::Value::as_array)
+                {
                     for option in options {
-                        if let Some((label, description)) = option
-                            .as_array()
-                            .and_then(|pair| {
-                                Some((
-                                    pair.first()?.as_str()?,
-                                    pair.get(1).and_then(serde_json::Value::as_str).unwrap_or(""),
-                                ))
-                            })
-                        {
-                            rendered.push_str(&format!("\noption: {} | {}", label.trim(), description.trim()));
+                        if let Some((label, description)) = option.as_array().and_then(|pair| {
+                            Some((
+                                pair.first()?.as_str()?,
+                                pair.get(1)
+                                    .and_then(serde_json::Value::as_str)
+                                    .unwrap_or(""),
+                            ))
+                        }) {
+                            rendered.push_str(&format!(
+                                "\noption: {} | {}",
+                                label.trim(),
+                                description.trim()
+                            ));
                         }
                     }
                 }
@@ -818,21 +835,17 @@ fn format_replace_result(value: &serde_json::Value) -> String {
 }
 
 fn exploration_result_note(message: &str) -> Option<String> {
-    message
-        .strip_prefix("explore_agent ")
-        .map(|summary| {
-            let first_line = summary.lines().next().unwrap_or(summary).trim();
-            format!("Sub-agent summary: {first_line}")
-        })
+    message.strip_prefix("explore_agent ").map(|summary| {
+        let first_line = summary.lines().next().unwrap_or(summary).trim();
+        format!("Sub-agent summary: {first_line}")
+    })
 }
 
 fn planning_result_note(message: &str) -> Option<String> {
-    message
-        .strip_prefix("plan_agent ")
-        .map(|summary| {
-            let first_line = summary.lines().next().unwrap_or(summary).trim();
-            format!("Sub-agent summary: {first_line}")
-        })
+    message.strip_prefix("plan_agent ").map(|summary| {
+        let first_line = summary.lines().next().unwrap_or(summary).trim();
+        format!("Sub-agent summary: {first_line}")
+    })
 }
 
 struct DelegatedRequestInput {
@@ -849,7 +862,11 @@ fn subagent_request_input(message: &str) -> Option<DelegatedRequestInput> {
     let mut question = None;
     let mut options = Vec::new();
     let mut note = None;
-    for line in message.lines().map(str::trim).filter(|line| !line.is_empty()) {
+    for line in message
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+    {
         if let Some(value) = line.strip_prefix("request_user_input:") {
             question = Some(value.trim().to_string());
             continue;
@@ -941,7 +958,10 @@ mod tests {
         let rendered = format_apply_patch_use(&json!({
             "patch": "*** Begin Patch\n*** Update File: src/tui/render.rs\n@@\n-old\n+new\n*** Update File: src/tui/runtime/events.rs\n@@\n-old\n+new\n*** End Patch"
         }));
-        assert_eq!(rendered, "apply_patch src/tui/render.rs, src/tui/runtime/events.rs");
+        assert_eq!(
+            rendered,
+            "apply_patch src/tui/render.rs, src/tui/runtime/events.rs"
+        );
     }
 
     #[test]
