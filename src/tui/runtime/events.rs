@@ -87,10 +87,10 @@ pub(super) fn apply_tui_event(app: &mut TuiApp, event: TuiEvent) {
                     app.agent_execution_mode,
                     crate::agent::AgentExecutionMode::Plan
                 );
+                let structured_planning_output = contains_structured_planning_output(&message);
                 let has_live_exploration = !app.active_live.exploration_actions.is_empty()
                     || !app.active_live.exploration_notes.is_empty();
-                let planning_notes = if planning_mode && !contains_structured_planning_output(&message)
-                {
+                let planning_notes = if planning_mode && !structured_planning_output {
                     planning_note_lines(&message)
                 } else {
                     Vec::new()
@@ -100,7 +100,7 @@ pub(super) fn apply_tui_event(app: &mut TuiApp, event: TuiEvent) {
                         app.runtime_phase,
                         RuntimePhase::RunningTool | RuntimePhase::SendingPrompt
                     )
-                    && (!planning_mode || planning_notes.is_empty())
+                    && (!planning_mode || (planning_notes.is_empty() && !structured_planning_output))
                 {
                     for note in exploration_note_lines(&message, planning_mode) {
                         app.record_exploration_note(note);
@@ -110,7 +110,7 @@ pub(super) fn apply_tui_event(app: &mut TuiApp, event: TuiEvent) {
                     RuntimePhase::ProcessingResponse,
                     Some("receiving model output".into()),
                 );
-                if planning_mode && !contains_structured_planning_output(&message) {
+                if planning_mode && !structured_planning_output {
                     for note in planning_notes {
                         app.record_planning_note(note);
                     }
@@ -340,7 +340,7 @@ fn tool_action_label(message: &str) -> Option<String> {
 
 fn exploration_note_lines(message: &str, planning_mode: bool) -> Vec<String> {
     let mut notes = Vec::new();
-    for line in scrub_internal_control_tokens(message)
+    for line in message
         .lines()
         .map(str::trim)
         .filter(|line| !line.is_empty())
@@ -384,7 +384,7 @@ fn is_planning_chatter(line: &str) -> bool {
 
 fn planning_note_lines(message: &str) -> Vec<String> {
     let mut notes = Vec::new();
-    for line in scrub_internal_control_tokens(message)
+    for line in message
         .lines()
         .map(str::trim)
         .filter(|line| !line.is_empty())
