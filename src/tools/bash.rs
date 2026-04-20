@@ -8,7 +8,7 @@ use std::env;
 use std::process::Stdio;
 use std::sync::Arc;
 use tokio::fs;
-use tokio::io::{AsyncBufReadExt, AsyncRead, BufReader};
+use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::process::Command;
 use tokio::sync::mpsc;
 
@@ -193,8 +193,9 @@ impl Tool for BashTool {
             .ok_or_else(|| ToolError::ExecutionFailed("stderr pipe unavailable".into()))?;
 
         let (tx, mut rx) = mpsc::unbounded_channel();
-        let stdout_task = tokio::spawn(read_stream_lines(stdout, BashStreamKind::Stdout, tx.clone()));
-        let stderr_task = tokio::spawn(read_stream_lines(stderr, BashStreamKind::Stderr, tx));
+        let stdout_task =
+            tokio::spawn(read_stream_chunks(stdout, BashStreamKind::Stdout, tx.clone()));
+        let stderr_task = tokio::spawn(read_stream_chunks(stderr, BashStreamKind::Stderr, tx));
 
         let mut stdout_text = String::new();
         let mut stderr_text = String::new();
@@ -233,7 +234,7 @@ impl Tool for BashTool {
     }
 }
 
-async fn read_stream_lines<R>(
+async fn read_stream_chunks<R>(
     reader: R,
     stream: BashStreamKind,
     tx: mpsc::UnboundedSender<(BashStreamKind, String)>,
@@ -241,10 +242,14 @@ async fn read_stream_lines<R>(
 where
     R: AsyncRead + Unpin + Send + 'static,
 {
-    let mut lines = BufReader::new(reader).lines();
-    while let Some(line) = lines.next_line().await? {
-        let mut chunk = line;
-        chunk.push('\n');
+    let mut reader = reader;
+    let mut buffer = [0_u8; 4096];
+    loop {
+        let read = reader.read(&mut buffer).await?;
+        if read == 0 {
+            break;
+        }
+        let chunk = String::from_utf8_lossy(&buffer[..read]).into_owned();
         let _ = tx.send((stream, chunk));
     }
     Ok(())

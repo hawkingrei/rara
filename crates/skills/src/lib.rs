@@ -1,6 +1,6 @@
 use anyhow::{anyhow, Result};
 use serde::Serialize;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -155,15 +155,8 @@ fn find_project_root(start: &Path) -> Option<PathBuf> {
 }
 
 fn dedupe_paths(paths: &mut Vec<PathBuf>) {
-    let mut seen = Vec::<PathBuf>::new();
-    paths.retain(|path| {
-        if seen.iter().any(|existing| existing == path) {
-            false
-        } else {
-            seen.push(path.clone());
-            true
-        }
-    });
+    let mut seen = HashSet::<PathBuf>::new();
+    paths.retain(|path| seen.insert(path.clone()));
 }
 
 fn skill_name_from_path(path: &Path) -> String {

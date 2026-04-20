@@ -651,16 +651,26 @@ fn append_tool_progress(
 }
 
 fn limit_tool_progress_entry(message: &mut String) {
-    let lines = message.lines().collect::<Vec<_>>();
-    if lines.len() <= TOOL_PROGRESS_LINE_LIMIT {
+    let line_count = message.as_bytes().iter().filter(|&&byte| byte == b'\n').count();
+    if line_count <= TOOL_PROGRESS_LINE_LIMIT {
         return;
     }
-    let keep = &lines[lines.len() - TOOL_PROGRESS_LINE_LIMIT..];
-    let mut folded = String::from("... live output truncated ...\n");
-    folded.push_str(&keep.join("\n"));
-    if message.ends_with('\n') {
-        folded.push('\n');
+
+    let remove_lines = line_count - TOOL_PROGRESS_LINE_LIMIT;
+    let mut removed = 0_usize;
+    let mut cutoff = 0_usize;
+    for (index, byte) in message.bytes().enumerate() {
+        if byte == b'\n' {
+            removed += 1;
+            if removed == remove_lines {
+                cutoff = index + 1;
+                break;
+            }
+        }
     }
+
+    let mut folded = String::from("... live output truncated ...\n");
+    folded.push_str(&message[cutoff..]);
     *message = folded;
 }
 
