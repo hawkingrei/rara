@@ -262,6 +262,7 @@ mod tests {
     use crate::tool::{Tool, ToolOutputStream, ToolProgressEvent};
     use serde_json::{Value, json};
     use std::sync::Arc;
+    use tempfile::tempdir;
 
     #[test]
     fn parses_legacy_shell_payload() {
@@ -299,8 +300,11 @@ mod tests {
 
     #[tokio::test]
     async fn streaming_call_reports_stdout_and_stderr_chunks() {
+        let temp = tempdir().expect("tempdir");
         let tool = BashTool {
-            sandbox: Arc::new(SandboxManager::new().expect("sandbox")),
+            sandbox: Arc::new(
+                SandboxManager::new_for_rara_dir(temp.path().join(".rara")).expect("sandbox"),
+            ),
         };
         let mut events = Vec::new();
         let result = tool
