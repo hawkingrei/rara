@@ -261,6 +261,8 @@ mod tests {
     use crate::sandbox::SandboxManager;
     use crate::tool::{Tool, ToolOutputStream, ToolProgressEvent};
     use serde_json::{Value, json};
+    use std::env;
+    use std::path::Path;
     use std::sync::Arc;
     use tempfile::tempdir;
 
@@ -301,10 +303,21 @@ mod tests {
     #[tokio::test]
     async fn streaming_call_reports_stdout_and_stderr_chunks() {
         let temp = tempdir().expect("tempdir");
+        let sandbox =
+            SandboxManager::new_for_rara_dir(temp.path().join(".rara")).expect("sandbox");
+        let wrapped = sandbox
+            .wrap_exec_command(
+                "sh",
+                &["-c".to_string(), "printf 'out\\n'; printf 'err\\n' >&2".to_string()],
+                temp.path().to_string_lossy().as_ref(),
+                false,
+            )
+            .expect("wrapped command");
+        if !binary_exists(&wrapped.program) {
+            return;
+        }
         let tool = BashTool {
-            sandbox: Arc::new(
-                SandboxManager::new_for_rara_dir(temp.path().join(".rara")).expect("sandbox"),
-            ),
+            sandbox: Arc::new(sandbox),
         };
         let mut events = Vec::new();
         let result = tool
@@ -327,5 +340,16 @@ mod tests {
             }
         )));
         assert_eq!(result.get("live_streamed").and_then(Value::as_bool), Some(true));
+    }
+
+    fn binary_exists(program: &str) -> bool {
+        let program_path = Path::new(program);
+        if program_path.components().count() > 1 {
+            return program_path.exists();
+        }
+
+        env::var_os("PATH")
+            .map(|paths| env::split_paths(&paths).any(|dir| dir.join(program).exists()))
+            .unwrap_or(false)
     }
 }
