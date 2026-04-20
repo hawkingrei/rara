@@ -41,15 +41,13 @@ pub fn pending_interaction_hint_text(kind: ActivePendingInteractionKind) -> &'st
 
 pub fn status_plan_approval_text(app: &TuiApp) -> String {
     let _ = app;
-    format!(
-        "review the updated plan before implementation:\n\noptions:\n1. Start implementation now\n2. Continue planning"
-    )
+    "Would you like to start implementation with this plan?\n\n1. Start implementation now\n2. Continue planning".to_string()
 }
 
 pub fn pending_interaction_shortcut_text(kind: ActivePendingInteractionKind) -> &'static str {
     match kind {
         ActivePendingInteractionKind::PlanApproval => {
-            "shortcuts: press 1 to start implementation, 2 to continue planning"
+            "Press 1 to start implementation or 2 to continue planning."
         }
         ActivePendingInteractionKind::ShellApproval => {
             "shortcuts: press 1 to approve once, 2 to approve for session, 3 to keep as suggestion"

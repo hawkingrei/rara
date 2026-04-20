@@ -46,6 +46,8 @@ When planning mode needs to continue, runtime records a structured continuation 
 - planning mode should render as a dedicated planning workflow, not as ordinary execution with extra chatter;
 - non-structured planning narration should be folded into planning/exploration sidecars instead of rendering as a separate responding block;
 - structured plans should render as an `Updated Plan` checklist object with a separate note/explanation and stable step status markers;
+- runtime heartbeat text such as `waiting for model response` or elapsed-time notices should stay in the activity/status surfaces instead of being repeated inside planning, exploration, or updated-plan transcript cells;
+- when execution resumes from an approved plan, only the currently active plan step may be auto-completed at successful turn end; pending later steps must not be marked complete optimistically;
 - pending plan approval and planning questions should appear as interaction cards;
 - status panels, overlays, and transcript cells should reuse the same plan formatting instead of diverging into separate text-only summaries;
 - approval or answers should resume the same workflow rather than starting a brand-new free-form chat turn.

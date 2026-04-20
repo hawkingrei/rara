@@ -6,17 +6,12 @@ You: Read the local codebase and propose the next refactor
 
  Exploring 
   └ Read src/oauth.rs
-  └ waiting for model response · 3s elapsed
 
  Planning 
   └ The auth flow should reuse codex_login instead of mirroring it.
-  └ waiting for model response · 3s elapsed
 
 • Updated Plan
   └ Prefer direct Codex auth reuse before extending more TUI flows.
     ✔ Inspect the current auth bridge
     □ Replace the bespoke OAuth flow
     □ Add snapshot tests for the auth picker
-
- Working 
-  waiting for model response · 3s elapsed

@@ -847,7 +847,7 @@ fn advances_plan_steps_during_execute_mode() {
 }
 
 #[test]
-fn completes_remaining_plan_steps_on_finish() {
+fn completes_only_active_plan_step_on_finish() {
     let mut agent = Agent::new(
         ToolManager::new(),
         Arc::new(SequencedBackend::new(Vec::new())),
@@ -871,12 +871,11 @@ fn completes_remaining_plan_steps_on_finish() {
         },
     ];
 
-    agent.complete_remaining_plan_steps();
+    agent.complete_active_plan_step();
 
-    assert!(agent
-        .current_plan
-        .iter()
-        .all(|step| step.status == PlanStepStatus::Completed));
+    assert_eq!(agent.current_plan[0].status, PlanStepStatus::Completed);
+    assert_eq!(agent.current_plan[1].status, PlanStepStatus::Completed);
+    assert_eq!(agent.current_plan[2].status, PlanStepStatus::Pending);
 }
 
 #[tokio::test]
