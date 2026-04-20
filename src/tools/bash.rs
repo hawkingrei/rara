@@ -1,16 +1,34 @@
 use crate::sandbox::SandboxManager;
-use crate::tool::{Tool, ToolError};
+use crate::tool::{Tool, ToolError, ToolOutputStream, ToolProgressEvent};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::env;
+use std::process::Stdio;
 use std::sync::Arc;
 use tokio::fs;
+use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::process::Command;
+use tokio::sync::mpsc;
 
 pub struct BashTool {
     pub sandbox: Arc<SandboxManager>,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum BashStreamKind {
+    Stdout,
+    Stderr,
+}
+
+impl BashStreamKind {
+    fn output_stream(self) -> ToolOutputStream {
+        match self {
+            Self::Stdout => ToolOutputStream::Stdout,
+            Self::Stderr => ToolOutputStream::Stderr,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -131,6 +149,14 @@ impl Tool for BashTool {
         })
     }
     async fn call(&self, i: Value) -> Result<Value, ToolError> {
+        self.call_with_events(i, &mut |_| {}).await
+    }
+
+    async fn call_with_events(
+        &self,
+        i: Value,
+        report: &mut (dyn FnMut(ToolProgressEvent) + Send),
+    ) -> Result<Value, ToolError> {
         let request = BashCommandInput::from_value(i)?;
         let cwd = request.working_dir()?;
         let wrapped = if let Some(command) = request.command.as_deref() {
@@ -152,23 +178,93 @@ impl Tool for BashTool {
         command
             .args(&wrapped.args)
             .current_dir(&cwd)
-            .envs(&request.env);
-        let out = command.output().await?;
+            .envs(&request.env)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let mut child = command.spawn()?;
+
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| ToolError::ExecutionFailed("stdout pipe unavailable".into()))?;
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| ToolError::ExecutionFailed("stderr pipe unavailable".into()))?;
+
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let stdout_task =
+            tokio::spawn(read_stream_chunks(stdout, BashStreamKind::Stdout, tx.clone()));
+        let stderr_task = tokio::spawn(read_stream_chunks(stderr, BashStreamKind::Stderr, tx));
+
+        let mut stdout_text = String::new();
+        let mut stderr_text = String::new();
+        let mut live_streamed = false;
+        while let Some((stream, chunk)) = rx.recv().await {
+            if chunk.is_empty() {
+                continue;
+            }
+            live_streamed = true;
+            match stream {
+                BashStreamKind::Stdout => stdout_text.push_str(&chunk),
+                BashStreamKind::Stderr => stderr_text.push_str(&chunk),
+            }
+            report(ToolProgressEvent::Output {
+                stream: stream.output_stream(),
+                chunk,
+            });
+        }
+
+        let status = child.wait().await?;
+        stdout_task
+            .await
+            .map_err(|err| ToolError::ExecutionFailed(err.to_string()))??;
+        stderr_task
+            .await
+            .map_err(|err| ToolError::ExecutionFailed(err.to_string()))??;
         if let Some(path) = wrapped.cleanup_path.as_ref() {
             let _ = fs::remove_file(path).await;
         }
         Ok(json!({
-            "stdout": String::from_utf8_lossy(&out.stdout),
-            "stderr": String::from_utf8_lossy(&out.stderr),
-            "exit_code": out.status.code()
+            "stdout": stdout_text,
+            "stderr": stderr_text,
+            "exit_code": status.code(),
+            "live_streamed": live_streamed,
         }))
     }
 }
 
+async fn read_stream_chunks<R>(
+    reader: R,
+    stream: BashStreamKind,
+    tx: mpsc::UnboundedSender<(BashStreamKind, String)>,
+) -> Result<(), ToolError>
+where
+    R: AsyncRead + Unpin + Send + 'static,
+{
+    let mut reader = reader;
+    let mut buffer = [0_u8; 4096];
+    loop {
+        let read = reader.read(&mut buffer).await?;
+        if read == 0 {
+            break;
+        }
+        let chunk = String::from_utf8_lossy(&buffer[..read]).into_owned();
+        let _ = tx.send((stream, chunk));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::BashCommandInput;
-    use serde_json::json;
+    use super::{BashCommandInput, BashTool};
+    use crate::sandbox::SandboxManager;
+    use crate::tool::{Tool, ToolOutputStream, ToolProgressEvent};
+    use serde_json::{Value, json};
+    use std::env;
+    use std::path::Path;
+    use std::sync::Arc;
+    use tempfile::tempdir;
 
     #[test]
     fn parses_legacy_shell_payload() {
@@ -202,5 +298,58 @@ mod tests {
         assert_eq!(input.cwd.as_deref(), Some("/tmp/workspace"));
         assert_eq!(input.env.get("RUST_LOG").map(String::as_str), Some("debug"));
         assert_eq!(input.summary(), "cargo check --workspace");
+    }
+
+    #[tokio::test]
+    async fn streaming_call_reports_stdout_and_stderr_chunks() {
+        let temp = tempdir().expect("tempdir");
+        let sandbox =
+            SandboxManager::new_for_rara_dir(temp.path().join(".rara")).expect("sandbox");
+        let wrapped = sandbox
+            .wrap_exec_command(
+                "sh",
+                &["-c".to_string(), "printf 'out\\n'; printf 'err\\n' >&2".to_string()],
+                temp.path().to_string_lossy().as_ref(),
+                false,
+            )
+            .expect("wrapped command");
+        if !binary_exists(&wrapped.program) {
+            return;
+        }
+        let tool = BashTool {
+            sandbox: Arc::new(sandbox),
+        };
+        let mut events = Vec::new();
+        let result = tool
+            .call_with_events(
+                json!({
+                    "program": "sh",
+                    "args": ["-c", "printf 'out\\n'; printf 'err\\n' >&2"],
+                }),
+                &mut |event| events.push(event),
+            )
+            .await
+            .expect("bash result");
+
+        assert!(!events.is_empty());
+        assert!(events.iter().any(|event| matches!(
+            event,
+            ToolProgressEvent::Output {
+                stream: ToolOutputStream::Stdout | ToolOutputStream::Stderr,
+                ..
+            }
+        )));
+        assert_eq!(result.get("live_streamed").and_then(Value::as_bool), Some(true));
+    }
+
+    fn binary_exists(program: &str) -> bool {
+        let program_path = Path::new(program);
+        if program_path.components().count() > 1 {
+            return program_path.exists();
+        }
+
+        env::var_os("PATH")
+            .map(|paths| env::split_paths(&paths).any(|dir| dir.join(program).exists()))
+            .unwrap_or(false)
     }
 }

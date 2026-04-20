@@ -12,6 +12,7 @@ pub use self::state_presets::{
     current_model_presets, selected_preset_idx_for_config, selected_provider_family_idx_for_config,
 };
 use super::markdown_stream::MarkdownStreamCollector;
+use super::queued_input::PendingFollowUpMessage;
 use crate::agent::{Agent, AgentExecutionMode, BashApprovalMode};
 use crate::config::{ConfigManager, RaraConfig};
 use crate::redaction::redact_secrets;
@@ -19,6 +20,7 @@ use crate::state_db::{
     PersistedCompactState, PersistedInteraction, PersistedPlanStep, PersistedSessionSummary,
     PersistedTurnEntry, StateDb,
 };
+use crate::tool::ToolOutputStream;
 use crate::tools::bash::BashCommandInput;
 use crate::tui::is_ssh_session;
 
@@ -228,6 +230,11 @@ pub enum TaskCompletion {
 
 pub enum TuiEvent {
     Transcript { role: &'static str, message: String },
+    ToolProgress {
+        name: String,
+        stream: ToolOutputStream,
+        chunk: String,
+    },
 }
 
 pub struct RunningTask {
@@ -332,7 +339,9 @@ pub struct TuiApp {
     pub agent_markdown_stream: Option<AgentMarkdownStreamState>,
     pub active_live: ActiveLiveSections,
     pub pending_planning_suggestion: Option<String>,
+    pub pending_follow_up_messages: Vec<PendingFollowUpMessage>,
     pub queued_follow_up_messages: Vec<String>,
+    pub running_tool_boundary_count: u64,
     pub terminal_focused: bool,
     pub state_db: Option<Arc<StateDb>>,
     pub state_db_status: Option<String>,
@@ -447,7 +456,9 @@ impl TuiApp {
             agent_markdown_stream: None,
             active_live: ActiveLiveSections::default(),
             pending_planning_suggestion: None,
+            pending_follow_up_messages: Vec::new(),
             queued_follow_up_messages: Vec::new(),
+            running_tool_boundary_count: 0,
             terminal_focused: true,
             state_db: None,
             state_db_status: None,
@@ -741,7 +752,9 @@ impl TuiApp {
         self.agent_markdown_stream = None;
         self.clear_active_live_sections();
         self.pending_planning_suggestion = None;
+        self.pending_follow_up_messages.clear();
         self.queued_follow_up_messages.clear();
+        self.running_tool_boundary_count = 0;
         self.set_plan_approval_interaction(false);
         self.notice = Some("Cleared local transcript view.".into());
     }
@@ -859,14 +872,35 @@ impl TuiApp {
     }
 
     pub fn has_queued_follow_up_messages(&self) -> bool {
-        !self.queued_follow_up_messages.is_empty()
+        !self.pending_follow_up_messages.is_empty() || !self.queued_follow_up_messages.is_empty()
     }
 
     pub fn queued_follow_up_count(&self) -> usize {
-        self.queued_follow_up_messages.len()
+        self.pending_follow_up_messages.len() + self.queued_follow_up_messages.len()
+    }
+
+    pub fn has_pending_follow_up_messages(&self) -> bool {
+        !self.pending_follow_up_messages.is_empty()
+    }
+
+    pub fn pending_follow_up_count(&self) -> usize {
+        self.pending_follow_up_messages.len()
     }
 
     pub fn queued_follow_up_preview(&self) -> Option<&str> {
+        self.pending_follow_up_messages
+            .first()
+            .map(|item| item.text.as_str())
+            .or_else(|| self.queued_follow_up_messages.first().map(String::as_str))
+    }
+
+    pub fn pending_follow_up_preview(&self) -> Option<&str> {
+        self.pending_follow_up_messages
+            .first()
+            .map(|item| item.text.as_str())
+    }
+
+    pub fn queued_end_of_turn_preview(&self) -> Option<&str> {
         self.queued_follow_up_messages.first().map(String::as_str)
     }
 
@@ -875,7 +909,21 @@ impl TuiApp {
         if !message.trim().is_empty() {
             self.queued_follow_up_messages.push(message);
         }
-        self.queued_follow_up_messages.len()
+        self.queued_follow_up_count()
+    }
+
+    pub fn queue_follow_up_message_after_next_tool_boundary(
+        &mut self,
+        message: impl Into<String>,
+    ) -> usize {
+        let message = message.into();
+        if !message.trim().is_empty() {
+            self.pending_follow_up_messages.push(PendingFollowUpMessage {
+                text: message,
+                release_after_boundary: self.running_tool_boundary_count.saturating_add(1),
+            });
+        }
+        self.queued_follow_up_count()
     }
 
     pub fn pop_queued_follow_up_message(&mut self) -> Option<String> {
@@ -884,6 +932,41 @@ impl TuiApp {
         } else {
             Some(self.queued_follow_up_messages.remove(0))
         }
+    }
+
+    pub fn begin_running_turn(&mut self) {
+        self.running_tool_boundary_count = 0;
+    }
+
+    pub fn release_pending_follow_ups(&mut self) {
+        if self.pending_follow_up_messages.is_empty() {
+            return;
+        }
+        let released = self
+            .pending_follow_up_messages
+            .drain(..)
+            .map(|item| item.text)
+            .collect::<Vec<_>>();
+        self.queued_follow_up_messages.extend(released);
+    }
+
+    pub fn advance_running_tool_boundary(&mut self) {
+        self.running_tool_boundary_count = self.running_tool_boundary_count.saturating_add(1);
+        if self.pending_follow_up_messages.is_empty() {
+            return;
+        }
+        let current = self.running_tool_boundary_count;
+        let mut still_pending = Vec::new();
+        let mut released = Vec::new();
+        for item in self.pending_follow_up_messages.drain(..) {
+            if item.release_after_boundary <= current {
+                released.push(item.text);
+            } else {
+                still_pending.push(item);
+            }
+        }
+        self.pending_follow_up_messages = still_pending;
+        self.queued_follow_up_messages.extend(released);
     }
 
     pub fn queue_planning_suggestion(&mut self, prompt: impl Into<String>) {
@@ -1461,5 +1544,31 @@ mod tests {
             Some("second")
         );
         assert_eq!(app.pop_queued_follow_up_message(), None);
+    }
+
+    #[test]
+    fn pending_follow_up_messages_release_on_tool_boundary() {
+        let dir = tempdir().expect("tempdir");
+        let cm = ConfigManager {
+            path: dir.path().join("config.json"),
+        };
+        let mut app = TuiApp::new(cm).expect("app");
+
+        app.begin_running_turn();
+        assert_eq!(
+            app.queue_follow_up_message_after_next_tool_boundary("first pending"),
+            1
+        );
+        assert_eq!(app.pending_follow_up_preview(), Some("first pending"));
+        assert_eq!(app.queued_end_of_turn_preview(), None);
+
+        app.advance_running_tool_boundary();
+
+        assert_eq!(app.pending_follow_up_preview(), None);
+        assert_eq!(app.queued_end_of_turn_preview(), Some("first pending"));
+        assert_eq!(
+            app.pop_queued_follow_up_message().as_deref(),
+            Some("first pending")
+        );
     }
 }

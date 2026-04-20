@@ -13,12 +13,33 @@ pub enum ToolError {
     Io(#[from] std::io::Error),
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ToolOutputStream {
+    Stdout,
+    Stderr,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ToolProgressEvent {
+    Output {
+        stream: ToolOutputStream,
+        chunk: String,
+    },
+}
+
 #[async_trait]
 pub trait Tool: Send + Sync {
     fn name(&self) -> &str;
     fn description(&self) -> &str;
     fn input_schema(&self) -> Value;
     async fn call(&self, input: Value) -> Result<Value, ToolError>;
+    async fn call_with_events(
+        &self,
+        input: Value,
+        _report: &mut (dyn FnMut(ToolProgressEvent) + Send),
+    ) -> Result<Value, ToolError> {
+        self.call(input).await
+    }
 }
 
 pub struct ToolManager {

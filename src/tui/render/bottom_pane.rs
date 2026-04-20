@@ -9,6 +9,10 @@ use unicode_width::UnicodeWidthStr;
 
 use super::super::custom_terminal::Frame;
 use super::super::interaction_text::pending_interaction_hint_text;
+use super::super::queued_input::{
+    pending_follow_up_heading, pending_follow_up_hint, queued_follow_up_heading,
+    queued_follow_up_hint,
+};
 use super::super::state::{ActivePendingInteractionKind, TaskKind, TuiApp};
 use super::badge;
 
@@ -246,44 +250,65 @@ fn render_composer(f: &mut Frame, app: &TuiApp, area: Rect) -> Option<(u16, u16)
 }
 
 fn queued_follow_up_preview_lines(app: &TuiApp) -> Vec<Line<'static>> {
-    let preview = app
-        .queued_follow_up_preview()
+    let mut lines = Vec::new();
+
+    if let Some(preview) = app
+        .pending_follow_up_preview()
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .unwrap_or("Queued follow-up");
-    let mut lines = vec![
-        Line::from(vec![
-            Span::styled(
-                "› ",
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                "Queued for after the current task:",
-                Style::default().fg(Color::DarkGray),
-            ),
-        ]),
-        Line::from(vec![Span::raw("  "), Span::raw(preview.to_string())]),
-    ];
-    let remaining = app.queued_follow_up_count().saturating_sub(1);
-    if remaining > 0 {
+    {
         lines.push(Line::from(vec![
-            Span::raw("  "),
-            Span::styled(
-                format!("... {remaining} more queued"),
-                Style::default().fg(Color::DarkGray),
-            ),
+            Span::styled("› ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::styled(pending_follow_up_heading(), Style::default().fg(Color::DarkGray)),
         ]));
+        lines.push(Line::from(vec![Span::raw("  "), Span::raw(preview.to_string())]));
+        let remaining = app.pending_follow_up_count().saturating_sub(1);
+        if remaining > 0 {
+            lines.push(Line::from(vec![
+                Span::raw("  "),
+                Span::styled(
+                    format!("... {remaining} more pending"),
+                    Style::default().fg(Color::DarkGray),
+                ),
+            ]));
+        }
     }
+
+    if let Some(preview) = app
+        .queued_end_of_turn_preview()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        if !lines.is_empty() {
+            lines.push(Line::from(""));
+        }
+        lines.push(Line::from(vec![
+            Span::styled("› ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::styled(queued_follow_up_heading(), Style::default().fg(Color::DarkGray)),
+        ]));
+        lines.push(Line::from(vec![Span::raw("  "), Span::raw(preview.to_string())]));
+        let remaining = app.queued_follow_up_messages.len().saturating_sub(1);
+        if remaining > 0 {
+            lines.push(Line::from(vec![
+                Span::raw("  "),
+                Span::styled(
+                    format!("... {remaining} more queued"),
+                    Style::default().fg(Color::DarkGray),
+                ),
+            ]));
+        }
+    }
+
     lines
 }
 
 fn composer_hint(app: &TuiApp) -> &'static str {
     if app.input.trim_start().starts_with('/') {
         "slash command  Enter run  Esc close"
+    } else if app.has_pending_follow_up_messages() {
+        pending_follow_up_hint()
     } else if app.has_queued_follow_up_messages() {
-        "queued follow-up pending  current task will finish before submission"
+        queued_follow_up_hint()
     } else if app.is_busy() {
         "busy  wait for the current task to finish"
     } else if app.has_pending_planning_suggestion() {
@@ -483,7 +508,8 @@ mod tests {
             path: temp.path().join("config.json"),
         })
         .expect("build tui app");
-        app.queue_follow_up_message("first follow-up");
+        app.begin_running_turn();
+        app.queue_follow_up_message_after_next_tool_boundary("first follow-up");
         app.queue_follow_up_message("second follow-up");
 
         let rendered = queued_follow_up_preview_lines(&app)
@@ -492,9 +518,10 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
 
-        assert!(rendered.contains("Queued for after the current task"));
+        assert!(rendered.contains("Messages to be submitted after next tool call"));
+        assert!(rendered.contains("Queued follow-up messages"));
         assert!(rendered.contains("first follow-up"));
-        assert!(rendered.contains("1 more queued"));
+        assert!(rendered.contains("second follow-up"));
     }
 
     #[test]
@@ -505,11 +532,12 @@ mod tests {
         })
         .expect("build tui app");
         app.runtime_phase = RuntimePhase::ProcessingResponse;
-        app.queue_follow_up_message("follow-up");
+        app.begin_running_turn();
+        app.queue_follow_up_message_after_next_tool_boundary("follow-up");
 
         assert_eq!(
             composer_hint(&app),
-            "queued follow-up pending  current task will finish before submission"
+            "queued follow-up pending  will submit after the next tool/result boundary"
         );
     }
 }

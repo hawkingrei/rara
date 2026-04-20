@@ -42,6 +42,9 @@ fn restore_execute_mode_after_plan_turn(app: &mut TuiApp, agent: &mut Agent) {
 }
 
 fn try_start_queued_follow_up(app: &mut TuiApp, agent_slot: &mut Option<Agent>) {
+    if app.running_task.is_none() {
+        app.release_pending_follow_ups();
+    }
     if app.running_task.is_some()
         || app.active_pending_interaction().is_some()
         || app.has_pending_planning_suggestion()
@@ -70,6 +73,7 @@ pub(super) fn start_query_task(app: &mut TuiApp, prompt: String, mut agent: Agen
     let (sender, receiver) = mpsc::unbounded_channel();
     app.clear_pending_planning_suggestion();
     app.clear_active_live_sections();
+    app.begin_running_turn();
     agent.set_execution_mode(app.agent_execution_mode);
     agent.set_bash_approval_mode(app.bash_approval_mode);
     app.notice = Some("Running prompt.".into());
@@ -410,6 +414,7 @@ pub(super) async fn finish_running_task_if_ready(
                     if let Some(agent) = agent_slot.as_ref() {
                         app.sync_snapshot(agent);
                     }
+                    app.release_pending_follow_ups();
                     app.finalize_agent_stream(None);
                     if finished_plan_turn && app.has_pending_plan_approval() {
                         app.notice = Some("Plan ready for approval.".into());
@@ -435,6 +440,7 @@ pub(super) async fn finish_running_task_if_ready(
                     if let Some(agent) = agent_slot.as_ref() {
                         app.sync_snapshot(agent);
                     }
+                    app.release_pending_follow_ups();
                     app.finalize_agent_stream(None);
                     app.set_runtime_phase(RuntimePhase::Failed, Some("query failed".into()));
                     let mut message = format!("Query failed:\n{}", format_error_chain(&err));
@@ -462,6 +468,7 @@ pub(super) async fn finish_running_task_if_ready(
             match result {
                 Ok(true) => {
                     app.clear_active_live_sections();
+                    app.release_pending_follow_ups();
                     if let Some((before, after)) = app
                         .snapshot
                         .last_compaction_before_tokens
@@ -482,6 +489,7 @@ pub(super) async fn finish_running_task_if_ready(
                 }
                 Ok(false) => {
                     app.clear_active_live_sections();
+                    app.release_pending_follow_ups();
                     let message = "Conversation history did not need compaction.";
                     app.push_entry("Agent", message);
                     app.push_notice(message);
@@ -491,6 +499,7 @@ pub(super) async fn finish_running_task_if_ready(
                 }
                 Err(err) => {
                     app.clear_active_live_sections();
+                    app.release_pending_follow_ups();
                     app.set_runtime_phase(RuntimePhase::Failed, Some("compact failed".into()));
                     let message = format!("Compaction failed:\n{}", format_error_chain(&err));
                     app.push_entry("System", message.clone());
@@ -510,8 +519,12 @@ pub(super) async fn finish_running_task_if_ready(
                     app.current_model_label()
                 ));
                 app.notice = app.setup_status.clone();
-                let queued_follow_up_messages = std::mem::take(&mut app.queued_follow_up_messages);
+                let queued_follow_up_messages =
+                    std::mem::take(&mut app.queued_follow_up_messages);
+                let pending_follow_up_messages =
+                    std::mem::take(&mut app.pending_follow_up_messages);
                 app.reset_transcript();
+                app.pending_follow_up_messages = pending_follow_up_messages;
                 app.queued_follow_up_messages = queued_follow_up_messages;
                 *agent_slot = Some(agent);
                 if let Some(agent) = agent_slot.as_ref() {

@@ -11,6 +11,7 @@ use crate::tool::ToolManager;
 use crate::tool_result::{
     default_tool_result_store_dir, repair_tool_result_history, ToolResultStore,
 };
+use crate::tool::ToolOutputStream;
 use crate::tools::bash::BashCommandInput;
 use crate::vectordb::{MemoryMetadata, VectorDB};
 use crate::workspace::WorkspaceMemory;
@@ -96,6 +97,11 @@ pub enum AgentEvent {
         name: String,
         content: String,
         is_error: bool,
+    },
+    ToolProgress {
+        name: String,
+        stream: ToolOutputStream,
+        chunk: String,
     },
 }
 
@@ -465,6 +471,9 @@ impl Agent {
     {
         let mut tool_results = Vec::new();
         for tool_call in tool_calls {
+            let tool_name = tool_call.name.clone();
+            let tool_id = tool_call.id.clone();
+            let tool_input = tool_call.input.clone();
             if tool_call.name == "bash"
                 && matches!(self.bash_approval_mode, BashApprovalMode::Suggestion)
             {
@@ -489,7 +498,7 @@ impl Agent {
                     });
                 let summary = request.summary();
                 self.pending_approval = Some(PendingApproval {
-                    tool_use_id: tool_call.id.clone(),
+                    tool_use_id: tool_id.clone(),
                     request: request.clone(),
                 });
                 self.pending_user_input = Some(PendingUserInput {
@@ -518,50 +527,65 @@ impl Agent {
                 ));
                 break;
             }
-            if !self.is_tool_allowed_in_current_mode(&tool_call.name) {
+            if !self.is_tool_allowed_in_current_mode(&tool_name) {
                 let error_text = format!(
                     "Error: tool '{}' is unavailable in {} mode. Inspect with read-only tools and return a plan instead.",
-                    tool_call.name,
+                    tool_name,
                     self.execution_mode_label()
                 );
                 report(AgentEvent::ToolResult {
-                    name: tool_call.name.clone(),
+                    name: tool_name.clone(),
                     content: error_text.clone(),
                     is_error: true,
                 });
-                tool_results.push(tool_result_message(&tool_call.id, error_text, true));
+                tool_results.push(tool_result_message(&tool_id, error_text, true));
                 continue;
             }
-            if let Some(tool) = self.tool_manager.get_tool(&tool_call.name) {
+            if let Some(tool) = self.tool_manager.get_tool(&tool_name) {
                 self.inspection_progress
-                    .record_tool(&tool_call.name, &tool_call.input);
-                report(AgentEvent::Status(format!(
-                    "Running tool {}.",
-                    tool_call.name
-                )));
-                match tool.call(tool_call.input.clone()).await {
+                    .record_tool(&tool_name, &tool_input);
+                let status_detail = if tool_name == "bash" {
+                    BashCommandInput::from_value(tool_input.clone())
+                        .map(|request| format!("Running shell command: {}", request.summary()))
+                        .unwrap_or_else(|_| "Running shell command.".to_string())
+                } else {
+                    format!("Running tool {}.", tool_name)
+                };
+                report(AgentEvent::Status(status_detail));
+                match tool
+                    .call_with_events(tool_input.clone(), &mut |progress| match progress {
+                        crate::tool::ToolProgressEvent::Output { stream, chunk } => {
+                            report(AgentEvent::ToolProgress {
+                                name: tool_name.clone(),
+                                stream,
+                                chunk,
+                            });
+                        }
+                    })
+                    .await
+                {
                     Ok(result) => {
                         let result_text = self.tool_result_store.compact_result(
-                            &tool_call.name,
-                            &tool_call.id,
-                            &tool_call.input,
+                            &tool_name,
+                            &tool_id,
+                            &tool_input,
                             &result,
                         )?;
                         report(AgentEvent::ToolResult {
-                            name: tool_call.name.clone(),
+                            name: tool_name.clone(),
                             content: result_text.clone(),
                             is_error: false,
                         });
-                        tool_results.push(tool_result_message(&tool_call.id, result_text, false));
+                        tool_results.push(tool_result_message(&tool_id, result_text, false));
                     }
                     Err(e) => {
                         let error_text = format!("Error: {}", e);
                         report(AgentEvent::ToolResult {
-                            name: tool_call.name.clone(),
+                            name: tool_name.clone(),
                             content: error_text.clone(),
                             is_error: true,
                         });
-                        tool_results.push(tool_result_message(&tool_call.id, error_text, true));
+                        tool_results.push(tool_result_message(&tool_id, error_text, true));
                     }
                 }
             }

@@ -622,7 +622,7 @@ impl HistoryCell for CommittedTurnCell<'_> {
             .map(|entry| entry.message.clone());
         let has_tool_activity = entry_refs
             .iter()
-            .any(|entry| matches!(entry.role.as_str(), "Tool" | "Tool Result" | "Tool Error"));
+            .any(|entry| matches!(entry.role.as_str(), "Tool" | "Tool Result" | "Tool Error" | "Tool Progress"));
         if let Some(summary) = explicit_exploration.or_else(|| {
             current_turn_exploration_summary_from_entries(entry_refs.as_slice(), false, None)
         }) {
@@ -736,7 +736,7 @@ impl ActiveCell for ActiveTurnCell<'_> {
         }
         let has_tool_activity = current_turn
             .iter()
-            .any(|entry| matches!(entry.role.as_str(), "Tool" | "Tool Result" | "Tool Error"));
+            .any(|entry| matches!(entry.role.as_str(), "Tool" | "Tool Result" | "Tool Error" | "Tool Progress"));
         let user_message = current_turn
             .iter()
             .find(|entry| entry.role == "You")
@@ -758,7 +758,12 @@ impl ActiveCell for ActiveTurnCell<'_> {
         let latest_tool_result = current_turn
             .iter()
             .rev()
-            .find(|entry| entry.role == "Tool Result" || entry.role == "Tool Error")
+            .find(|entry| {
+                matches!(
+                    entry.role.as_str(),
+                    "Tool Result" | "Tool Error" | "Tool Progress"
+                )
+            })
             .map(|entry| (entry.role.as_str(), entry.message.as_str()));
         let latest_completion = current_turn
             .iter()

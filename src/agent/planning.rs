@@ -258,10 +258,22 @@ impl Agent {
             .tool_manager
             .get_tool("bash")
             .ok_or_else(|| anyhow!("bash tool is unavailable"))?;
-        report(AgentEvent::Status(
-            "Running approved bash command.".to_string(),
-        ));
-        match tool.call(input.clone()).await {
+        let status_detail = BashCommandInput::from_value(input.clone())
+            .map(|request| format!("Running approved shell command: {}", request.summary()))
+            .unwrap_or_else(|_| "Running approved bash command.".to_string());
+        report(AgentEvent::Status(status_detail));
+        match tool
+            .call_with_events(input.clone(), &mut |progress| match progress {
+                crate::tool::ToolProgressEvent::Output { stream, chunk } => {
+                    report(AgentEvent::ToolProgress {
+                        name: "bash".to_string(),
+                        stream,
+                        chunk,
+                    });
+                }
+            })
+            .await
+        {
             Ok(result) => {
                 let result_text = self.tool_result_store.compact_result(
                     "bash",

@@ -1,8 +1,7 @@
 use std::collections::HashSet;
 use std::env;
 use std::fs;
-use std::path::Path;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Result};
 use uuid::Uuid;
@@ -34,6 +33,15 @@ impl SandboxManager {
     pub fn new() -> Result<Self> {
         let os = std::env::consts::OS.to_string();
         let rara_dir = std::env::current_dir()?.join(".rara");
+        Self::new_with_rara_dir(os, rara_dir)
+    }
+
+    pub fn new_for_rara_dir(rara_dir: PathBuf) -> Result<Self> {
+        let os = std::env::consts::OS.to_string();
+        Self::new_with_rara_dir(os, rara_dir)
+    }
+
+    fn new_with_rara_dir(os: String, rara_dir: PathBuf) -> Result<Self> {
         if !rara_dir.exists() {
             fs::create_dir_all(&rara_dir)?;
         }
