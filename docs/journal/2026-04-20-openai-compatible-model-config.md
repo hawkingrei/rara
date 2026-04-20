@@ -29,6 +29,8 @@ This change keeps Codex login separate while making generic OpenAI-compatible en
   - `N` model name
 - Added generic `openai-compatible` backend construction in `build_backend_with_progress`
 - Kept provider-scoped remembered state so switching providers restores the right `api_key`, `base_url`, and `model`
+- Tightened the picker/runtime contract so single-provider families restore the right provider-scoped state before editing connection fields
+- Corrected the default OpenAI-compatible model fallback to `gpt-4o-mini`
 
 ## Validation
 

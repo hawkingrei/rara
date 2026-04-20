@@ -906,10 +906,20 @@ fn render_setup_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
         })
         .collect::<Vec<_>>()
         .join("\n");
+    let preset_shortcuts = (1..=current_model_presets(app.provider_picker_idx).len())
+        .map(|idx| idx.to_string())
+        .collect::<Vec<_>>()
+        .join("/");
+    let codex_auth_hint = if matches!(app.selected_provider_family(), ProviderFamily::Codex) {
+        "\n[L] Codex auth modes"
+    } else {
+        ""
+    };
     let text = format!(
         "Provider: {}\nModel: {}\nBase URL: {}\nAPI key: {}\nRevision: {}\n\n\
          Presets:\n{}\n\n\
-         [1/2/3] Select preset\n[M] Cycle preset\n[Enter] Apply and rebuild\n[L] Codex auth modes\n[Esc] Close\n\n\
+         [{}] Select preset\n[M] Cycle preset\n[Enter] Apply and rebuild{}\
+\n[Esc] Close\n\n\
          Use /model for the full provider menu.\n\
          OpenAI-compatible endpoints can be configured from the model picker with base URL, API key, and model name.\n\
          Recommended: Qwn3 8B for stable local use.",
@@ -919,6 +929,8 @@ fn render_setup_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
         api_key_status(&app.config),
         app.config.revision.as_deref().unwrap_or("main"),
         preset_lines,
+        preset_shortcuts,
+        codex_auth_hint,
     );
     f.render_widget(
         Paragraph::new(text)
@@ -1251,7 +1263,7 @@ fn render_model_name_editor_modal(f: &mut Frame, app: &TuiApp, area: Rect) -> Op
         ])
         .split(area);
     let intro = Paragraph::new(
-        "Set the model name to send to the OpenAI-compatible endpoint.\nExample: gpt-4.1-mini, kimi-k2, or any server-specific model id.",
+        "Set the model name to send to the OpenAI-compatible endpoint.\nExample: gpt-4o-mini, kimi-k2, or any server-specific model id.",
     )
     .block(Block::default().borders(Borders::ALL).title(" Model Name "))
     .wrap(Wrap { trim: false });

@@ -28,7 +28,7 @@ These values are editable directly from the model picker through dedicated short
 Selecting the OpenAI-compatible preset sets:
 
 - `provider = "openai-compatible"`
-- `model = "gpt-4.1-mini"` if no explicit model has been set for that provider
+- `model = "gpt-4o-mini"` if no explicit model has been set for that provider
 - `base_url = "https://api.openai.com/v1"` if no explicit base URL has been set for that provider
 - `revision = None`
 

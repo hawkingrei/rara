@@ -494,6 +494,24 @@ impl TuiApp {
         PROVIDER_FAMILIES[self.provider_picker_idx].0
     }
 
+    fn selected_model_preset(&self) -> (&'static str, &'static str, &'static str) {
+        let presets = current_model_presets(self.provider_picker_idx);
+        presets[self.model_picker_idx.min(presets.len().saturating_sub(1))]
+    }
+
+    fn single_provider_for_selected_family(&self) -> Option<&'static str> {
+        let presets = current_model_presets(self.provider_picker_idx);
+        let provider = presets.first()?.1;
+        if presets
+            .iter()
+            .all(|(_, preset_provider, _)| *preset_provider == provider)
+        {
+            Some(provider)
+        } else {
+            None
+        }
+    }
+
     pub fn select_local_model(&mut self, idx: usize) {
         let presets = current_model_presets(self.provider_picker_idx);
         let (_, provider, model) = presets[idx];
@@ -514,6 +532,7 @@ impl TuiApp {
                     .set_base_url(Some("http://localhost:11434".to_string()));
             }
         } else if provider == "codex" {
+            self.config.set_model(Some(model.to_string()));
             self.config.set_revision(None);
             if self
                 .config
@@ -848,11 +867,13 @@ impl TuiApp {
             self.resume_picker_idx = 0;
         }
         if matches!(overlay, Overlay::ModelPicker) {
+            if let Some(provider) = self.single_provider_for_selected_family() {
+                self.config.set_provider(provider.to_string());
+            }
             self.model_picker_idx = self.selected_preset_idx();
         }
         if matches!(overlay, Overlay::BaseUrlEditor) {
-            let provider_family =
-                PROVIDER_FAMILIES[selected_provider_family_idx_for_config(&self.config)].0;
+            let provider_family = self.selected_provider_family();
             self.base_url_input = self.config.base_url.clone().unwrap_or_else(|| {
                 if matches!(provider_family, ProviderFamily::OpenAiCompatible) {
                     "https://api.openai.com/v1".to_string()
@@ -865,11 +886,12 @@ impl TuiApp {
             self.api_key_input.clear();
         }
         if matches!(overlay, Overlay::ModelNameEditor) {
+            let (_, _, default_model) = self.selected_model_preset();
             self.model_name_input = self
                 .config
                 .model
                 .clone()
-                .unwrap_or_else(|| "gpt-4.1-mini".to_string());
+                .unwrap_or_else(|| default_model.to_string());
         }
         if matches!(overlay, Overlay::AuthModePicker) {
             self.auth_mode_idx = if is_ssh_session() { 1 } else { 0 };
@@ -1509,7 +1531,8 @@ impl TuiApp {
 mod tests {
     use super::{
         input_requests_command_palette, state_db_status_error, ActivePendingInteractionKind,
-        InteractionKind, PendingInteractionSnapshot, ProviderFamily, RuntimeSnapshot, TuiApp,
+        InteractionKind, Overlay, PendingInteractionSnapshot, ProviderFamily, RuntimeSnapshot,
+        TuiApp,
     };
     use crate::config::{ConfigManager, RaraConfig};
     use tempfile::tempdir;
@@ -1646,7 +1669,7 @@ mod tests {
         app.select_local_model(0);
 
         assert_eq!(app.config.provider, "openai-compatible");
-        assert_eq!(app.config.model.as_deref(), Some("gpt-4.1-mini"));
+        assert_eq!(app.config.model.as_deref(), Some("gpt-4o-mini"));
         assert_eq!(
             app.config.base_url.as_deref(),
             Some("https://api.openai.com/v1")
@@ -1670,5 +1693,65 @@ mod tests {
 
         assert_eq!(app.config.provider, "openai-compatible");
         assert_eq!(app.config.model.as_deref(), Some("custom-model"));
+    }
+
+    #[test]
+    fn codex_preset_keeps_the_codex_model_label() {
+        let dir = tempdir().expect("tempdir");
+        let cm = ConfigManager {
+            path: dir.path().join("config.json"),
+        };
+        let mut app = TuiApp::new(cm).expect("app");
+
+        app.provider_picker_idx = 0;
+        app.select_local_model(0);
+
+        assert_eq!(app.config.provider, "codex");
+        assert_eq!(app.config.model.as_deref(), Some("codex"));
+    }
+
+    #[test]
+    fn opening_openai_compatible_model_picker_restores_provider_scoped_state() {
+        let dir = tempdir().expect("tempdir");
+        let cm = ConfigManager {
+            path: dir.path().join("config.json"),
+        };
+        let mut app = TuiApp::new(cm).expect("app");
+
+        app.config.set_provider("openai-compatible");
+        app.config
+            .set_base_url(Some("http://proxy.local/v1".to_string()));
+        app.config.set_model(Some("custom-model".to_string()));
+        app.config.set_provider("codex");
+        app.config.set_model(Some("codex".to_string()));
+
+        app.provider_picker_idx = 1;
+        app.open_overlay(Overlay::ModelPicker);
+
+        assert_eq!(app.config.provider, "openai-compatible");
+        assert_eq!(
+            app.config.base_url.as_deref(),
+            Some("http://proxy.local/v1")
+        );
+        assert_eq!(app.config.model.as_deref(), Some("custom-model"));
+    }
+
+    #[test]
+    fn model_name_editor_seeds_from_selected_provider_state() {
+        let dir = tempdir().expect("tempdir");
+        let cm = ConfigManager {
+            path: dir.path().join("config.json"),
+        };
+        let mut app = TuiApp::new(cm).expect("app");
+
+        app.config.set_provider("openai-compatible");
+        app.config.set_model(Some("custom-model".to_string()));
+        app.config.set_provider("codex");
+        app.provider_picker_idx = 1;
+
+        app.open_overlay(Overlay::ModelPicker);
+        app.open_overlay(Overlay::ModelNameEditor);
+
+        assert_eq!(app.model_name_input, "custom-model");
     }
 }

@@ -8,7 +8,7 @@ pub const CODEX_MODEL_PRESETS: [(&str, &str, &str); 2] = [
 ];
 
 pub const OPENAI_COMPATIBLE_MODEL_PRESETS: [(&str, &str, &str); 1] =
-    [("Custom endpoint", "openai-compatible", "gpt-4.1-mini")];
+    [("Custom endpoint", "openai-compatible", "gpt-4o-mini")];
 
 pub const LOCAL_MODEL_PRESETS: [(&str, &str, &str); 3] = [
     ("Gemma 4 E4B (Experimental)", "gemma4", "gemma4-e4b"),

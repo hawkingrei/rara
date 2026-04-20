@@ -331,7 +331,7 @@ pub(crate) async fn build_backend_with_progress(
             config
                 .model
                 .clone()
-                .unwrap_or_else(|| "gpt-4.1-mini".to_string()),
+                .unwrap_or_else(|| "gpt-4o-mini".to_string()),
         )?)),
         "ollama" | "ollama-native" => Ok(Box::new(OllamaBackend::new(
             config
