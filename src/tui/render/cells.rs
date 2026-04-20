@@ -827,6 +827,7 @@ impl ActiveCell for ActiveTurnCell<'_> {
         } else {
             explicit_planning
         };
+        let has_planning_summary = planning_summary.is_some();
         if let Some(summary) = planning_summary {
             cells.push(Box::new(PlanningCell::new(summary, turn_live)));
         }
@@ -949,7 +950,7 @@ impl ActiveCell for ActiveTurnCell<'_> {
             )));
         } else if turn_live
             && !has_exploration_summary
-            && !has_live_planning
+            && !has_planning_summary
             && !has_running_summary
             && self.app.pending_request_input().is_none()
             && !self.app.has_pending_plan_approval()
