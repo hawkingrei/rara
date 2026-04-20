@@ -440,7 +440,7 @@ impl Agent {
                     ));
                     continue;
                 }
-                self.complete_remaining_plan_steps();
+                self.complete_active_plan_step();
                 break;
             }
             *tool_rounds += 1;

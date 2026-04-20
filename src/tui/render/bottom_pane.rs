@@ -72,7 +72,7 @@ fn render_activity_bar(f: &mut Frame, app: &TuiApp, area: Rect) {
 
     if app.agent_execution_mode_label() == "plan" && !label_already_reflects_planning {
         spans.push(Span::raw("  "));
-        spans.push(badge("mode", "plan", Color::LightBlue));
+        spans.push(badge("mode", "plan", Color::Cyan));
     }
     if !detail.is_empty() {
         spans.push(Span::raw("  "));
@@ -99,10 +99,10 @@ fn activity_status_line(app: &TuiApp) -> (&'static str, Color, String) {
 
     if let Some(pending) = app.active_pending_interaction() {
         let (label, color) = match pending.kind {
-            ActivePendingInteractionKind::PlanApproval => ("Plan Approval", Color::LightBlue),
+            ActivePendingInteractionKind::PlanApproval => ("Plan Approval", Color::Cyan),
             ActivePendingInteractionKind::ShellApproval => ("Shell Approval", Color::Yellow),
             ActivePendingInteractionKind::PlanningQuestion => {
-                ("Planning Question", Color::LightBlue)
+                ("Planning Question", Color::Cyan)
             }
             ActivePendingInteractionKind::ExplorationQuestion => {
                 ("Exploration Question", Color::Yellow)
@@ -114,7 +114,7 @@ fn activity_status_line(app: &TuiApp) -> (&'static str, Color, String) {
         };
         let detail = match pending.kind {
             ActivePendingInteractionKind::PlanApproval => {
-                "review the proposed plan and choose the next step".to_string()
+                "choose whether to start implementation or continue planning".to_string()
             }
             ActivePendingInteractionKind::ShellApproval => app
                 .pending_command_approval()
@@ -136,7 +136,7 @@ fn activity_status_line(app: &TuiApp) -> (&'static str, Color, String) {
     if app.has_pending_planning_suggestion() {
         return (
             "Planning Suggested",
-            Color::LightBlue,
+            Color::Cyan,
             "enter planning mode first or continue in execute mode".to_string(),
         );
     }
@@ -159,7 +159,7 @@ fn activity_status_line(app: &TuiApp) -> (&'static str, Color, String) {
     if app.agent_execution_mode_label() == "plan" {
         return (
             "Planning",
-            Color::LightBlue,
+            Color::Cyan,
             "analyze, refine, or finalize a plan".to_string(),
         );
     }
@@ -499,7 +499,8 @@ mod tests {
 
         let (label, _, detail) = activity_status_line(&app);
         assert_eq!(label, "Plan Approval");
-        assert!(detail.contains("review the proposed plan"));
+        assert!(detail.contains("start implementation"));
+        assert!(detail.contains("continue planning"));
     }
 
     #[test]

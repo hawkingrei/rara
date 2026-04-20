@@ -35,3 +35,6 @@ That behavior was weaker than both Claude Code plan mode and Codex collaboration
 - added focused tests for planning-sidecar rendering and chatter filtering.
 - moved plan rendering onto a dedicated `Updated Plan` formatter so transcript cells, status panels, and overlays now show the same checklist-style plan object instead of separate `steps:/note:` text blocks;
 - reduced bottom-pane noise so planning and pending-interaction states behave more like Codex's single-status source instead of duplicating transcript information.
+- stopped injecting runtime heartbeat text into planning/exploration/running transcript sidecars once those sections already exist; heartbeat now stays in the activity/status area instead of showing up as fake plan content.
+- stopped rehydrating stale completed plan/question/approval interactions from snapshot state into each new active turn; only explicit transcript completion entries now render as completion cards.
+- tightened execute-mode plan progression so successful turn completion only closes the active in-progress step rather than pessimistically marking every remaining pending step as completed.

@@ -175,8 +175,8 @@ fn exploration_note_lines(current_turn: &[&TranscriptEntry]) -> Vec<String> {
 
 pub(crate) fn current_turn_exploration_summary_from_entries(
     current_turn: &[&TranscriptEntry],
-    show_live_detail: bool,
-    live_detail: Option<&str>,
+    _show_live_detail: bool,
+    _live_detail: Option<&str>,
 ) -> Option<String> {
     let mut actions = Vec::new();
     for entry in current_turn {
@@ -200,20 +200,13 @@ pub(crate) fn current_turn_exploration_summary_from_entries(
         lines.push(format!("└ {note}"));
     }
 
-    if show_live_detail {
-        lines.push(format!(
-            "└ {}",
-            live_detail.unwrap_or("waiting for more exploration output")
-        ));
-    }
-
     Some(lines.join("\n"))
 }
 
 pub(crate) fn current_turn_tool_summary(
     current_turn: &[&TranscriptEntry],
-    show_live_detail: bool,
-    live_detail: Option<&str>,
+    _show_live_detail: bool,
+    _live_detail: Option<&str>,
 ) -> Option<String> {
     let actions = current_turn
         .iter()
@@ -228,17 +221,10 @@ pub(crate) fn current_turn_tool_summary(
         return None;
     }
 
-    let mut lines = actions
+    let lines = actions
         .into_iter()
         .map(|action| format!("└ {action}"))
         .collect::<Vec<_>>();
-
-    if show_live_detail {
-        lines.push(format!(
-            "└ {}",
-            live_detail.unwrap_or("waiting for tool output")
-        ));
-    }
 
     Some(lines.join("\n"))
 }

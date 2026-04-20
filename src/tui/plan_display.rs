@@ -31,15 +31,11 @@ impl PlanStepKind {
 
     fn style(self) -> Style {
         match self {
-            Self::Completed => Style::default()
-                .fg(Color::DarkGray)
-                .add_modifier(Modifier::CROSSED_OUT | Modifier::DIM),
-            Self::InProgress => Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-            Self::Pending => Style::default()
-                .fg(Color::DarkGray)
-                .add_modifier(Modifier::DIM),
+            Self::Completed => {
+                Style::default().add_modifier(Modifier::CROSSED_OUT | Modifier::DIM)
+            }
+            Self::InProgress => Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            Self::Pending => Style::default().add_modifier(Modifier::DIM),
         }
     }
 }
@@ -79,13 +75,8 @@ pub(crate) fn updated_plan_lines(
     }
 
     let mut lines = vec![Line::from(vec![
-        Span::styled("• ", Style::default().fg(Color::DarkGray)),
-        Span::styled(
-            "Updated Plan",
-            Style::default()
-                .fg(Color::LightBlue)
-                .add_modifier(Modifier::BOLD),
-        ),
+        Span::styled("• ", Style::default().add_modifier(Modifier::DIM)),
+        Span::styled("Updated Plan", Style::default().add_modifier(Modifier::BOLD)),
     ])];
 
     let mut detail_lines = Vec::new();
@@ -93,9 +84,7 @@ pub(crate) fn updated_plan_lines(
     if let Some(note) = explanation.map(str::trim).filter(|note| !note.is_empty()) {
         detail_lines.push(Line::from(Span::styled(
             note.to_string(),
-            Style::default()
-                .fg(Color::DarkGray)
-                .add_modifier(Modifier::DIM | Modifier::ITALIC),
+            Style::default().add_modifier(Modifier::DIM | Modifier::ITALIC),
         )));
     }
 
@@ -109,7 +98,7 @@ pub(crate) fn updated_plan_lines(
 
     lines.extend(prefix_lines(
         detail_lines,
-        Span::styled("  └ ", Style::default().fg(Color::DarkGray)),
+        Span::styled("  └ ", Style::default().add_modifier(Modifier::DIM)),
         Span::raw("    "),
     ));
 

@@ -518,16 +518,18 @@ impl Agent {
         }
     }
 
-    pub(super) fn complete_remaining_plan_steps(&mut self) {
+    pub(super) fn complete_active_plan_step(&mut self) {
         if !matches!(self.execution_mode, AgentExecutionMode::Execute)
             || self.current_plan.is_empty()
         {
             return;
         }
-        for step in &mut self.current_plan {
-            if !matches!(step.status, PlanStepStatus::Completed) {
-                step.status = PlanStepStatus::Completed;
-            }
+        if let Some(step) = self
+            .current_plan
+            .iter_mut()
+            .find(|step| matches!(step.status, PlanStepStatus::InProgress))
+        {
+            step.status = PlanStepStatus::Completed;
         }
     }
 
