@@ -138,6 +138,21 @@ pub(super) fn apply_tui_event(app: &mut TuiApp, event: TuiEvent) {
                     || lower.contains("polling device code")
                 {
                     app.set_runtime_phase(RuntimePhase::OAuthPollingDeviceCode, Some(detail));
+                } else if is_oauth_prompt_message(&message) {
+                    let is_device_code = message.to_ascii_lowercase().contains("one-time code");
+                    app.push_entry("System", message);
+                    if is_device_code {
+                        app.set_runtime_phase(
+                            RuntimePhase::OAuthDeviceCodePrompt,
+                            Some("device code ready".into()),
+                        );
+                    } else {
+                        app.set_runtime_phase(
+                            RuntimePhase::OAuthWaitingCallback,
+                            Some("browser login url ready".into()),
+                        );
+                    }
+                    return;
                 } else if lower.contains("device-code login")
                     || lower.contains("one-time code")
                     || lower.contains("open this url in a browser")
@@ -174,6 +189,12 @@ pub(super) fn apply_tui_event(app: &mut TuiApp, event: TuiEvent) {
             );
         }
     }
+}
+
+fn is_oauth_prompt_message(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    lower.contains("open this url in a browser and enter the one-time code:")
+        || lower.contains("open this url if the browser does not launch automatically:")
 }
 
 pub(super) fn convert_agent_event(event: AgentEvent) -> Option<TuiEvent> {
@@ -989,8 +1010,9 @@ use crate::redaction::redact_secrets;
 mod tests {
     use super::{
         apply_tui_event, format_apply_patch_result, format_apply_patch_use, format_tool_progress,
-        format_tool_result, limit_tool_progress_entry, planning_note_lines,
         scrub_internal_control_tokens,
+        format_tool_result, is_oauth_prompt_message, limit_tool_progress_entry,
+        planning_note_lines,
         subagent_request_input,
     };
     use crate::agent::AgentExecutionMode;
@@ -1168,6 +1190,14 @@ mod tests {
             },
         );
         assert_eq!(app.runtime_phase, RuntimePhase::OAuthDeviceCodePrompt);
+        let prompt_entry = app
+            .active_turn
+            .entries
+            .last()
+            .expect("persisted oauth prompt entry");
+        assert_eq!(prompt_entry.role, "System");
+        assert!(prompt_entry.message.contains("https://example.test"));
+        assert!(prompt_entry.message.contains("Code: ABCD"));
 
         apply_tui_event(
             &mut app,
@@ -1177,5 +1207,16 @@ mod tests {
             },
         );
         assert_eq!(app.runtime_phase, RuntimePhase::OAuthPollingDeviceCode);
+    }
+
+    #[test]
+    fn detects_persistent_oauth_prompt_messages() {
+        assert!(is_oauth_prompt_message(
+            "Open this URL in a browser and enter the one-time code:\nhttps://example.test\n\nCode: ABCD"
+        ));
+        assert!(is_oauth_prompt_message(
+            "Starting Codex browser login.\nOpen this URL if the browser does not launch automatically:\nhttps://example.test"
+        ));
+        assert!(!is_oauth_prompt_message("Waiting for device-code confirmation."));
     }
 }
