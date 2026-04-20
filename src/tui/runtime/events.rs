@@ -126,9 +126,14 @@ pub(super) fn apply_tui_event(app: &mut TuiApp, event: TuiEvent) {
             } else if role == "Runtime" {
                 let detail = message.lines().next().unwrap_or(role).trim().to_string();
                 let lower = detail.to_ascii_lowercase();
-                if lower.contains("device-code login")
+                if lower.contains("waiting for device-code confirmation")
+                    || lower.contains("polling device code")
+                {
+                    app.set_runtime_phase(RuntimePhase::OAuthPollingDeviceCode, Some(detail));
+                } else if lower.contains("device-code login")
                     || lower.contains("one-time code")
                     || lower.contains("open this url in a browser")
+                    || lower.starts_with("code:")
                 {
                     app.set_runtime_phase(RuntimePhase::OAuthDeviceCodePrompt, Some(detail));
                 } else if lower.contains("waiting for browser callback") {
@@ -928,12 +933,15 @@ use crate::redaction::redact_secrets;
 #[cfg(test)]
 mod tests {
     use super::{
-        format_apply_patch_result, format_apply_patch_use, format_tool_progress,
+        apply_tui_event, format_apply_patch_result, format_apply_patch_use, format_tool_progress,
         format_tool_result, limit_tool_progress_entry, planning_note_lines,
         subagent_request_input,
     };
+    use crate::config::ConfigManager;
     use crate::tool::ToolOutputStream;
+    use crate::tui::state::{RuntimePhase, TuiApp, TuiEvent};
     use serde_json::json;
+    use tempfile::tempdir;
 
     #[test]
     fn parses_delegated_request_input_from_subagent_result() {
@@ -1045,5 +1053,32 @@ mod tests {
         assert!(message.contains("... live output truncated ..."));
         assert!(!message.lines().any(|line| line == "line 1"));
         assert!(message.contains("line 20"));
+    }
+
+    #[test]
+    fn runtime_device_code_messages_update_prompt_and_polling_phases() {
+        let temp = tempdir().expect("tempdir");
+        let mut app = TuiApp::new(ConfigManager {
+            path: temp.path().join("config.json"),
+        })
+        .expect("app");
+
+        apply_tui_event(
+            &mut app,
+            TuiEvent::Transcript {
+                role: "Runtime",
+                message: "Open this URL in a browser and enter the one-time code:\nhttps://example.test\n\nCode: ABCD".into(),
+            },
+        );
+        assert_eq!(app.runtime_phase, RuntimePhase::OAuthDeviceCodePrompt);
+
+        apply_tui_event(
+            &mut app,
+            TuiEvent::Transcript {
+                role: "Runtime",
+                message: "Waiting for device-code confirmation.".into(),
+            },
+        );
+        assert_eq!(app.runtime_phase, RuntimePhase::OAuthPollingDeviceCode);
     }
 }

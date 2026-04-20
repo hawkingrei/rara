@@ -44,7 +44,10 @@ use self::runtime::{
 use self::session_restore::{
     provider_requires_api_key, restore_latest_session, restore_session_by_id,
 };
-use self::state::{current_model_presets, HelpTab, Overlay, TaskKind, TuiApp, PROVIDER_FAMILIES};
+use self::state::{
+    current_model_presets, HelpTab, LocalCommandKind, Overlay, TaskKind, TuiApp,
+    PROVIDER_FAMILIES,
+};
 use self::terminal_ui::{
     build_terminal, flush_committed_history, handle_paste, is_ssh_session, teardown_terminal,
     update_terminal_viewport,
@@ -98,6 +101,9 @@ pub async fn run_tui(agent: Agent, oauth_manager: OAuthManager) -> anyhow::Resul
                     Some(Ok(event)) => match translate_event(event, &app) {
                         Some(UiEvent::App(event)) => {
                             if dispatch_event(event, &mut app, &mut agent_slot, &oauth_manager).await? {
+                                if let Some(task) = app.running_task.take() {
+                                    task.handle.abort();
+                                }
                                 break Ok(());
                             }
                         }
@@ -544,6 +550,7 @@ async fn dispatch_event(
                     } else if is_ssh_session() {
                         app.push_notice("Browser login is unavailable in SSH/headless sessions. Choose device code or API key instead.");
                     } else {
+                        app.close_overlay();
                         start_oauth_task(
                             app,
                             Arc::clone(oauth_manager),
@@ -555,6 +562,7 @@ async fn dispatch_event(
                     if app.is_busy() {
                         app.push_notice("A task is already running. Wait for it to finish.");
                     } else {
+                        app.close_overlay();
                         start_oauth_task(
                             app,
                             Arc::clone(oauth_manager),
@@ -611,6 +619,11 @@ async fn handle_submit(
             return Ok(false);
         }
         if trimmed.starts_with('/') {
+            if let Some(command) = parse_local_command(trimmed) {
+                if matches!(command.kind, LocalCommandKind::Quit) {
+                    return execute_local_command(command, app, agent_slot, oauth_manager).await;
+                }
+            }
             app.push_notice(
                 "A task is already running. Wait for it to finish before running a slash command.",
             );
@@ -889,6 +902,43 @@ mod tests {
             .as_deref()
             .is_some_and(|value| value.contains("Queued for after the next tool call boundary")));
         assert_eq!(app.pending_follow_up_preview(), Some("continue with the follow-up"));
+
+        if let Some(task) = app.running_task.take() {
+            task.handle.abort();
+        }
+    }
+
+    #[tokio::test]
+    async fn busy_submit_allows_quit_command() {
+        let temp = tempdir().expect("tempdir");
+        let mut app = TuiApp::new(ConfigManager {
+            path: temp.path().join("config.json"),
+        })
+        .expect("app");
+        app.input = "/quit".into();
+
+        let (_sender, receiver) = mpsc::unbounded_channel();
+        app.running_task = Some(RunningTask {
+            kind: TaskKind::OAuth,
+            receiver,
+            handle: tokio::spawn(async move {
+                tokio::time::sleep(Duration::from_secs(60)).await;
+                unreachable!()
+            }),
+            started_at: Instant::now(),
+            next_heartbeat_after_secs: u64::MAX,
+        });
+
+        let mut agent_slot = None;
+        let oauth_manager = Arc::new(
+            crate::oauth::OAuthManager::new_for_config_dir(temp.path().join(".rara"))
+                .expect("oauth manager"),
+        );
+        let should_quit = super::handle_submit(&mut app, &mut agent_slot, &oauth_manager)
+            .await
+            .expect("submit");
+
+        assert!(should_quit);
 
         if let Some(task) = app.running_task.take() {
             task.handle.abort();
