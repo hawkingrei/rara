@@ -164,7 +164,14 @@ fn map_key_to_event(key: KeyCode, app: &TuiApp) -> AppEvent {
             KeyCode::Char('2') => AppEvent::SetModelSelection(1),
             KeyCode::Char('3') => AppEvent::SetModelSelection(2),
             KeyCode::Char('m') => AppEvent::CycleModelSelection,
-            KeyCode::Char('l') => AppEvent::OpenOverlay(Overlay::AuthModePicker),
+            KeyCode::Char('l')
+                if matches!(
+                    app.selected_provider_family(),
+                    self::state::ProviderFamily::Codex
+                ) =>
+            {
+                AppEvent::OpenOverlay(Overlay::AuthModePicker)
+            }
             KeyCode::Enter => AppEvent::ApplyOverlaySelection,
             _ => AppEvent::Noop,
         },
@@ -174,6 +181,8 @@ fn map_key_to_event(key: KeyCode, app: &TuiApp) -> AppEvent {
             KeyCode::Down | KeyCode::Char('j') => AppEvent::MoveProviderSelection(1),
             KeyCode::Char('1') => AppEvent::SetProviderSelection(0),
             KeyCode::Char('2') => AppEvent::SetProviderSelection(1),
+            KeyCode::Char('3') => AppEvent::SetProviderSelection(2),
+            KeyCode::Char('4') => AppEvent::SetProviderSelection(3),
             KeyCode::Enter => AppEvent::ApplyOverlaySelection,
             _ => AppEvent::Noop,
         },
@@ -194,8 +203,30 @@ fn map_key_to_event(key: KeyCode, app: &TuiApp) -> AppEvent {
             KeyCode::Char('1') => AppEvent::SetModelSelection(0),
             KeyCode::Char('2') => AppEvent::SetModelSelection(1),
             KeyCode::Char('3') => AppEvent::SetModelSelection(2),
-            KeyCode::Char('b') if app.provider_picker_idx == 1 => {
+            KeyCode::Char('b')
+                if matches!(
+                    app.selected_provider_family(),
+                    self::state::ProviderFamily::OpenAiCompatible
+                        | self::state::ProviderFamily::Ollama
+                ) =>
+            {
                 AppEvent::OpenOverlay(Overlay::BaseUrlEditor)
+            }
+            KeyCode::Char('a')
+                if matches!(
+                    app.selected_provider_family(),
+                    self::state::ProviderFamily::OpenAiCompatible
+                ) =>
+            {
+                AppEvent::OpenOverlay(Overlay::ApiKeyEditor)
+            }
+            KeyCode::Char('n')
+                if matches!(
+                    app.selected_provider_family(),
+                    self::state::ProviderFamily::OpenAiCompatible
+                ) =>
+            {
+                AppEvent::OpenOverlay(Overlay::ModelNameEditor)
             }
             KeyCode::Enter => AppEvent::ApplyOverlaySelection,
             _ => AppEvent::Noop,
@@ -221,6 +252,13 @@ fn map_key_to_event(key: KeyCode, app: &TuiApp) -> AppEvent {
         Some(Overlay::ApiKeyEditor) => match key {
             KeyCode::Esc => AppEvent::CloseOverlay,
             KeyCode::Enter => AppEvent::SaveApiKeyInput,
+            KeyCode::Backspace => AppEvent::Backspace,
+            KeyCode::Char(c) => AppEvent::InputChar(c),
+            _ => AppEvent::Noop,
+        },
+        Some(Overlay::ModelNameEditor) => match key {
+            KeyCode::Esc => AppEvent::CloseOverlay,
+            KeyCode::Enter => AppEvent::SaveModelNameInput,
             KeyCode::Backspace => AppEvent::Backspace,
             KeyCode::Char(c) => AppEvent::InputChar(c),
             _ => AppEvent::Noop,
@@ -286,6 +324,8 @@ async fn dispatch_event(
                 app.base_url_input.push(c);
             } else if matches!(app.overlay, Some(Overlay::ApiKeyEditor)) {
                 app.api_key_input.push(c);
+            } else if matches!(app.overlay, Some(Overlay::ModelNameEditor)) {
+                app.model_name_input.push(c);
             } else {
                 app.input.push(c);
                 app.sync_command_palette_with_input();
@@ -296,6 +336,8 @@ async fn dispatch_event(
                 app.base_url_input.pop();
             } else if matches!(app.overlay, Some(Overlay::ApiKeyEditor)) {
                 app.api_key_input.pop();
+            } else if matches!(app.overlay, Some(Overlay::ModelNameEditor)) {
+                app.model_name_input.pop();
             } else {
                 app.input.pop();
                 app.sync_command_palette_with_input();
@@ -453,31 +495,60 @@ async fn dispatch_event(
             app.cycle_local_model();
         }
         AppEvent::SaveBaseUrlInput => {
-            let value = app.base_url_input.trim();
-            app.config.set_base_url((!value.is_empty()).then(|| value.to_string()));
-            app.config_manager.save(&app.config)?;
-            app.notice = Some(format!(
-                "Saved base URL: {}",
-                app.config.base_url.as_deref().unwrap_or("unset")
-            ));
-            app.close_overlay();
+            if app.is_busy() {
+                app.push_notice("Wait for the current task before saving the base URL.");
+            } else {
+                let value = app.base_url_input.trim();
+                app.config
+                    .set_base_url((!value.is_empty()).then(|| value.to_string()));
+                app.config_manager.save(&app.config)?;
+                app.notice = Some(format!(
+                    "Saved base URL: {}",
+                    app.config.base_url.as_deref().unwrap_or("unset")
+                ));
+                app.close_overlay();
+            }
         }
         AppEvent::SaveApiKeyInput => {
             let value = app.api_key_input.trim();
-            if value.is_empty() {
-                app.push_notice("Enter a Codex API key or press Esc to go back.");
-            } else if app.is_busy() {
+            if app.is_busy() {
                 app.push_notice("Wait for the current task before saving the API key.");
+            } else if value.is_empty() && app.config.provider == "codex" {
+                app.push_notice("Enter a Codex API key or press Esc to go back.");
+            } else if value.is_empty() {
+                app.config.clear_api_key();
+                app.config_manager.save(&app.config)?;
+                app.notice = Some("Cleared API key for the current provider.".into());
+                app.close_overlay();
             } else {
-                app.config.set_provider("codex");
                 app.config.set_api_key(value.to_string());
-                if app.config.model.is_none() {
+                if app.config.provider == "codex" && app.config.model.is_none() {
                     app.config.set_model(Some("codex".into()));
                 }
                 app.config_manager.save(&app.config)?;
-                app.notice = Some("Saved Codex API key. Rebuilding backend.".into());
-                app.overlay = None;
-                start_rebuild_task(app);
+                if app.config.provider == "codex" {
+                    app.notice = Some("Saved Codex API key. Rebuilding backend.".into());
+                    app.overlay = None;
+                    start_rebuild_task(app);
+                } else {
+                    app.notice = Some("Saved API key for the current provider.".into());
+                    app.close_overlay();
+                }
+            }
+        }
+        AppEvent::SaveModelNameInput => {
+            if app.is_busy() {
+                app.push_notice("Wait for the current task before saving the model name.");
+            } else {
+                let value = app.model_name_input.trim();
+                if value.is_empty() {
+                    app.push_notice("Enter a model name or press Esc to go back.");
+                } else {
+                    app.config.set_model(Some(value.to_string()));
+                    app.config_manager.save(&app.config)?;
+                    app.notice = Some(format!("Saved model name: {}", value));
+                    app.close_overlay();
+                }
             }
         }
         AppEvent::SelectHelpTab(tab) => {
@@ -514,15 +585,19 @@ async fn dispatch_event(
                 }
             }
             Some(Overlay::BaseUrlEditor) => {
-                let value = app.base_url_input.trim();
-                app.config
-                    .set_base_url((!value.is_empty()).then(|| value.to_string()));
-                app.config_manager.save(&app.config)?;
-                app.notice = Some(format!(
-                    "Saved base URL: {}",
-                    app.config.base_url.as_deref().unwrap_or("unset")
-                ));
-                app.close_overlay();
+                if app.is_busy() {
+                    app.push_notice("Wait for the current task before saving the base URL.");
+                } else {
+                    let value = app.base_url_input.trim();
+                    app.config
+                        .set_base_url((!value.is_empty()).then(|| value.to_string()));
+                    app.config_manager.save(&app.config)?;
+                    app.notice = Some(format!(
+                        "Saved base URL: {}",
+                        app.config.base_url.as_deref().unwrap_or("unset")
+                    ));
+                    app.close_overlay();
+                }
             }
             Some(Overlay::ModelPicker) => {
                 if app.is_busy() {
@@ -827,7 +902,8 @@ fn should_open_codex_auth_guide(app: &TuiApp) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        classify_pending_plan_approval_input, map_key_to_event, PendingPlanApprovalAction,
+        classify_pending_plan_approval_input, dispatch_event, map_key_to_event,
+        PendingPlanApprovalAction,
     };
     use crate::config::ConfigManager;
     use crate::tui::app_event::AppEvent;
@@ -901,7 +977,10 @@ mod tests {
             .notice
             .as_deref()
             .is_some_and(|value| value.contains("Queued for after the next tool call boundary")));
-        assert_eq!(app.pending_follow_up_preview(), Some("continue with the follow-up"));
+        assert_eq!(
+            app.pending_follow_up_preview(),
+            Some("continue with the follow-up")
+        );
 
         if let Some(task) = app.running_task.take() {
             task.handle.abort();
@@ -966,5 +1045,65 @@ mod tests {
             map_key_to_event(KeyCode::Char('3'), &app),
             AppEvent::SetAuthModeSelection(2)
         ));
+    }
+
+    #[test]
+    fn openai_compatible_model_picker_exposes_connection_edit_shortcuts() {
+        let temp = tempdir().expect("tempdir");
+        let mut app = TuiApp::new(ConfigManager {
+            path: temp.path().join("config.json"),
+        })
+        .expect("app");
+
+        app.provider_picker_idx = 1;
+        app.open_overlay(Overlay::ModelPicker);
+
+        assert!(matches!(
+            map_key_to_event(KeyCode::Char('b'), &app),
+            AppEvent::OpenOverlay(Overlay::BaseUrlEditor)
+        ));
+        assert!(matches!(
+            map_key_to_event(KeyCode::Char('a'), &app),
+            AppEvent::OpenOverlay(Overlay::ApiKeyEditor)
+        ));
+        assert!(matches!(
+            map_key_to_event(KeyCode::Char('n'), &app),
+            AppEvent::OpenOverlay(Overlay::ModelNameEditor)
+        ));
+    }
+
+    #[tokio::test]
+    async fn save_api_key_input_allows_clearing_openai_compatible_credentials() {
+        let temp = tempdir().expect("tempdir");
+        let mut app = TuiApp::new(ConfigManager {
+            path: temp.path().join("config.json"),
+        })
+        .expect("app");
+        app.config.set_provider("openai-compatible");
+        app.config.set_api_key("sk-existing");
+        app.open_overlay(Overlay::ApiKeyEditor);
+        app.api_key_input.clear();
+
+        let oauth_manager = Arc::new(
+            crate::oauth::OAuthManager::new_for_config_dir(temp.path().join(".rara"))
+                .expect("oauth manager"),
+        );
+        let mut agent_slot = None;
+
+        let should_quit = dispatch_event(
+            AppEvent::SaveApiKeyInput,
+            &mut app,
+            &mut agent_slot,
+            &oauth_manager,
+        )
+        .await
+        .expect("save api key");
+
+        assert!(!should_quit);
+        assert_eq!(app.config.api_key(), None);
+        assert!(app
+            .notice
+            .as_deref()
+            .is_some_and(|value| value.contains("Cleared API key")));
     }
 }

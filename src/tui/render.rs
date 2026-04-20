@@ -27,7 +27,8 @@ use super::interaction_text::status_active_pending_interaction_text;
 use super::line_utils::prefix_lines;
 use super::plan_display::status_plan_text;
 use super::state::{
-    current_model_presets, HelpTab, Overlay, TranscriptEntry, TuiApp, PROVIDER_FAMILIES,
+    current_model_presets, HelpTab, Overlay, ProviderFamily, TranscriptEntry, TuiApp,
+    PROVIDER_FAMILIES,
 };
 
 pub fn render(f: &mut Frame, app: &TuiApp) {
@@ -489,6 +490,7 @@ fn render_overlay(f: &mut Frame, app: &TuiApp, overlay: Overlay) -> Option<(u16,
             None
         }
         Overlay::ApiKeyEditor => render_api_key_editor_modal(f, app, popup),
+        Overlay::ModelNameEditor => render_model_name_editor_modal(f, app, popup),
     }
 }
 
@@ -904,12 +906,22 @@ fn render_setup_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
         })
         .collect::<Vec<_>>()
         .join("\n");
+    let preset_shortcuts = (1..=current_model_presets(app.provider_picker_idx).len())
+        .map(|idx| idx.to_string())
+        .collect::<Vec<_>>()
+        .join("/");
+    let codex_auth_hint = if matches!(app.selected_provider_family(), ProviderFamily::Codex) {
+        "\n[L] Codex auth modes"
+    } else {
+        ""
+    };
     let text = format!(
         "Provider: {}\nModel: {}\nBase URL: {}\nAPI key: {}\nRevision: {}\n\n\
          Presets:\n{}\n\n\
-         [1/2/3] Select preset\n[M] Cycle preset\n[Enter] Apply and rebuild\n[L] Auth modes\n[Esc] Close\n\n\
+         [{}] Select preset\n[M] Cycle preset\n[Enter] Apply and rebuild{}\
+\n[Esc] Close\n\n\
          Use /model for the full provider menu.\n\
-         Codex supports browser login, device-code login, and API key auth.\n\
+         OpenAI-compatible endpoints can be configured from the model picker with base URL, API key, and model name.\n\
          Recommended: Qwn3 8B for stable local use.",
         app.config.provider,
         app.current_model_label(),
@@ -917,6 +929,8 @@ fn render_setup_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
         api_key_status(&app.config),
         app.config.revision.as_deref().unwrap_or("main"),
         preset_lines,
+        preset_shortcuts,
+        codex_auth_hint,
     );
     f.render_widget(
         Paragraph::new(text)
@@ -970,7 +984,7 @@ fn render_provider_picker_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
         chunks[1],
     );
     f.render_widget(
-        Paragraph::new("1/2/3 select  Up/Down move  Enter continue  Esc close")
+        Paragraph::new("1/2/3/4 select  Up/Down move  Enter continue  Esc close")
             .alignment(Alignment::Center),
         chunks[2],
     );
@@ -1089,6 +1103,16 @@ fn render_model_picker_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
         .split(area);
     let help = if provider_label == "Codex" && api_key_status(&app.config) == "missing" {
         "Provider: Codex\nAuthentication is required before this preset can be used.\nEnter opens the Codex login guide."
+    } else if provider_label == "OpenAI-compatible" {
+        &format!(
+            "Provider: {provider_label}\nBase URL: {}\nModel name: {}\nAPI key: {}\nUse B/A/N to edit connection settings, then Enter to apply and rebuild.",
+            app.config
+                .base_url
+                .as_deref()
+                .unwrap_or("https://api.openai.com/v1"),
+            app.current_model_label(),
+            api_key_status(&app.config),
+        )
     } else {
         &format!(
             "Provider: {provider_label}\nBase URL: {}\nSelect a concrete model preset. Enter applies immediately.",
@@ -1110,6 +1134,8 @@ fn render_model_picker_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
     f.render_widget(
         Paragraph::new(if provider_label == "Codex" {
             "1/2 choose  Up/Down move  Enter continue  Esc close"
+        } else if provider_label == "OpenAI-compatible" {
+            "1 choose  Up/Down move  B edit base URL  A edit API key  N edit model name  Enter apply  Esc close"
         } else {
             "1/2/3 apply directly  Up/Down move  B edit base URL  Enter apply  Esc close"
         })
@@ -1119,6 +1145,10 @@ fn render_model_picker_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
 }
 
 fn render_base_url_editor_modal(f: &mut Frame, app: &TuiApp, area: Rect) -> Option<(u16, u16)> {
+    let is_openai_compatible = matches!(
+        app.selected_provider_family(),
+        ProviderFamily::OpenAiCompatible
+    );
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -1127,9 +1157,11 @@ fn render_base_url_editor_modal(f: &mut Frame, app: &TuiApp, area: Rect) -> Opti
             Constraint::Length(2),
         ])
         .split(area);
-    let intro = Paragraph::new(
-        "Edit the Ollama base URL for this provider.\nLeave it empty to clear the override. Default: http://localhost:11434",
-    )
+    let intro = Paragraph::new(if is_openai_compatible {
+        "Edit the OpenAI-compatible base URL for this provider.\nLeave it empty to restore the default. Default: https://api.openai.com/v1"
+    } else {
+        "Edit the Ollama base URL for this provider.\nLeave it empty to clear the override. Default: http://localhost:11434"
+    })
     .block(Block::default().borders(Borders::ALL).title(" Base URL "));
     let editor = Paragraph::new(app.base_url_input.as_str())
         .block(Block::default().borders(Borders::ALL).title(" Value "));
@@ -1181,6 +1213,47 @@ fn render_auth_mode_picker_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
 }
 
 fn render_api_key_editor_modal(f: &mut Frame, app: &TuiApp, area: Rect) -> Option<(u16, u16)> {
+    let is_openai_compatible = matches!(
+        app.selected_provider_family(),
+        ProviderFamily::OpenAiCompatible
+    );
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(4),
+            Constraint::Length(3),
+            Constraint::Length(2),
+        ])
+        .split(area);
+    let (intro_text, title, footer_text) = if is_openai_compatible {
+        (
+            "Paste the API key for the selected OpenAI-compatible endpoint.",
+            " API Key ",
+            "Enter save  Esc back to model picker",
+        )
+    } else {
+        (
+            "Paste a Codex-compatible API key. This is the recommended path for SSH/headless sessions.",
+            " Codex API Key ",
+            "Enter save and rebuild  Esc back to login guide",
+        )
+    };
+    let intro = Paragraph::new(intro_text)
+        .block(Block::default().borders(Borders::ALL).title(title))
+        .wrap(Wrap { trim: false });
+    let editor = Paragraph::new(app.api_key_input.as_str())
+        .block(Block::default().borders(Borders::ALL).title(" Value "));
+    let footer = Paragraph::new(footer_text).alignment(Alignment::Center);
+    f.render_widget(intro, chunks[0]);
+    f.render_widget(editor, chunks[1]);
+    f.render_widget(footer, chunks[2]);
+    Some(editor_cursor_position(
+        app.api_key_input.as_str(),
+        chunks[1],
+    ))
+}
+
+fn render_model_name_editor_modal(f: &mut Frame, app: &TuiApp, area: Rect) -> Option<(u16, u16)> {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -1190,23 +1263,19 @@ fn render_api_key_editor_modal(f: &mut Frame, app: &TuiApp, area: Rect) -> Optio
         ])
         .split(area);
     let intro = Paragraph::new(
-        "Paste a Codex-compatible API key. This is the recommended path for SSH/headless sessions.",
+        "Set the model name to send to the OpenAI-compatible endpoint.\nExample: gpt-4o-mini, kimi-k2, or any server-specific model id.",
     )
-    .block(
-        Block::default()
-            .borders(Borders::ALL)
-            .title(" Codex API Key "),
-    )
+    .block(Block::default().borders(Borders::ALL).title(" Model Name "))
     .wrap(Wrap { trim: false });
-    let editor = Paragraph::new(app.api_key_input.as_str())
+    let editor = Paragraph::new(app.model_name_input.as_str())
         .block(Block::default().borders(Borders::ALL).title(" Value "));
-    let footer = Paragraph::new("Enter save and rebuild  Esc back to login guide")
-        .alignment(Alignment::Center);
+    let footer =
+        Paragraph::new("Enter save  Esc back to model picker").alignment(Alignment::Center);
     f.render_widget(intro, chunks[0]);
     f.render_widget(editor, chunks[1]);
     f.render_widget(footer, chunks[2]);
     Some(editor_cursor_position(
-        app.api_key_input.as_str(),
+        app.model_name_input.as_str(),
         chunks[1],
     ))
 }

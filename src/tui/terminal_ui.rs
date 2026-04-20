@@ -24,6 +24,11 @@ pub(super) fn handle_paste(text: String, app: &mut TuiApp) {
         return;
     }
 
+    if matches!(app.overlay, Some(super::state::Overlay::ModelNameEditor)) {
+        app.model_name_input.push_str(&text);
+        return;
+    }
+
     app.input.push_str(&text);
     app.sync_command_palette_with_input();
 }
