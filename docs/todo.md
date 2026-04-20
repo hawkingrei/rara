@@ -11,8 +11,6 @@ Active backlog only. Keep this file small and current.
 
 ## LLM and Networking
 
-- [ ] Add explicit HTTP timeouts to all networked backends in `src/llm.rs` so provider calls fail predictably instead of hanging indefinitely.
-- [ ] Extract shared message-mapping helpers across OpenAI-compatible and Ollama backends to reduce duplication and keep tool-call behavior consistent.
 - [ ] Add an `AgentHub team mode` on top of ACP: for role-specialized worker sessions, use a small model first for intent routing and only hand the task to the larger worker model when the intent is relevant to that worker, instead of sending every ACP turn directly to the expensive model.
 - [ ] Deepen the `AgentHub team mode` spec before implementation: define the ACP session metadata, worker-role contract, router prompt/output schema, and the exact `skip` / `handle` response semantics so the worker runtime can be implemented without inventing a parallel protocol later.
 
@@ -21,8 +19,8 @@ Active backlog only. Keep this file small and current.
 - [ ] Add a first-run onboarding flow that explains workspace, provider/model selection, local model download behavior, cache location, and tool loop expectations before the user lands in a blank chat.
 - [ ] Continue aligning the TUI status and transcript surfaces with Codex/Claude so runtime state stays visible without leaking bottom-pane chrome into transcript history.
 - [ ] Continue making tool-action transcript summaries more source-aware and file-aware so edit tools such as `write_file` / `replace` / `apply_patch` consistently show what they touched instead of only generic action labels.
-- [ ] Turn `bash` execution into a real evented TUI transcript path so long-running commands can stream stdout/stderr live instead of only surfacing a post-hoc result summary.
-- [ ] Upgrade queued follow-up messages from "run after the current task finishes" to a true "submit after the next tool call boundary" steer path, matching the Codex-style pending input contract more closely.
+- [ ] Continue refining the live `bash` transcript path so command execution behaves more like Codex: keep the streamed stdout/stderr surface, then add richer lifecycle details such as clearer command-start/finish framing and better long-output folding.
+- [ ] Continue refining queued follow-up steering toward the full Codex contract: keep the new next-tool-boundary queue, then add the explicit interrupt/send-now path and clearer separation between pending steers and ordinary queued follow-ups.
 - [ ] Harden local model prompting contracts for Gemma 4 and Qwen3: chat template handling, stop sequences, and tool-call JSON framing should be explicit and regression-tested.
 - [ ] Replace the current hash-based local embedding fallback with a real embedding backend so project memory retrieval quality is good enough for normal coding sessions.
 - [ ] Replace the mock `VectorDB` implementation in `src/vectordb.rs` with real LanceDB-backed search/upsert behavior, or feature-gate the memory tools until the backend is real.
@@ -42,6 +40,7 @@ Active backlog only. Keep this file small and current.
 ## Code Organization and Docs
 
 - [ ] Continue the internal-crate rollout after `rara-config`, `rara-instructions`, and `rara-skills`: move more skill runtime behavior behind `rara-skills`, then extract the next stable boundary instead of growing the root crate back toward a monolith.
+- [ ] Revisit direct reuse of `codex-core-skills` after the Codex-compatible root-discovery phase: keep `rara-skills` as the adaptation boundary, but replace more of the custom loader/render/invocation stack once the dependency surface is acceptable.
 - [ ] Refine instruction resolution so `AGENTS.md` / instruction files behave more like Codex and Claude Code: keep hierarchical lookup, then define clearer precedence and merge rules for nested project instructions versus local `.rara` instructions.
 - [ ] Continue splitting remaining oversized TUI files such as `src/tui/state.rs` and `src/tui/markdown_render.rs` so the 800-line guideline holds across the main interaction path.
 - [ ] Add module-level documentation for the agent lifecycle, tool loop, plan/update flow, and sandbox model so the runtime architecture is easier to reason about.

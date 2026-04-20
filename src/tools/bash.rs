@@ -1,15 +1,33 @@
-use crate::tool::{Tool, ToolError};
+use crate::tool::{Tool, ToolError, ToolOutputStream, ToolProgressEvent};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use tokio::process::Command;
 use crate::sandbox::SandboxManager;
 use tokio::fs;
+use tokio::io::{AsyncBufReadExt, AsyncRead, BufReader};
+use tokio::process::Command;
+use tokio::sync::mpsc;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::env;
+use std::process::Stdio;
 
 pub struct BashTool { pub sandbox: Arc<SandboxManager> }
+
+#[derive(Clone, Copy, Debug)]
+enum BashStreamKind {
+    Stdout,
+    Stderr,
+}
+
+impl BashStreamKind {
+    fn output_stream(self) -> ToolOutputStream {
+        match self {
+            Self::Stdout => ToolOutputStream::Stdout,
+            Self::Stderr => ToolOutputStream::Stderr,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct BashCommandInput {
@@ -119,6 +137,14 @@ impl Tool for BashTool {
         })
     }
     async fn call(&self, i: Value) -> Result<Value, ToolError> {
+        self.call_with_events(i, &mut |_| {}).await
+    }
+
+    async fn call_with_events(
+        &self,
+        i: Value,
+        report: &mut (dyn FnMut(ToolProgressEvent) + Send),
+    ) -> Result<Value, ToolError> {
         let request = BashCommandInput::from_value(i)?;
         let cwd = request.working_dir()?;
         let wrapped = if let Some(command) = request.command.as_deref() {
@@ -137,23 +163,88 @@ impl Tool for BashTool {
         };
 
         let mut command = Command::new(&wrapped.program);
-        command.args(&wrapped.args).current_dir(&cwd).envs(&request.env);
-        let out = command.output().await?;
+        command
+            .args(&wrapped.args)
+            .current_dir(&cwd)
+            .envs(&request.env)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let mut child = command.spawn()?;
+
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| ToolError::ExecutionFailed("stdout pipe unavailable".into()))?;
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| ToolError::ExecutionFailed("stderr pipe unavailable".into()))?;
+
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let stdout_task = tokio::spawn(read_stream_lines(stdout, BashStreamKind::Stdout, tx.clone()));
+        let stderr_task = tokio::spawn(read_stream_lines(stderr, BashStreamKind::Stderr, tx));
+
+        let mut stdout_text = String::new();
+        let mut stderr_text = String::new();
+        let mut live_streamed = false;
+        while let Some((stream, chunk)) = rx.recv().await {
+            if chunk.is_empty() {
+                continue;
+            }
+            live_streamed = true;
+            match stream {
+                BashStreamKind::Stdout => stdout_text.push_str(&chunk),
+                BashStreamKind::Stderr => stderr_text.push_str(&chunk),
+            }
+            report(ToolProgressEvent::Output {
+                stream: stream.output_stream(),
+                chunk,
+            });
+        }
+
+        let status = child.wait().await?;
+        stdout_task
+            .await
+            .map_err(|err| ToolError::ExecutionFailed(err.to_string()))??;
+        stderr_task
+            .await
+            .map_err(|err| ToolError::ExecutionFailed(err.to_string()))??;
         if let Some(path) = wrapped.cleanup_path.as_ref() {
             let _ = fs::remove_file(path).await;
         }
         Ok(json!({
-            "stdout": String::from_utf8_lossy(&out.stdout),
-            "stderr": String::from_utf8_lossy(&out.stderr),
-            "exit_code": out.status.code()
+            "stdout": stdout_text,
+            "stderr": stderr_text,
+            "exit_code": status.code(),
+            "live_streamed": live_streamed,
         }))
     }
 }
 
+async fn read_stream_lines<R>(
+    reader: R,
+    stream: BashStreamKind,
+    tx: mpsc::UnboundedSender<(BashStreamKind, String)>,
+) -> Result<(), ToolError>
+where
+    R: AsyncRead + Unpin + Send + 'static,
+{
+    let mut lines = BufReader::new(reader).lines();
+    while let Some(line) = lines.next_line().await? {
+        let mut chunk = line;
+        chunk.push('\n');
+        let _ = tx.send((stream, chunk));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::BashCommandInput;
-    use serde_json::json;
+    use super::{BashCommandInput, BashTool};
+    use crate::sandbox::SandboxManager;
+    use crate::tool::{Tool, ToolOutputStream, ToolProgressEvent};
+    use serde_json::{Value, json};
+    use std::sync::Arc;
 
     #[test]
     fn parses_legacy_shell_payload() {
@@ -184,5 +275,33 @@ mod tests {
         assert_eq!(input.cwd.as_deref(), Some("/tmp/workspace"));
         assert_eq!(input.env.get("RUST_LOG").map(String::as_str), Some("debug"));
         assert_eq!(input.summary(), "cargo check --workspace");
+    }
+
+    #[tokio::test]
+    async fn streaming_call_reports_stdout_and_stderr_chunks() {
+        let tool = BashTool {
+            sandbox: Arc::new(SandboxManager::new().expect("sandbox")),
+        };
+        let mut events = Vec::new();
+        let result = tool
+            .call_with_events(
+                json!({
+                    "program": "sh",
+                    "args": ["-c", "printf 'out\\n'; printf 'err\\n' >&2"],
+                }),
+                &mut |event| events.push(event),
+            )
+            .await
+            .expect("bash result");
+
+        assert!(!events.is_empty());
+        assert!(events.iter().any(|event| matches!(
+            event,
+            ToolProgressEvent::Output {
+                stream: ToolOutputStream::Stdout | ToolOutputStream::Stderr,
+                ..
+            }
+        )));
+        assert_eq!(result.get("live_streamed").and_then(Value::as_bool), Some(true));
     }
 }

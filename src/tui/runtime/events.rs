@@ -1,9 +1,12 @@
 use crate::agent::AgentEvent;
+use crate::tool::ToolOutputStream;
 use crate::tools::bash::BashCommandInput;
 
 use super::super::state::{
     contains_structured_planning_output, RuntimePhase, TuiApp, TuiEvent,
 };
+
+const TOOL_PROGRESS_LINE_LIMIT: usize = 16;
 
 pub(super) fn apply_tui_event(app: &mut TuiApp, event: TuiEvent) {
     match event {
@@ -31,6 +34,7 @@ pub(super) fn apply_tui_event(app: &mut TuiApp, event: TuiEvent) {
                         app.record_running_action(action);
                     }
                 } else if let Some(note) = exploration_result_note(&message) {
+                    app.advance_running_tool_boundary();
                     app.record_exploration_note(note);
                     app.set_runtime_phase(
                         RuntimePhase::RunningTool,
@@ -38,6 +42,7 @@ pub(super) fn apply_tui_event(app: &mut TuiApp, event: TuiEvent) {
                     );
                     return;
                 } else if let Some(note) = planning_result_note(&message) {
+                    app.advance_running_tool_boundary();
                     app.record_planning_note(note);
                     app.set_runtime_phase(
                         RuntimePhase::RunningTool,
@@ -53,6 +58,7 @@ pub(super) fn apply_tui_event(app: &mut TuiApp, event: TuiEvent) {
                     }
                     return;
                 } else if let Some(request) = subagent_request_input(&message) {
+                    app.advance_running_tool_boundary();
                     let source = if message.starts_with("explore_agent ") {
                         "explore_agent"
                     } else {
@@ -69,6 +75,9 @@ pub(super) fn apply_tui_event(app: &mut TuiApp, event: TuiEvent) {
                         Some(message.lines().next().unwrap_or(role).trim().to_string()),
                     );
                     return;
+                }
+                if matches!(role, "Tool Result" | "Tool Error") {
+                    app.advance_running_tool_boundary();
                 }
                 app.set_runtime_phase(
                     RuntimePhase::RunningTool,
@@ -126,6 +135,19 @@ pub(super) fn apply_tui_event(app: &mut TuiApp, event: TuiEvent) {
             }
             app.push_entry(role, message)
         }
+        TuiEvent::ToolProgress {
+            name,
+            stream,
+            chunk,
+        } => {
+            if !append_tool_progress(app, &name, stream, &chunk) {
+                return;
+            }
+            app.set_runtime_phase(
+                RuntimePhase::RunningTool,
+                Some(format!("streaming {name} output")),
+            );
+        }
     }
 }
 
@@ -164,6 +186,15 @@ pub(super) fn convert_agent_event(event: AgentEvent) -> Option<TuiEvent> {
                 message: format_tool_result(&name, &content),
             })
         }
+        AgentEvent::ToolProgress {
+            name,
+            stream,
+            chunk,
+        } => Some(TuiEvent::ToolProgress {
+            name,
+            stream,
+            chunk,
+        }),
     }
 }
 
@@ -505,7 +536,15 @@ fn format_tool_result(name: &str, content: &str) -> String {
                 .get("stderr")
                 .and_then(serde_json::Value::as_str)
                 .unwrap_or_default();
-            let mut summary = format!("bash exit_code={exit_code}");
+            let live_streamed = value
+                .get("live_streamed")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false);
+            let mut summary = format!("bash completed exit_code={exit_code}");
+            if live_streamed {
+                summary.push_str("\nstreamed output shown above");
+                return summary;
+            }
             if let Some(stdout_preview) = output_tail_preview(stdout) {
                 summary.push_str(&format!("\nstdout:\n{stdout_preview}"));
             }
@@ -554,6 +593,58 @@ fn format_tool_result(name: &str, content: &str) -> String {
     }
 
     format!("{name}: {content}")
+}
+
+fn format_tool_progress(name: &str, stream: ToolOutputStream, chunk: &str) -> String {
+    let trimmed = chunk.trim_end_matches('\n');
+    if trimmed.trim().is_empty() {
+        return String::new();
+    }
+    let stream_label = match stream {
+        ToolOutputStream::Stdout => "stdout",
+        ToolOutputStream::Stderr => "stderr",
+    };
+    format!("{name} {stream_label}:\n{trimmed}\n")
+}
+
+fn append_tool_progress(
+    app: &mut TuiApp,
+    name: &str,
+    stream: ToolOutputStream,
+    chunk: &str,
+) -> bool {
+    let rendered = format_tool_progress(name, stream, chunk);
+    if rendered.is_empty() {
+        return false;
+    }
+
+    if let Some(last) = app.active_turn.entries.last_mut() {
+        if last.role == "Tool Progress" {
+            last.message.push_str(&rendered);
+            limit_tool_progress_entry(&mut last.message);
+            return true;
+        }
+    }
+
+    app.push_entry("Tool Progress", rendered);
+    if let Some(last) = app.active_turn.entries.last_mut() {
+        limit_tool_progress_entry(&mut last.message);
+    }
+    true
+}
+
+fn limit_tool_progress_entry(message: &mut String) {
+    let lines = message.lines().collect::<Vec<_>>();
+    if lines.len() <= TOOL_PROGRESS_LINE_LIMIT {
+        return;
+    }
+    let keep = &lines[lines.len() - TOOL_PROGRESS_LINE_LIMIT..];
+    let mut folded = String::from("... live output truncated ...\n");
+    folded.push_str(&keep.join("\n"));
+    if message.ends_with('\n') {
+        folded.push('\n');
+    }
+    *message = folded;
 }
 
 fn format_apply_patch_result(value: &serde_json::Value) -> String {
@@ -810,9 +901,11 @@ use crate::redaction::redact_secrets;
 #[cfg(test)]
 mod tests {
     use super::{
-        format_apply_patch_result, format_apply_patch_use, format_tool_result, planning_note_lines,
+        format_apply_patch_result, format_apply_patch_use, format_tool_progress,
+        format_tool_result, limit_tool_progress_entry, planning_note_lines,
         subagent_request_input,
     };
+    use crate::tool::ToolOutputStream;
     use serde_json::json;
 
     #[test]
@@ -883,8 +976,44 @@ mod tests {
             .to_string(),
         );
 
-        assert!(rendered.contains("bash exit_code=0"));
+        assert!(rendered.contains("bash completed exit_code=0"));
         assert!(rendered.contains("stdout:\nline 2\nline 3\nline 4\nline 5\nline 6\nline 7"));
         assert!(rendered.contains("stderr:\nwarn 1\nwarn 2"));
+    }
+
+    #[test]
+    fn formats_live_bash_tool_result_without_duplicate_tail() {
+        let rendered = format_tool_result(
+            "bash",
+            &json!({
+                "exit_code": 0,
+                "stdout": "line 1\nline 2\n",
+                "stderr": "",
+                "live_streamed": true
+            })
+            .to_string(),
+        );
+
+        assert!(rendered.contains("bash completed exit_code=0"));
+        assert!(rendered.contains("streamed output shown above"));
+        assert!(!rendered.contains("stdout:"));
+    }
+
+    #[test]
+    fn formats_tool_progress_with_stream_label() {
+        let rendered = format_tool_progress("bash", ToolOutputStream::Stderr, "warn 1\nwarn 2\n");
+        assert_eq!(rendered, "bash stderr:\nwarn 1\nwarn 2\n");
+    }
+
+    #[test]
+    fn folds_tool_progress_to_recent_tail() {
+        let mut message = (1..=20)
+            .map(|n| format!("line {n}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        limit_tool_progress_entry(&mut message);
+        assert!(message.contains("... live output truncated ..."));
+        assert!(!message.lines().any(|line| line == "line 1"));
+        assert!(message.contains("line 20"));
     }
 }

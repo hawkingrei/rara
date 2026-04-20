@@ -10,6 +10,7 @@ mod markdown;
 mod markdown_render;
 mod markdown_stream;
 mod plan_display;
+mod queued_input;
 mod render;
 mod runtime;
 mod session_restore;
@@ -42,7 +43,7 @@ use self::runtime::{
 use self::session_restore::{
     provider_requires_api_key, restore_latest_session, restore_session_by_id,
 };
-use self::state::{current_model_presets, HelpTab, Overlay, TuiApp, PROVIDER_FAMILIES};
+use self::state::{current_model_presets, HelpTab, Overlay, TaskKind, TuiApp, PROVIDER_FAMILIES};
 use self::terminal_ui::{
     build_terminal, flush_committed_history, handle_paste, is_ssh_session, teardown_terminal,
     update_terminal_viewport,
@@ -582,14 +583,27 @@ async fn handle_submit(
                 "A task is already running. Wait for it to finish before running a slash command.",
             );
         } else {
-            let queued = app.queue_follow_up_message(trimmed.to_string());
+            let pending_for_tool_boundary = app
+                .running_task
+                .as_ref()
+                .is_some_and(|task| matches!(&task.kind, TaskKind::Query));
+            let queued = if pending_for_tool_boundary {
+                app.queue_follow_up_message_after_next_tool_boundary(trimmed.to_string())
+            } else {
+                app.queue_follow_up_message(trimmed.to_string())
+            };
             let suffix = if queued > 1 {
                 format!(" {queued} follow-up messages are queued.")
             } else {
                 " 1 follow-up message is queued.".to_string()
             };
             app.notice = Some(format!(
-                "Queued for after the current task finishes.{suffix}"
+                "{}{suffix}",
+                if pending_for_tool_boundary {
+                    "Queued for after the next tool call boundary."
+                } else {
+                    "Queued for after the current task finishes."
+                }
             ));
         }
         return Ok(false);
@@ -836,7 +850,8 @@ mod tests {
         assert!(app
             .notice
             .as_deref()
-            .is_some_and(|value| value.contains("Queued for after the current task")));
+            .is_some_and(|value| value.contains("Queued for after the next tool call boundary")));
+        assert_eq!(app.pending_follow_up_preview(), Some("continue with the follow-up"));
 
         if let Some(task) = app.running_task.take() {
             task.handle.abort();
