@@ -25,6 +25,7 @@ use crate::tools::web::WebFetchTool;
 use crate::tools::workspace::UpdateProjectMemoryTool;
 use crate::vectordb::VectorDB;
 use crate::workspace::WorkspaceMemory;
+use crate::{DEFAULT_CODEX_BASE_URL, DEFAULT_CODEX_MODEL};
 
 use super::super::state::{
     OAuthLoginMode, RunningTask, RuntimePhase, TaskCompletion, TaskKind, TuiApp, TuiEvent,
@@ -534,8 +535,7 @@ pub(super) async fn finish_running_task_if_ready(
                     app.current_model_label()
                 ));
                 app.notice = app.setup_status.clone();
-                let queued_follow_up_messages =
-                    std::mem::take(&mut app.queued_follow_up_messages);
+                let queued_follow_up_messages = std::mem::take(&mut app.queued_follow_up_messages);
                 let pending_follow_up_messages =
                     std::mem::take(&mut app.pending_follow_up_messages);
                 app.reset_transcript();
@@ -564,7 +564,17 @@ pub(super) async fn finish_running_task_if_ready(
                 app.config
                     .set_api_key(credential.expose_secret().to_string());
                 if app.config.model.is_none() {
-                    app.config.set_model(Some("codex".into()));
+                    app.config.set_model(Some(DEFAULT_CODEX_MODEL.into()));
+                }
+                if app
+                    .config
+                    .base_url
+                    .as_deref()
+                    .map(str::trim)
+                    .is_none_or(|current| current.is_empty() || current == "http://localhost:8080")
+                {
+                    app.config
+                        .set_base_url(Some(DEFAULT_CODEX_BASE_URL.to_string()));
                 }
                 app.config_manager.save(&app.config)?;
                 let saved_message = match mode {

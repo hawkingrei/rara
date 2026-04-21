@@ -47,6 +47,9 @@ use clap::{Parser, Subcommand};
 use secrecy::ExposeSecret;
 use std::sync::Arc;
 
+pub(crate) const DEFAULT_CODEX_BASE_URL: &str = "https://api.openai.com/v1";
+pub(crate) const DEFAULT_CODEX_MODEL: &str = "gpt-5-codex";
+
 #[derive(Parser)]
 #[command(name = "rara")]
 #[command(about = "RARA: RARA Automates Rust Agents", long_about = None)]
@@ -216,8 +219,16 @@ fn save_codex_credential(
 ) -> Result<()> {
     config.set_provider("codex");
     config.set_api_key(credential.to_string());
+    let should_reset_base_url = config
+        .base_url
+        .as_deref()
+        .map(str::trim)
+        .is_none_or(|value| value.is_empty() || value == "http://localhost:8080");
+    if should_reset_base_url {
+        config.set_base_url(Some(DEFAULT_CODEX_BASE_URL.to_string()));
+    }
     if config.model.is_none() {
-        config.set_model(Some("codex".into()));
+        config.set_model(Some(DEFAULT_CODEX_MODEL.into()));
     }
     config_manager.save(config)
 }
@@ -319,8 +330,11 @@ pub(crate) async fn build_backend_with_progress(
             config
                 .base_url
                 .clone()
-                .unwrap_or_else(|| "http://localhost:8080".to_string()),
-            config.model.clone().unwrap_or_else(|| "codex".to_string()),
+                .unwrap_or_else(|| DEFAULT_CODEX_BASE_URL.to_string()),
+            config
+                .model
+                .clone()
+                .unwrap_or_else(|| DEFAULT_CODEX_MODEL.to_string()),
         )?)),
         "openai-compatible" => Ok(Box::new(OpenAiCompatibleBackend::new(
             config.api_key.clone(),

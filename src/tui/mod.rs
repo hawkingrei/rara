@@ -31,6 +31,7 @@ use tokio::time::{interval, Duration};
 use crate::agent::Agent;
 use crate::oauth::OAuthManager;
 use crate::state_db::StateDb;
+use crate::{DEFAULT_CODEX_BASE_URL, DEFAULT_CODEX_MODEL};
 
 use self::app_event::AppEvent;
 use self::command::{palette_command_by_index, palette_commands, parse_local_command};
@@ -45,8 +46,7 @@ use self::session_restore::{
     provider_requires_api_key, restore_latest_session, restore_session_by_id,
 };
 use self::state::{
-    current_model_presets, HelpTab, LocalCommandKind, Overlay, TaskKind, TuiApp,
-    PROVIDER_FAMILIES,
+    current_model_presets, HelpTab, LocalCommandKind, Overlay, TaskKind, TuiApp, PROVIDER_FAMILIES,
 };
 use self::terminal_ui::{
     build_terminal, flush_committed_history, handle_paste, is_ssh_session, teardown_terminal,
@@ -392,7 +392,7 @@ async fn dispatch_event(
             if matches!(app.overlay, Some(Overlay::Setup)) {
                 app.select_local_model(app.model_picker_idx);
             } else if matches!(app.overlay, Some(Overlay::ModelPicker)) && !app.is_busy() {
-                if should_open_codex_auth_guide(app) {
+                if should_open_codex_auth_guide(app, oauth_manager.as_ref()) {
                     app.select_local_model(app.model_picker_idx);
                     app.open_overlay(Overlay::AuthModePicker);
                 } else {
@@ -523,7 +523,20 @@ async fn dispatch_event(
             } else {
                 app.config.set_api_key(value.to_string());
                 if app.config.provider == "codex" && app.config.model.is_none() {
-                    app.config.set_model(Some("codex".into()));
+                    app.config.set_model(Some(DEFAULT_CODEX_MODEL.into()));
+                }
+                if app.config.provider == "codex"
+                    && app
+                        .config
+                        .base_url
+                        .as_deref()
+                        .map(str::trim)
+                        .is_none_or(|current| {
+                            current.is_empty() || current == "http://localhost:8080"
+                        })
+                {
+                    app.config
+                        .set_base_url(Some(DEFAULT_CODEX_BASE_URL.to_string()));
                 }
                 app.config_manager.save(&app.config)?;
                 if app.config.provider == "codex" {
@@ -569,7 +582,7 @@ async fn dispatch_event(
                 if app.is_busy() {
                     app.push_notice("A task is already running. Wait for it to finish.");
                 } else {
-                    app.open_overlay(Overlay::ModelPicker);
+                    open_provider_family_overlay(app, oauth_manager.as_ref());
                 }
             }
             Some(Overlay::ResumePicker) => {
@@ -604,7 +617,7 @@ async fn dispatch_event(
                     app.push_notice("A task is already running. Wait for it to finish.");
                 } else {
                     app.select_local_model(app.model_picker_idx);
-                    if should_open_codex_auth_guide(app) {
+                    if should_open_codex_auth_guide(app, oauth_manager.as_ref()) {
                         app.open_overlay(Overlay::AuthModePicker);
                     } else {
                         start_rebuild_task(app);
@@ -891,23 +904,43 @@ fn clamp_command_palette_selection(app: &mut TuiApp) {
     }
 }
 
-fn should_open_codex_auth_guide(app: &TuiApp) -> bool {
+fn codex_auth_is_available(app: &TuiApp, oauth_manager: &OAuthManager) -> bool {
+    if app.config.provider == "codex" && app.config.has_api_key() {
+        return true;
+    }
+    oauth_manager.has_saved_auth().unwrap_or(false)
+}
+
+fn open_provider_family_overlay(app: &mut TuiApp, oauth_manager: &OAuthManager) {
+    if matches!(
+        app.selected_provider_family(),
+        self::state::ProviderFamily::Codex
+    ) && !codex_auth_is_available(app, oauth_manager)
+    {
+        app.open_overlay(Overlay::AuthModePicker);
+    } else {
+        app.open_overlay(Overlay::ModelPicker);
+    }
+}
+
+fn should_open_codex_auth_guide(app: &TuiApp, oauth_manager: &OAuthManager) -> bool {
     let presets = current_model_presets(app.provider_picker_idx);
     let Some((_, provider, _)) = presets.get(app.model_picker_idx) else {
         return false;
     };
-    *provider == "codex" && !app.config.has_api_key()
+    *provider == "codex" && !codex_auth_is_available(app, oauth_manager)
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        classify_pending_plan_approval_input, dispatch_event, map_key_to_event,
-        PendingPlanApprovalAction,
+        classify_pending_plan_approval_input, codex_auth_is_available, dispatch_event,
+        map_key_to_event, open_provider_family_overlay, PendingPlanApprovalAction,
     };
     use crate::config::ConfigManager;
     use crate::tui::app_event::AppEvent;
-    use crate::tui::state::{Overlay, RunningTask, TaskKind, TuiApp};
+    use crate::tui::state::{Overlay, ProviderFamily, RunningTask, TaskKind, TuiApp};
+    use crate::{DEFAULT_CODEX_BASE_URL, DEFAULT_CODEX_MODEL};
     use crossterm::event::KeyCode;
     use std::sync::Arc;
     use std::time::{Duration, Instant};
@@ -1105,5 +1138,92 @@ mod tests {
             .notice
             .as_deref()
             .is_some_and(|value| value.contains("Cleared API key")));
+    }
+
+    #[test]
+    fn codex_auth_detection_uses_saved_auth_storage() {
+        let temp = tempdir().expect("tempdir");
+        let app = TuiApp::new(ConfigManager {
+            path: temp.path().join("config.json"),
+        })
+        .expect("app");
+        let oauth_manager =
+            crate::oauth::OAuthManager::new_for_config_dir(temp.path().join(".rara"))
+                .expect("oauth manager");
+
+        assert!(!codex_auth_is_available(&app, &oauth_manager));
+
+        oauth_manager
+            .save_api_key("sk-test-codex")
+            .expect("save api key");
+        assert!(codex_auth_is_available(&app, &oauth_manager));
+    }
+
+    #[test]
+    fn codex_provider_family_routes_to_auth_picker_without_saved_login() {
+        let temp = tempdir().expect("tempdir");
+        let mut app = TuiApp::new(ConfigManager {
+            path: temp.path().join("config.json"),
+        })
+        .expect("app");
+        let oauth_manager =
+            crate::oauth::OAuthManager::new_for_config_dir(temp.path().join(".rara"))
+                .expect("oauth manager");
+        app.provider_picker_idx = 0;
+
+        assert_eq!(app.selected_provider_family(), ProviderFamily::Codex);
+
+        open_provider_family_overlay(&mut app, &oauth_manager);
+        assert!(matches!(app.overlay, Some(Overlay::AuthModePicker)));
+    }
+
+    #[test]
+    fn codex_provider_family_routes_to_model_picker_with_saved_login() {
+        let temp = tempdir().expect("tempdir");
+        let mut app = TuiApp::new(ConfigManager {
+            path: temp.path().join("config.json"),
+        })
+        .expect("app");
+        let oauth_manager =
+            crate::oauth::OAuthManager::new_for_config_dir(temp.path().join(".rara"))
+                .expect("oauth manager");
+        oauth_manager
+            .save_api_key("sk-test-codex")
+            .expect("save api key");
+        app.provider_picker_idx = 0;
+
+        open_provider_family_overlay(&mut app, &oauth_manager);
+        assert!(matches!(app.overlay, Some(Overlay::ModelPicker)));
+    }
+
+    #[tokio::test]
+    async fn save_api_key_input_sets_codex_defaults_before_rebuild() {
+        let temp = tempdir().expect("tempdir");
+        let mut app = TuiApp::new(ConfigManager {
+            path: temp.path().join("config.json"),
+        })
+        .expect("app");
+        app.config.set_provider("codex");
+        app.open_overlay(Overlay::ApiKeyEditor);
+        app.api_key_input = "sk-codex".into();
+
+        let oauth_manager = Arc::new(
+            crate::oauth::OAuthManager::new_for_config_dir(temp.path().join(".rara"))
+                .expect("oauth manager"),
+        );
+        let mut agent_slot = None;
+
+        let should_quit = dispatch_event(
+            AppEvent::SaveApiKeyInput,
+            &mut app,
+            &mut agent_slot,
+            &oauth_manager,
+        )
+        .await
+        .expect("save codex api key");
+
+        assert!(!should_quit);
+        assert_eq!(app.config.model.as_deref(), Some(DEFAULT_CODEX_MODEL));
+        assert_eq!(app.config.base_url.as_deref(), Some(DEFAULT_CODEX_BASE_URL));
     }
 }

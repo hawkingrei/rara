@@ -23,6 +23,7 @@ use crate::state_db::{
 use crate::tool::ToolOutputStream;
 use crate::tools::bash::BashCommandInput;
 use crate::tui::is_ssh_session;
+use crate::DEFAULT_CODEX_BASE_URL;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum HelpTab {
@@ -543,7 +544,7 @@ impl TuiApp {
                 .is_none()
             {
                 self.config
-                    .set_base_url(Some("http://localhost:8080".to_string()));
+                    .set_base_url(Some(DEFAULT_CODEX_BASE_URL.to_string()));
             }
         } else if provider == "openai-compatible" {
             if self
@@ -1535,6 +1536,7 @@ mod tests {
         TuiApp,
     };
     use crate::config::{ConfigManager, RaraConfig};
+    use crate::{DEFAULT_CODEX_BASE_URL, DEFAULT_CODEX_MODEL};
     use tempfile::tempdir;
 
     #[test]
@@ -1707,7 +1709,8 @@ mod tests {
         app.select_local_model(0);
 
         assert_eq!(app.config.provider, "codex");
-        assert_eq!(app.config.model.as_deref(), Some("codex"));
+        assert_eq!(app.config.model.as_deref(), Some(DEFAULT_CODEX_MODEL));
+        assert_eq!(app.config.base_url.as_deref(), Some(DEFAULT_CODEX_BASE_URL));
     }
 
     #[test]
