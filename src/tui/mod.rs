@@ -26,7 +26,7 @@ use crossterm::{
     terminal::size as terminal_size,
 };
 use futures::StreamExt;
-use secrecy::ExposeSecret;
+use secrecy::{ExposeSecret, SecretString};
 use tokio::time::{interval, Duration};
 
 use crate::agent::Agent;
@@ -901,22 +901,83 @@ fn sync_codex_credential_from_auth_store(
     app: &mut TuiApp,
     oauth_manager: &OAuthManager,
 ) -> anyhow::Result<bool> {
-    oauth_manager.invalidate_saved_auth_cache();
+    let codex_state = app.config.provider_states.get("codex");
+    let has_ready_codex_state = codex_state
+        .and_then(|state| state.api_key.as_ref())
+        .is_some_and(|api_key| !api_key.expose_secret().trim().is_empty())
+        && codex_state
+            .and_then(|state| state.model.as_deref())
+            .map(str::trim)
+            .is_some_and(|model| !model.is_empty() && model != crate::config::LEGACY_CODEX_MODEL)
+        && codex_state
+            .map(|state| !crate::config::should_reset_codex_base_url(state.base_url.as_deref()))
+            .unwrap_or(false);
+    if has_ready_codex_state {
+        return Ok(true);
+    }
+
     if !oauth_manager.has_saved_auth()? {
         return Ok(false);
     }
 
     let credential = oauth_manager.load_saved_credential()?;
-    let previous_provider = app.config.provider.clone();
+    let credential = credential.expose_secret().trim().to_string();
+    let mut changed = false;
 
-    app.config.set_provider("codex");
-    app.config
-        .set_api_key(credential.expose_secret().to_string());
-    app.config.apply_codex_defaults();
-    app.config_manager.save(&app.config)?;
+    if app.config.provider == "codex" {
+        let current_key = app
+            .config
+            .api_key
+            .as_ref()
+            .map(|value| value.expose_secret().trim());
+        if current_key != Some(credential.as_str()) {
+            app.config.set_api_key(credential.clone());
+            changed = true;
+        }
+        let current_model = app.config.model.as_deref().map(str::trim).unwrap_or("");
+        if current_model.is_empty() || current_model == crate::config::LEGACY_CODEX_MODEL {
+            app.config
+                .set_model(Some(crate::config::DEFAULT_CODEX_MODEL.to_string()));
+            changed = true;
+        }
+        if crate::config::should_reset_codex_base_url(app.config.base_url.as_deref()) {
+            app.config
+                .set_base_url(Some(crate::config::DEFAULT_CODEX_BASE_URL.to_string()));
+            changed = true;
+        }
+    } else {
+        let mut codex_state = app
+            .config
+            .provider_states
+            .get("codex")
+            .cloned()
+            .unwrap_or_default();
+        let current_key = codex_state
+            .api_key
+            .as_ref()
+            .map(|value| value.expose_secret().trim());
+        if current_key != Some(credential.as_str()) {
+            codex_state.api_key = Some(SecretString::from(credential));
+            changed = true;
+        }
+        let current_model = codex_state.model.as_deref().map(str::trim).unwrap_or("");
+        if current_model.is_empty() || current_model == crate::config::LEGACY_CODEX_MODEL {
+            codex_state.model = Some(crate::config::DEFAULT_CODEX_MODEL.to_string());
+            changed = true;
+        }
+        if crate::config::should_reset_codex_base_url(codex_state.base_url.as_deref()) {
+            codex_state.base_url = Some(crate::config::DEFAULT_CODEX_BASE_URL.to_string());
+            changed = true;
+        }
+        if changed {
+            app.config
+                .provider_states
+                .insert("codex".to_string(), codex_state);
+        }
+    }
 
-    if previous_provider != "codex" {
-        app.config.set_provider(previous_provider);
+    if changed {
+        app.config_manager.save(&app.config)?;
     }
 
     Ok(true)
@@ -942,19 +1003,20 @@ fn open_provider_family_overlay(
     app: &mut TuiApp,
     oauth_manager: &OAuthManager,
 ) -> anyhow::Result<()> {
-    let has_synced_codex_auth = if matches!(
+    let entering_codex_family = matches!(
         app.selected_provider_family(),
         self::state::ProviderFamily::Codex
-    ) {
+    );
+    if entering_codex_family {
+        oauth_manager.invalidate_saved_auth_cache();
+    }
+    let has_synced_codex_auth = if entering_codex_family {
         sync_codex_credential_from_auth_store(app, oauth_manager)?
     } else {
         false
     };
 
-    if matches!(
-        app.selected_provider_family(),
-        self::state::ProviderFamily::Codex
-    ) && !has_synced_codex_auth
+    if entering_codex_family && !has_synced_codex_auth
         && !codex_auth_is_available(app, oauth_manager)
     {
         app.config.set_provider("codex");
@@ -1294,6 +1356,17 @@ mod tests {
             Some("sk-test-codex")
         );
         assert_eq!(app.config.provider, "ollama");
+
+        let persisted = app.config_manager.load().expect("load saved config");
+        assert_eq!(persisted.provider, "ollama");
+        assert_eq!(
+            persisted
+                .provider_states
+                .get("codex")
+                .and_then(|state| state.api_key.as_ref())
+                .map(|value| value.expose_secret()),
+            Some("sk-test-codex")
+        );
     }
 
     #[tokio::test]

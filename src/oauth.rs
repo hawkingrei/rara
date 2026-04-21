@@ -338,6 +338,7 @@ mod tests {
         )
         .expect("save token auth");
 
+        manager.invalidate_saved_auth_cache();
         assert!(manager.has_saved_auth().expect("token auth"));
     }
 
