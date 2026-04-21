@@ -23,7 +23,7 @@ use crate::state_db::{
 use crate::tool::ToolOutputStream;
 use crate::tools::bash::BashCommandInput;
 use crate::tui::is_ssh_session;
-use crate::DEFAULT_CODEX_BASE_URL;
+use crate::{should_reset_codex_base_url, DEFAULT_CODEX_BASE_URL};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum HelpTab {
@@ -539,9 +539,7 @@ impl TuiApp {
                 .config
                 .base_url
                 .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .is_none()
+                .is_none_or(|value| should_reset_codex_base_url(Some(value)))
             {
                 self.config
                     .set_base_url(Some(DEFAULT_CODEX_BASE_URL.to_string()));

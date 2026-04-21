@@ -49,6 +49,12 @@ use std::sync::Arc;
 
 pub(crate) const DEFAULT_CODEX_BASE_URL: &str = "https://api.openai.com/v1";
 pub(crate) const DEFAULT_CODEX_MODEL: &str = "gpt-5-codex";
+pub(crate) const LEGACY_CODEX_BASE_URL: &str = "http://localhost:8080";
+
+pub(crate) fn should_reset_codex_base_url(url: Option<&str>) -> bool {
+    url.map(str::trim)
+        .is_none_or(|value| value.is_empty() || value == LEGACY_CODEX_BASE_URL)
+}
 
 #[derive(Parser)]
 #[command(name = "rara")]
@@ -219,12 +225,7 @@ fn save_codex_credential(
 ) -> Result<()> {
     config.set_provider("codex");
     config.set_api_key(credential.to_string());
-    let should_reset_base_url = config
-        .base_url
-        .as_deref()
-        .map(str::trim)
-        .is_none_or(|value| value.is_empty() || value == "http://localhost:8080");
-    if should_reset_base_url {
+    if should_reset_codex_base_url(config.base_url.as_deref()) {
         config.set_base_url(Some(DEFAULT_CODEX_BASE_URL.to_string()));
     }
     if config.model.is_none() {

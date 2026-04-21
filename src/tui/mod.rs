@@ -31,7 +31,7 @@ use tokio::time::{interval, Duration};
 use crate::agent::Agent;
 use crate::oauth::OAuthManager;
 use crate::state_db::StateDb;
-use crate::{DEFAULT_CODEX_BASE_URL, DEFAULT_CODEX_MODEL};
+use crate::{should_reset_codex_base_url, DEFAULT_CODEX_BASE_URL, DEFAULT_CODEX_MODEL};
 
 use self::app_event::AppEvent;
 use self::command::{palette_command_by_index, palette_commands, parse_local_command};
@@ -522,21 +522,14 @@ async fn dispatch_event(
                 app.close_overlay();
             } else {
                 app.config.set_api_key(value.to_string());
-                if app.config.provider == "codex" && app.config.model.is_none() {
-                    app.config.set_model(Some(DEFAULT_CODEX_MODEL.into()));
-                }
-                if app.config.provider == "codex"
-                    && app
-                        .config
-                        .base_url
-                        .as_deref()
-                        .map(str::trim)
-                        .is_none_or(|current| {
-                            current.is_empty() || current == "http://localhost:8080"
-                        })
-                {
-                    app.config
-                        .set_base_url(Some(DEFAULT_CODEX_BASE_URL.to_string()));
+                if app.config.provider == "codex" {
+                    if app.config.model.is_none() {
+                        app.config.set_model(Some(DEFAULT_CODEX_MODEL.into()));
+                    }
+                    if should_reset_codex_base_url(app.config.base_url.as_deref()) {
+                        app.config
+                            .set_base_url(Some(DEFAULT_CODEX_BASE_URL.to_string()));
+                    }
                 }
                 app.config_manager.save(&app.config)?;
                 if app.config.provider == "codex" {

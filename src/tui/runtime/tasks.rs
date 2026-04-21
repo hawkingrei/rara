@@ -25,7 +25,7 @@ use crate::tools::web::WebFetchTool;
 use crate::tools::workspace::UpdateProjectMemoryTool;
 use crate::vectordb::VectorDB;
 use crate::workspace::WorkspaceMemory;
-use crate::{DEFAULT_CODEX_BASE_URL, DEFAULT_CODEX_MODEL};
+use crate::{should_reset_codex_base_url, DEFAULT_CODEX_BASE_URL, DEFAULT_CODEX_MODEL};
 
 use super::super::state::{
     OAuthLoginMode, RunningTask, RuntimePhase, TaskCompletion, TaskKind, TuiApp, TuiEvent,
@@ -566,13 +566,7 @@ pub(super) async fn finish_running_task_if_ready(
                 if app.config.model.is_none() {
                     app.config.set_model(Some(DEFAULT_CODEX_MODEL.into()));
                 }
-                if app
-                    .config
-                    .base_url
-                    .as_deref()
-                    .map(str::trim)
-                    .is_none_or(|current| current.is_empty() || current == "http://localhost:8080")
-                {
+                if should_reset_codex_base_url(app.config.base_url.as_deref()) {
                     app.config
                         .set_base_url(Some(DEFAULT_CODEX_BASE_URL.to_string()));
                 }
