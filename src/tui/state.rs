@@ -14,6 +14,7 @@ pub use self::state_presets::{
 use super::markdown_stream::MarkdownStreamCollector;
 use super::queued_input::PendingFollowUpMessage;
 use crate::agent::{Agent, AgentExecutionMode, BashApprovalMode};
+use crate::config::DEFAULT_CODEX_BASE_URL;
 use crate::config::{ConfigManager, RaraConfig};
 use crate::redaction::redact_secrets;
 use crate::state_db::{
@@ -23,7 +24,6 @@ use crate::state_db::{
 use crate::tool::ToolOutputStream;
 use crate::tools::bash::BashCommandInput;
 use crate::tui::is_ssh_session;
-use crate::{should_reset_codex_base_url, DEFAULT_CODEX_BASE_URL};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum HelpTab {
@@ -535,12 +535,7 @@ impl TuiApp {
         } else if provider == "codex" {
             self.config.set_model(Some(model.to_string()));
             self.config.set_revision(None);
-            if self
-                .config
-                .base_url
-                .as_deref()
-                .is_none_or(|value| should_reset_codex_base_url(Some(value)))
-            {
+            if crate::config::should_reset_codex_base_url(self.config.base_url.as_deref()) {
                 self.config
                     .set_base_url(Some(DEFAULT_CODEX_BASE_URL.to_string()));
             }
@@ -1534,7 +1529,7 @@ mod tests {
         TuiApp,
     };
     use crate::config::{ConfigManager, RaraConfig};
-    use crate::{DEFAULT_CODEX_BASE_URL, DEFAULT_CODEX_MODEL};
+    use crate::config::{DEFAULT_CODEX_BASE_URL, DEFAULT_CODEX_MODEL};
     use tempfile::tempdir;
 
     #[test]

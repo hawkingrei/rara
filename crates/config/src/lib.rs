@@ -7,6 +7,15 @@ use std::fs;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 
+pub const DEFAULT_CODEX_BASE_URL: &str = "https://api.openai.com/v1";
+pub const DEFAULT_CODEX_MODEL: &str = "gpt-5-codex";
+pub const LEGACY_CODEX_BASE_URL: &str = "http://localhost:8080";
+
+pub fn should_reset_codex_base_url(url: Option<&str>) -> bool {
+    url.map(str::trim)
+        .is_none_or(|value| value.is_empty() || value == LEGACY_CODEX_BASE_URL)
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct ProviderConfigState {
     #[serde(
@@ -107,6 +116,15 @@ impl RaraConfig {
     pub fn set_num_ctx(&mut self, value: Option<u32>) {
         self.num_ctx = value;
         self.sync_active_provider_state();
+    }
+
+    pub fn apply_codex_defaults(&mut self) {
+        if should_reset_codex_base_url(self.base_url.as_deref()) {
+            self.set_base_url(Some(DEFAULT_CODEX_BASE_URL.to_string()));
+        }
+        if self.model.is_none() {
+            self.set_model(Some(DEFAULT_CODEX_MODEL.to_string()));
+        }
     }
 
     fn sync_active_provider_state(&mut self) {

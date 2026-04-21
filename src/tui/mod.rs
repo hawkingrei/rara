@@ -31,7 +31,6 @@ use tokio::time::{interval, Duration};
 use crate::agent::Agent;
 use crate::oauth::OAuthManager;
 use crate::state_db::StateDb;
-use crate::{should_reset_codex_base_url, DEFAULT_CODEX_BASE_URL, DEFAULT_CODEX_MODEL};
 
 use self::app_event::AppEvent;
 use self::command::{palette_command_by_index, palette_commands, parse_local_command};
@@ -523,13 +522,7 @@ async fn dispatch_event(
             } else {
                 app.config.set_api_key(value.to_string());
                 if app.config.provider == "codex" {
-                    if app.config.model.is_none() {
-                        app.config.set_model(Some(DEFAULT_CODEX_MODEL.into()));
-                    }
-                    if should_reset_codex_base_url(app.config.base_url.as_deref()) {
-                        app.config
-                            .set_base_url(Some(DEFAULT_CODEX_BASE_URL.to_string()));
-                    }
+                    app.config.apply_codex_defaults();
                 }
                 app.config_manager.save(&app.config)?;
                 if app.config.provider == "codex" {
@@ -901,7 +894,7 @@ fn codex_auth_is_available(app: &TuiApp, oauth_manager: &OAuthManager) -> bool {
     if app.config.provider == "codex" && app.config.has_api_key() {
         return true;
     }
-    oauth_manager.has_saved_auth().unwrap_or(false)
+    oauth_manager.has_saved_auth().is_ok_and(|saved| saved)
 }
 
 fn open_provider_family_overlay(app: &mut TuiApp, oauth_manager: &OAuthManager) {
@@ -931,9 +924,9 @@ mod tests {
         map_key_to_event, open_provider_family_overlay, PendingPlanApprovalAction,
     };
     use crate::config::ConfigManager;
+    use crate::config::{DEFAULT_CODEX_BASE_URL, DEFAULT_CODEX_MODEL};
     use crate::tui::app_event::AppEvent;
     use crate::tui::state::{Overlay, ProviderFamily, RunningTask, TaskKind, TuiApp};
-    use crate::{DEFAULT_CODEX_BASE_URL, DEFAULT_CODEX_MODEL};
     use crossterm::event::KeyCode;
     use std::sync::Arc;
     use std::time::{Duration, Instant};
