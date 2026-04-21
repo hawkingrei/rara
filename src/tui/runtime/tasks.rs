@@ -336,6 +336,7 @@ pub(super) fn start_oauth_task(
     oauth_manager: Arc<OAuthManager>,
     mode: OAuthLoginMode,
 ) {
+    oauth_manager.invalidate_saved_auth_cache();
     if matches!(mode, OAuthLoginMode::Browser) && super::super::is_ssh_session() {
         app.set_runtime_phase(
             RuntimePhase::Failed,
@@ -534,8 +535,7 @@ pub(super) async fn finish_running_task_if_ready(
                     app.current_model_label()
                 ));
                 app.notice = app.setup_status.clone();
-                let queued_follow_up_messages =
-                    std::mem::take(&mut app.queued_follow_up_messages);
+                let queued_follow_up_messages = std::mem::take(&mut app.queued_follow_up_messages);
                 let pending_follow_up_messages =
                     std::mem::take(&mut app.pending_follow_up_messages);
                 app.reset_transcript();
@@ -563,9 +563,7 @@ pub(super) async fn finish_running_task_if_ready(
                 app.config.set_provider("codex");
                 app.config
                     .set_api_key(credential.expose_secret().to_string());
-                if app.config.model.is_none() {
-                    app.config.set_model(Some("codex".into()));
-                }
+                app.config.apply_codex_defaults();
                 app.config_manager.save(&app.config)?;
                 let saved_message = match mode {
                     OAuthLoginMode::Browser => {

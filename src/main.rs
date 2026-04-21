@@ -19,7 +19,7 @@ mod workspace;
 
 use crate::acp::{run_acp_stdio, RaraAcpAgent};
 use crate::agent::Agent;
-use crate::config::{ConfigManager, RaraConfig};
+use crate::config::{ConfigManager, RaraConfig, DEFAULT_CODEX_BASE_URL, DEFAULT_CODEX_MODEL};
 use crate::llm::{
     CodexBackend, GeminiBackend, LlmBackend, MockLlm, OllamaBackend, OpenAiCompatibleBackend,
 };
@@ -216,9 +216,7 @@ fn save_codex_credential(
 ) -> Result<()> {
     config.set_provider("codex");
     config.set_api_key(credential.to_string());
-    if config.model.is_none() {
-        config.set_model(Some("codex".into()));
-    }
+    config.apply_codex_defaults();
     config_manager.save(config)
 }
 
@@ -319,8 +317,11 @@ pub(crate) async fn build_backend_with_progress(
             config
                 .base_url
                 .clone()
-                .unwrap_or_else(|| "http://localhost:8080".to_string()),
-            config.model.clone().unwrap_or_else(|| "codex".to_string()),
+                .unwrap_or_else(|| DEFAULT_CODEX_BASE_URL.to_string()),
+            config
+                .model
+                .clone()
+                .unwrap_or_else(|| DEFAULT_CODEX_MODEL.to_string()),
         )?)),
         "openai-compatible" => Ok(Box::new(OpenAiCompatibleBackend::new(
             config.api_key.clone(),

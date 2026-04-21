@@ -14,6 +14,7 @@ pub use self::state_presets::{
 use super::markdown_stream::MarkdownStreamCollector;
 use super::queued_input::PendingFollowUpMessage;
 use crate::agent::{Agent, AgentExecutionMode, BashApprovalMode};
+use crate::config::DEFAULT_CODEX_BASE_URL;
 use crate::config::{ConfigManager, RaraConfig};
 use crate::redaction::redact_secrets;
 use crate::state_db::{
@@ -534,16 +535,9 @@ impl TuiApp {
         } else if provider == "codex" {
             self.config.set_model(Some(model.to_string()));
             self.config.set_revision(None);
-            if self
-                .config
-                .base_url
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .is_none()
-            {
+            if crate::config::should_reset_codex_base_url(self.config.base_url.as_deref()) {
                 self.config
-                    .set_base_url(Some("http://localhost:8080".to_string()));
+                    .set_base_url(Some(DEFAULT_CODEX_BASE_URL.to_string()));
             }
         } else if provider == "openai-compatible" {
             if self
@@ -1535,6 +1529,7 @@ mod tests {
         TuiApp,
     };
     use crate::config::{ConfigManager, RaraConfig};
+    use crate::config::{DEFAULT_CODEX_BASE_URL, DEFAULT_CODEX_MODEL};
     use tempfile::tempdir;
 
     #[test]
@@ -1707,7 +1702,8 @@ mod tests {
         app.select_local_model(0);
 
         assert_eq!(app.config.provider, "codex");
-        assert_eq!(app.config.model.as_deref(), Some("codex"));
+        assert_eq!(app.config.model.as_deref(), Some(DEFAULT_CODEX_MODEL));
+        assert_eq!(app.config.base_url.as_deref(), Some(DEFAULT_CODEX_BASE_URL));
     }
 
     #[test]

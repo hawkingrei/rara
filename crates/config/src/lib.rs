@@ -7,6 +7,16 @@ use std::fs;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 
+pub const DEFAULT_CODEX_BASE_URL: &str = "https://api.openai.com/v1";
+pub const DEFAULT_CODEX_MODEL: &str = "gpt-5-codex";
+pub const LEGACY_CODEX_BASE_URL: &str = "http://localhost:8080";
+pub const LEGACY_CODEX_MODEL: &str = "codex";
+
+pub fn should_reset_codex_base_url(url: Option<&str>) -> bool {
+    url.map(str::trim)
+        .map_or(true, |value| value.is_empty() || value == LEGACY_CODEX_BASE_URL)
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct ProviderConfigState {
     #[serde(
@@ -107,6 +117,16 @@ impl RaraConfig {
     pub fn set_num_ctx(&mut self, value: Option<u32>) {
         self.num_ctx = value;
         self.sync_active_provider_state();
+    }
+
+    pub fn apply_codex_defaults(&mut self) {
+        if should_reset_codex_base_url(self.base_url.as_deref()) {
+            self.set_base_url(Some(DEFAULT_CODEX_BASE_URL.to_string()));
+        }
+        let model = self.model.as_deref().map(str::trim).unwrap_or("");
+        if model.is_empty() || model == LEGACY_CODEX_MODEL {
+            self.set_model(Some(DEFAULT_CODEX_MODEL.to_string()));
+        }
     }
 
     fn sync_active_provider_state(&mut self) {
@@ -338,6 +358,21 @@ mod tests {
         assert_eq!(config.model.as_deref(), Some("qwen3"));
         assert_eq!(config.base_url.as_deref(), Some("http://localhost:11434"));
         assert_eq!(config.num_ctx, Some(32768));
+    }
+
+    #[test]
+    fn apply_codex_defaults_migrates_legacy_model_and_base_url() {
+        let mut config = RaraConfig {
+            provider: "codex".to_string(),
+            ..Default::default()
+        };
+        config.set_model(Some("codex".to_string()));
+        config.set_base_url(Some("http://localhost:8080".to_string()));
+
+        config.apply_codex_defaults();
+
+        assert_eq!(config.model.as_deref(), Some(super::DEFAULT_CODEX_MODEL));
+        assert_eq!(config.base_url.as_deref(), Some(super::DEFAULT_CODEX_BASE_URL));
     }
 
     #[test]
