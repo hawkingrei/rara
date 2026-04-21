@@ -28,6 +28,17 @@ impl OpenAiCompatibleBackend {
             model,
         })
     }
+
+    fn endpoint_url(&self, path: &str) -> String {
+        let base = self.base_url.trim_end_matches('/');
+        let path = path.trim_start_matches('/');
+        let normalized_base = if base.ends_with("/v1") {
+            base.to_string()
+        } else {
+            format!("{base}/v1")
+        };
+        format!("{normalized_base}/{path}")
+    }
 }
 
 #[async_trait]
@@ -53,10 +64,8 @@ impl LlmBackend for OpenAiCompatibleBackend {
             body["tools"] = json!(openai_tools);
         }
 
-        let mut request = self.client.post(&format!(
-            "{}/v1/chat/completions",
-            self.base_url.trim_end_matches('/')
-        ));
+        let completions_url = self.endpoint_url("chat/completions");
+        let mut request = self.client.post(&completions_url);
         if let Some(api_key) = self.api_key.as_ref().map(SecretString::expose_secret) {
             if !api_key.is_empty() {
                 request = request.header("Authorization", format!("Bearer {api_key}"));
@@ -67,10 +76,7 @@ impl LlmBackend for OpenAiCompatibleBackend {
         if !res.status().is_success() {
             return Err(anyhow!(
                 "API Error at {}: {}",
-                sanitize_url_for_display(&format!(
-                    "{}/v1/chat/completions",
-                    self.base_url.trim_end_matches('/')
-                )),
+                sanitize_url_for_display(&completions_url),
                 redact_secrets(res.text().await?)
             ));
         }
@@ -109,10 +115,8 @@ impl LlmBackend for OpenAiCompatibleBackend {
 
     async fn embed(&self, text: &str) -> Result<Vec<f32>> {
         let body = json!({ "model": "text-embedding-3-small", "input": text });
-        let mut request = self.client.post(&format!(
-            "{}/v1/embeddings",
-            self.base_url.trim_end_matches('/')
-        ));
+        let embeddings_url = self.endpoint_url("embeddings");
+        let mut request = self.client.post(&embeddings_url);
         if let Some(api_key) = self.api_key.as_ref().map(SecretString::expose_secret) {
             if !api_key.is_empty() {
                 request = request.header("Authorization", format!("Bearer {api_key}"));
@@ -122,10 +126,7 @@ impl LlmBackend for OpenAiCompatibleBackend {
         if !res.status().is_success() {
             return Err(anyhow!(
                 "API Error at {}: {}",
-                sanitize_url_for_display(&format!(
-                    "{}/v1/embeddings",
-                    self.base_url.trim_end_matches('/')
-                )),
+                sanitize_url_for_display(&embeddings_url),
                 redact_secrets(res.text().await?)
             ));
         }
@@ -146,10 +147,8 @@ impl LlmBackend for OpenAiCompatibleBackend {
             content: json!(instruction),
         });
         let body = json!({ "model": self.model, "messages": to_openai_messages(&msgs) });
-        let mut request = self.client.post(&format!(
-            "{}/v1/chat/completions",
-            self.base_url.trim_end_matches('/')
-        ));
+        let completions_url = self.endpoint_url("chat/completions");
+        let mut request = self.client.post(&completions_url);
         if let Some(api_key) = self.api_key.as_ref().map(SecretString::expose_secret) {
             if !api_key.is_empty() {
                 request = request.header("Authorization", format!("Bearer {api_key}"));
@@ -159,10 +158,7 @@ impl LlmBackend for OpenAiCompatibleBackend {
         if !res.status().is_success() {
             return Err(anyhow!(
                 "API Error at {}: {}",
-                sanitize_url_for_display(&format!(
-                    "{}/v1/chat/completions",
-                    self.base_url.trim_end_matches('/')
-                )),
+                sanitize_url_for_display(&completions_url),
                 redact_secrets(res.text().await?)
             ));
         }
