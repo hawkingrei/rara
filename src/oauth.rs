@@ -9,6 +9,7 @@ use codex_login::{
 use secrecy::SecretString;
 use std::io::Read;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
 const ISSUER: &str = "https://auth.openai.com";
 
@@ -39,6 +40,7 @@ impl BrowserLoginSession {
 pub struct OAuthManager {
     pub config_dir: PathBuf,
     codex_home: PathBuf,
+    saved_auth_available: Arc<Mutex<Option<bool>>>,
 }
 
 impl OAuthManager {
@@ -54,6 +56,7 @@ impl OAuthManager {
         Ok(Self {
             config_dir,
             codex_home,
+            saved_auth_available: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -96,17 +99,23 @@ impl OAuthManager {
 
     pub fn save_api_key(&self, api_key: &str) -> Result<SecretString> {
         codex_login_with_api_key(&self.codex_home, api_key, AuthCredentialsStoreMode::File)?;
+        self.set_saved_auth_cache(true);
         self.load_saved_credential()
     }
 
     pub fn clear_saved_auth(&self) -> Result<bool> {
-        Ok(codex_logout(
+        let removed = codex_logout(
             &self.codex_home,
             AuthCredentialsStoreMode::File,
-        )?)
+        )?;
+        self.clear_saved_auth_cache();
+        Ok(removed)
     }
 
     pub fn has_saved_auth(&self) -> Result<bool> {
+        if self.saved_auth_cache() {
+            return Ok(true);
+        }
         let Some(auth) = load_auth_dot_json(&self.codex_home, AuthCredentialsStoreMode::File)?
         else {
             return Ok(false);
@@ -119,7 +128,11 @@ impl OAuthManager {
             .tokens
             .as_ref()
             .is_some_and(|tokens| !tokens.access_token.trim().is_empty());
-        Ok(has_api_key || has_access_token)
+        let has_saved_auth = has_api_key || has_access_token;
+        if has_saved_auth {
+            self.set_saved_auth_cache(true);
+        }
+        Ok(has_saved_auth)
     }
 
     pub fn read_api_key_from_stdin(&self) -> Result<SecretString> {
@@ -149,14 +162,36 @@ impl OAuthManager {
         let auth = load_auth_dot_json(&self.codex_home, AuthCredentialsStoreMode::File)?
             .ok_or_else(|| anyhow!("Codex login finished but no credential was saved"))?;
         if let Some(api_key) = auth.openai_api_key {
+            self.set_saved_auth_cache(true);
             return Ok(SecretString::from(api_key));
         }
         if let Some(tokens) = auth.tokens {
+            self.set_saved_auth_cache(true);
             return Ok(SecretString::from(tokens.access_token));
         }
         Err(anyhow!(
             "Codex login finished but auth storage did not contain an API key or access token"
         ))
+    }
+
+    fn saved_auth_cache(&self) -> bool {
+        self.saved_auth_available
+            .lock()
+            .ok()
+            .and_then(|guard| *guard)
+            .unwrap_or(false)
+    }
+
+    fn set_saved_auth_cache(&self, value: bool) {
+        if let Ok(mut guard) = self.saved_auth_available.lock() {
+            *guard = Some(value);
+        }
+    }
+
+    fn clear_saved_auth_cache(&self) {
+        if let Ok(mut guard) = self.saved_auth_available.lock() {
+            *guard = None;
+        }
     }
 }
 

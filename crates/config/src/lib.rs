@@ -13,7 +13,7 @@ pub const LEGACY_CODEX_BASE_URL: &str = "http://localhost:8080";
 
 pub fn should_reset_codex_base_url(url: Option<&str>) -> bool {
     url.map(str::trim)
-        .is_none_or(|value| value.is_empty() || value == LEGACY_CODEX_BASE_URL)
+        .map_or(true, |value| value.is_empty() || value == LEGACY_CODEX_BASE_URL)
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]

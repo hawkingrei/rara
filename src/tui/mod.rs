@@ -26,6 +26,7 @@ use crossterm::{
     terminal::size as terminal_size,
 };
 use futures::StreamExt;
+use secrecy::ExposeSecret;
 use tokio::time::{interval, Duration};
 
 use crate::agent::Agent;
@@ -894,6 +895,15 @@ fn codex_auth_is_available(app: &TuiApp, oauth_manager: &OAuthManager) -> bool {
     if app.config.provider == "codex" && app.config.has_api_key() {
         return true;
     }
+    if app
+        .config
+        .provider_states
+        .get("codex")
+        .and_then(|state| state.api_key.as_ref())
+        .is_some_and(|api_key| !api_key.expose_secret().trim().is_empty())
+    {
+        return true;
+    }
     oauth_manager.has_saved_auth().is_ok_and(|saved| saved)
 }
 
@@ -903,6 +913,7 @@ fn open_provider_family_overlay(app: &mut TuiApp, oauth_manager: &OAuthManager) 
         self::state::ProviderFamily::Codex
     ) && !codex_auth_is_available(app, oauth_manager)
     {
+        app.config.set_provider("codex");
         app.open_overlay(Overlay::AuthModePicker);
     } else {
         app.open_overlay(Overlay::ModelPicker);
@@ -1160,6 +1171,7 @@ mod tests {
         assert_eq!(app.selected_provider_family(), ProviderFamily::Codex);
 
         open_provider_family_overlay(&mut app, &oauth_manager);
+        assert_eq!(app.config.provider, "codex");
         assert!(matches!(app.overlay, Some(Overlay::AuthModePicker)));
     }
 
@@ -1177,6 +1189,30 @@ mod tests {
             .save_api_key("sk-test-codex")
             .expect("save api key");
         app.provider_picker_idx = 0;
+
+        open_provider_family_overlay(&mut app, &oauth_manager);
+        assert!(matches!(app.overlay, Some(Overlay::ModelPicker)));
+    }
+
+    #[test]
+    fn codex_provider_family_uses_saved_codex_provider_state() {
+        let temp = tempdir().expect("tempdir");
+        let mut app = TuiApp::new(ConfigManager {
+            path: temp.path().join("config.json"),
+        })
+        .expect("app");
+        let oauth_manager =
+            crate::oauth::OAuthManager::new_for_config_dir(temp.path().join(".rara"))
+                .expect("oauth manager");
+
+        app.config.set_provider("ollama");
+        app.config.set_api_key("sk-ollama");
+        app.config.set_provider("codex");
+        app.config.set_api_key("sk-codex");
+        app.config.set_provider("ollama");
+        app.provider_picker_idx = 0;
+
+        assert!(codex_auth_is_available(&app, &oauth_manager));
 
         open_provider_family_overlay(&mut app, &oauth_manager);
         assert!(matches!(app.overlay, Some(Overlay::ModelPicker)));
