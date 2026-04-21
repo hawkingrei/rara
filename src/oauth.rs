@@ -161,11 +161,14 @@ impl OAuthManager {
     fn load_saved_credential(&self) -> Result<SecretString> {
         let auth = load_auth_dot_json(&self.codex_home, AuthCredentialsStoreMode::File)?
             .ok_or_else(|| anyhow!("Codex login finished but no credential was saved"))?;
-        if let Some(api_key) = auth.openai_api_key {
+        if let Some(api_key) = auth.openai_api_key.filter(|value| !value.trim().is_empty()) {
             self.set_saved_auth_cache(true);
             return Ok(SecretString::from(api_key));
         }
-        if let Some(tokens) = auth.tokens {
+        if let Some(tokens) = auth
+            .tokens
+            .filter(|tokens| !tokens.access_token.trim().is_empty())
+        {
             self.set_saved_auth_cache(true);
             return Ok(SecretString::from(tokens.access_token));
         }
@@ -334,6 +337,38 @@ mod tests {
         .expect("save token auth");
 
         assert!(manager.has_saved_auth().expect("token auth"));
+    }
+
+    #[test]
+    fn load_saved_credential_rejects_blank_values() {
+        let temp = tempdir().expect("tempdir");
+        let manager =
+            OAuthManager::new_for_config_dir(temp.path().join(".rara")).expect("oauth manager");
+
+        codex_login::save_auth(
+            auth_path(&manager),
+            &codex_login::AuthDotJson {
+                auth_mode: None,
+                openai_api_key: Some("   ".into()),
+                tokens: Some(codex_login::TokenData {
+                    id_token: valid_id_token_info(),
+                    access_token: "   ".into(),
+                    refresh_token: "refresh".into(),
+                    account_id: None,
+                }),
+                last_refresh: None,
+                agent_identity: None,
+            },
+            AuthCredentialsStoreMode::File,
+        )
+        .expect("save auth");
+
+        let err = manager
+            .load_saved_credential()
+            .expect_err("blank credentials should be rejected");
+        assert!(err
+            .to_string()
+            .contains("did not contain an API key or access token"));
     }
 
     fn auth_path(manager: &OAuthManager) -> &Path {
