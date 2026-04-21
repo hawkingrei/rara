@@ -113,11 +113,12 @@ impl OAuthManager {
     }
 
     pub fn has_saved_auth(&self) -> Result<bool> {
-        if self.saved_auth_cache() {
-            return Ok(true);
+        if let Some(cached) = self.saved_auth_cache() {
+            return Ok(cached);
         }
         let Some(auth) = load_auth_dot_json(&self.codex_home, AuthCredentialsStoreMode::File)?
         else {
+            self.set_saved_auth_cache(false);
             return Ok(false);
         };
         let has_api_key = auth
@@ -129,9 +130,7 @@ impl OAuthManager {
             .as_ref()
             .is_some_and(|tokens| !tokens.access_token.trim().is_empty());
         let has_saved_auth = has_api_key || has_access_token;
-        if has_saved_auth {
-            self.set_saved_auth_cache(true);
-        }
+        self.set_saved_auth_cache(has_saved_auth);
         Ok(has_saved_auth)
     }
 
@@ -158,7 +157,7 @@ impl OAuthManager {
         options
     }
 
-    fn load_saved_credential(&self) -> Result<SecretString> {
+    pub fn load_saved_credential(&self) -> Result<SecretString> {
         let auth = load_auth_dot_json(&self.codex_home, AuthCredentialsStoreMode::File)?
             .ok_or_else(|| anyhow!("Codex login finished but no credential was saved"))?;
         if let Some(api_key) = auth.openai_api_key.filter(|value| !value.trim().is_empty()) {
@@ -177,12 +176,15 @@ impl OAuthManager {
         ))
     }
 
-    fn saved_auth_cache(&self) -> bool {
+    pub fn invalidate_saved_auth_cache(&self) {
+        self.clear_saved_auth_cache();
+    }
+
+    fn saved_auth_cache(&self) -> Option<bool> {
         self.saved_auth_available
             .lock()
             .ok()
             .and_then(|guard| *guard)
-            .unwrap_or(false)
     }
 
     fn set_saved_auth_cache(&self, value: bool) {
@@ -369,6 +371,32 @@ mod tests {
         assert!(err
             .to_string()
             .contains("did not contain an API key or access token"));
+    }
+
+    #[test]
+    fn has_saved_auth_refreshes_after_cache_invalidation() {
+        let temp = tempdir().expect("tempdir");
+        let manager =
+            OAuthManager::new_for_config_dir(temp.path().join(".rara")).expect("oauth manager");
+
+        assert!(!manager.has_saved_auth().expect("no auth"));
+
+        codex_login::save_auth(
+            auth_path(&manager),
+            &codex_login::AuthDotJson {
+                auth_mode: None,
+                openai_api_key: Some("sk-direct".into()),
+                tokens: None,
+                last_refresh: None,
+                agent_identity: None,
+            },
+            AuthCredentialsStoreMode::File,
+        )
+        .expect("save auth");
+
+        assert!(!manager.has_saved_auth().expect("stale false cache"));
+        manager.invalidate_saved_auth_cache();
+        assert!(manager.has_saved_auth().expect("refreshed auth"));
     }
 
     fn auth_path(manager: &OAuthManager) -> &Path {

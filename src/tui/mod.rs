@@ -392,6 +392,9 @@ async fn dispatch_event(
             if matches!(app.overlay, Some(Overlay::Setup)) {
                 app.select_local_model(app.model_picker_idx);
             } else if matches!(app.overlay, Some(Overlay::ModelPicker)) && !app.is_busy() {
+                if app.selected_provider_family() == self::state::ProviderFamily::Codex {
+                    let _ = sync_codex_credential_from_auth_store(app, oauth_manager.as_ref())?;
+                }
                 if should_open_codex_auth_guide(app, oauth_manager.as_ref()) {
                     app.select_local_model(app.model_picker_idx);
                     app.open_overlay(Overlay::AuthModePicker);
@@ -569,7 +572,7 @@ async fn dispatch_event(
                 if app.is_busy() {
                     app.push_notice("A task is already running. Wait for it to finish.");
                 } else {
-                    open_provider_family_overlay(app, oauth_manager.as_ref());
+                    open_provider_family_overlay(app, oauth_manager.as_ref())?;
                 }
             }
             Some(Overlay::ResumePicker) => {
@@ -603,6 +606,9 @@ async fn dispatch_event(
                 if app.is_busy() {
                     app.push_notice("A task is already running. Wait for it to finish.");
                 } else {
+                    if app.selected_provider_family() == self::state::ProviderFamily::Codex {
+                        let _ = sync_codex_credential_from_auth_store(app, oauth_manager.as_ref())?;
+                    }
                     app.select_local_model(app.model_picker_idx);
                     if should_open_codex_auth_guide(app, oauth_manager.as_ref()) {
                         app.open_overlay(Overlay::AuthModePicker);
@@ -891,6 +897,31 @@ fn clamp_command_palette_selection(app: &mut TuiApp) {
     }
 }
 
+fn sync_codex_credential_from_auth_store(
+    app: &mut TuiApp,
+    oauth_manager: &OAuthManager,
+) -> anyhow::Result<bool> {
+    oauth_manager.invalidate_saved_auth_cache();
+    if !oauth_manager.has_saved_auth()? {
+        return Ok(false);
+    }
+
+    let credential = oauth_manager.load_saved_credential()?;
+    let previous_provider = app.config.provider.clone();
+
+    app.config.set_provider("codex");
+    app.config
+        .set_api_key(credential.expose_secret().to_string());
+    app.config.apply_codex_defaults();
+    app.config_manager.save(&app.config)?;
+
+    if previous_provider != "codex" {
+        app.config.set_provider(previous_provider);
+    }
+
+    Ok(true)
+}
+
 fn codex_auth_is_available(app: &TuiApp, oauth_manager: &OAuthManager) -> bool {
     if app.config.provider == "codex" && app.config.has_api_key() {
         return true;
@@ -907,17 +938,31 @@ fn codex_auth_is_available(app: &TuiApp, oauth_manager: &OAuthManager) -> bool {
     oauth_manager.has_saved_auth().is_ok_and(|saved| saved)
 }
 
-fn open_provider_family_overlay(app: &mut TuiApp, oauth_manager: &OAuthManager) {
+fn open_provider_family_overlay(
+    app: &mut TuiApp,
+    oauth_manager: &OAuthManager,
+) -> anyhow::Result<()> {
+    let has_synced_codex_auth = if matches!(
+        app.selected_provider_family(),
+        self::state::ProviderFamily::Codex
+    ) {
+        sync_codex_credential_from_auth_store(app, oauth_manager)?
+    } else {
+        false
+    };
+
     if matches!(
         app.selected_provider_family(),
         self::state::ProviderFamily::Codex
-    ) && !codex_auth_is_available(app, oauth_manager)
+    ) && !has_synced_codex_auth
+        && !codex_auth_is_available(app, oauth_manager)
     {
         app.config.set_provider("codex");
         app.open_overlay(Overlay::AuthModePicker);
     } else {
         app.open_overlay(Overlay::ModelPicker);
     }
+    Ok(())
 }
 
 fn should_open_codex_auth_guide(app: &TuiApp, oauth_manager: &OAuthManager) -> bool {
@@ -932,13 +977,15 @@ fn should_open_codex_auth_guide(app: &TuiApp, oauth_manager: &OAuthManager) -> b
 mod tests {
     use super::{
         classify_pending_plan_approval_input, codex_auth_is_available, dispatch_event,
-        map_key_to_event, open_provider_family_overlay, PendingPlanApprovalAction,
+        map_key_to_event, open_provider_family_overlay, sync_codex_credential_from_auth_store,
+        PendingPlanApprovalAction,
     };
     use crate::config::ConfigManager;
     use crate::config::{DEFAULT_CODEX_BASE_URL, DEFAULT_CODEX_MODEL};
     use crate::tui::app_event::AppEvent;
     use crate::tui::state::{Overlay, ProviderFamily, RunningTask, TaskKind, TuiApp};
     use crossterm::event::KeyCode;
+    use secrecy::ExposeSecret;
     use std::sync::Arc;
     use std::time::{Duration, Instant};
     use tempfile::tempdir;
@@ -1170,7 +1217,7 @@ mod tests {
 
         assert_eq!(app.selected_provider_family(), ProviderFamily::Codex);
 
-        open_provider_family_overlay(&mut app, &oauth_manager);
+        open_provider_family_overlay(&mut app, &oauth_manager).expect("open overlay");
         assert_eq!(app.config.provider, "codex");
         assert!(matches!(app.overlay, Some(Overlay::AuthModePicker)));
     }
@@ -1190,7 +1237,7 @@ mod tests {
             .expect("save api key");
         app.provider_picker_idx = 0;
 
-        open_provider_family_overlay(&mut app, &oauth_manager);
+        open_provider_family_overlay(&mut app, &oauth_manager).expect("open overlay");
         assert!(matches!(app.overlay, Some(Overlay::ModelPicker)));
     }
 
@@ -1214,8 +1261,39 @@ mod tests {
 
         assert!(codex_auth_is_available(&app, &oauth_manager));
 
-        open_provider_family_overlay(&mut app, &oauth_manager);
+        open_provider_family_overlay(&mut app, &oauth_manager).expect("open overlay");
         assert!(matches!(app.overlay, Some(Overlay::ModelPicker)));
+    }
+
+    #[test]
+    fn codex_auth_store_is_synced_into_config_before_model_flow() {
+        let temp = tempdir().expect("tempdir");
+        let mut app = TuiApp::new(ConfigManager {
+            path: temp.path().join("config.json"),
+        })
+        .expect("app");
+        let oauth_manager =
+            crate::oauth::OAuthManager::new_for_config_dir(temp.path().join(".rara"))
+                .expect("oauth manager");
+        oauth_manager
+            .save_api_key("sk-test-codex")
+            .expect("save api key");
+
+        app.config.set_provider("ollama");
+        app.provider_picker_idx = 0;
+
+        assert!(
+            sync_codex_credential_from_auth_store(&mut app, &oauth_manager).expect("sync auth")
+        );
+        assert_eq!(
+            app.config
+                .provider_states
+                .get("codex")
+                .and_then(|state| state.api_key.as_ref())
+                .map(|value| value.expose_secret()),
+            Some("sk-test-codex")
+        );
+        assert_eq!(app.config.provider, "ollama");
     }
 
     #[tokio::test]

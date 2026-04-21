@@ -336,6 +336,7 @@ pub(super) fn start_oauth_task(
     oauth_manager: Arc<OAuthManager>,
     mode: OAuthLoginMode,
 ) {
+    oauth_manager.invalidate_saved_auth_cache();
     if matches!(mode, OAuthLoginMode::Browser) && super::super::is_ssh_session() {
         app.set_runtime_phase(
             RuntimePhase::Failed,
