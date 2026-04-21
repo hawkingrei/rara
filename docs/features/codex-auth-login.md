@@ -214,6 +214,9 @@ Implemented in the current pass:
   project-local `.rara`
 - the main RARA config now lives under `~/.rara/config.json`, with
   provider-scoped remembered state for multi-provider/model use
+- the Codex runtime path no longer reuses the generic OpenAI-compatible
+  `chat/completions` backend; Codex requests now target the Responses API at
+  `/v1/responses`, matching upstream `codex-rs`
 - focused auth regression tests now cover:
   - stored API-key persistence
   - logout cleanup
