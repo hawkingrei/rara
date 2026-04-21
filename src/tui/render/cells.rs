@@ -987,7 +987,7 @@ fn is_renderable_system_message(message: &str) -> bool {
         || lower.starts_with("oauth failed:")
         || lower.starts_with("backend rebuild failed:")
         || lower.starts_with("open this url in a browser and enter the one-time code:")
-        || lower.starts_with("starting codex browser login.\nopen this url if the browser does not launch automatically:")
+        || lower.starts_with("starting codex browser login.")
         || lower.starts_with("error:")
 }
 
