@@ -986,6 +986,8 @@ fn is_renderable_system_message(message: &str) -> bool {
         || lower.starts_with("compact failed:")
         || lower.starts_with("oauth failed:")
         || lower.starts_with("backend rebuild failed:")
+        || lower.starts_with("open this url in a browser and enter the one-time code:")
+        || lower.starts_with("starting codex browser login.\nopen this url if the browser does not launch automatically:")
         || lower.starts_with("error:")
 }
 
@@ -1489,6 +1491,40 @@ mod tests {
         assert!(rendered.contains("Agent\n  Final recommendation"));
         assert!(!rendered.contains("System"));
         assert!(!rendered.contains("prompt finished"));
+    }
+
+    #[test]
+    fn active_turn_cell_renders_device_code_prompt_system_message() {
+        let temp = tempdir().unwrap();
+        let mut app = TuiApp::new(ConfigManager {
+            path: temp.path().join("config.json"),
+        })
+        .expect("build tui app");
+        app.runtime_phase = RuntimePhase::OAuthPollingDeviceCode;
+        app.runtime_phase_detail = Some("Waiting for device-code confirmation.".into());
+        app.active_turn = TranscriptTurn {
+            entries: vec![
+                TranscriptEntry {
+                    role: "Runtime".into(),
+                    message: "Starting Codex device-code login flow.".into(),
+                },
+                TranscriptEntry {
+                    role: "System".into(),
+                    message: "Open this URL in a browser and enter the one-time code:\nhttps://example.test\n\nCode: ABCD".into(),
+                },
+            ],
+        };
+
+        let rendered = ActiveTurnCell::new(&app, Some(Path::new(".")))
+            .display_lines(100)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(rendered.contains("System"));
+        assert!(rendered.contains("https://example.test"));
+        assert!(rendered.contains("Code: ABCD"));
     }
 
     #[test]
