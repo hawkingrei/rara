@@ -334,17 +334,7 @@ pub(super) fn to_codex_input_items(messages: &[Message]) -> Vec<Value> {
     for message in messages {
         match message.role.as_str() {
             "assistant" => items.extend(render_codex_assistant_items(&message.content)),
-            "user" => {
-                if let Some(tool_result) = extract_codex_tool_result_item(&message.content) {
-                    items.push(tool_result);
-                } else {
-                    items.push(render_codex_message(
-                        message.role.as_str(),
-                        &message.content,
-                        false,
-                    ));
-                }
-            }
+            "user" => items.extend(render_codex_user_items(&message.content)),
             role => items.push(render_codex_message(role, &message.content, false)),
         }
     }
@@ -390,8 +380,65 @@ fn render_codex_assistant_items(content: &Value) -> Vec<Value> {
     items
 }
 
+fn render_codex_user_items(content: &Value) -> Vec<Value> {
+    let Some(raw_items) = content.as_array() else {
+        return vec![render_codex_message("user", content, false)];
+    };
+
+    let mut rendered = Vec::new();
+    let mut text_parts = Vec::new();
+    let flush_text = |rendered: &mut Vec<Value>, text_parts: &mut Vec<String>| {
+        if !text_parts.is_empty() {
+            rendered.push(render_codex_message(
+                "user",
+                &Value::String(text_parts.join("\n\n")),
+                false,
+            ));
+            text_parts.clear();
+        }
+    };
+
+    for item in raw_items {
+        match item.get("type").and_then(Value::as_str) {
+            Some("tool_result") => {
+                flush_text(&mut rendered, &mut text_parts);
+                if let Some(tool_result) = extract_codex_tool_result_item(item) {
+                    rendered.push(tool_result);
+                }
+            }
+            Some("text") => {
+                if let Some(text) = item.get("text").and_then(Value::as_str) {
+                    if !text.trim().is_empty() {
+                        text_parts.push(text.to_string());
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    flush_text(&mut rendered, &mut text_parts);
+
+    if rendered.is_empty() {
+        vec![render_codex_message("user", content, false)]
+    } else {
+        rendered
+    }
+}
+
 fn extract_codex_tool_result_item(content: &Value) -> Option<Value> {
-    let (tool_use_id, tool_content) = extract_single_tool_result(content)?;
+    let tool_use_id = content
+        .get("tool_use_id")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let tool_content = content
+        .get("content")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    if tool_use_id.is_empty() {
+        return None;
+    }
     Some(json!({
         "type": "function_call_output",
         "call_id": tool_use_id,

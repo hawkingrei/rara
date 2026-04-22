@@ -76,6 +76,32 @@ fn converts_history_to_codex_responses_input_items() {
 }
 
 #[test]
+fn preserves_mixed_user_text_and_multiple_tool_results_for_codex_inputs() {
+    let messages = vec![Message {
+        role: "user".to_string(),
+        content: json!([
+            {"type":"text","text":"First result follows."},
+            {"type":"tool_result","tool_use_id":"tool-1","content":"alpha"},
+            {"type":"text","text":"Second result follows."},
+            {"type":"tool_result","tool_use_id":"tool-2","content":"beta"}
+        ]),
+    }];
+
+    let input = to_codex_input_items(&messages);
+    assert_eq!(input.len(), 4);
+    assert_eq!(input[0]["type"], "message");
+    assert_eq!(input[0]["content"][0]["text"], "First result follows.");
+    assert_eq!(input[1]["type"], "function_call_output");
+    assert_eq!(input[1]["call_id"], "tool-1");
+    assert_eq!(input[1]["output"], "alpha");
+    assert_eq!(input[2]["type"], "message");
+    assert_eq!(input[2]["content"][0]["text"], "Second result follows.");
+    assert_eq!(input[3]["type"], "function_call_output");
+    assert_eq!(input[3]["call_id"], "tool-2");
+    assert_eq!(input[3]["output"], "beta");
+}
+
+#[test]
 fn parses_codex_responses_output_into_text_and_tool_use_blocks() {
     let response = parse_codex_response(&json!({
         "status": "completed",
