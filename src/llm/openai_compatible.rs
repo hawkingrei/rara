@@ -359,7 +359,7 @@ pub(super) fn build_codex_responses_request(
         "store": false,
         "stream": false,
         "include": [],
-        "instructions": "",
+        "instructions": build_codex_instructions(messages),
         "text": Value::Null,
         "client_metadata": Value::Null,
     });
@@ -392,10 +392,21 @@ pub(super) fn to_codex_input_items(messages: &[Message]) -> Vec<Value> {
         match message.role.as_str() {
             "assistant" => items.extend(render_codex_assistant_items(&message.content)),
             "user" => items.extend(render_codex_user_items(&message.content)),
+            "system" => {}
             role => items.push(render_codex_message(role, &message.content, false)),
         }
     }
     items
+}
+
+fn build_codex_instructions(messages: &[Message]) -> String {
+    messages
+        .iter()
+        .filter(|message| message.role == "system")
+        .map(|message| render_openai_message_content(&message.content))
+        .filter(|text| !text.trim().is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n")
 }
 
 fn render_codex_message(role: &str, content: &Value, assistant_output: bool) -> Value {

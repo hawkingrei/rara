@@ -65,16 +65,13 @@ fn converts_history_to_codex_responses_input_items() {
 
     let input = to_codex_input_items(&messages);
     assert_eq!(input[0]["type"], "message");
-    assert_eq!(input[0]["role"], "system");
-    assert_eq!(input[0]["content"][0]["type"], "input_text");
-    assert_eq!(input[1]["type"], "message");
-    assert_eq!(input[1]["role"], "assistant");
-    assert_eq!(input[1]["content"][0]["type"], "output_text");
-    assert_eq!(input[2]["type"], "function_call");
+    assert_eq!(input[0]["role"], "assistant");
+    assert_eq!(input[0]["content"][0]["type"], "output_text");
+    assert_eq!(input[1]["type"], "function_call");
+    assert_eq!(input[1]["call_id"], "tool-1");
+    assert_eq!(input[2]["type"], "function_call_output");
     assert_eq!(input[2]["call_id"], "tool-1");
-    assert_eq!(input[3]["type"], "function_call_output");
-    assert_eq!(input[3]["call_id"], "tool-1");
-    assert_eq!(input[3]["output"], "[package]");
+    assert_eq!(input[2]["output"], "[package]");
 }
 
 #[test]
@@ -151,16 +148,24 @@ fn parses_codex_responses_output_into_text_and_tool_use_blocks() {
 fn codex_responses_request_includes_reasoning_effort_when_selected() {
     let request = build_codex_responses_request(
         "gpt-5.4",
-        &[Message {
-            role: "user".to_string(),
-            content: json!("Hello"),
-        }],
+        &[
+            Message {
+                role: "system".to_string(),
+                content: json!("Follow project instructions."),
+            },
+            Message {
+                role: "user".to_string(),
+                content: json!("Hello"),
+            },
+        ],
         &[],
         Some("high"),
     );
 
     assert_eq!(request["model"], "gpt-5.4");
     assert_eq!(request["reasoning"]["effort"], "high");
+    assert_eq!(request["instructions"], "Follow project instructions.");
+    assert_eq!(request["input"][0]["role"], "user");
 }
 
 #[test]
