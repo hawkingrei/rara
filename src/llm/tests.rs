@@ -316,9 +316,11 @@ fn applies_ollama_stream_event_deltas_and_tool_calls() {
 fn rejects_ollama_streams_without_final_done_event() {
     let error = ensure_ollama_stream_completed(false, "http://localhost:11434/api/chat")
         .expect_err("missing done event should fail");
-    assert!(error
-        .to_string()
-        .contains("ended before the final done event"));
+    assert!(
+        error
+            .to_string()
+            .contains("ended before the final done event")
+    );
 }
 
 #[test]

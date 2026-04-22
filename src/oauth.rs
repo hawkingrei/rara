@@ -3,8 +3,8 @@ use codex_login::{
     complete_device_code_login as codex_complete_device_code_login, load_auth_dot_json,
     login_with_api_key as codex_login_with_api_key, logout as codex_logout,
     request_device_code as codex_request_device_code, run_login_server as codex_run_login_server,
-    AuthCredentialsStoreMode, DeviceCode as CodexDeviceCode, LoginServer as CodexLoginServer,
-    ServerOptions, CLIENT_ID,
+    AuthCredentialsStoreMode, AuthDotJson, DeviceCode as CodexDeviceCode,
+    LoginServer as CodexLoginServer, ServerOptions, CLIENT_ID,
 };
 use secrecy::SecretString;
 use std::io::Read;
@@ -12,6 +12,12 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 const ISSUER: &str = "https://auth.openai.com";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SavedCodexAuthMode {
+    ApiKey,
+    Chatgpt,
+}
 
 #[derive(Debug, Clone)]
 pub struct DeviceCode {
@@ -142,6 +148,14 @@ impl OAuthManager {
         Ok(SecretString::from(trimmed.to_string()))
     }
 
+    pub fn saved_auth_mode(&self) -> Result<Option<SavedCodexAuthMode>> {
+        let Some(auth) = load_auth_dot_json(&self.codex_home, AuthCredentialsStoreMode::File)?
+        else {
+            return Ok(None);
+        };
+        Ok(detect_saved_auth_mode(&auth))
+    }
+
     fn server_options(&self, open_browser: bool) -> ServerOptions {
         let mut options = ServerOptions::new(
             self.codex_home.clone(),
@@ -157,16 +171,24 @@ impl OAuthManager {
     pub fn load_saved_credential(&self) -> Result<SecretString> {
         let auth = load_auth_dot_json(&self.codex_home, AuthCredentialsStoreMode::File)?
             .ok_or_else(|| anyhow!("Codex login finished but no credential was saved"))?;
-        if let Some(api_key) = auth.openai_api_key.filter(|value| !value.trim().is_empty()) {
-            self.set_saved_auth_cache(true);
-            return Ok(SecretString::from(api_key));
-        }
-        if let Some(tokens) = auth
-            .tokens
-            .filter(|tokens| !tokens.access_token.trim().is_empty())
-        {
-            self.set_saved_auth_cache(true);
-            return Ok(SecretString::from(tokens.access_token));
+        match detect_saved_auth_mode(&auth) {
+            Some(SavedCodexAuthMode::ApiKey) => {
+                if let Some(api_key) = auth.openai_api_key.filter(|value| !value.trim().is_empty())
+                {
+                    self.set_saved_auth_cache(true);
+                    return Ok(SecretString::from(api_key));
+                }
+            }
+            Some(SavedCodexAuthMode::Chatgpt) => {
+                if let Some(tokens) = auth
+                    .tokens
+                    .filter(|tokens| !tokens.access_token.trim().is_empty())
+                {
+                    self.set_saved_auth_cache(true);
+                    return Ok(SecretString::from(tokens.access_token));
+                }
+            }
+            None => {}
         }
         Err(anyhow!(
             "Codex login finished but auth storage did not contain an API key or access token"
@@ -199,6 +221,34 @@ impl OAuthManager {
             *guard = None;
         }
     }
+}
+
+fn detect_saved_auth_mode(auth: &AuthDotJson) -> Option<SavedCodexAuthMode> {
+    let explicit_mode = auth.auth_mode.as_ref().map(|mode| format!("{mode:?}"));
+    if explicit_mode.as_deref() == Some("ApiKey") {
+        return Some(SavedCodexAuthMode::ApiKey);
+    }
+    if explicit_mode
+        .as_deref()
+        .is_some_and(|mode| mode.starts_with("Chatgpt"))
+    {
+        return Some(SavedCodexAuthMode::Chatgpt);
+    }
+    if auth
+        .tokens
+        .as_ref()
+        .is_some_and(|tokens| !tokens.access_token.trim().is_empty())
+    {
+        return Some(SavedCodexAuthMode::Chatgpt);
+    }
+    if auth
+        .openai_api_key
+        .as_deref()
+        .is_some_and(|value| !value.trim().is_empty())
+    {
+        return Some(SavedCodexAuthMode::ApiKey);
+    }
+    None
 }
 
 #[cfg(test)]
@@ -242,7 +292,7 @@ mod tests {
     }
 
     #[test]
-    fn load_saved_credential_prefers_api_key_then_access_token() {
+    fn load_saved_credential_prefers_access_token_for_chatgpt_auth() {
         let temp = tempdir().expect("tempdir");
         let manager =
             OAuthManager::new_for_config_dir(temp.path().join(".rara")).expect("oauth manager");
@@ -265,8 +315,12 @@ mod tests {
         )
         .expect("save auth");
 
-        let saved = manager.load_saved_credential().expect("load api key");
-        assert_eq!(saved.expose_secret(), "sk-direct");
+        let saved = manager.load_saved_credential().expect("load chatgpt token");
+        assert_eq!(saved.expose_secret(), "access");
+        assert_eq!(
+            manager.saved_auth_mode().expect("auth mode"),
+            Some(SavedCodexAuthMode::Chatgpt)
+        );
 
         codex_login::save_auth(
             auth_path(&manager),
@@ -288,6 +342,33 @@ mod tests {
 
         let saved = manager.load_saved_credential().expect("load access token");
         assert_eq!(saved.expose_secret(), "access-only");
+    }
+
+    #[test]
+    fn load_saved_credential_uses_api_key_for_api_key_auth() {
+        let temp = tempdir().expect("tempdir");
+        let manager =
+            OAuthManager::new_for_config_dir(temp.path().join(".rara")).expect("oauth manager");
+
+        codex_login::save_auth(
+            auth_path(&manager),
+            &codex_login::AuthDotJson {
+                auth_mode: None,
+                openai_api_key: Some("sk-direct".into()),
+                tokens: None,
+                last_refresh: None,
+                agent_identity: None,
+            },
+            AuthCredentialsStoreMode::File,
+        )
+        .expect("save auth");
+
+        let saved = manager.load_saved_credential().expect("load api key");
+        assert_eq!(saved.expose_secret(), "sk-direct");
+        assert_eq!(
+            manager.saved_auth_mode().expect("auth mode"),
+            Some(SavedCodexAuthMode::ApiKey)
+        );
     }
 
     #[test]

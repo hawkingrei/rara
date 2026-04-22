@@ -2,13 +2,14 @@ use anyhow::Result;
 use dirs::home_dir;
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
-use std::collections::{hash_map::DefaultHasher, BTreeMap};
+use std::collections::{BTreeMap, hash_map::DefaultHasher};
 use std::fs;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 
 pub const DEFAULT_CODEX_BASE_URL: &str = "https://api.openai.com/v1";
 pub const DEFAULT_CODEX_MODEL: &str = "gpt-5.4";
+pub const DEFAULT_CODEX_CHATGPT_BASE_URL: &str = "https://chatgpt.com/backend-api/codex";
 pub const LEGACY_CODEX_BASE_URL: &str = "http://localhost:8080";
 pub const LEGACY_CODEX_MODEL: &str = "codex";
 pub const LEGACY_CODEX_MODEL_V1: &str = "gpt-5-codex";
@@ -27,6 +28,15 @@ pub fn should_reset_codex_model(model: Option<&str>) -> bool {
                 value,
                 LEGACY_CODEX_MODEL | LEGACY_CODEX_MODEL_V1 | LEGACY_CODEX_MODEL_V1_MINI
             )
+    })
+}
+
+pub fn should_apply_codex_base_url(url: Option<&str>, expected: &str) -> bool {
+    url.map(str::trim).map_or(true, |value| {
+        value.is_empty()
+            || value == LEGACY_CODEX_BASE_URL
+            || ((value == DEFAULT_CODEX_BASE_URL || value == DEFAULT_CODEX_CHATGPT_BASE_URL)
+                && value != expected)
     })
 }
 
@@ -140,8 +150,12 @@ impl RaraConfig {
     }
 
     pub fn apply_codex_defaults(&mut self) {
-        if should_reset_codex_base_url(self.base_url.as_deref()) {
-            self.set_base_url(Some(DEFAULT_CODEX_BASE_URL.to_string()));
+        self.apply_codex_defaults_for_base_url(DEFAULT_CODEX_BASE_URL);
+    }
+
+    pub fn apply_codex_defaults_for_base_url(&mut self, base_url: &str) {
+        if should_apply_codex_base_url(self.base_url.as_deref(), base_url) {
+            self.set_base_url(Some(base_url.to_string()));
         }
         if should_reset_codex_model(self.model.as_deref()) {
             self.set_model(Some(DEFAULT_CODEX_MODEL.to_string()));
@@ -324,7 +338,7 @@ impl ConfigManager {
 
 #[cfg(test)]
 mod tests {
-    use super::{workspace_data_dir_for_home, ConfigManager, RaraConfig};
+    use super::{ConfigManager, RaraConfig, workspace_data_dir_for_home};
     use std::fs;
     use tempfile::tempdir;
 
@@ -401,6 +415,24 @@ mod tests {
             config.base_url.as_deref(),
             Some(super::DEFAULT_CODEX_BASE_URL)
         );
+    }
+
+    #[test]
+    fn apply_codex_defaults_for_base_url_switches_between_known_codex_defaults() {
+        let mut config = RaraConfig {
+            provider: "codex".to_string(),
+            base_url: Some(super::DEFAULT_CODEX_BASE_URL.to_string()),
+            model: Some(super::DEFAULT_CODEX_MODEL.to_string()),
+            ..Default::default()
+        };
+
+        config.apply_codex_defaults_for_base_url(super::DEFAULT_CODEX_CHATGPT_BASE_URL);
+
+        assert_eq!(
+            config.base_url.as_deref(),
+            Some(super::DEFAULT_CODEX_CHATGPT_BASE_URL)
+        );
+        assert_eq!(config.model.as_deref(), Some(super::DEFAULT_CODEX_MODEL));
     }
 
     #[test]
