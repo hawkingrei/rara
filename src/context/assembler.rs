@@ -43,7 +43,7 @@ impl<'a> ContextAssembler<'a> {
     }
 
     pub fn compact_instruction(&self) -> String {
-        self.assemble(PromptMode::Execute).compact_instruction
+        prompt::build_compact_instruction(self.runtime)
     }
 
     pub fn budget_for(
