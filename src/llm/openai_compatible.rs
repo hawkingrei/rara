@@ -4,7 +4,8 @@ use codex_login::default_client::default_headers as codex_default_headers;
 use secrecy::{ExposeSecret, SecretString};
 use serde_json::{Value, json};
 
-use crate::agent::{AnthropicResponse, ContentBlock, Message};
+use crate::agent::Message;
+use crate::llm::{ContentBlock, LlmResponse, TokenUsage};
 use crate::redaction::{redact_secrets, sanitize_url_for_display};
 
 use super::shared::{
@@ -44,7 +45,7 @@ impl OpenAiCompatibleBackend {
 
 #[async_trait]
 impl LlmBackend for OpenAiCompatibleBackend {
-    async fn ask(&self, messages: &[Message], tools: &[Value]) -> Result<AnthropicResponse> {
+    async fn ask(&self, messages: &[Message], tools: &[Value]) -> Result<LlmResponse> {
         let openai_messages = to_openai_messages(messages);
         let openai_tools: Vec<Value> = tools
             .iter()
@@ -101,11 +102,11 @@ impl LlmBackend for OpenAiCompatibleBackend {
                 });
             }
         }
-        let usage = resp_json.get("usage").map(|u| crate::agent::TokenUsage {
+        let usage = resp_json.get("usage").map(|u| TokenUsage {
             input_tokens: u["prompt_tokens"].as_u64().unwrap_or(0) as u32,
             output_tokens: u["completion_tokens"].as_u64().unwrap_or(0) as u32,
         });
-        Ok(AnthropicResponse {
+        Ok(LlmResponse {
             content,
             stop_reason: resp_json["choices"][0]["finish_reason"]
                 .as_str()
@@ -276,7 +277,7 @@ impl CodexBackend {
 
 #[async_trait]
 impl LlmBackend for CodexBackend {
-    async fn ask(&self, m: &[Message], t: &[Value]) -> Result<AnthropicResponse> {
+    async fn ask(&self, m: &[Message], t: &[Value]) -> Result<LlmResponse> {
         let body =
             build_codex_responses_request(&self.model, m, t, self.reasoning_effort.as_deref());
         let responses_url = self.endpoint_url("responses");
@@ -503,7 +504,7 @@ fn extract_codex_tool_result_item(content: &Value) -> Option<Value> {
     }))
 }
 
-pub(super) fn parse_codex_response(resp_json: &Value) -> Result<AnthropicResponse> {
+pub(super) fn parse_codex_response(resp_json: &Value) -> Result<LlmResponse> {
     let mut content = Vec::new();
     if let Some(items) = resp_json.get("output").and_then(Value::as_array) {
         for item in items {
@@ -535,11 +536,11 @@ pub(super) fn parse_codex_response(resp_json: &Value) -> Result<AnthropicRespons
             }
         }
     }
-    let usage = resp_json.get("usage").map(|u| crate::agent::TokenUsage {
+    let usage = resp_json.get("usage").map(|u| TokenUsage {
         input_tokens: u["input_tokens"].as_u64().unwrap_or(0) as u32,
         output_tokens: u["output_tokens"].as_u64().unwrap_or(0) as u32,
     });
-    Ok(AnthropicResponse {
+    Ok(LlmResponse {
         content,
         stop_reason: resp_json
             .get("status")
@@ -572,7 +573,7 @@ pub struct GeminiBackend {
 
 #[async_trait]
 impl LlmBackend for GeminiBackend {
-    async fn ask(&self, _: &[Message], _: &[Value]) -> Result<AnthropicResponse> {
+    async fn ask(&self, _: &[Message], _: &[Value]) -> Result<LlmResponse> {
         Err(anyhow!("Gemini pending"))
     }
 

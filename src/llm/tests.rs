@@ -1,6 +1,7 @@
 use serde_json::json;
 
 use crate::agent::Message;
+use crate::llm::ContentBlock;
 
 use super::ollama::{
     apply_ollama_stream_event, build_ollama_options, ensure_ollama_stream_completed,
@@ -132,13 +133,13 @@ fn parses_codex_responses_output_into_text_and_tool_use_blocks() {
     assert_eq!(response.usage.unwrap().input_tokens, 11);
     assert_eq!(response.content.len(), 2);
     match &response.content[0] {
-        crate::agent::ContentBlock::Text { text } => {
+        ContentBlock::Text { text } => {
             assert_eq!(text, "Need to inspect a file.");
         }
         other => panic!("expected text block, got {other:?}"),
     }
     match &response.content[1] {
-        crate::agent::ContentBlock::ToolUse { id, name, input } => {
+        ContentBlock::ToolUse { id, name, input } => {
             assert_eq!(id, "call-1");
             assert_eq!(name, "read_file");
             assert_eq!(input, &json!({"path":"Cargo.toml"}));

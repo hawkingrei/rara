@@ -59,7 +59,7 @@ impl<'a> ContextAssembler<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent::{AnthropicResponse, ContentBlock};
+    use crate::llm::{ContentBlock, LlmResponse};
     use anyhow::Result;
     use async_trait::async_trait;
     use rara_config::RaraConfig;
@@ -72,8 +72,8 @@ mod tests {
 
     #[async_trait]
     impl LlmBackend for BudgetBackend {
-        async fn ask(&self, _messages: &[Message], _tools: &[Value]) -> Result<AnthropicResponse> {
-            Ok(AnthropicResponse {
+        async fn ask(&self, _messages: &[Message], _tools: &[Value]) -> Result<LlmResponse> {
+            Ok(LlmResponse {
                 content: vec![ContentBlock::Text {
                     text: "ok".to_string(),
                 }],
