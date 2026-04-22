@@ -8,7 +8,7 @@ use codex_login::{
 };
 use secrecy::SecretString;
 use std::io::Read;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 const ISSUER: &str = "https://auth.openai.com";
@@ -104,10 +104,7 @@ impl OAuthManager {
     }
 
     pub fn clear_saved_auth(&self) -> Result<bool> {
-        let removed = codex_logout(
-            &self.codex_home,
-            AuthCredentialsStoreMode::File,
-        )?;
+        let removed = codex_logout(&self.codex_home, AuthCredentialsStoreMode::File)?;
         self.clear_saved_auth_cache();
         Ok(removed)
     }
@@ -178,6 +175,10 @@ impl OAuthManager {
 
     pub fn invalidate_saved_auth_cache(&self) {
         self.clear_saved_auth_cache();
+    }
+
+    pub fn codex_home(&self) -> &Path {
+        self.codex_home.as_path()
     }
 
     fn saved_auth_cache(&self) -> Option<bool> {

@@ -27,6 +27,8 @@ later, but it is a separate second-layer concern.
   persistence and login choices.
 - Prefer reusing Codex crates for login execution and credential handling
   instead of maintaining a parallel OAuth implementation in RARA.
+- Stop hardcoding the Codex model list inside RARA once login succeeds; reuse
+  Codex's own model catalog and reasoning-level metadata instead.
 - Make the Codex-auth path usable from:
   - CLI
   - TUI login flows
@@ -170,6 +172,51 @@ The TUI `/login` path should remain an explicit mode picker similar to Codex:
 The TUI should still keep provider login distinct from any future MCP/appserver
 server login surface.
 
+## Model and Reasoning Selection
+
+Once Codex auth is available, RARA should align with Codex's catalog-driven
+model selection instead of maintaining a local hardcoded preset list.
+
+### Model Source
+
+RARA should prefer the same Codex model catalog metadata used by upstream
+Codex:
+
+- `codex_models_manager`
+- `codex_protocol` model metadata exposed through `ModelPreset`
+
+This means:
+
+- the visible Codex model list should come from the active catalog;
+- picker visibility should respect `show_in_picker`;
+- auth-aware filtering should follow Codex's own catalog logic rather than a
+  RARA-local allowlist.
+
+### Picker Flow
+
+The TUI `/model` flow for Codex should behave as follows:
+
+1. If no Codex auth is available, open the Codex auth-mode picker.
+2. If Codex auth is available, refresh/load the Codex model catalog and open
+   the model picker.
+3. After selecting a model:
+   - if the model exposes more than one supported reasoning level, open a
+     second picker for reasoning level;
+   - if only one reasoning level is available, apply it directly and rebuild
+     without an extra overlay.
+
+### Persisted State
+
+RARA's provider-scoped state for `codex` must now remember:
+
+- `model`
+- `reasoning_effort`
+- `base_url`
+- credential state
+
+Switching away from and back to Codex should restore the remembered model and
+reasoning effort together.
+
 ## Appserver / MCP Relationship
 
 This feature is related to appserver support, but it is not the same feature.
@@ -217,11 +264,22 @@ Implemented in the current pass:
 - the Codex runtime path no longer reuses the generic OpenAI-compatible
   `chat/completions` backend; Codex requests now target the Responses API at
   `/v1/responses`, matching upstream `codex-rs`
+- the Codex model picker no longer uses a local hardcoded preset list; it now
+  loads the active Codex catalog through `codex_models_manager`
+- Codex reasoning effort is now a first-class provider-scoped setting instead
+  of being squeezed into the existing boolean `thinking` flag
+- the TUI Codex flow is now two-stage:
+  - model picker first
+  - reasoning-level picker second when the chosen model supports multiple
+    efforts
 - focused auth regression tests now cover:
   - stored API-key persistence
   - logout cleanup
   - credential loading precedence
   - auth-picker navigation
+- focused Codex catalog tests now cover:
+  - carrying selected reasoning effort into `/v1/responses`
+  - opening the reasoning picker before rebuild for multi-effort Codex models
 - initial snapshot coverage now exists for:
   - auth picker popup
   - queued follow-up preview
@@ -230,6 +288,9 @@ Implemented in the current pass:
 Still intentionally left open:
 
 - fuller browser callback-path validation beyond the `codex_login` server bridge
+- auth-mode-specific Codex endpoint selection:
+  - ChatGPT/Codex login should not necessarily reuse the same endpoint as an
+    OpenAI API key
 - broader snapshot coverage for more TUI popups and transcript-heavy surfaces
 - richer credential persistence semantics if Codex later requires more than the
   current stored access token/API key path
@@ -237,5 +298,8 @@ Still intentionally left open:
 ## Follow-Up Work
 
 - Expand auth-path tests around browser callback handling and shared persistence.
+- Align Codex endpoint selection with the active auth mode so OAuth-backed
+  Codex sessions and API-key-backed Codex sessions do not share the wrong
+  provider URL by accident.
 - Expand snapshot coverage across more Codex-style TUI surfaces.
 - Specify MCP/appserver OAuth separately if later appserver work truly needs it.

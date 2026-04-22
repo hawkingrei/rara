@@ -13,6 +13,7 @@ Active backlog only. Keep this file small and current.
 
 - [ ] Broaden Codex-auth validation beyond the current bridge tests: add stronger callback-flow coverage and more end-to-end persistence checks so the browser/device/API-key/logout paths stay regression-tested even as `codex_login` evolves.
 - [ ] Split Codex-specific persisted auth/config back out to `~/.codex` while keeping provider-agnostic RARA config, workspace runtime state, and session data under `~/.rara`.
+- [ ] Align Codex endpoint selection with auth mode: ChatGPT/Codex login and OpenAI API key sessions should not share the same provider URL blindly, even though both currently reuse the Responses-shaped backend contract.
 - [ ] Add an `AgentHub team mode` on top of ACP: for role-specialized worker sessions, use a small model first for intent routing and only hand the task to the larger worker model when the intent is relevant to that worker, instead of sending every ACP turn directly to the expensive model.
 - [ ] Deepen the `AgentHub team mode` spec before implementation: define the ACP session metadata, worker-role contract, router prompt/output schema, and the exact `skip` / `handle` response semantics so the worker runtime can be implemented without inventing a parallel protocol later.
 

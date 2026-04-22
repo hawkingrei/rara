@@ -2,11 +2,7 @@ use crate::config::RaraConfig;
 
 use super::ProviderFamily;
 
-pub const CODEX_MODEL_PRESETS: [(&str, &str, &str); 3] = [
-    ("GPT-5 Codex", "codex", "gpt-5-codex"),
-    ("GPT-5.1 Codex mini", "codex", "gpt-5.1-codex-mini"),
-    ("GPT-5.1 Codex max", "codex", "gpt-5.1-codex-max"),
-];
+pub const CODEX_MODEL_PRESETS: [(&str, &str, &str); 0] = [];
 
 pub const OPENAI_COMPATIBLE_MODEL_PRESETS: [(&str, &str, &str); 1] =
     [("Custom endpoint", "openai-compatible", "gpt-4o-mini")];

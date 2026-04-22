@@ -30,8 +30,10 @@ use secrecy::{ExposeSecret, SecretString};
 use tokio::time::{interval, Duration};
 
 use crate::agent::Agent;
+use crate::codex_model_catalog::load_codex_model_catalog;
 use crate::oauth::OAuthManager;
 use crate::state_db::StateDb;
+use codex_models_manager::manager::RefreshStrategy;
 
 use self::app_event::AppEvent;
 use self::command::{palette_command_by_index, palette_commands, parse_local_command};
@@ -45,9 +47,7 @@ use self::runtime::{
 use self::session_restore::{
     provider_requires_api_key, restore_latest_session, restore_session_by_id,
 };
-use self::state::{
-    current_model_presets, HelpTab, LocalCommandKind, Overlay, TaskKind, TuiApp, PROVIDER_FAMILIES,
-};
+use self::state::{HelpTab, LocalCommandKind, Overlay, TaskKind, TuiApp, PROVIDER_FAMILIES};
 use self::terminal_ui::{
     build_terminal, flush_committed_history, handle_paste, is_ssh_session, teardown_terminal,
     update_terminal_viewport,
@@ -163,6 +163,12 @@ fn map_key_to_event(key: KeyCode, app: &TuiApp) -> AppEvent {
             KeyCode::Char('1') => AppEvent::SetModelSelection(0),
             KeyCode::Char('2') => AppEvent::SetModelSelection(1),
             KeyCode::Char('3') => AppEvent::SetModelSelection(2),
+            KeyCode::Char('4') => AppEvent::SetModelSelection(3),
+            KeyCode::Char('5') => AppEvent::SetModelSelection(4),
+            KeyCode::Char('6') => AppEvent::SetModelSelection(5),
+            KeyCode::Char('7') => AppEvent::SetModelSelection(6),
+            KeyCode::Char('8') => AppEvent::SetModelSelection(7),
+            KeyCode::Char('9') => AppEvent::SetModelSelection(8),
             KeyCode::Char('m') => AppEvent::CycleModelSelection,
             KeyCode::Char('l')
                 if matches!(
@@ -203,6 +209,12 @@ fn map_key_to_event(key: KeyCode, app: &TuiApp) -> AppEvent {
             KeyCode::Char('1') => AppEvent::SetModelSelection(0),
             KeyCode::Char('2') => AppEvent::SetModelSelection(1),
             KeyCode::Char('3') => AppEvent::SetModelSelection(2),
+            KeyCode::Char('4') => AppEvent::SetModelSelection(3),
+            KeyCode::Char('5') => AppEvent::SetModelSelection(4),
+            KeyCode::Char('6') => AppEvent::SetModelSelection(5),
+            KeyCode::Char('7') => AppEvent::SetModelSelection(6),
+            KeyCode::Char('8') => AppEvent::SetModelSelection(7),
+            KeyCode::Char('9') => AppEvent::SetModelSelection(8),
             KeyCode::Char('b')
                 if matches!(
                     app.selected_provider_family(),
@@ -261,6 +273,18 @@ fn map_key_to_event(key: KeyCode, app: &TuiApp) -> AppEvent {
             KeyCode::Enter => AppEvent::SaveModelNameInput,
             KeyCode::Backspace => AppEvent::Backspace,
             KeyCode::Char(c) => AppEvent::InputChar(c),
+            _ => AppEvent::Noop,
+        },
+        Some(Overlay::ReasoningEffortPicker) => match key {
+            KeyCode::Esc => AppEvent::CloseOverlay,
+            KeyCode::Up | KeyCode::Char('k') => AppEvent::MoveReasoningEffortSelection(-1),
+            KeyCode::Down | KeyCode::Char('j') => AppEvent::MoveReasoningEffortSelection(1),
+            KeyCode::Char('1') => AppEvent::SetReasoningEffortSelection(0),
+            KeyCode::Char('2') => AppEvent::SetReasoningEffortSelection(1),
+            KeyCode::Char('3') => AppEvent::SetReasoningEffortSelection(2),
+            KeyCode::Char('4') => AppEvent::SetReasoningEffortSelection(3),
+            KeyCode::Char('5') => AppEvent::SetReasoningEffortSelection(4),
+            KeyCode::Enter => AppEvent::ApplyOverlaySelection,
             _ => AppEvent::Noop,
         },
         None => match key {
@@ -364,11 +388,19 @@ async fn dispatch_event(
             }
         }
         AppEvent::MoveModelSelection(delta) => {
-            let next = (app.model_picker_idx as i32 + delta).clamp(
-                0,
-                current_model_presets(app.provider_picker_idx).len() as i32 - 1,
-            );
-            app.model_picker_idx = next as usize;
+            let len = app.current_model_picker_len();
+            if len > 0 {
+                let next = (app.model_picker_idx as i32 + delta).clamp(0, len as i32 - 1);
+                app.model_picker_idx = next as usize;
+            }
+        }
+        AppEvent::MoveReasoningEffortSelection(delta) => {
+            let len = app.selected_codex_reasoning_options().len();
+            if len > 0 {
+                let next =
+                    (app.reasoning_effort_picker_idx as i32 + delta).clamp(0, len as i32 - 1);
+                app.reasoning_effort_picker_idx = next as usize;
+            }
         }
         AppEvent::MoveAuthModeSelection(delta) => {
             let next = (app.auth_mode_idx as i32 + delta).clamp(0, 3);
@@ -381,20 +413,29 @@ async fn dispatch_event(
         AppEvent::SetAuthModeSelection(idx) => {
             app.auth_mode_idx = idx.min(3);
         }
+        AppEvent::SetReasoningEffortSelection(idx) => {
+            let len = app.selected_codex_reasoning_options().len();
+            if len > 0 {
+                app.reasoning_effort_picker_idx = idx.min(len - 1);
+            }
+        }
         AppEvent::SetResumeSelection(idx) => {
             if !app.recent_sessions.is_empty() {
                 app.resume_picker_idx = idx.min(app.recent_sessions.len() - 1);
             }
         }
         AppEvent::SetModelSelection(idx) => {
-            app.model_picker_idx =
-                idx.min(current_model_presets(app.provider_picker_idx).len() - 1);
+            let len = app.current_model_picker_len();
+            if len == 0 {
+                return Ok(false);
+            }
+            app.model_picker_idx = idx.min(len - 1);
             if matches!(app.overlay, Some(Overlay::Setup)) {
                 app.select_local_model(app.model_picker_idx);
-            } else if matches!(app.overlay, Some(Overlay::ModelPicker)) && !app.is_busy() {
-                if app.selected_provider_family() == self::state::ProviderFamily::Codex {
-                    let _ = sync_codex_credential_from_auth_store(app, oauth_manager.as_ref())?;
-                }
+            } else if matches!(app.overlay, Some(Overlay::ModelPicker))
+                && app.selected_provider_family() != self::state::ProviderFamily::Codex
+                && !app.is_busy()
+            {
                 if should_open_codex_auth_guide(app, oauth_manager.as_ref()) {
                     app.select_local_model(app.model_picker_idx);
                     app.open_overlay(Overlay::AuthModePicker);
@@ -572,7 +613,7 @@ async fn dispatch_event(
                 if app.is_busy() {
                     app.push_notice("A task is already running. Wait for it to finish.");
                 } else {
-                    open_provider_family_overlay(app, oauth_manager.as_ref())?;
+                    open_provider_family_overlay(app, oauth_manager.as_ref()).await?;
                 }
             }
             Some(Overlay::ResumePicker) => {
@@ -609,12 +650,30 @@ async fn dispatch_event(
                     if app.selected_provider_family() == self::state::ProviderFamily::Codex {
                         let _ = sync_codex_credential_from_auth_store(app, oauth_manager.as_ref())?;
                     }
-                    app.select_local_model(app.model_picker_idx);
                     if should_open_codex_auth_guide(app, oauth_manager.as_ref()) {
+                        app.select_local_model(app.model_picker_idx);
                         app.open_overlay(Overlay::AuthModePicker);
+                    } else if app.selected_provider_family() == self::state::ProviderFamily::Codex {
+                        app.select_local_model(app.model_picker_idx);
+                        if app.selected_codex_reasoning_options().len() <= 1 {
+                            app.apply_selected_codex_reasoning_effort();
+                            start_rebuild_task(app);
+                        } else {
+                            app.open_overlay(Overlay::ReasoningEffortPicker);
+                        }
                     } else {
+                        app.select_local_model(app.model_picker_idx);
                         start_rebuild_task(app);
                     }
+                }
+            }
+            Some(Overlay::ReasoningEffortPicker) => {
+                if app.is_busy() {
+                    app.push_notice("A task is already running. Wait for it to finish.");
+                } else {
+                    app.select_local_model(app.model_picker_idx);
+                    app.apply_selected_codex_reasoning_effort();
+                    start_rebuild_task(app);
                 }
             }
             Some(Overlay::Setup) => {
@@ -907,8 +966,7 @@ fn sync_codex_credential_from_auth_store(
         .is_some_and(|api_key| !api_key.expose_secret().trim().is_empty())
         && codex_state
             .and_then(|state| state.model.as_deref())
-            .map(str::trim)
-            .is_some_and(|model| !model.is_empty() && model != crate::config::LEGACY_CODEX_MODEL)
+            .is_some_and(|model| !crate::config::should_reset_codex_model(Some(model)))
         && codex_state
             .map(|state| !crate::config::should_reset_codex_base_url(state.base_url.as_deref()))
             .unwrap_or(false);
@@ -934,8 +992,7 @@ fn sync_codex_credential_from_auth_store(
             app.config.set_api_key(credential.clone());
             changed = true;
         }
-        let current_model = app.config.model.as_deref().map(str::trim).unwrap_or("");
-        if current_model.is_empty() || current_model == crate::config::LEGACY_CODEX_MODEL {
+        if crate::config::should_reset_codex_model(app.config.model.as_deref()) {
             app.config
                 .set_model(Some(crate::config::DEFAULT_CODEX_MODEL.to_string()));
             changed = true;
@@ -960,8 +1017,7 @@ fn sync_codex_credential_from_auth_store(
             codex_state.api_key = Some(SecretString::from(credential));
             changed = true;
         }
-        let current_model = codex_state.model.as_deref().map(str::trim).unwrap_or("");
-        if current_model.is_empty() || current_model == crate::config::LEGACY_CODEX_MODEL {
+        if crate::config::should_reset_codex_model(codex_state.model.as_deref()) {
             codex_state.model = Some(crate::config::DEFAULT_CODEX_MODEL.to_string());
             changed = true;
         }
@@ -999,7 +1055,20 @@ fn codex_auth_is_available(app: &TuiApp, oauth_manager: &OAuthManager) -> bool {
     oauth_manager.has_saved_auth().is_ok_and(|saved| saved)
 }
 
-fn open_provider_family_overlay(
+async fn refresh_codex_model_picker(
+    app: &mut TuiApp,
+    oauth_manager: &OAuthManager,
+    refresh_strategy: RefreshStrategy,
+) -> anyhow::Result<()> {
+    let options = load_codex_model_catalog(oauth_manager.codex_home(), refresh_strategy).await?;
+    if options.is_empty() {
+        app.push_notice("Codex model catalog is empty. Check the saved login or try again.");
+    }
+    app.set_codex_model_options(options);
+    Ok(())
+}
+
+async fn open_provider_family_overlay(
     app: &mut TuiApp,
     oauth_manager: &OAuthManager,
 ) -> anyhow::Result<()> {
@@ -1016,23 +1085,25 @@ fn open_provider_family_overlay(
         false
     };
 
-    if entering_codex_family && !has_synced_codex_auth
+    if entering_codex_family
+        && !has_synced_codex_auth
         && !codex_auth_is_available(app, oauth_manager)
     {
         app.config.set_provider("codex");
         app.open_overlay(Overlay::AuthModePicker);
     } else {
+        if entering_codex_family {
+            refresh_codex_model_picker(app, oauth_manager, RefreshStrategy::OnlineIfUncached)
+                .await?;
+        }
         app.open_overlay(Overlay::ModelPicker);
     }
     Ok(())
 }
 
 fn should_open_codex_auth_guide(app: &TuiApp, oauth_manager: &OAuthManager) -> bool {
-    let presets = current_model_presets(app.provider_picker_idx);
-    let Some((_, provider, _)) = presets.get(app.model_picker_idx) else {
-        return false;
-    };
-    *provider == "codex" && !codex_auth_is_available(app, oauth_manager)
+    app.selected_provider_family() == self::state::ProviderFamily::Codex
+        && !codex_auth_is_available(app, oauth_manager)
 }
 
 #[cfg(test)]
@@ -1042,6 +1113,7 @@ mod tests {
         map_key_to_event, open_provider_family_overlay, sync_codex_credential_from_auth_store,
         PendingPlanApprovalAction,
     };
+    use crate::codex_model_catalog::{CodexModelOption, CodexReasoningOption};
     use crate::config::ConfigManager;
     use crate::config::{DEFAULT_CODEX_BASE_URL, DEFAULT_CODEX_MODEL};
     use crate::tui::app_event::AppEvent;
@@ -1265,8 +1337,8 @@ mod tests {
         assert!(codex_auth_is_available(&app, &oauth_manager));
     }
 
-    #[test]
-    fn codex_provider_family_routes_to_auth_picker_without_saved_login() {
+    #[tokio::test]
+    async fn codex_provider_family_routes_to_auth_picker_without_saved_login() {
         let temp = tempdir().expect("tempdir");
         let mut app = TuiApp::new(ConfigManager {
             path: temp.path().join("config.json"),
@@ -1279,13 +1351,15 @@ mod tests {
 
         assert_eq!(app.selected_provider_family(), ProviderFamily::Codex);
 
-        open_provider_family_overlay(&mut app, &oauth_manager).expect("open overlay");
+        open_provider_family_overlay(&mut app, &oauth_manager)
+            .await
+            .expect("open overlay");
         assert_eq!(app.config.provider, "codex");
         assert!(matches!(app.overlay, Some(Overlay::AuthModePicker)));
     }
 
-    #[test]
-    fn codex_provider_family_routes_to_model_picker_with_saved_login() {
+    #[tokio::test]
+    async fn codex_provider_family_routes_to_model_picker_with_saved_login() {
         let temp = tempdir().expect("tempdir");
         let mut app = TuiApp::new(ConfigManager {
             path: temp.path().join("config.json"),
@@ -1299,12 +1373,15 @@ mod tests {
             .expect("save api key");
         app.provider_picker_idx = 0;
 
-        open_provider_family_overlay(&mut app, &oauth_manager).expect("open overlay");
+        open_provider_family_overlay(&mut app, &oauth_manager)
+            .await
+            .expect("open overlay");
         assert!(matches!(app.overlay, Some(Overlay::ModelPicker)));
+        assert!(!app.codex_model_options.is_empty());
     }
 
-    #[test]
-    fn codex_provider_family_uses_saved_codex_provider_state() {
+    #[tokio::test]
+    async fn codex_provider_family_uses_saved_codex_provider_state() {
         let temp = tempdir().expect("tempdir");
         let mut app = TuiApp::new(ConfigManager {
             path: temp.path().join("config.json"),
@@ -1323,8 +1400,98 @@ mod tests {
 
         assert!(codex_auth_is_available(&app, &oauth_manager));
 
-        open_provider_family_overlay(&mut app, &oauth_manager).expect("open overlay");
+        open_provider_family_overlay(&mut app, &oauth_manager)
+            .await
+            .expect("open overlay");
         assert!(matches!(app.overlay, Some(Overlay::ModelPicker)));
+    }
+
+    #[tokio::test]
+    async fn codex_model_picker_opens_reasoning_level_overlay_before_rebuild() {
+        let temp = tempdir().expect("tempdir");
+        let mut app = TuiApp::new(ConfigManager {
+            path: temp.path().join("config.json"),
+        })
+        .expect("app");
+        let oauth_manager = Arc::new(
+            crate::oauth::OAuthManager::new_for_config_dir(temp.path().join(".rara"))
+                .expect("oauth manager"),
+        );
+        oauth_manager
+            .save_api_key("sk-test-codex")
+            .expect("save api key");
+
+        app.provider_picker_idx = 0;
+        open_provider_family_overlay(&mut app, &oauth_manager)
+            .await
+            .expect("open overlay");
+        app.overlay = Some(Overlay::ModelPicker);
+
+        let mut agent_slot = None;
+        dispatch_event(
+            AppEvent::ApplyOverlaySelection,
+            &mut app,
+            &mut agent_slot,
+            &oauth_manager,
+        )
+        .await
+        .expect("apply model selection");
+
+        assert!(matches!(app.overlay, Some(Overlay::ReasoningEffortPicker)));
+    }
+
+    #[tokio::test]
+    async fn codex_model_picker_applies_single_reasoning_level_without_overlay() {
+        let temp = tempdir().expect("tempdir");
+        let mut app = TuiApp::new(ConfigManager {
+            path: temp.path().join("config.json"),
+        })
+        .expect("app");
+        app.provider_picker_idx = 0;
+        app.config.set_provider("codex");
+        app.set_codex_model_options(vec![CodexModelOption {
+            id: "gpt-5.2-codex".to_string(),
+            model: "gpt-5.2-codex".to_string(),
+            label: "gpt-5.2-codex".to_string(),
+            description: "Frontier agentic coding model.".to_string(),
+            default_reasoning_effort: Some("high".to_string()),
+            reasoning_options: vec![CodexReasoningOption {
+                value: "high".to_string(),
+                label: "High".to_string(),
+                description: "Maximize reasoning depth.".to_string(),
+                is_default: true,
+            }],
+            is_default: true,
+        }]);
+        app.overlay = Some(Overlay::ModelPicker);
+
+        let oauth_manager = Arc::new(
+            crate::oauth::OAuthManager::new_for_config_dir(temp.path().join(".rara"))
+                .expect("oauth manager"),
+        );
+        oauth_manager
+            .save_api_key("sk-test-codex")
+            .expect("save api key");
+        let mut agent_slot = None;
+
+        dispatch_event(
+            AppEvent::ApplyOverlaySelection,
+            &mut app,
+            &mut agent_slot,
+            &oauth_manager,
+        )
+        .await
+        .expect("apply model selection");
+
+        assert_eq!(app.config.model.as_deref(), Some("gpt-5.2-codex"));
+        assert_eq!(app.config.reasoning_effort.as_deref(), Some("high"));
+        assert!(matches!(
+            app.running_task.as_ref(),
+            Some(task) if matches!(task.kind, TaskKind::Rebuild)
+        ));
+        if let Some(task) = app.running_task.take() {
+            task.handle.abort();
+        }
     }
 
     #[test]

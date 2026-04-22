@@ -470,6 +470,10 @@ fn render_overlay(f: &mut Frame, app: &TuiApp, overlay: Overlay) -> Option<(u16,
             render_model_picker_modal(f, app, popup);
             None
         }
+        Overlay::ReasoningEffortPicker => {
+            render_reasoning_effort_picker_modal(f, app, popup);
+            None
+        }
         Overlay::BaseUrlEditor => render_base_url_editor_modal(f, app, popup),
         Overlay::AuthModePicker => {
             render_auth_mode_picker_modal(f, app, popup);
@@ -877,22 +881,44 @@ fn render_status_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
 }
 
 fn render_setup_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
-    let preset_lines = current_model_presets(app.provider_picker_idx)
-        .iter()
-        .enumerate()
-        .map(|(idx, (label, provider, model))| {
-            let marker = if app.config.provider == *provider
-                && app.config.model.as_deref() == Some(*model)
-            {
-                ">"
-            } else {
-                " "
-            };
-            format!("{marker} [{}] {label} ({provider} / {model})", idx + 1)
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    let preset_shortcuts = (1..=current_model_presets(app.provider_picker_idx).len())
+    let preset_lines = if app.selected_provider_family() == ProviderFamily::Codex {
+        if app.codex_model_options.is_empty() {
+            "  Sign in to load the current Codex model catalog.".to_string()
+        } else {
+            app.codex_model_options
+                .iter()
+                .enumerate()
+                .map(|(idx, preset)| {
+                    let marker = if app.config.provider == "codex"
+                        && app.config.model.as_deref() == Some(preset.model.as_str())
+                    {
+                        ">"
+                    } else {
+                        " "
+                    };
+                    format!("{marker} [{}] {} ({})", idx + 1, preset.label, preset.model)
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        }
+    } else {
+        current_model_presets(app.provider_picker_idx)
+            .iter()
+            .enumerate()
+            .map(|(idx, (label, provider, model))| {
+                let marker = if app.config.provider == *provider
+                    && app.config.model.as_deref() == Some(*model)
+                {
+                    ">"
+                } else {
+                    " "
+                };
+                format!("{marker} [{}] {label} ({provider} / {model})", idx + 1)
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let preset_shortcuts = (1..=app.current_model_picker_len())
         .map(|idx| idx.to_string())
         .collect::<Vec<_>>()
         .join("/");
@@ -1042,43 +1068,79 @@ fn render_resume_picker_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
 }
 
 fn render_model_picker_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
-    let presets = current_model_presets(app.provider_picker_idx);
     let provider_label = PROVIDER_FAMILIES[app.provider_picker_idx].1;
-    let items = presets
-        .iter()
-        .enumerate()
-        .map(|(idx, (label, provider, model))| {
-            let style = if idx == app.model_picker_idx {
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default()
-            };
-            let current = if app.config.provider == *provider
-                && app.config.model.as_deref() == Some(*model)
-            {
-                " current"
-            } else {
-                ""
-            };
-            let recommendation = if provider_label == "Candle Local" && idx == 2 {
-                " recommended"
-            } else {
-                ""
-            };
-            ListItem::new(format!(
-                "[{}] {} ({}/{}){}{}",
-                idx + 1,
-                label,
-                provider,
-                model,
-                current,
-                recommendation,
-            ))
-            .style(style)
-        })
-        .collect::<Vec<_>>();
+    let items = if app.selected_provider_family() == ProviderFamily::Codex {
+        app.codex_model_options
+            .iter()
+            .enumerate()
+            .map(|(idx, preset)| {
+                let style = if idx == app.model_picker_idx {
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default()
+                };
+                let current = if app.config.provider == "codex"
+                    && app.config.model.as_deref() == Some(preset.model.as_str())
+                {
+                    " current"
+                } else {
+                    ""
+                };
+                let level = preset
+                    .default_reasoning_effort
+                    .as_deref()
+                    .unwrap_or("default");
+                ListItem::new(format!(
+                    "[{}] {} ({})  level={}{}",
+                    idx + 1,
+                    preset.label,
+                    preset.model,
+                    level,
+                    current,
+                ))
+                .style(style)
+            })
+            .collect::<Vec<_>>()
+    } else {
+        let presets = current_model_presets(app.provider_picker_idx);
+        presets
+            .iter()
+            .enumerate()
+            .map(|(idx, (label, provider, model))| {
+                let style = if idx == app.model_picker_idx {
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default()
+                };
+                let current = if app.config.provider == *provider
+                    && app.config.model.as_deref() == Some(*model)
+                {
+                    " current"
+                } else {
+                    ""
+                };
+                let recommendation = if provider_label == "Candle Local" && idx == 2 {
+                    " recommended"
+                } else {
+                    ""
+                };
+                ListItem::new(format!(
+                    "[{}] {} ({}/{}){}{}",
+                    idx + 1,
+                    label,
+                    provider,
+                    model,
+                    current,
+                    recommendation,
+                ))
+                .style(style)
+            })
+            .collect::<Vec<_>>()
+    };
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -1089,6 +1151,15 @@ fn render_model_picker_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
         .split(area);
     let help = if provider_label == "Codex" && api_key_status(&app.config) == "missing" {
         "Provider: Codex\nAuthentication is required before this preset can be used.\nEnter opens the Codex login guide."
+    } else if provider_label == "Codex" {
+        &format!(
+            "Provider: {provider_label}\nBase URL: {}\nReasoning level: {}\nChoose a model first, then Enter to select the level.",
+            app.config
+                .base_url
+                .as_deref()
+                .unwrap_or("https://api.openai.com/v1"),
+            app.current_reasoning_effort_label(),
+        )
     } else if provider_label == "OpenAI-compatible" {
         &format!(
             "Provider: {provider_label}\nBase URL: {}\nModel name: {}\nAPI key: {}\nUse B/A/N to edit connection settings, then Enter to apply and rebuild.",
@@ -1119,13 +1190,63 @@ fn render_model_picker_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
     );
     f.render_widget(
         Paragraph::new(if provider_label == "Codex" {
-            "1/2 choose  Up/Down move  Enter continue  Esc close"
+            "1-9 jump  Up/Down move  Enter choose level  Esc close"
         } else if provider_label == "OpenAI-compatible" {
             "1 choose  Up/Down move  B edit base URL  A edit API key  N edit model name  Enter apply  Esc close"
         } else {
-            "1/2/3 apply directly  Up/Down move  B edit base URL  Enter apply  Esc close"
+            "1-9 apply directly  Up/Down move  B edit base URL  Enter apply  Esc close"
         })
         .alignment(Alignment::Center),
+        chunks[2],
+    );
+}
+
+fn render_reasoning_effort_picker_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
+    let options = app.selected_codex_reasoning_options();
+    let title = app
+        .selected_codex_model()
+        .map(|preset| format!(" Reasoning Level · {} ", preset.label))
+        .unwrap_or_else(|| " Reasoning Level ".to_string());
+    let items = options
+        .iter()
+        .enumerate()
+        .map(|(idx, option)| {
+            let style = if idx == app.reasoning_effort_picker_idx {
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
+            let default_suffix = if option.is_default { " default" } else { "" };
+            ListItem::new(vec![
+                Line::from(format!("[{}] {}{}", idx + 1, option.label, default_suffix)),
+                Line::from(option.description.clone()),
+                Line::from(""),
+            ])
+            .style(style)
+        })
+        .collect::<Vec<_>>();
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(3),
+            Constraint::Min(6),
+            Constraint::Length(2),
+        ])
+        .split(area);
+    f.render_widget(
+        Paragraph::new("Select the reasoning level for the chosen Codex model. Enter persists both the model and the level.")
+            .block(Block::default().borders(Borders::ALL).title(title)),
+        chunks[0],
+    );
+    f.render_widget(
+        List::new(items).block(Block::default().borders(Borders::LEFT | Borders::RIGHT)),
+        chunks[1],
+    );
+    f.render_widget(
+        Paragraph::new("1-5 jump  Up/Down move  Enter apply  Esc back")
+            .alignment(Alignment::Center),
         chunks[2],
     );
 }

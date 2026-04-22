@@ -8,13 +8,26 @@ use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 
 pub const DEFAULT_CODEX_BASE_URL: &str = "https://api.openai.com/v1";
-pub const DEFAULT_CODEX_MODEL: &str = "gpt-5-codex";
+pub const DEFAULT_CODEX_MODEL: &str = "gpt-5.4";
 pub const LEGACY_CODEX_BASE_URL: &str = "http://localhost:8080";
 pub const LEGACY_CODEX_MODEL: &str = "codex";
+pub const LEGACY_CODEX_MODEL_V1: &str = "gpt-5-codex";
+pub const LEGACY_CODEX_MODEL_V1_MINI: &str = "gpt-5-codex-mini";
 
 pub fn should_reset_codex_base_url(url: Option<&str>) -> bool {
-    url.map(str::trim)
-        .map_or(true, |value| value.is_empty() || value == LEGACY_CODEX_BASE_URL)
+    url.map(str::trim).map_or(true, |value| {
+        value.is_empty() || value == LEGACY_CODEX_BASE_URL
+    })
+}
+
+pub fn should_reset_codex_model(model: Option<&str>) -> bool {
+    model.map(str::trim).map_or(true, |value| {
+        value.is_empty()
+            || matches!(
+                value,
+                LEGACY_CODEX_MODEL | LEGACY_CODEX_MODEL_V1 | LEGACY_CODEX_MODEL_V1_MINI
+            )
+    })
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
@@ -27,6 +40,7 @@ pub struct ProviderConfigState {
     pub api_key: Option<SecretString>,
     pub base_url: Option<String>,
     pub model: Option<String>,
+    pub reasoning_effort: Option<String>,
     pub revision: Option<String>,
     pub thinking: Option<bool>,
     pub num_ctx: Option<u32>,
@@ -43,6 +57,7 @@ pub struct RaraConfig {
     pub api_key: Option<SecretString>,
     pub base_url: Option<String>,
     pub model: Option<String>,
+    pub reasoning_effort: Option<String>,
     pub revision: Option<String>,
     pub thinking: Option<bool>,
     pub num_ctx: Option<u32>,
@@ -104,6 +119,11 @@ impl RaraConfig {
         self.sync_active_provider_state();
     }
 
+    pub fn set_reasoning_effort(&mut self, value: Option<String>) {
+        self.reasoning_effort = normalize_optional_string(value);
+        self.sync_active_provider_state();
+    }
+
     pub fn set_revision(&mut self, value: Option<String>) {
         self.revision = normalize_optional_string(value);
         self.sync_active_provider_state();
@@ -123,8 +143,7 @@ impl RaraConfig {
         if should_reset_codex_base_url(self.base_url.as_deref()) {
             self.set_base_url(Some(DEFAULT_CODEX_BASE_URL.to_string()));
         }
-        let model = self.model.as_deref().map(str::trim).unwrap_or("");
-        if model.is_empty() || model == LEGACY_CODEX_MODEL {
+        if should_reset_codex_model(self.model.as_deref()) {
             self.set_model(Some(DEFAULT_CODEX_MODEL.to_string()));
         }
     }
@@ -142,6 +161,7 @@ impl RaraConfig {
             api_key: self.api_key.clone(),
             base_url: self.base_url.clone(),
             model: self.model.clone(),
+            reasoning_effort: self.reasoning_effort.clone(),
             revision: self.revision.clone(),
             thinking: self.thinking,
             num_ctx: self.num_ctx,
@@ -152,6 +172,7 @@ impl RaraConfig {
         self.api_key = state.api_key;
         self.base_url = state.base_url;
         self.model = state.model;
+        self.reasoning_effort = state.reasoning_effort;
         self.revision = state.revision;
         self.thinking = state.thinking;
         self.num_ctx = state.num_ctx;
@@ -161,6 +182,7 @@ impl RaraConfig {
         self.api_key = None;
         self.base_url = None;
         self.model = None;
+        self.reasoning_effort = None;
         self.revision = None;
         self.thinking = None;
         self.num_ctx = None;
@@ -336,6 +358,7 @@ mod tests {
         };
         config.set_api_key("sk-codex");
         config.set_model(Some("codex".to_string()));
+        config.set_reasoning_effort(Some("high".to_string()));
         config.set_base_url(Some("http://localhost:8080".to_string()));
 
         config.set_provider("ollama");
@@ -351,11 +374,13 @@ mod tests {
         config.set_provider("codex");
         assert_eq!(config.api_key(), Some("sk-codex"));
         assert_eq!(config.model.as_deref(), Some("codex"));
+        assert_eq!(config.reasoning_effort.as_deref(), Some("high"));
         assert_eq!(config.base_url.as_deref(), Some("http://localhost:8080"));
         assert_eq!(config.num_ctx, None);
 
         config.set_provider("ollama");
         assert_eq!(config.model.as_deref(), Some("qwen3"));
+        assert_eq!(config.reasoning_effort, None);
         assert_eq!(config.base_url.as_deref(), Some("http://localhost:11434"));
         assert_eq!(config.num_ctx, Some(32768));
     }
@@ -372,7 +397,10 @@ mod tests {
         config.apply_codex_defaults();
 
         assert_eq!(config.model.as_deref(), Some(super::DEFAULT_CODEX_MODEL));
-        assert_eq!(config.base_url.as_deref(), Some(super::DEFAULT_CODEX_BASE_URL));
+        assert_eq!(
+            config.base_url.as_deref(),
+            Some(super::DEFAULT_CODEX_BASE_URL)
+        );
     }
 
     #[test]

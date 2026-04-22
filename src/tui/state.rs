@@ -14,6 +14,7 @@ pub use self::state_presets::{
 use super::markdown_stream::MarkdownStreamCollector;
 use super::queued_input::PendingFollowUpMessage;
 use crate::agent::{Agent, AgentExecutionMode, BashApprovalMode};
+use crate::codex_model_catalog::{CodexModelOption, CodexReasoningOption};
 use crate::config::DEFAULT_CODEX_BASE_URL;
 use crate::config::{ConfigManager, RaraConfig};
 use crate::redaction::redact_secrets;
@@ -45,6 +46,7 @@ pub enum Overlay {
     AuthModePicker,
     ApiKeyEditor,
     ModelNameEditor,
+    ReasoningEffortPicker,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -339,11 +341,13 @@ pub struct TuiApp {
     pub bash_approval_mode: BashApprovalMode,
     pub provider_picker_idx: usize,
     pub model_picker_idx: usize,
+    pub reasoning_effort_picker_idx: usize,
     pub auth_mode_idx: usize,
     pub command_palette_idx: usize,
     pub base_url_input: String,
     pub api_key_input: String,
     pub model_name_input: String,
+    pub codex_model_options: Vec<CodexModelOption>,
     pub recent_commands: Vec<String>,
     pub recent_sessions: Vec<PersistedSessionSummary>,
     pub resume_picker_idx: usize,
@@ -457,11 +461,13 @@ impl TuiApp {
             bash_approval_mode: BashApprovalMode::Suggestion,
             provider_picker_idx,
             model_picker_idx,
+            reasoning_effort_picker_idx: 0,
             auth_mode_idx: 0,
             command_palette_idx: 0,
             base_url_input: String::new(),
             api_key_input: String::new(),
             model_name_input: String::new(),
+            codex_model_options: Vec::new(),
             recent_commands: Vec::new(),
             recent_sessions: Vec::new(),
             resume_picker_idx: 0,
@@ -488,11 +494,86 @@ impl TuiApp {
     }
 
     pub fn selected_preset_idx(&self) -> usize {
+        if self.selected_provider_family() == ProviderFamily::Codex
+            && !self.codex_model_options.is_empty()
+        {
+            return self
+                .codex_model_options
+                .iter()
+                .position(|preset| self.config.model.as_deref() == Some(preset.model.as_str()))
+                .or_else(|| {
+                    self.codex_model_options
+                        .iter()
+                        .position(|preset| preset.is_default)
+                })
+                .unwrap_or(0);
+        }
         selected_preset_idx_for_config(&self.config, self.provider_picker_idx)
     }
 
     pub fn selected_provider_family(&self) -> ProviderFamily {
         PROVIDER_FAMILIES[self.provider_picker_idx].0
+    }
+
+    pub fn current_model_picker_len(&self) -> usize {
+        if self.selected_provider_family() == ProviderFamily::Codex {
+            self.codex_model_options.len()
+        } else {
+            current_model_presets(self.provider_picker_idx).len()
+        }
+    }
+
+    pub fn selected_codex_model(&self) -> Option<&CodexModelOption> {
+        self.codex_model_options.get(
+            self.model_picker_idx
+                .min(self.codex_model_options.len().saturating_sub(1)),
+        )
+    }
+
+    pub fn selected_codex_reasoning_options(&self) -> &[CodexReasoningOption] {
+        self.selected_codex_model()
+            .map(|preset| preset.reasoning_options.as_slice())
+            .unwrap_or(&[])
+    }
+
+    pub fn current_reasoning_effort_label(&self) -> String {
+        let current = self
+            .config
+            .reasoning_effort
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        if let Some(option) = self
+            .selected_codex_reasoning_options()
+            .iter()
+            .find(|option| Some(option.value.as_str()) == current)
+        {
+            return option.label.clone();
+        }
+        current
+            .map(crate::codex_model_catalog::reasoning_effort_label)
+            .unwrap_or("default")
+            .to_string()
+    }
+
+    pub fn sync_reasoning_effort_picker(&mut self) {
+        let options = self.selected_codex_reasoning_options();
+        let selected = self
+            .config
+            .reasoning_effort
+            .as_deref()
+            .filter(|value| !value.trim().is_empty());
+        self.reasoning_effort_picker_idx = options
+            .iter()
+            .position(|option| Some(option.value.as_str()) == selected)
+            .or_else(|| options.iter().position(|option| option.is_default))
+            .unwrap_or(0);
+    }
+
+    pub fn set_codex_model_options(&mut self, options: Vec<CodexModelOption>) {
+        self.codex_model_options = options;
+        self.model_picker_idx = self.selected_preset_idx();
+        self.sync_reasoning_effort_picker();
     }
 
     fn selected_model_preset(&self) -> (&'static str, &'static str, &'static str) {
@@ -501,6 +582,9 @@ impl TuiApp {
     }
 
     fn single_provider_for_selected_family(&self) -> Option<&'static str> {
+        if self.selected_provider_family() == ProviderFamily::Codex {
+            return Some("codex");
+        }
         let presets = current_model_presets(self.provider_picker_idx);
         let provider = presets.first()?.1;
         if presets
@@ -514,9 +598,24 @@ impl TuiApp {
     }
 
     pub fn select_local_model(&mut self, idx: usize) {
+        self.model_picker_idx = idx;
+        if self.selected_provider_family() == ProviderFamily::Codex {
+            let Some(preset) = self.selected_codex_model().cloned() else {
+                return;
+            };
+            self.config.set_provider("codex");
+            self.config.set_model(Some(preset.model));
+            self.config.set_revision(None);
+            if crate::config::should_reset_codex_base_url(self.config.base_url.as_deref()) {
+                self.config
+                    .set_base_url(Some(DEFAULT_CODEX_BASE_URL.to_string()));
+            }
+            self.sync_reasoning_effort_picker();
+            return;
+        }
+
         let presets = current_model_presets(self.provider_picker_idx);
         let (_, provider, model) = presets[idx];
-        self.model_picker_idx = idx;
         self.config.set_provider(provider.to_string());
         if provider == "ollama" {
             self.config.set_model(Some(model.to_string()));
@@ -570,9 +669,30 @@ impl TuiApp {
     }
 
     pub fn cycle_local_model(&mut self) {
-        let next = (self.selected_preset_idx() + 1)
-            % current_model_presets(self.provider_picker_idx).len();
+        let len = self.current_model_picker_len();
+        if len == 0 {
+            return;
+        }
+        let next = (self.selected_preset_idx() + 1) % len;
         self.select_local_model(next);
+    }
+
+    pub fn apply_selected_codex_reasoning_effort(&mut self) {
+        let selected = self
+            .selected_codex_reasoning_options()
+            .get(
+                self.reasoning_effort_picker_idx.min(
+                    self.selected_codex_reasoning_options()
+                        .len()
+                        .saturating_sub(1),
+                ),
+            )
+            .map(|option| option.value.clone())
+            .or_else(|| {
+                self.selected_codex_model()
+                    .and_then(|preset| preset.default_reasoning_effort.clone())
+            });
+        self.config.set_reasoning_effort(selected);
     }
 
     pub fn sync_snapshot(&mut self, agent: &Agent) {
@@ -865,6 +985,7 @@ impl TuiApp {
                 self.config.set_provider(provider.to_string());
             }
             self.model_picker_idx = self.selected_preset_idx();
+            self.sync_reasoning_effort_picker();
         }
         if matches!(overlay, Overlay::BaseUrlEditor) {
             let provider_family = self.selected_provider_family();
@@ -889,6 +1010,9 @@ impl TuiApp {
         }
         if matches!(overlay, Overlay::AuthModePicker) {
             self.auth_mode_idx = if is_ssh_session() { 1 } else { 0 };
+        }
+        if matches!(overlay, Overlay::ReasoningEffortPicker) {
+            self.sync_reasoning_effort_picker();
         }
         self.overlay = Some(overlay);
     }

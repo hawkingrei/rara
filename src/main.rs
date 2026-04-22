@@ -1,5 +1,6 @@
 mod acp;
 mod agent;
+mod codex_model_catalog;
 mod config;
 mod llm;
 mod local_backend;
@@ -322,6 +323,7 @@ pub(crate) async fn build_backend_with_progress(
                 .model
                 .clone()
                 .unwrap_or_else(|| DEFAULT_CODEX_MODEL.to_string()),
+            config.reasoning_effort.clone(),
         )?)),
         "openai-compatible" => Ok(Box::new(OpenAiCompatibleBackend::new(
             config.api_key.clone(),
