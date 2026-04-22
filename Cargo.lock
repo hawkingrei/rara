@@ -8564,6 +8564,7 @@ dependencies = [
  "codex-models-manager",
  "crossterm",
  "dirs",
+ "eventsource-stream",
  "futures",
  "glob",
  "hf-hub",

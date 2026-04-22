@@ -52,6 +52,7 @@ regex-lite = "0.1.8"
 uuid = { version = "1.11", features = ["v4"] }
 lancedb = "0.27"
 futures = "0.3"
+eventsource-stream = "0.2.3"
 rusqlite = "0.32"
 pulldown-cmark = "0.10"
 textwrap = "0.16.2"

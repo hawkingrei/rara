@@ -8,7 +8,8 @@ use super::ollama::{
     suggest_ollama_num_ctx, to_ollama_messages,
 };
 use super::openai_compatible::{
-    build_codex_responses_request, parse_codex_response, to_codex_input_items, to_openai_messages,
+    apply_codex_stream_event, build_codex_responses_request, parse_codex_response,
+    to_codex_input_items, to_openai_messages,
 };
 use super::shared::{
     extract_message_text, model_context_budget, parse_tool_arguments, should_bypass_proxy,
@@ -164,9 +165,62 @@ fn codex_responses_request_includes_reasoning_effort_when_selected() {
     );
 
     assert_eq!(request["model"], "gpt-5.4");
+    assert_eq!(request["stream"], true);
     assert_eq!(request["reasoning"]["effort"], "high");
     assert_eq!(request["instructions"], "Follow project instructions.");
     assert_eq!(request["input"][0]["role"], "user");
+}
+
+#[test]
+fn codex_stream_events_collect_output_items_usage_and_text_deltas() {
+    let mut output_items = Vec::new();
+    let mut usage = None;
+    let mut deltas = Vec::new();
+
+    let mut on_delta = |delta: String| deltas.push(delta);
+    let mut on_delta_option: Option<&mut (dyn FnMut(String) + Send)> = Some(&mut on_delta);
+    assert!(!apply_codex_stream_event(
+        &json!({"type":"response.output_text.delta","delta":"Hello"}),
+        &mut output_items,
+        &mut usage,
+        &mut on_delta_option,
+    )
+    .unwrap());
+
+    let mut no_delta_callback: Option<&mut (dyn FnMut(String) + Send)> = None;
+    assert!(!apply_codex_stream_event(
+        &json!({
+            "type":"response.output_item.done",
+            "item":{
+                "type":"message",
+                "content":[{"type":"output_text","text":"Hello"}]
+            }
+        }),
+        &mut output_items,
+        &mut usage,
+        &mut no_delta_callback,
+    )
+    .unwrap());
+
+    assert!(apply_codex_stream_event(
+        &json!({
+            "type":"response.completed",
+            "response":{
+                "id":"resp-1",
+                "usage":{"input_tokens":11,"output_tokens":7}
+            }
+        }),
+        &mut output_items,
+        &mut usage,
+        &mut no_delta_callback,
+    )
+    .unwrap());
+
+    assert_eq!(deltas, vec!["Hello".to_string()]);
+    assert_eq!(output_items.len(), 1);
+    assert_eq!(output_items[0]["type"], "message");
+    assert_eq!(usage.as_ref().unwrap()["input_tokens"], 11);
+    assert_eq!(usage.as_ref().unwrap()["output_tokens"], 7);
 }
 
 #[test]
@@ -322,11 +376,9 @@ fn applies_ollama_stream_event_deltas_and_tool_calls() {
 fn rejects_ollama_streams_without_final_done_event() {
     let error = ensure_ollama_stream_completed(false, "http://localhost:11434/api/chat")
         .expect_err("missing done event should fail");
-    assert!(
-        error
-            .to_string()
-            .contains("ended before the final done event")
-    );
+    assert!(error
+        .to_string()
+        .contains("ended before the final done event"));
 }
 
 #[test]
