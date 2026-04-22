@@ -19,6 +19,13 @@ Active backlog only. Keep this file small and current.
 
 ## Memory and Retrieval
 
+- [ ] Implement the Stage 1 context-architecture boundary from `docs/features/context-architecture.md`: introduce explicit `ContextBudget` and `ContextAssembler` layers so stable instructions, workspace context, active turn context, memory selections, and compacted history stop being assembled implicitly across unrelated modules.
+- [ ] Implement a local `ThreadStore` / `ThreadRecorder` boundary so thread metadata, rollout history, plan state, pending interactions, and future sub-agent lineage are persisted as structured items instead of reconstructed from flattened transcript text.
+- [ ] Make compaction a first-class runtime event: persist compacted summary items, before/after token counts, and replacement metadata so long threads can resume cleanly without replaying unbounded raw history.
+- [ ] Define thread-scoped and workspace-scoped `MemoryRecord` storage plus promotion rules so durable findings, preferences, and repo facts stop being mixed with transient turn context.
+- [ ] Replace the current placeholder retrieval path with real vector retrieval over Lance/LanceDB, including metadata-aware ranking for thread memory and workspace memory selections before injection into context.
+- [ ] Add the retrieval orchestration layer described in `docs/features/context-architecture.md`: a `Retriever` boundary that can merge thread recall, workspace vector recall, and later graph-based recall into one bounded `MemorySelection`.
+- [ ] Design Graph RAG as a later retrieval layer on top of durable memory and extracted relationships instead of as a prompt hack: define graph nodes/edges, traversal outputs, and how graph results compose with vector retrieval.
 - [ ] Add a first-run onboarding flow that explains workspace, provider/model selection, local model download behavior, cache location, and tool loop expectations before the user lands in a blank chat.
 - [ ] Continue aligning the TUI status and transcript surfaces with Codex/Claude so runtime state stays visible without leaking bottom-pane chrome into transcript history.
 - [ ] Expand the new Codex-style TUI snapshot coverage beyond the first auth-picker / queued-follow-up / Updated Plan snapshots so more popups, status surfaces, and transcript-heavy widgets are protected by golden tests.
