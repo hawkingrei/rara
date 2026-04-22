@@ -4,7 +4,8 @@ use serde_json::{json, Value};
 use std::time::Duration;
 use url::Url;
 
-use crate::agent::{AnthropicResponse, ContentBlock, Message};
+use crate::agent::Message;
+use crate::llm::{ContentBlock, LlmResponse, TokenUsage};
 
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct AssistantToolUse {
@@ -22,13 +23,13 @@ pub struct ContextBudget {
 
 #[async_trait]
 pub trait LlmBackend: Send + Sync {
-    async fn ask(&self, messages: &[Message], tools: &[Value]) -> Result<AnthropicResponse>;
+    async fn ask(&self, messages: &[Message], tools: &[Value]) -> Result<LlmResponse>;
     async fn ask_streaming(
         &self,
         messages: &[Message],
         tools: &[Value],
         _on_text_delta: &mut (dyn FnMut(String) + Send),
-    ) -> Result<AnthropicResponse> {
+    ) -> Result<LlmResponse> {
         self.ask(messages, tools).await
     }
     async fn embed(&self, text: &str) -> Result<Vec<f32>>;
@@ -42,7 +43,7 @@ pub struct MockLlm;
 
 #[async_trait]
 impl LlmBackend for MockLlm {
-    async fn ask(&self, messages: &[Message], _tools: &[Value]) -> Result<AnthropicResponse> {
+    async fn ask(&self, messages: &[Message], _tools: &[Value]) -> Result<LlmResponse> {
         let last_msg_json = &messages.last().unwrap().content;
         let last_msg_text = if last_msg_json.is_array() {
             last_msg_json
@@ -53,12 +54,12 @@ impl LlmBackend for MockLlm {
         } else {
             last_msg_json.as_str().unwrap_or("")
         };
-        Ok(AnthropicResponse {
+        Ok(LlmResponse {
             content: vec![ContentBlock::Text {
                 text: format!("Mock Response: {}", last_msg_text),
             }],
             stop_reason: Some("end_turn".to_string()),
-            usage: Some(crate::agent::TokenUsage {
+            usage: Some(TokenUsage {
                 input_tokens: 10,
                 output_tokens: 20,
             }),

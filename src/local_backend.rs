@@ -13,9 +13,9 @@ use candle::{DType, Tensor};
 use candle_transformers::generation::{LogitsProcessor, Sampling};
 use serde_json::Value;
 
-use crate::agent::{AnthropicResponse, ContentBlock, Message, TokenUsage};
+use crate::agent::Message;
 use crate::config::RaraConfig;
-use crate::llm::{hashed_embedding, LlmBackend};
+use crate::llm::{ContentBlock, LlmBackend, LlmResponse, TokenUsage, hashed_embedding};
 
 use self::model::{
     build_hf_api, default_local_model_cache_dir as model_cache_dir, load_safetensors,
@@ -136,7 +136,7 @@ fn report_progress(progress: &Option<LocalProgressReporter>, message: String) {
 
 #[async_trait]
 impl LlmBackend for LocalLlmBackend {
-    async fn ask(&self, messages: &[Message], tools: &[Value]) -> Result<AnthropicResponse> {
+    async fn ask(&self, messages: &[Message], tools: &[Value]) -> Result<LlmResponse> {
         let runtime = Arc::clone(&self.runtime);
         let messages = messages.to_vec();
         let tools = tools.to_vec();
@@ -179,7 +179,7 @@ impl LlmBackend for LocalLlmBackend {
             }],
         };
 
-        Ok(AnthropicResponse {
+        Ok(LlmResponse {
             stop_reason: Some("end_turn".to_string()),
             content,
             usage: Some(TokenUsage {

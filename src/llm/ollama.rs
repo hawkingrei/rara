@@ -5,7 +5,8 @@ use async_trait::async_trait;
 use futures::StreamExt;
 use serde_json::{json, Value};
 
-use crate::agent::{AnthropicResponse, ContentBlock, Message};
+use crate::agent::Message;
+use crate::llm::{ContentBlock, LlmResponse, TokenUsage};
 use crate::redaction::{redact_secrets, sanitize_url_for_display};
 
 use super::shared::{
@@ -41,7 +42,7 @@ impl OllamaBackend {
 
 #[async_trait]
 impl LlmBackend for OllamaBackend {
-    async fn ask(&self, messages: &[Message], tools: &[Value]) -> Result<AnthropicResponse> {
+    async fn ask(&self, messages: &[Message], tools: &[Value]) -> Result<LlmResponse> {
         let endpoint = format!("{}/api/chat", self.base_url.trim_end_matches('/'));
         let mut body = json!({
             "model": self.model,
@@ -102,13 +103,13 @@ impl LlmBackend for OllamaBackend {
             }
         }
 
-        Ok(AnthropicResponse {
+        Ok(LlmResponse {
             content,
             stop_reason: resp_json
                 .get("done_reason")
                 .and_then(Value::as_str)
                 .map(str::to_string),
-            usage: Some(crate::agent::TokenUsage {
+            usage: Some(TokenUsage {
                 input_tokens: resp_json
                     .get("prompt_eval_count")
                     .and_then(Value::as_u64)
@@ -126,7 +127,7 @@ impl LlmBackend for OllamaBackend {
         messages: &[Message],
         tools: &[Value],
         on_text_delta: &mut (dyn FnMut(String) + Send),
-    ) -> Result<AnthropicResponse> {
+    ) -> Result<LlmResponse> {
         let endpoint = format!("{}/api/chat", self.base_url.trim_end_matches('/'));
         let mut body = json!({
             "model": self.model,
@@ -226,10 +227,10 @@ impl LlmBackend for OllamaBackend {
             });
         }
 
-        Ok(AnthropicResponse {
+        Ok(LlmResponse {
             content,
             stop_reason,
-            usage: Some(crate::agent::TokenUsage {
+            usage: Some(TokenUsage {
                 input_tokens,
                 output_tokens,
             }),

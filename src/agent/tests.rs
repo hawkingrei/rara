@@ -2,10 +2,11 @@ use super::planning::{
     parse_plan_block, parse_request_user_input_block, strip_continue_inspection_control,
 };
 use super::{
-    Agent, AgentExecutionMode, AnthropicResponse, ContentBlock, Message, PendingUserInput,
-    PlanStep, PlanStepStatus, RuntimeContinuationPhase, TokenUsage,
+    Agent, AgentExecutionMode, Message, PendingUserInput, PlanStep, PlanStepStatus,
+    RuntimeContinuationPhase,
 };
 use crate::llm::LlmBackend;
+use crate::llm::{ContentBlock, LlmResponse, TokenUsage};
 use crate::session::SessionManager;
 use crate::tool::{Tool, ToolError, ToolManager};
 use crate::tool_result::ToolResultStore;
@@ -72,13 +73,13 @@ impl Tool for PlanAgentStub {
 }
 
 struct SequencedBackend {
-    responses: Mutex<Vec<AnthropicResponse>>,
+    responses: Mutex<Vec<LlmResponse>>,
     observed_messages: Mutex<Vec<Vec<Message>>>,
     observed_tools: Mutex<Vec<Vec<String>>>,
 }
 
 impl SequencedBackend {
-    fn new(responses: Vec<AnthropicResponse>) -> Self {
+    fn new(responses: Vec<LlmResponse>) -> Self {
         Self {
             responses: Mutex::new(responses),
             observed_messages: Mutex::new(Vec::new()),
@@ -113,7 +114,7 @@ fn test_runtime_storage() -> (
 
 #[async_trait]
 impl LlmBackend for SequencedBackend {
-    async fn ask(&self, messages: &[Message], tools: &[Value]) -> Result<AnthropicResponse> {
+    async fn ask(&self, messages: &[Message], tools: &[Value]) -> Result<LlmResponse> {
         self.observed_messages
             .lock()
             .expect("lock")
@@ -144,7 +145,7 @@ impl LlmBackend for SequencedBackend {
 #[tokio::test]
 async fn appends_continuation_after_tool_result() {
     let backend = Arc::new(SequencedBackend::new(vec![
-        AnthropicResponse {
+        LlmResponse {
             content: vec![ContentBlock::ToolUse {
                 id: "tool-1".to_string(),
                 name: "stub_tool".to_string(),
@@ -153,7 +154,7 @@ async fn appends_continuation_after_tool_result() {
             stop_reason: Some("tool_use".to_string()),
             usage: Some(TokenUsage::default()),
         },
-        AnthropicResponse {
+        LlmResponse {
             content: vec![ContentBlock::Text {
                 text: "done".to_string(),
             }],
@@ -193,7 +194,7 @@ async fn appends_continuation_after_tool_result() {
 #[tokio::test]
 async fn resumes_after_plan_approval_via_structured_continuation() {
     let (_temp, session_manager, workspace, rara_dir) = test_runtime_storage();
-    let backend = Arc::new(SequencedBackend::new(vec![AnthropicResponse {
+    let backend = Arc::new(SequencedBackend::new(vec![LlmResponse {
         content: vec![ContentBlock::Text {
             text: "Implemented the first plan step.".to_string(),
         }],
@@ -242,7 +243,7 @@ async fn resumes_after_plan_approval_via_structured_continuation() {
 
 #[tokio::test]
 async fn does_not_append_continuation_without_tools() {
-    let backend = Arc::new(SequencedBackend::new(vec![AnthropicResponse {
+    let backend = Arc::new(SequencedBackend::new(vec![LlmResponse {
         content: vec![ContentBlock::Text {
             text: "final".to_string(),
         }],
@@ -274,7 +275,7 @@ async fn does_not_append_continuation_without_tools() {
 #[tokio::test]
 async fn errors_when_tool_loop_exceeds_limit() {
     let responses = (0..=super::MAX_TOOL_ROUNDS_PER_TURN)
-        .map(|idx| AnthropicResponse {
+        .map(|idx| LlmResponse {
             content: vec![ContentBlock::ToolUse {
                 id: format!("tool-{idx}"),
                 name: "stub_tool".to_string(),
@@ -305,7 +306,7 @@ async fn errors_when_tool_loop_exceeds_limit() {
 
 #[tokio::test]
 async fn plan_mode_filters_write_tools_from_schema() {
-    let backend = Arc::new(SequencedBackend::new(vec![AnthropicResponse {
+    let backend = Arc::new(SequencedBackend::new(vec![LlmResponse {
         content: vec![ContentBlock::Text {
             text: "<plan>\n- [pending] Review the current project structure\n</plan>".to_string(),
         }],
@@ -340,7 +341,7 @@ async fn plan_mode_filters_write_tools_from_schema() {
 
 #[tokio::test]
 async fn accepts_shallow_initial_plan_as_structured_outcome() {
-    let backend = Arc::new(SequencedBackend::new(vec![AnthropicResponse {
+    let backend = Arc::new(SequencedBackend::new(vec![LlmResponse {
         content: vec![ContentBlock::Text {
             text: "<plan>\n- [pending] Inspect the repository structure\n</plan>\nStart with the top-level layout.".to_string(),
         }],
@@ -386,7 +387,7 @@ async fn last_query_plan_updated_tracks_only_the_final_planning_turn() {
     let workspace = Arc::new(WorkspaceMemory::from_paths(root, rara_dir.clone()));
 
     let backend = Arc::new(SequencedBackend::new(vec![
-        AnthropicResponse {
+        LlmResponse {
             content: vec![ContentBlock::Text {
                 text: "I inspected the top-level layout and still need a structured follow-up."
                     .to_string(),
@@ -394,7 +395,7 @@ async fn last_query_plan_updated_tracks_only_the_final_planning_turn() {
             stop_reason: Some("end_turn".to_string()),
             usage: Some(TokenUsage::default()),
         },
-        AnthropicResponse {
+        LlmResponse {
             content: vec![ContentBlock::Text {
                 text: "<request_user_input>\nquestion: Which area should the plan focus on first?\noption: Prompt runtime | Tighten the planning prompt and continuation phases.\noption: TUI lifecycle | Improve the planning and approval interaction flow.\n</request_user_input>".to_string(),
             }],
@@ -423,7 +424,7 @@ async fn last_query_plan_updated_tracks_only_the_final_planning_turn() {
 
     assert!(!agent.last_query_produced_plan());
 
-    let backend = Arc::new(SequencedBackend::new(vec![AnthropicResponse {
+    let backend = Arc::new(SequencedBackend::new(vec![LlmResponse {
         content: vec![ContentBlock::Text {
             text: "<plan>\n- [pending] Inspect the repository structure\n- [pending] Review src/main.rs bootstrap flow\n</plan>\nReady for approval.".to_string(),
         }],
@@ -455,7 +456,7 @@ async fn last_query_plan_updated_tracks_only_the_final_planning_turn() {
 #[tokio::test]
 async fn continues_plan_mode_after_exploration_if_assistant_still_signals_more_work() {
     let backend = Arc::new(SequencedBackend::new(vec![
-        AnthropicResponse {
+        LlmResponse {
             content: vec![
                 ContentBlock::Text {
                     text: "<plan>\n- [pending] Inspect the repository structure\n</plan>\nStart with the top-level layout.".to_string(),
@@ -469,14 +470,14 @@ async fn continues_plan_mode_after_exploration_if_assistant_still_signals_more_w
             stop_reason: Some("tool_use".to_string()),
             usage: Some(TokenUsage::default()),
         },
-        AnthropicResponse {
+        LlmResponse {
             content: vec![ContentBlock::Text {
                 text: "I have examined the overall structure and still need more inspection.\n<continue_inspection/>".to_string(),
             }],
             stop_reason: Some("end_turn".to_string()),
             usage: Some(TokenUsage::default()),
         },
-        AnthropicResponse {
+        LlmResponse {
             content: vec![ContentBlock::Text {
                 text: "<plan>\n- [pending] Inspect src/main.rs bootstrap flow\n- [pending] Review the prompt runtime wiring\n</plan>\nThe inspection path is now complete."
                     .to_string(),
@@ -513,7 +514,7 @@ async fn continues_plan_mode_after_exploration_if_assistant_still_signals_more_w
 #[tokio::test]
 async fn continues_plan_mode_to_synthesize_plan_after_exploration_evidence() {
     let backend = Arc::new(SequencedBackend::new(vec![
-        AnthropicResponse {
+        LlmResponse {
             content: vec![ContentBlock::ToolUse {
                 id: "tool-1".to_string(),
                 name: "list_files".to_string(),
@@ -522,7 +523,7 @@ async fn continues_plan_mode_to_synthesize_plan_after_exploration_evidence() {
             stop_reason: Some("tool_use".to_string()),
             usage: Some(TokenUsage::default()),
         },
-        AnthropicResponse {
+        LlmResponse {
             content: vec![ContentBlock::Text {
                 text: "I inspected the repository structure and the current planning flow."
                     .to_string(),
@@ -530,7 +531,7 @@ async fn continues_plan_mode_to_synthesize_plan_after_exploration_evidence() {
             stop_reason: Some("end_turn".to_string()),
             usage: Some(TokenUsage::default()),
         },
-        AnthropicResponse {
+        LlmResponse {
             content: vec![ContentBlock::Text {
                 text: "<plan>\n- [pending] Review planning continuation state\n- [pending] Tighten plan completion rules\n</plan>\nThe first pass exposed enough evidence to finalize the plan.".to_string(),
             }],
@@ -567,7 +568,7 @@ async fn continues_plan_mode_to_synthesize_plan_after_exploration_evidence() {
 #[tokio::test]
 async fn narration_only_planning_turn_requires_structured_followup() {
     let backend = Arc::new(SequencedBackend::new(vec![
-        AnthropicResponse {
+        LlmResponse {
             content: vec![ContentBlock::Text {
                 text: "I reviewed the prompt runtime and the workspace discovery flow."
                     .to_string(),
@@ -575,7 +576,7 @@ async fn narration_only_planning_turn_requires_structured_followup() {
             stop_reason: Some("end_turn".to_string()),
             usage: Some(TokenUsage::default()),
         },
-        AnthropicResponse {
+        LlmResponse {
             content: vec![ContentBlock::Text {
                 text: "<plan>\n- [pending] Generalize instruction discovery\n- [pending] Preserve current cache behavior\n</plan>\nThe inspected code now supports a concrete refactor path.".to_string(),
             }],
@@ -615,7 +616,7 @@ async fn narration_only_planning_turn_requires_structured_followup() {
 #[tokio::test]
 async fn delegated_plan_agent_counts_as_planning_evidence() {
     let backend = Arc::new(SequencedBackend::new(vec![
-        AnthropicResponse {
+        LlmResponse {
             content: vec![ContentBlock::ToolUse {
                 id: "tool-1".to_string(),
                 name: "plan_agent".to_string(),
@@ -624,14 +625,14 @@ async fn delegated_plan_agent_counts_as_planning_evidence() {
             stop_reason: Some("tool_use".to_string()),
             usage: Some(TokenUsage::default()),
         },
-        AnthropicResponse {
+        LlmResponse {
             content: vec![ContentBlock::Text {
                 text: "The delegated planning pass inspected enough code context.".to_string(),
             }],
             stop_reason: Some("end_turn".to_string()),
             usage: Some(TokenUsage::default()),
         },
-        AnthropicResponse {
+        LlmResponse {
             content: vec![ContentBlock::Text {
                 text: "<plan>\n- [pending] Review delegated planning evidence\n- [pending] Finalize the top-level plan\n</plan>\nReady for approval.".to_string(),
             }],
@@ -664,7 +665,7 @@ async fn delegated_plan_agent_counts_as_planning_evidence() {
 #[tokio::test]
 async fn continues_execute_mode_after_exploration_if_assistant_still_signals_more_work() {
     let backend = Arc::new(SequencedBackend::new(vec![
-        AnthropicResponse {
+        LlmResponse {
             content: vec![ContentBlock::ToolUse {
                 id: "tool-1".to_string(),
                 name: "stub_tool".to_string(),
@@ -673,14 +674,14 @@ async fn continues_execute_mode_after_exploration_if_assistant_still_signals_mor
             stop_reason: Some("tool_use".to_string()),
             usage: Some(TokenUsage::default()),
         },
-        AnthropicResponse {
+        LlmResponse {
             content: vec![ContentBlock::Text {
                 text: "I have checked the top-level structure and need one more inspection pass.\n<continue_inspection/>".to_string(),
             }],
             stop_reason: Some("end_turn".to_string()),
             usage: Some(TokenUsage::default()),
         },
-        AnthropicResponse {
+        LlmResponse {
             content: vec![ContentBlock::Text {
                 text: "done".to_string(),
             }],
@@ -716,14 +717,14 @@ async fn continues_execute_mode_after_exploration_if_assistant_still_signals_mor
 #[tokio::test]
 async fn continues_execute_mode_when_assistant_requests_structured_followup_inspection() {
     let backend = Arc::new(SequencedBackend::new(vec![
-        AnthropicResponse {
+        LlmResponse {
             content: vec![ContentBlock::Text {
                 text: "I have checked the repository layout and need one more repo-inspection step.\n<continue_inspection/>".to_string(),
             }],
             stop_reason: Some("end_turn".to_string()),
             usage: Some(TokenUsage::default()),
         },
-        AnthropicResponse {
+        LlmResponse {
             content: vec![ContentBlock::Text {
                 text: "done".to_string(),
             }],

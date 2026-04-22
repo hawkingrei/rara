@@ -4,7 +4,7 @@ mod prompting;
 #[cfg(test)]
 mod tests;
 
-use crate::llm::LlmBackend;
+use crate::llm::{ContentBlock, LlmBackend};
 use crate::prompt::{self, PromptMode, PromptRuntimeConfig};
 use crate::session::SessionManager;
 use crate::tool::ToolManager;
@@ -50,32 +50,6 @@ pub enum BashApprovalMode {
 pub struct Message {
     pub role: String,
     pub content: Value,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct AnthropicResponse {
-    pub content: Vec<ContentBlock>,
-    pub stop_reason: Option<String>,
-    pub usage: Option<TokenUsage>,
-}
-
-#[derive(Debug, Deserialize, Serialize, Clone, Default)]
-pub struct TokenUsage {
-    pub input_tokens: u32,
-    pub output_tokens: u32,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-#[serde(tag = "type")]
-pub enum ContentBlock {
-    #[serde(rename = "text")]
-    Text { text: String },
-    #[serde(rename = "tool_use")]
-    ToolUse {
-        id: String,
-        name: String,
-        input: Value,
-    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
