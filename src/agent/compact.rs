@@ -99,7 +99,7 @@ impl Agent {
             .llm_backend
             .summarize(
                 &self.history[..split_idx],
-                &prompt::build_compact_instruction(&self.prompt_config),
+                &self.context_assembler().compact_instruction(),
             )
             .await?;
         let recent_files =
@@ -167,7 +167,8 @@ impl Agent {
 
     pub(super) fn current_compact_budget(&self) -> Option<ContextBudget> {
         let tools = self.visible_tool_schemas();
-        self.llm_backend.context_budget(&self.history, &tools)
+        self.context_assembler()
+            .budget_for(self.llm_backend.as_ref(), &self.history, &tools)
     }
 
     pub(super) fn push_history_message(&mut self, message: Message) {

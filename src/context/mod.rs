@@ -1,5 +1,8 @@
-//! Placeholder for the staged context architecture module.
+//! Staged context architecture module.
 //!
-//! The initial integration for the context subsystem lands in separate PRs.
-//! This module exists so branches that already reference `mod context;`
-//! continue to compile until the staged implementation is merged.
+//! Stage 1 introduces the shared assembly boundary while keeping the module
+//! lightweight enough for branches that only need `mod context;` to compile.
+
+mod assembler;
+
+pub use self::assembler::{AssembledContext, ContextAssembler};
