@@ -244,12 +244,19 @@ fn extract_tool_result_message(content: &Value) -> Option<Value> {
 
 pub struct CodexBackend {
     inner: OpenAiCompatibleBackend,
+    reasoning_effort: Option<String>,
 }
 
 impl CodexBackend {
-    pub fn new(api_key: Option<SecretString>, base_url: String, model: String) -> Result<Self> {
+    pub fn new(
+        api_key: Option<SecretString>,
+        base_url: String,
+        model: String,
+        reasoning_effort: Option<String>,
+    ) -> Result<Self> {
         Ok(Self {
             inner: OpenAiCompatibleBackend::new(api_key, base_url, model)?,
+            reasoning_effort,
         })
     }
 }
@@ -257,7 +264,12 @@ impl CodexBackend {
 #[async_trait]
 impl LlmBackend for CodexBackend {
     async fn ask(&self, m: &[Message], t: &[Value]) -> Result<AnthropicResponse> {
-        let body = build_codex_responses_request(&self.inner.model, m, t);
+        let body = build_codex_responses_request(
+            &self.inner.model,
+            m,
+            t,
+            self.reasoning_effort.as_deref(),
+        );
         let responses_url = self.inner.endpoint_url("responses");
         let mut request = self.inner.client.post(&responses_url);
         if let Some(api_key) = self.inner.api_key.as_ref().map(SecretString::expose_secret) {
@@ -304,7 +316,12 @@ impl LlmBackend for CodexBackend {
     }
 }
 
-fn build_codex_responses_request(model: &str, messages: &[Message], tools: &[Value]) -> Value {
+pub(super) fn build_codex_responses_request(
+    model: &str,
+    messages: &[Message],
+    tools: &[Value],
+    reasoning_effort: Option<&str>,
+) -> Value {
     let codex_tools = tools
         .iter()
         .map(|tool| {
@@ -317,7 +334,7 @@ fn build_codex_responses_request(model: &str, messages: &[Message], tools: &[Val
         })
         .collect::<Vec<_>>();
 
-    json!({
+    let mut body = json!({
         "model": model,
         "input": to_codex_input_items(messages),
         "tools": codex_tools,
@@ -326,7 +343,14 @@ fn build_codex_responses_request(model: &str, messages: &[Message], tools: &[Val
         "store": false,
         "stream": false,
         "include": [],
-    })
+    });
+    if let Some(reasoning_effort) = reasoning_effort
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        body["reasoning"] = json!({ "effort": reasoning_effort });
+    }
+    body
 }
 
 pub(super) fn to_codex_input_items(messages: &[Message]) -> Vec<Value> {
