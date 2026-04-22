@@ -1060,11 +1060,19 @@ async fn refresh_codex_model_picker(
     oauth_manager: &OAuthManager,
     refresh_strategy: RefreshStrategy,
 ) -> anyhow::Result<()> {
-    let options = load_codex_model_catalog(oauth_manager.codex_home(), refresh_strategy).await?;
-    if options.is_empty() {
-        app.push_notice("Codex model catalog is empty. Check the saved login or try again.");
+    match load_codex_model_catalog(oauth_manager.codex_home(), refresh_strategy).await {
+        Ok(options) => {
+            if options.is_empty() && app.codex_model_options.is_empty() {
+                app.push_notice(
+                    "Codex model catalog is empty. Check the saved login or try again.",
+                );
+            }
+            app.set_codex_model_options(options);
+        }
+        Err(err) => {
+            app.push_notice(format!("Failed to load Codex model catalog: {err}"));
+        }
     }
-    app.set_codex_model_options(options);
     Ok(())
 }
 

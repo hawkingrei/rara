@@ -1652,6 +1652,7 @@ mod tests {
         InteractionKind, Overlay, PendingInteractionSnapshot, ProviderFamily, RuntimeSnapshot,
         TuiApp,
     };
+    use crate::codex_model_catalog::{CodexModelOption, CodexReasoningOption};
     use crate::config::{ConfigManager, RaraConfig};
     use crate::config::{DEFAULT_CODEX_BASE_URL, DEFAULT_CODEX_MODEL};
     use tempfile::tempdir;
@@ -1823,6 +1824,20 @@ mod tests {
         let mut app = TuiApp::new(cm).expect("app");
 
         app.provider_picker_idx = 0;
+        app.set_codex_model_options(vec![CodexModelOption {
+            id: DEFAULT_CODEX_MODEL.to_string(),
+            model: DEFAULT_CODEX_MODEL.to_string(),
+            label: "gpt-5.4".to_string(),
+            description: "Latest frontier agentic coding model.".to_string(),
+            reasoning_options: vec![CodexReasoningOption {
+                value: "medium".to_string(),
+                label: "Medium".to_string(),
+                description: "Default reasoning effort.".to_string(),
+                is_default: true,
+            }],
+            default_reasoning_effort: Some("medium".to_string()),
+            is_default: true,
+        }]);
         app.select_local_model(0);
 
         assert_eq!(app.config.provider, "codex");
