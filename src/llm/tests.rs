@@ -6,7 +6,7 @@ use super::ollama::{
     apply_ollama_stream_event, build_ollama_options, ensure_ollama_stream_completed,
     suggest_ollama_num_ctx, to_ollama_messages,
 };
-use super::openai_compatible::to_openai_messages;
+use super::openai_compatible::{parse_codex_response, to_codex_input_items, to_openai_messages};
 use super::shared::{
     extract_message_text, model_context_budget, parse_tool_arguments, should_bypass_proxy,
 };
@@ -37,6 +37,112 @@ fn converts_assistant_tool_history_to_openai_messages() {
     );
     assert_eq!(openai_messages[1]["role"], "tool");
     assert_eq!(openai_messages[1]["tool_call_id"], "tool-1");
+}
+
+#[test]
+fn converts_history_to_codex_responses_input_items() {
+    let messages = vec![
+        Message {
+            role: "system".to_string(),
+            content: json!("Follow the repo rules."),
+        },
+        Message {
+            role: "assistant".to_string(),
+            content: json!([
+                {"type":"text","text":"Need a tool."},
+                {"type":"tool_use","id":"tool-1","name":"read_file","input":{"path":"Cargo.toml"}}
+            ]),
+        },
+        Message {
+            role: "user".to_string(),
+            content: json!([
+                {"type":"tool_result","tool_use_id":"tool-1","content":"[package]"}
+            ]),
+        },
+    ];
+
+    let input = to_codex_input_items(&messages);
+    assert_eq!(input[0]["type"], "message");
+    assert_eq!(input[0]["role"], "system");
+    assert_eq!(input[0]["content"][0]["type"], "input_text");
+    assert_eq!(input[1]["type"], "message");
+    assert_eq!(input[1]["role"], "assistant");
+    assert_eq!(input[1]["content"][0]["type"], "output_text");
+    assert_eq!(input[2]["type"], "function_call");
+    assert_eq!(input[2]["call_id"], "tool-1");
+    assert_eq!(input[3]["type"], "function_call_output");
+    assert_eq!(input[3]["call_id"], "tool-1");
+    assert_eq!(input[3]["output"], "[package]");
+}
+
+#[test]
+fn preserves_mixed_user_text_and_multiple_tool_results_for_codex_inputs() {
+    let messages = vec![Message {
+        role: "user".to_string(),
+        content: json!([
+            {"type":"text","text":"First result follows."},
+            {"type":"tool_result","tool_use_id":"tool-1","content":"alpha"},
+            {"type":"text","text":"Second result follows."},
+            {"type":"tool_result","tool_use_id":"tool-2","content":"beta"}
+        ]),
+    }];
+
+    let input = to_codex_input_items(&messages);
+    assert_eq!(input.len(), 4);
+    assert_eq!(input[0]["type"], "message");
+    assert_eq!(input[0]["content"][0]["text"], "First result follows.");
+    assert_eq!(input[1]["type"], "function_call_output");
+    assert_eq!(input[1]["call_id"], "tool-1");
+    assert_eq!(input[1]["output"], "alpha");
+    assert_eq!(input[2]["type"], "message");
+    assert_eq!(input[2]["content"][0]["text"], "Second result follows.");
+    assert_eq!(input[3]["type"], "function_call_output");
+    assert_eq!(input[3]["call_id"], "tool-2");
+    assert_eq!(input[3]["output"], "beta");
+}
+
+#[test]
+fn parses_codex_responses_output_into_text_and_tool_use_blocks() {
+    let response = parse_codex_response(&json!({
+        "status": "completed",
+        "usage": {
+            "input_tokens": 11,
+            "output_tokens": 7
+        },
+        "output": [
+            {
+                "type": "message",
+                "content": [
+                    {"type": "output_text", "text": "Need to inspect a file."}
+                ]
+            },
+            {
+                "type": "function_call",
+                "call_id": "call-1",
+                "name": "read_file",
+                "arguments": "{\"path\":\"Cargo.toml\"}"
+            }
+        ]
+    }))
+    .unwrap();
+
+    assert_eq!(response.stop_reason, Some("completed".to_string()));
+    assert_eq!(response.usage.unwrap().input_tokens, 11);
+    assert_eq!(response.content.len(), 2);
+    match &response.content[0] {
+        crate::agent::ContentBlock::Text { text } => {
+            assert_eq!(text, "Need to inspect a file.");
+        }
+        other => panic!("expected text block, got {other:?}"),
+    }
+    match &response.content[1] {
+        crate::agent::ContentBlock::ToolUse { id, name, input } => {
+            assert_eq!(id, "call-1");
+            assert_eq!(name, "read_file");
+            assert_eq!(input, &json!({"path":"Cargo.toml"}));
+        }
+        other => panic!("expected tool_use block, got {other:?}"),
+    }
 }
 
 #[test]
