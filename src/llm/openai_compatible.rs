@@ -1,15 +1,16 @@
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use async_trait::async_trait;
+use codex_login::default_client::default_headers as codex_default_headers;
 use secrecy::{ExposeSecret, SecretString};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::agent::{AnthropicResponse, ContentBlock, Message};
 use crate::redaction::{redact_secrets, sanitize_url_for_display};
 
 use super::shared::{
-    collect_assistant_content, extract_message_text, extract_single_tool_result,
-    http_client_for_target, model_context_budget, parse_tool_arguments,
-    render_openai_message_content, ContextBudget, LlmBackend,
+    ContextBudget, LlmBackend, collect_assistant_content, extract_message_text,
+    extract_single_tool_result, http_client_for_target, model_context_budget, parse_tool_arguments,
+    render_openai_message_content,
 };
 
 pub struct OpenAiCompatibleBackend {
@@ -243,8 +244,11 @@ fn extract_tool_result_message(content: &Value) -> Option<Value> {
 }
 
 pub struct CodexBackend {
-    inner: OpenAiCompatibleBackend,
     reasoning_effort: Option<String>,
+    client: reqwest::Client,
+    api_key: Option<SecretString>,
+    base_url: String,
+    model: String,
 }
 
 impl CodexBackend {
@@ -255,29 +259,38 @@ impl CodexBackend {
         reasoning_effort: Option<String>,
     ) -> Result<Self> {
         Ok(Self {
-            inner: OpenAiCompatibleBackend::new(api_key, base_url, model)?,
+            client: http_client_for_target(&base_url)?,
+            api_key,
+            base_url,
+            model,
             reasoning_effort,
         })
+    }
+
+    fn endpoint_url(&self, path: &str) -> String {
+        let base = self.base_url.trim_end_matches('/');
+        let path = path.trim_start_matches('/');
+        format!("{base}/{path}")
     }
 }
 
 #[async_trait]
 impl LlmBackend for CodexBackend {
     async fn ask(&self, m: &[Message], t: &[Value]) -> Result<AnthropicResponse> {
-        let body = build_codex_responses_request(
-            &self.inner.model,
-            m,
-            t,
-            self.reasoning_effort.as_deref(),
-        );
-        let responses_url = self.inner.endpoint_url("responses");
-        let mut request = self.inner.client.post(&responses_url);
-        if let Some(api_key) = self.inner.api_key.as_ref().map(SecretString::expose_secret) {
+        let body =
+            build_codex_responses_request(&self.model, m, t, self.reasoning_effort.as_deref());
+        let responses_url = self.endpoint_url("responses");
+        let mut request = self.client.post(&responses_url);
+        for (name, value) in &codex_default_headers() {
+            request = request.header(name, value);
+        }
+        if let Some(api_key) = self.api_key.as_ref().map(SecretString::expose_secret) {
             if !api_key.is_empty() {
                 request = request.header("Authorization", format!("Bearer {api_key}"));
             }
         }
         let res = request.json(&body).send().await?;
+
         if !res.status().is_success() {
             return Err(anyhow!(
                 "API Error at {}: {}",
@@ -285,12 +298,19 @@ impl LlmBackend for CodexBackend {
                 redact_secrets(res.text().await?)
             ));
         }
+
         let resp_json: Value = res.json().await?;
         parse_codex_response(&resp_json)
     }
 
     async fn embed(&self, t: &str) -> Result<Vec<f32>> {
-        self.inner.embed(t).await
+        OpenAiCompatibleBackend::new(
+            self.api_key.clone(),
+            self.base_url.clone(),
+            self.model.clone(),
+        )?
+        .embed(t)
+        .await
     }
 
     async fn summarize(&self, m: &[Message], instruction: &str) -> Result<String> {
@@ -304,15 +324,23 @@ impl LlmBackend for CodexBackend {
             .content
             .into_iter()
             .filter_map(|block| match block {
-                ContentBlock::Text { text } => Some(text),
-                ContentBlock::ToolUse { .. } => None,
+                ContentBlock::Text { text } if !text.trim().is_empty() => Some(text),
+                _ => None,
             })
             .collect::<Vec<_>>()
             .join("\n\n"))
     }
 
     fn context_budget(&self, messages: &[Message], tools: &[Value]) -> Option<ContextBudget> {
-        self.inner.context_budget(messages, tools)
+        model_context_budget(self.model.as_str()).or_else(|| {
+            let inner = OpenAiCompatibleBackend::new(
+                self.api_key.clone(),
+                self.base_url.clone(),
+                self.model.clone(),
+            )
+            .ok()?;
+            inner.context_budget(messages, tools)
+        })
     }
 }
 
@@ -322,7 +350,30 @@ pub(super) fn build_codex_responses_request(
     tools: &[Value],
     reasoning_effort: Option<&str>,
 ) -> Value {
-    let codex_tools = tools
+    let mut body = json!({
+        "model": model,
+        "input": to_codex_input_items(messages),
+        "tools": to_codex_tools(tools),
+        "tool_choice": "auto",
+        "parallel_tool_calls": true,
+        "store": false,
+        "stream": false,
+        "include": [],
+        "instructions": "",
+        "text": Value::Null,
+        "client_metadata": Value::Null,
+    });
+    if let Some(reasoning_effort) = reasoning_effort
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        body["reasoning"] = json!({ "effort": reasoning_effort });
+    }
+    body
+}
+
+fn to_codex_tools(tools: &[Value]) -> Vec<Value> {
+    tools
         .iter()
         .map(|tool| {
             json!({
@@ -332,25 +383,7 @@ pub(super) fn build_codex_responses_request(
                 "parameters": tool["input_schema"],
             })
         })
-        .collect::<Vec<_>>();
-
-    let mut body = json!({
-        "model": model,
-        "input": to_codex_input_items(messages),
-        "tools": codex_tools,
-        "tool_choice": "auto",
-        "parallel_tool_calls": false,
-        "store": false,
-        "stream": false,
-        "include": [],
-    });
-    if let Some(reasoning_effort) = reasoning_effort
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        body["reasoning"] = json!({ "effort": reasoning_effort });
-    }
-    body
+        .collect()
 }
 
 pub(super) fn to_codex_input_items(messages: &[Message]) -> Vec<Value> {

@@ -563,7 +563,12 @@ pub(super) async fn finish_running_task_if_ready(
                 app.config.set_provider("codex");
                 app.config
                     .set_api_key(credential.expose_secret().to_string());
-                app.config.apply_codex_defaults();
+                let base_url = match mode {
+                    OAuthLoginMode::Browser | OAuthLoginMode::DeviceCode => {
+                        crate::config::DEFAULT_CODEX_CHATGPT_BASE_URL
+                    }
+                };
+                app.config.apply_codex_defaults_for_base_url(base_url);
                 app.config_manager.save(&app.config)?;
                 let saved_message = match mode {
                     OAuthLoginMode::Browser => {

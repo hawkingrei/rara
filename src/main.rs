@@ -2,6 +2,7 @@ mod acp;
 mod agent;
 mod codex_model_catalog;
 mod config;
+mod context;
 mod llm;
 mod local_backend;
 mod oauth;
@@ -20,12 +21,15 @@ mod workspace;
 
 use crate::acp::{run_acp_stdio, RaraAcpAgent};
 use crate::agent::Agent;
-use crate::config::{ConfigManager, RaraConfig, DEFAULT_CODEX_BASE_URL, DEFAULT_CODEX_MODEL};
+use crate::config::{
+    ConfigManager, RaraConfig, DEFAULT_CODEX_BASE_URL, DEFAULT_CODEX_CHATGPT_BASE_URL,
+    DEFAULT_CODEX_MODEL,
+};
 use crate::llm::{
     CodexBackend, GeminiBackend, LlmBackend, MockLlm, OllamaBackend, OpenAiCompatibleBackend,
 };
 use crate::local_backend::{LocalLlmBackend, LocalProgressReporter};
-use crate::oauth::OAuthManager;
+use crate::oauth::{OAuthManager, SavedCodexAuthMode};
 use crate::redaction::redact_secrets;
 use crate::sandbox::SandboxManager;
 use crate::session::SessionManager;
@@ -166,7 +170,12 @@ async fn main_impl() -> Result<()> {
                     tokio::task::spawn_blocking(move || oauth_reader.read_api_key_from_stdin())
                         .await??;
                 let credential = oauth_manager.save_api_key(api_key.expose_secret())?;
-                save_codex_credential(&mut config, &config_manager, credential.expose_secret())?;
+                save_codex_credential(
+                    &mut config,
+                    &config_manager,
+                    &oauth_manager,
+                    credential.expose_secret(),
+                )?;
                 println!("Successfully saved Codex API key.");
             } else if device_auth {
                 let token = oauth_manager.request_device_code().await?;
@@ -175,7 +184,12 @@ async fn main_impl() -> Result<()> {
                     token.verification_url, token.user_code
                 );
                 let credential = oauth_manager.complete_device_code_login(&token).await?;
-                save_codex_credential(&mut config, &config_manager, credential.expose_secret())?;
+                save_codex_credential(
+                    &mut config,
+                    &config_manager,
+                    &oauth_manager,
+                    credential.expose_secret(),
+                )?;
                 println!("Successfully logged in with device code.");
             } else {
                 if std::env::var_os("SSH_CONNECTION").is_some() {
@@ -187,7 +201,12 @@ async fn main_impl() -> Result<()> {
                     session.auth_url()
                 );
                 let credential = session.complete(&oauth_manager).await?;
-                save_codex_credential(&mut config, &config_manager, credential.expose_secret())?;
+                save_codex_credential(
+                    &mut config,
+                    &config_manager,
+                    &oauth_manager,
+                    credential.expose_secret(),
+                )?;
                 println!("Successfully logged in.");
             }
         }
@@ -213,11 +232,16 @@ async fn main_impl() -> Result<()> {
 fn save_codex_credential(
     config: &mut RaraConfig,
     config_manager: &ConfigManager,
+    oauth_manager: &OAuthManager,
     credential: &str,
 ) -> Result<()> {
     config.set_provider("codex");
     config.set_api_key(credential.to_string());
-    config.apply_codex_defaults();
+    let base_url = match oauth_manager.saved_auth_mode()? {
+        Some(SavedCodexAuthMode::Chatgpt) => DEFAULT_CODEX_CHATGPT_BASE_URL,
+        _ => DEFAULT_CODEX_BASE_URL,
+    };
+    config.apply_codex_defaults_for_base_url(base_url);
     config_manager.save(config)
 }
 

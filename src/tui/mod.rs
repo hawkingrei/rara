@@ -567,7 +567,8 @@ async fn dispatch_event(
             } else {
                 app.config.set_api_key(value.to_string());
                 if app.config.provider == "codex" {
-                    app.config.apply_codex_defaults();
+                    app.config
+                        .apply_codex_defaults_for_base_url(crate::config::DEFAULT_CODEX_BASE_URL);
                 }
                 app.config_manager.save(&app.config)?;
                 if app.config.provider == "codex" {
@@ -980,6 +981,12 @@ fn sync_codex_credential_from_auth_store(
 
     let credential = oauth_manager.load_saved_credential()?;
     let credential = credential.expose_secret().trim().to_string();
+    let expected_base_url = match oauth_manager.saved_auth_mode()? {
+        Some(crate::oauth::SavedCodexAuthMode::Chatgpt) => {
+            crate::config::DEFAULT_CODEX_CHATGPT_BASE_URL
+        }
+        _ => crate::config::DEFAULT_CODEX_BASE_URL,
+    };
     let mut changed = false;
 
     if app.config.provider == "codex" {
@@ -997,9 +1004,11 @@ fn sync_codex_credential_from_auth_store(
                 .set_model(Some(crate::config::DEFAULT_CODEX_MODEL.to_string()));
             changed = true;
         }
-        if crate::config::should_reset_codex_base_url(app.config.base_url.as_deref()) {
-            app.config
-                .set_base_url(Some(crate::config::DEFAULT_CODEX_BASE_URL.to_string()));
+        if crate::config::should_apply_codex_base_url(
+            app.config.base_url.as_deref(),
+            expected_base_url,
+        ) {
+            app.config.set_base_url(Some(expected_base_url.to_string()));
             changed = true;
         }
     } else {
@@ -1021,8 +1030,11 @@ fn sync_codex_credential_from_auth_store(
             codex_state.model = Some(crate::config::DEFAULT_CODEX_MODEL.to_string());
             changed = true;
         }
-        if crate::config::should_reset_codex_base_url(codex_state.base_url.as_deref()) {
-            codex_state.base_url = Some(crate::config::DEFAULT_CODEX_BASE_URL.to_string());
+        if crate::config::should_apply_codex_base_url(
+            codex_state.base_url.as_deref(),
+            expected_base_url,
+        ) {
+            codex_state.base_url = Some(expected_base_url.to_string());
             changed = true;
         }
         if changed {
@@ -1123,7 +1135,9 @@ mod tests {
     };
     use crate::codex_model_catalog::{CodexModelOption, CodexReasoningOption};
     use crate::config::ConfigManager;
-    use crate::config::{DEFAULT_CODEX_BASE_URL, DEFAULT_CODEX_MODEL};
+    use crate::config::{
+        DEFAULT_CODEX_BASE_URL, DEFAULT_CODEX_CHATGPT_BASE_URL, DEFAULT_CODEX_MODEL,
+    };
     use crate::tui::app_event::AppEvent;
     use crate::tui::state::{Overlay, ProviderFamily, RunningTask, TaskKind, TuiApp};
     use crossterm::event::KeyCode;
@@ -1541,6 +1555,59 @@ mod tests {
                 .and_then(|state| state.api_key.as_ref())
                 .map(|value| value.expose_secret()),
             Some("sk-test-codex")
+        );
+    }
+
+    #[test]
+    fn codex_chatgpt_auth_store_sets_chatgpt_base_url_before_model_flow() {
+        let temp = tempdir().expect("tempdir");
+        let mut app = TuiApp::new(ConfigManager {
+            path: temp.path().join("config.json"),
+        })
+        .expect("app");
+        let oauth_manager =
+            crate::oauth::OAuthManager::new_for_config_dir(temp.path().join(".rara"))
+                .expect("oauth manager");
+        codex_login::save_auth(
+            &temp.path().join(".rara").join("codex-auth"),
+            &codex_login::AuthDotJson {
+                auth_mode: None,
+                openai_api_key: Some("sk-from-oauth".into()),
+                tokens: Some(codex_login::TokenData {
+                    id_token: codex_login::token_data::parse_chatgpt_jwt_claims(
+                        "eyJhbGciOiJub25lIn0.e30.signature",
+                    )
+                    .expect("valid id token"),
+                    access_token: "oauth-access-token".into(),
+                    refresh_token: "refresh".into(),
+                    account_id: None,
+                }),
+                last_refresh: None,
+                agent_identity: None,
+            },
+            codex_login::AuthCredentialsStoreMode::File,
+        )
+        .expect("save auth");
+
+        app.config.set_provider("ollama");
+
+        assert!(
+            sync_codex_credential_from_auth_store(&mut app, &oauth_manager).expect("sync auth")
+        );
+        assert_eq!(
+            app.config
+                .provider_states
+                .get("codex")
+                .and_then(|state| state.api_key.as_ref())
+                .map(|value| value.expose_secret()),
+            Some("oauth-access-token")
+        );
+        assert_eq!(
+            app.config
+                .provider_states
+                .get("codex")
+                .and_then(|state| state.base_url.as_deref()),
+            Some(DEFAULT_CODEX_CHATGPT_BASE_URL)
         );
     }
 
