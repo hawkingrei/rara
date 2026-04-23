@@ -2,6 +2,37 @@
 
 Active backlog only. Keep this file small and current.
 
+## Suggested Rollout Order
+
+From easier / lower-risk work toward harder / more structural work:
+
+1. Transcript and command-surface polish
+   - [ ] Add Claude-style repository context hints beneath the input area, especially the current GitHub PR link (when the workspace is on a PR branch or can be mapped to an open PR), so the active review context stays visible without manual lookup.
+   - [ ] Add Codex/Claude-style transcript role cards for `You` / `Agent` / `System`: use clearer card/background separation without mixing status chrome into committed transcript history.
+   - [ ] Bring the main response UI closer to Codex / Claude Code: tighten the `You` / `Agent` message-card hierarchy, keep active response blocks visually stable while streaming, and avoid falling back to generic transcript rows for states that should render as dedicated response cards.
+   - [ ] Rework the built-in command TUI (`/help`, `/model`, `/status`, command palette, setup overlays) to more closely match Codex / Claude Code: better information density, clearer keyboard affordances, stronger selection states, and less modal friction.
+
+2. Transcript stability and compactness
+   - [ ] Improve transcript rendering stability across long and streaming sessions: reduce scroll jumps and flicker, keep bottom anchoring stable while new content streams in, and prevent stale transient sections (`Exploring`, `Updated Plan`, busy chrome) from reappearing after their live phase has ended.
+   - [ ] Rework long `Exploring` / `Explored` handling to follow Codex more closely: keep live exploration compact, summarize committed exploration into a small source-aware digest (prefer actual `read`/inspection actions over noisy `list`/`glob`/search chatter), and avoid dumping long raw action traces into the main transcript.
+   - [ ] Decouple setup/help/model overlays from transcript layout so popups do not perturb history rendering: overlays should render as a pure top layer instead of changing transcript viewport sizing or causing history reflow/flicker when opened and closed.
+   - [ ] Expand the new Codex-style TUI snapshot coverage beyond the first auth-picker / queued-follow-up / Updated Plan snapshots so more popups, status surfaces, and transcript-heavy widgets are protected by golden tests.
+
+3. Rich Codex/Claude transcript parity
+   - [ ] Continue making tool-action transcript summaries more source-aware and file-aware so edit tools such as `write_file` / `replace` / `apply_patch` consistently show what they touched instead of only generic action labels.
+   - [ ] Continue refining the live `bash` transcript path so command execution behaves more like Codex: keep the streamed stdout/stderr surface, then add richer lifecycle details such as clearer command-start/finish framing and better long-output folding.
+   - [ ] Add a high-fidelity Claude Code / Codex transcript rendering pass: mirror the structured `write/update` tool presentation, inline diff display, approval cards, and message-card hierarchy as closely as practical instead of only loosely borrowing the style, and explicitly use Codex as the primary reference for `bash` / command lifecycle framing, stdout/stderr streaming, completion summaries, and output folding.
+
+4. Reasoning and model-surface alignment
+   - [ ] Add a Codex-style configurable `model_reasoning_summary` surface instead of a boolean thinking toggle: support model/provider-scoped configuration, show reasoning summaries only when the backend emits them, and keep the transcript/status behavior aligned with Codex (`none` / `auto` / richer summary modes) rather than exposing raw chain-of-thought.
+   - [ ] Continue refining queued follow-up steering toward the full Codex contract: keep the new next-tool-boundary queue, then add the explicit interrupt/send-now path and clearer separation between pending steers and ordinary queued follow-ups.
+
+5. Deeper runtime and architecture work
+   - [ ] Unify runtime assembly and startup boundaries across `src/main.rs` and `src/tui/runtime/tasks.rs`: introduce one shared runtime/builder entry point for backend/tool/session/workspace initialization, stop silently swallowing `SkillManager::load_all()` failures, move hard-coded persistence paths such as `data/lancedb` behind config/workspace path resolution, and keep the root crate split between thin entrypoints and explicit runtime-context assembly instead of letting `main.rs` keep parser/setup/dispatch responsibilities together.
+   - [ ] Implement the Stage 1 context-architecture boundary from `docs/features/context-architecture.md`: introduce explicit `ContextBudget` and `ContextAssembler` layers so stable instructions, workspace context, active turn context, memory selections, and compacted history stop being assembled implicitly across unrelated modules.
+   - [ ] Implement a local `ThreadStore` / `ThreadRecorder` boundary so thread metadata, rollout history, plan state, pending interactions, and future sub-agent lineage are persisted as structured items instead of reconstructed from flattened transcript text.
+   - [ ] Introduce a dedicated transcript viewport model that renders history from stable turn data plus scroll state instead of letting overlays and transient runtime sections implicitly drive layout; this should become the basis for future virtualization, stronger scroll anchoring, and less flicker under streaming updates.
+
 ## Security and Reliability
 
 - [ ] Replace the current string-based shell execution path in `src/tools/bash.rs` and `src/sandbox.rs` with a structured command model (`program`, `args`, `cwd`, `allow_net`) so `bash -c` / `sh -c` is no longer the default execution path.
@@ -28,10 +59,13 @@ Active backlog only. Keep this file small and current.
 - [ ] Design Graph RAG as a later retrieval layer on top of durable memory and extracted relationships instead of as a prompt hack: define graph nodes/edges, traversal outputs, and how graph results compose with vector retrieval.
 - [ ] Add a first-run onboarding flow that explains workspace, provider/model selection, local model download behavior, cache location, and tool loop expectations before the user lands in a blank chat.
 - [ ] Continue aligning the TUI status and transcript surfaces with Codex/Claude so runtime state stays visible without leaking bottom-pane chrome into transcript history.
+- [ ] Improve transcript rendering stability across long and streaming sessions: reduce scroll jumps and flicker, keep bottom anchoring stable while new content streams in, and prevent stale transient sections (`Exploring`, `Updated Plan`, busy chrome) from reappearing after their live phase has ended.
 - [ ] Add Claude-style repository context hints beneath the input area, especially the current GitHub PR link (when the workspace is on a PR branch or can be mapped to an open PR), so the active review context stays visible without manual lookup.
 - [ ] Rework the built-in command TUI (`/help`, `/model`, `/status`, command palette, setup overlays) to more closely match Codex / Claude Code: better information density, clearer keyboard affordances, stronger selection states, and less modal friction.
+- [ ] Add a Codex-style configurable `model_reasoning_summary` surface instead of a boolean thinking toggle: support model/provider-scoped configuration, show reasoning summaries only when the backend emits them, and keep the transcript/status behavior aligned with Codex (`none` / `auto` / richer summary modes) rather than exposing raw chain-of-thought.
 - [ ] Add Codex/Claude-style transcript role cards for `You` / `Agent` / `System`: use clearer card/background separation without mixing status chrome into committed transcript history.
 - [ ] Add a high-fidelity Claude Code / Codex transcript rendering pass: mirror the structured `write/update` tool presentation, inline diff display, approval cards, and message-card hierarchy as closely as practical instead of only loosely borrowing the style, and explicitly use Codex as the primary reference for `bash` / command lifecycle framing, stdout/stderr streaming, completion summaries, and output folding.
+- [ ] Rework long `Exploring` / `Explored` handling to follow Codex more closely: keep live exploration compact, summarize committed exploration into a small source-aware digest (prefer actual `read`/inspection actions over noisy `list`/`glob`/search chatter), and avoid dumping long raw action traces into the main transcript.
 - [ ] Expand the new Codex-style TUI snapshot coverage beyond the first auth-picker / queued-follow-up / Updated Plan snapshots so more popups, status surfaces, and transcript-heavy widgets are protected by golden tests.
 - [ ] Continue making tool-action transcript summaries more source-aware and file-aware so edit tools such as `write_file` / `replace` / `apply_patch` consistently show what they touched instead of only generic action labels.
 - [ ] Continue refining the live `bash` transcript path so command execution behaves more like Codex: keep the streamed stdout/stderr surface, then add richer lifecycle details such as clearer command-start/finish framing and better long-output folding.

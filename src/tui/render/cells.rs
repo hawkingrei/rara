@@ -20,7 +20,8 @@ use self::components::{
     RunningCell, UserCell, planning_suggestion_text,
 };
 use super::{
-    current_turn_exploration_summary, current_turn_exploration_summary_from_entries,
+    compact_summary_lines, compact_summary_text, current_turn_exploration_summary,
+    current_turn_exploration_summary_from_entries,
     current_turn_tool_summary,
     history_pipeline::{narrative_entries, ordered_completion_entries},
     wrapped_history_line_count,
@@ -135,9 +136,12 @@ impl HistoryCell for CommittedTurnCell<'_> {
         let has_tool_activity = entry_refs
             .iter()
             .any(|entry| matches!(entry.role.as_str(), "Tool" | "Tool Result" | "Tool Error" | "Tool Progress"));
-        if let Some(summary) = explicit_exploration.or_else(|| {
-            current_turn_exploration_summary_from_entries(entry_refs.as_slice(), false, None)
-        }) {
+        if let Some(summary) = explicit_exploration
+            .map(|summary| compact_summary_text(&summary, 4, "more exploration step(s)"))
+            .or_else(|| {
+                current_turn_exploration_summary_from_entries(entry_refs.as_slice(), false, None)
+            })
+        {
             cells.push(Box::new(ExploredCell::new(summary)));
         }
 
@@ -304,27 +308,33 @@ impl ActiveCell for ActiveTurnCell<'_> {
             .map(|entry| entry.message.clone());
 
         let exploration_summary = if has_live_exploration {
-            let mut lines = self
+            let mut items = self
                 .app
                 .active_live
                 .exploration_actions
                 .iter()
-                .map(|action| format!("└ {action}"))
+                .cloned()
                 .collect::<Vec<_>>();
-            lines.extend(
+            items.extend(
                 self.app
                     .active_live
-                .exploration_notes
-                .iter()
-                .map(|note| format!("└ {note}")),
+                    .exploration_notes
+                    .iter()
+                    .cloned(),
             );
-            Some(lines.join("\n"))
+            Some(compact_summary_lines(
+                items.as_slice(),
+                4,
+                "more exploration step(s)",
+            ))
         } else if !turn_live {
             None
         } else {
-            explicit_exploration.or_else(|| {
-                current_turn_exploration_summary(self.app, current_turn.as_slice(), turn_live)
-            })
+            explicit_exploration
+                .map(|summary| compact_summary_text(&summary, 4, "more exploration step(s)"))
+                .or_else(|| {
+                    current_turn_exploration_summary(self.app, current_turn.as_slice(), turn_live)
+                })
         };
         let has_exploration_summary = exploration_summary.is_some();
         let exploration_active = turn_live && has_exploration_summary;
@@ -338,23 +348,28 @@ impl ActiveCell for ActiveTurnCell<'_> {
             .map(|entry| entry.message.clone());
 
         let planning_summary = if has_live_planning {
-            let mut lines = self
+            let mut items = self
                 .app
                 .active_live
                 .planning_actions
                 .iter()
-                .map(|action| format!("└ {action}"))
+                .cloned()
                 .collect::<Vec<_>>();
-            lines.extend(
+            items.extend(
                 self.app
                     .active_live
-                .planning_notes
-                .iter()
-                .map(|note| format!("└ {note}")),
+                    .planning_notes
+                    .iter()
+                    .cloned(),
             );
-            Some(lines.join("\n"))
+            Some(compact_summary_lines(
+                items.as_slice(),
+                4,
+                "more planning step(s)",
+            ))
         } else {
             explicit_planning
+                .map(|summary| compact_summary_text(&summary, 4, "more planning step(s)"))
         };
         let has_planning_summary = planning_summary.is_some();
         if let Some(summary) = planning_summary {
@@ -367,16 +382,22 @@ impl ActiveCell for ActiveTurnCell<'_> {
             .map(|entry| entry.message.clone());
 
         let running_summary = if has_live_running {
-            let lines = self
+            let items = self
                 .app
                 .active_live
                 .running_actions
                 .iter()
-                .map(|action| format!("└ {action}"))
+                .cloned()
                 .collect::<Vec<_>>();
-            Some(lines.join("\n"))
+            Some(compact_summary_lines(
+                items.as_slice(),
+                4,
+                "more running step(s)",
+            ))
         } else {
-            explicit_running.or_else(|| {
+            explicit_running
+                .map(|summary| compact_summary_text(&summary, 4, "more running step(s)"))
+                .or_else(|| {
                 current_turn_tool_summary(
                     current_turn.as_slice(),
                     turn_live,
@@ -442,6 +463,21 @@ impl ActiveCell for ActiveTurnCell<'_> {
             && latest_agent.is_some_and(contains_structured_planning_output);
 
         let responding_role = if turn_live { "Responding" } else { "Agent" };
+        let prefer_responding_chrome = turn_live
+            && matches!(
+                self.app.runtime_phase,
+                RuntimePhase::SendingPrompt | RuntimePhase::ProcessingResponse
+            )
+            && !has_exploration_summary
+            && !has_planning_summary
+            && !has_running_summary
+            && self.app.snapshot.plan_steps.is_empty()
+            && !suppress_planning_chatter
+            && !suppress_structured_plan_response
+            && self.app.pending_request_input().is_none()
+            && !self.app.has_pending_plan_approval()
+            && self.app.pending_command_approval().is_none()
+            && self.app.pending_planning_suggestion.is_none();
 
         if has_agent_stream
             && !suppress_intermediate_agent
@@ -475,6 +511,13 @@ impl ActiveCell for ActiveTurnCell<'_> {
                 agent_message,
                 usize::MAX,
                 self.cwd,
+            )));
+        } else if prefer_responding_chrome {
+            cells.push(Box::new(RespondingCell::working(
+                self.app
+                    .runtime_phase_detail
+                    .as_deref()
+                    .unwrap_or("waiting for model output"),
             )));
         } else if let Some(system_message) = latest_system {
             cells.push(Box::new(RespondingCell::from_message(

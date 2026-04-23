@@ -47,7 +47,7 @@ fn active_turn_cell_keeps_sections_in_stable_order() {
         .collect::<Vec<_>>()
         .join("\n");
 
-    let you_idx = rendered.find("You: Inspect the codebase").unwrap();
+    let you_idx = rendered.find("› Inspect the codebase").unwrap();
     let running_idx = rendered.find(" Running ").unwrap();
     let plan_idx = rendered.find("Updated Plan").unwrap();
     let approval_idx = rendered.find(" Request Input ").unwrap();
@@ -74,7 +74,7 @@ fn active_turn_cell_renders_planning_suggestion_without_active_turn_entries() {
         .collect::<Vec<_>>()
         .join("\n");
 
-    assert!(rendered.contains("You: Review this repository and propose changes."));
+    assert!(rendered.contains("› Review this repository and propose changes."));
     assert!(rendered.contains(" Planning Suggested "));
     assert!(rendered.contains("Enter planning mode"));
     assert!(rendered.contains("Continue in execute mode"));
@@ -158,6 +158,109 @@ fn active_turn_cell_uses_stateful_live_exploration_sections() {
     assert!(rendered.contains("Read src/tools/vector.rs"));
     assert!(rendered.contains("I have inspected the repository structure."));
     assert!(!rendered.contains("waiting for model response · 20s elapsed"));
+}
+
+#[test]
+fn active_turn_cell_compacts_long_live_exploration_sections() {
+    let temp = tempdir().unwrap();
+    let mut app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("build tui app");
+    app.runtime_phase = RuntimePhase::RunningTool;
+    app.active_turn = TranscriptTurn {
+        entries: vec![TranscriptEntry {
+            role: "You".into(),
+            message: "Inspect the repository".into(),
+        }],
+    };
+    for idx in 1..=5 {
+        app.record_exploration_action(format!("Read src/module_{idx}.rs"));
+    }
+    app.record_exploration_note("Cross-check the auth entrypoint.");
+
+    let rendered = ActiveTurnCell::new(&app, Some(Path::new(".")))
+        .display_lines(100)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(rendered.contains(" Exploring "));
+    assert!(rendered.contains("... 2 more exploration step(s)"));
+    assert!(!rendered.contains("module_1.rs"));
+    assert!(!rendered.contains("module_2.rs"));
+    assert!(rendered.contains("module_3.rs"));
+    assert!(rendered.contains("module_5.rs"));
+    assert!(rendered.contains("Cross-check the auth entrypoint."));
+}
+
+#[test]
+fn active_turn_cell_compacts_long_live_planning_sections() {
+    let temp = tempdir().unwrap();
+    let mut app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("build tui app");
+    app.runtime_phase = RuntimePhase::ProcessingResponse;
+    app.active_turn = TranscriptTurn {
+        entries: vec![TranscriptEntry {
+            role: "You".into(),
+            message: "Refine the plan".into(),
+        }],
+    };
+    for idx in 1..=5 {
+        app.record_planning_action(format!("Inspect planning module {idx}"));
+    }
+    app.record_planning_note("Reuse the shared auth bridge.");
+
+    let rendered = ActiveTurnCell::new(&app, Some(Path::new(".")))
+        .display_lines(100)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(rendered.contains(" Planning "));
+    assert!(rendered.contains("... 2 more planning step(s)"));
+    assert!(!rendered.contains("planning module 1"));
+    assert!(!rendered.contains("planning module 2"));
+    assert!(rendered.contains("planning module 3"));
+    assert!(rendered.contains("planning module 5"));
+    assert!(rendered.contains("Reuse the shared auth bridge."));
+}
+
+#[test]
+fn active_turn_cell_compacts_long_live_running_sections() {
+    let temp = tempdir().unwrap();
+    let mut app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("build tui app");
+    app.runtime_phase = RuntimePhase::RunningTool;
+    app.active_turn = TranscriptTurn {
+        entries: vec![TranscriptEntry {
+            role: "You".into(),
+            message: "Run the checks".into(),
+        }],
+    };
+    for idx in 1..=6 {
+        app.record_running_action(format!("Run task {idx}"));
+    }
+
+    let rendered = ActiveTurnCell::new(&app, Some(Path::new(".")))
+        .display_lines(100)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(rendered.contains(" Running "));
+    assert!(rendered.contains("... 2 more running step(s)"));
+    assert!(!rendered.contains("Run task 1"));
+    assert!(!rendered.contains("Run task 2"));
+    assert!(rendered.contains("Run task 3"));
+    assert!(rendered.contains("Run task 6"));
 }
 
 #[test]
@@ -390,7 +493,74 @@ fn active_turn_cell_uses_responding_label_while_busy() {
         .join("\n");
 
     assert!(rendered.contains("Responding"));
-    assert!(!rendered.contains("Agent\n  I have inspected"));
+    assert!(!rendered.contains("• I have inspected"));
+}
+
+#[test]
+fn active_turn_cell_prefers_responding_over_tool_result_while_processing_response() {
+    let temp = tempdir().unwrap();
+    let mut app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("build tui app");
+    app.runtime_phase = RuntimePhase::ProcessingResponse;
+    app.runtime_phase_detail = Some("waiting for model output".into());
+    app.active_turn = TranscriptTurn {
+        entries: vec![
+            TranscriptEntry {
+                role: "You".into(),
+                message: "Review the repository".into(),
+            },
+            TranscriptEntry {
+                role: "Tool Result".into(),
+                message: "bash stdout: partial output".into(),
+            },
+        ],
+    };
+
+    let rendered = ActiveTurnCell::new(&app, Some(Path::new(".")))
+        .display_lines(100)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(rendered.contains(" Responding ") || rendered.contains("Responding"));
+    assert!(!rendered.contains("Tool Result"));
+    assert!(!rendered.contains("bash stdout: partial output"));
+}
+
+#[test]
+fn active_turn_cell_prefers_responding_over_system_notice_while_sending_prompt() {
+    let temp = tempdir().unwrap();
+    let mut app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("build tui app");
+    app.runtime_phase = RuntimePhase::SendingPrompt;
+    app.runtime_phase_detail = Some("sending prompt to provider".into());
+    app.active_turn = TranscriptTurn {
+        entries: vec![
+            TranscriptEntry {
+                role: "You".into(),
+                message: "Review the repository".into(),
+            },
+            TranscriptEntry {
+                role: "System".into(),
+                message: "temporary setup notice".into(),
+            },
+        ],
+    };
+
+    let rendered = ActiveTurnCell::new(&app, Some(Path::new(".")))
+        .display_lines(100)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(rendered.contains(" Responding ") || rendered.contains("Responding"));
+    assert!(!rendered.contains("temporary setup notice"));
 }
 
 #[test]

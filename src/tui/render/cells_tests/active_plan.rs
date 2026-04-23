@@ -106,7 +106,7 @@ fn active_turn_cell_hides_stale_updated_plan_after_plan_turn_finishes() {
         .join("\n");
 
     assert!(!rendered.contains("Updated Plan"));
-    assert!(rendered.contains("You: Implement the approved fix"));
+    assert!(rendered.contains("› Implement the approved fix"));
 }
 
 #[test]
@@ -138,7 +138,7 @@ fn active_turn_cell_hides_stale_exploring_after_live_phase_finishes() {
         .join("\n");
 
     assert!(!rendered.contains(" Exploring "));
-    assert!(rendered.contains("You: Inspect the repository"));
+    assert!(rendered.contains("› Inspect the repository"));
 }
 
 #[test]

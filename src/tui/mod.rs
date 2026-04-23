@@ -79,8 +79,10 @@ pub async fn run_tui(agent: Agent, oauth_manager: OAuthManager) -> anyhow::Resul
     if let Some(agent_ref) = agent_slot.as_ref() {
         app.sync_snapshot(agent_ref);
     }
+    app.start_repo_context_detection();
 
     let result = loop {
+        app.finish_repo_context_task_if_ready().await;
         finish_running_task_if_ready(&mut app, &mut agent_slot).await?;
         clamp_command_palette_selection(&mut app);
         let size = terminal_size()?;
@@ -134,6 +136,9 @@ pub async fn run_tui(agent: Agent, oauth_manager: OAuthManager) -> anyhow::Resul
         }
     };
 
+    if let Some(handle) = app.repo_context_task.take() {
+        handle.abort();
+    }
     teardown_terminal(terminal)?;
     result
 }

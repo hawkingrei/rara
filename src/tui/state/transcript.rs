@@ -6,6 +6,15 @@ use super::{PendingFollowUpMessage, RuntimePhase, TranscriptEntry, TranscriptTur
 use crate::redaction::redact_secrets;
 
 impl TuiApp {
+    fn reset_transcript_scroll_if_following_tail(&mut self) {
+        // Keep the transcript pinned to the tail only when the user has not
+        // manually scrolled upward. Once they scroll up, transcript mutations
+        // should avoid yanking the viewport back to the bottom.
+        if self.transcript_scroll == 0 {
+            self.transcript_scroll = 0;
+        }
+    }
+
     pub fn push_entry(&mut self, role: &'static str, message: impl Into<String>) {
         let message = match role {
             "System" | "Runtime" => redact_secrets(message.into()),
@@ -18,14 +27,14 @@ impl TuiApp {
             role: role.to_string(),
             message,
         });
-        self.transcript_scroll = 0;
+        self.reset_transcript_scroll_if_following_tail();
     }
 
     pub fn append_to_latest_entry(&mut self, role: &'static str, delta: &str) {
         if let Some(last) = self.active_turn.entries.last_mut() {
             if last.role == role {
                 last.message.push_str(delta);
-                self.transcript_scroll = 0;
+                self.reset_transcript_scroll_if_following_tail();
                 return;
             }
         }
@@ -42,7 +51,7 @@ impl TuiApp {
             .agent_markdown_stream
             .get_or_insert_with(|| super::AgentMarkdownStreamState::new(cwd));
         stream.push_delta(delta);
-        self.transcript_scroll = 0;
+        self.reset_transcript_scroll_if_following_tail();
     }
 
     pub fn agent_stream_lines(&self) -> Option<&[Line<'static>]> {
@@ -68,7 +77,7 @@ impl TuiApp {
         if let Some(last) = self.active_turn.entries.last_mut() {
             if last.role == "Agent" {
                 last.message = message;
-                self.transcript_scroll = 0;
+                self.reset_transcript_scroll_if_following_tail();
                 return;
             }
         }
@@ -81,7 +90,7 @@ impl TuiApp {
                 if last.role == "Agent" {
                     last.message = message;
                     self.invalidate_committed_render_cache();
-                    self.transcript_scroll = 0;
+                    self.reset_transcript_scroll_if_following_tail();
                     return;
                 }
             }
@@ -216,7 +225,7 @@ impl TuiApp {
         self.persist_turn(ordinal, &turn);
         self.committed_turns.push(turn);
         self.invalidate_committed_render_cache();
-        self.transcript_scroll = 0;
+        self.reset_transcript_scroll_if_following_tail();
         self.clear_active_live_sections();
     }
 
