@@ -1,9 +1,10 @@
+mod codex_tool_schema;
 mod ollama;
 mod openai_compatible;
 mod shared;
-mod types;
 #[cfg(test)]
 mod tests;
+mod types;
 
 pub use self::ollama::OllamaBackend;
 pub use self::openai_compatible::{CodexBackend, GeminiBackend, OpenAiCompatibleBackend};

@@ -8,8 +8,8 @@ use super::ollama::{
     suggest_ollama_num_ctx, to_ollama_messages,
 };
 use super::openai_compatible::{
-    apply_codex_stream_event, build_codex_responses_request, parse_codex_response,
-    to_codex_input_items, to_openai_messages,
+    apply_codex_stream_event, build_codex_responses_request, codex_tool_value_from_schema,
+    parse_codex_response, to_codex_input_items, to_openai_messages,
 };
 use super::shared::{
     extract_message_text, model_context_budget, parse_tool_arguments, should_bypass_proxy,
@@ -162,13 +162,47 @@ fn codex_responses_request_includes_reasoning_effort_when_selected() {
         ],
         &[],
         Some("high"),
-    );
+    )
+    .unwrap();
 
     assert_eq!(request["model"], "gpt-5.4");
     assert_eq!(request["stream"], true);
     assert_eq!(request["reasoning"]["effort"], "high");
     assert_eq!(request["instructions"], "Follow project instructions.");
     assert_eq!(request["input"][0]["role"], "user");
+}
+
+#[test]
+fn codex_tool_schema_uses_codex_tool_definition_export() {
+    let tool = codex_tool_value_from_schema(&json!({
+        "name": "bash",
+        "description": "Run shell command in sandbox",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "command": { "type": "string" },
+                "program": { "type": "string" }
+            },
+            "anyOf": [
+                { "required": ["command"] },
+                { "required": ["program"] }
+            ]
+        }
+    }))
+    .unwrap();
+
+    assert_eq!(tool["type"], "function");
+    assert_eq!(tool["name"], "bash");
+    assert_eq!(tool["parameters"]["type"], "object");
+    assert!(tool["parameters"].get("anyOf").is_none());
+    assert_eq!(
+        tool["parameters"]["properties"]["command"]["type"],
+        "string"
+    );
+    assert_eq!(
+        tool["parameters"]["properties"]["program"]["type"],
+        "string"
+    );
 }
 
 #[test]

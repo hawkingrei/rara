@@ -10,6 +10,9 @@ use crate::agent::Message;
 use crate::llm::{ContentBlock, LlmResponse, TokenUsage};
 use crate::redaction::{redact_secrets, sanitize_url_for_display};
 
+use super::codex_tool_schema::{
+    parse_tool_input_schema, tool_definition_to_responses_api_tool, ToolDefinition,
+};
 use super::shared::{
     collect_assistant_content, extract_message_text, extract_single_tool_result,
     http_client_for_target, model_context_budget, parse_tool_arguments,
@@ -339,11 +342,11 @@ pub(super) fn build_codex_responses_request(
     messages: &[Message],
     tools: &[Value],
     reasoning_effort: Option<&str>,
-) -> Value {
+) -> Result<Value> {
     let mut body = json!({
         "model": model,
         "input": to_codex_input_items(messages),
-        "tools": to_codex_tools(tools),
+        "tools": to_codex_tools(tools)?,
         "tool_choice": "auto",
         "parallel_tool_calls": true,
         "store": false,
@@ -359,7 +362,7 @@ pub(super) fn build_codex_responses_request(
     {
         body["reasoning"] = json!({ "effort": reasoning_effort });
     }
-    body
+    Ok(body)
 }
 
 impl CodexBackend {
@@ -374,7 +377,7 @@ impl CodexBackend {
             messages,
             tools,
             self.reasoning_effort.as_deref(),
-        );
+        )?;
         let responses_url = self.endpoint_url("responses");
         let mut request = self.client.post(&responses_url);
         for (name, value) in &codex_default_headers() {
@@ -490,18 +493,23 @@ pub(super) fn apply_codex_stream_event(
     }
 }
 
-fn to_codex_tools(tools: &[Value]) -> Vec<Value> {
-    tools
-        .iter()
-        .map(|tool| {
-            json!({
-                "type": "function",
-                "name": tool["name"],
-                "description": tool["description"],
-                "parameters": tool["input_schema"],
-            })
-        })
-        .collect()
+fn to_codex_tools(tools: &[Value]) -> Result<Vec<Value>> {
+    tools.iter().map(codex_tool_value_from_schema).collect()
+}
+
+pub(super) fn codex_tool_value_from_schema(tool: &Value) -> Result<Value> {
+    let tool_name = tool["name"].as_str().unwrap_or("unknown");
+    let input_schema = parse_tool_input_schema(&tool["input_schema"])
+        .map_err(|error| anyhow!("Failed to parse Codex tool schema for '{tool_name}': {error}"))?;
+    let responses_tool = tool_definition_to_responses_api_tool(ToolDefinition {
+        name: tool_name.to_string(),
+        description: tool["description"].as_str().unwrap_or_default().to_string(),
+        input_schema,
+        output_schema: None,
+        defer_loading: false,
+    });
+    serde_json::to_value(responses_tool)
+        .map_err(|error| anyhow!("Failed to serialize Codex tool schema '{tool_name}': {error}"))
 }
 
 pub(super) fn to_codex_input_items(messages: &[Message]) -> Vec<Value> {
