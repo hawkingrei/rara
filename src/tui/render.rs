@@ -51,6 +51,7 @@ pub fn render(f: &mut Frame, app: &TuiApp) {
 
 fn render_transcript(f: &mut Frame, app: &TuiApp, area: Rect) {
     let transcript_lines = renderable_transcript_lines(app, area.width);
+    let transcript_line_count = transcript_lines.len();
     if !app.has_any_transcript() && transcript_lines.is_empty() {
         if app.startup_card_inserted {
             f.render_widget(Paragraph::new(Vec::<Line<'static>>::new()), area);
@@ -92,15 +93,35 @@ fn render_transcript(f: &mut Frame, app: &TuiApp, area: Rect) {
     f.render_widget(
         Paragraph::new(transcript_lines)
             .wrap(Wrap { trim: false })
-            .scroll((app.transcript_scroll as u16, 0)),
+            .scroll((transcript_scroll_offset(app, area.height, transcript_line_count), 0)),
         area,
     );
 }
 
 fn renderable_transcript_lines(app: &TuiApp, width: u16) -> Vec<Line<'static>> {
+    let mut lines = committed_transcript_lines(app, width);
+
+    let mut active_lines = active_turn_cell(app).display_lines(width);
+    if !active_lines.is_empty() {
+        if !lines.is_empty() {
+            lines.push(Line::from(""));
+        }
+        lines.append(&mut active_lines);
+    }
+
+    lines
+}
+
+fn committed_transcript_lines(app: &TuiApp, width: u16) -> Vec<Line<'static>> {
+    {
+        let cache = app.committed_render_cache.borrow();
+        if cache.generation == app.committed_render_generation && cache.width == width {
+            return cache.lines.clone();
+        }
+    }
+
     let cwd = (!app.snapshot.cwd.is_empty()).then(|| Path::new(app.snapshot.cwd.as_str()));
     let mut lines = Vec::new();
-
     for turn in &app.committed_turns {
         let mut turn_lines = committed_turn_lines(turn.entries.as_slice(), cwd, width);
         if turn_lines.is_empty() {
@@ -112,15 +133,17 @@ fn renderable_transcript_lines(app: &TuiApp, width: u16) -> Vec<Line<'static>> {
         lines.append(&mut turn_lines);
     }
 
-    let mut active_lines = active_turn_cell(app).display_lines(width);
-    if !active_lines.is_empty() {
-        if !lines.is_empty() {
-            lines.push(Line::from(""));
-        }
-        lines.append(&mut active_lines);
-    }
-
+    let mut cache = app.committed_render_cache.borrow_mut();
+    cache.generation = app.committed_render_generation;
+    cache.width = width;
+    cache.lines = lines.clone();
     lines
+}
+
+fn transcript_scroll_offset(app: &TuiApp, viewport_height: u16, transcript_line_count: usize) -> u16 {
+    let max_offset = transcript_line_count.saturating_sub(viewport_height as usize);
+    let top_offset = max_offset.saturating_sub(app.transcript_scroll);
+    top_offset.min(u16::MAX as usize) as u16
 }
 
 pub fn committed_turn_cell<'a>(
@@ -1578,7 +1601,7 @@ mod tests {
     use super::cells::HistoryCell;
     use super::{
         committed_turn_cell, current_turn_tool_summary, desired_viewport_height,
-        renderable_transcript_lines,
+        renderable_transcript_lines, transcript_scroll_offset,
     };
 
     #[test]
@@ -1672,5 +1695,57 @@ mod tests {
         assert!(rendered.contains("You: Earlier prompt"));
         assert!(rendered.contains("Committed answer"));
         assert!(rendered.contains("You: Current prompt"));
+    }
+
+    #[test]
+    fn transcript_scroll_offset_keeps_zero_sticky_to_bottom() {
+        let temp = tempdir().expect("tempdir");
+        let mut app = TuiApp::new(ConfigManager {
+            path: temp.path().join("config.json"),
+        })
+        .expect("build tui app");
+        app.transcript_scroll = 0;
+
+        assert_eq!(transcript_scroll_offset(&app, 3, 10), 7);
+
+        app.scroll_transcript(-2);
+        assert_eq!(transcript_scroll_offset(&app, 3, 10), 5);
+    }
+
+    #[test]
+    fn renderable_transcript_lines_cache_is_invalidated_when_committed_turns_change() {
+        let temp = tempdir().expect("tempdir");
+        let mut app = TuiApp::new(ConfigManager {
+            path: temp.path().join("config.json"),
+        })
+        .expect("build tui app");
+        app.restore_committed_turns(vec![TranscriptTurn {
+            entries: vec![TranscriptEntry {
+                role: "Agent".into(),
+                message: "First answer".into(),
+            }],
+        }]);
+
+        let first = renderable_transcript_lines(&app, 100)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(first.contains("First answer"));
+
+        app.restore_committed_turns(vec![TranscriptTurn {
+            entries: vec![TranscriptEntry {
+                role: "Agent".into(),
+                message: "Second answer".into(),
+            }],
+        }]);
+
+        let second = renderable_transcript_lines(&app, 100)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(!second.contains("First answer"));
+        assert!(second.contains("Second answer"));
     }
 }

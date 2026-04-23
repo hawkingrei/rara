@@ -2,6 +2,7 @@ mod state_presets;
 
 use ratatui::text::Line;
 use serde_json::json;
+use std::cell::RefCell;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
@@ -287,6 +288,13 @@ pub struct TranscriptTurn {
     pub entries: Vec<TranscriptEntry>,
 }
 
+#[derive(Default)]
+pub(crate) struct CommittedTranscriptRenderCache {
+    pub generation: u64,
+    pub width: u16,
+    pub lines: Vec<Line<'static>>,
+}
+
 pub struct AgentMarkdownStreamState {
     raw_text: String,
     collector: MarkdownStreamCollector,
@@ -351,6 +359,8 @@ pub struct TuiApp {
     pub recent_commands: Vec<String>,
     pub recent_sessions: Vec<PersistedSessionSummary>,
     pub resume_picker_idx: usize,
+    pub committed_render_generation: u64,
+    pub committed_render_cache: RefCell<CommittedTranscriptRenderCache>,
     pub transcript_scroll: usize,
     pub agent_markdown_stream: Option<AgentMarkdownStreamState>,
     pub active_live: ActiveLiveSections,
@@ -471,6 +481,8 @@ impl TuiApp {
             recent_commands: Vec::new(),
             recent_sessions: Vec::new(),
             resume_picker_idx: 0,
+            committed_render_generation: 0,
+            committed_render_cache: RefCell::new(CommittedTranscriptRenderCache::default()),
             transcript_scroll: 0,
             agent_markdown_stream: None,
             active_live: ActiveLiveSections::default(),
@@ -919,6 +931,7 @@ impl TuiApp {
         self.committed_turns.clear();
         self.active_turn.entries.clear();
         self.inserted_turns = 0;
+        self.invalidate_committed_render_cache();
         self.transcript_scroll = 0;
         self.agent_markdown_stream = None;
         self.clear_active_live_sections();
@@ -1392,6 +1405,7 @@ impl TuiApp {
         let ordinal = self.committed_turns.len();
         self.persist_turn(ordinal, &turn);
         self.committed_turns.push(turn);
+        self.invalidate_committed_render_cache();
         self.transcript_scroll = 0;
         self.clear_active_live_sections();
     }
@@ -1404,9 +1418,15 @@ impl TuiApp {
         self.committed_turns = turns;
         self.active_turn.entries.clear();
         self.inserted_turns = 0;
+        self.invalidate_committed_render_cache();
         self.transcript_scroll = 0;
         self.agent_markdown_stream = None;
         self.clear_active_live_sections();
+    }
+
+    pub(crate) fn invalidate_committed_render_cache(&mut self) {
+        self.committed_render_generation = self.committed_render_generation.wrapping_add(1);
+        *self.committed_render_cache.borrow_mut() = CommittedTranscriptRenderCache::default();
     }
 
     pub fn clear_active_live_sections(&mut self) {
