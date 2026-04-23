@@ -1061,6 +1061,7 @@ mod tests {
             path: temp.path().join("config.json"),
         })
         .expect("build tui app");
+        app.agent_execution_mode = crate::agent::AgentExecutionMode::Plan;
         app.runtime_phase = RuntimePhase::RunningTool;
         app.runtime_phase_detail = Some("waiting for tool output".into());
         app.active_turn = TranscriptTurn {
@@ -1220,6 +1221,7 @@ mod tests {
             path: temp.path().join("config.json"),
         })
         .expect("build tui app");
+        app.agent_execution_mode = crate::agent::AgentExecutionMode::Plan;
         app.runtime_phase = RuntimePhase::ProcessingResponse;
         app.runtime_phase_detail = Some("waiting for model response · 3s elapsed".into());
         app.active_turn = TranscriptTurn {
@@ -1676,6 +1678,7 @@ mod tests {
             path: temp.path().join("config.json"),
         })
         .expect("build tui app");
+        app.agent_execution_mode = crate::agent::AgentExecutionMode::Plan;
         app.active_turn = TranscriptTurn {
             entries: vec![TranscriptEntry {
                 role: "You".into(),
@@ -1715,6 +1718,7 @@ mod tests {
             path: temp.path().join("config.json"),
         })
         .expect("build tui app");
+        app.agent_execution_mode = crate::agent::AgentExecutionMode::Plan;
         app.active_turn = TranscriptTurn {
             entries: vec![TranscriptEntry {
                 role: "You".into(),

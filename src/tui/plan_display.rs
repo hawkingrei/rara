@@ -55,7 +55,10 @@ pub(crate) fn should_show_updated_plan(app: &TuiApp) -> bool {
         return false;
     }
 
-    app.agent_execution_mode_label() == "plan" || app.has_pending_plan_approval()
+    matches!(
+        app.agent_execution_mode,
+        crate::agent::AgentExecutionMode::Plan
+    ) || app.has_pending_plan_approval()
 }
 
 pub(crate) fn updated_plan_text(steps: &[(String, String)], explanation: Option<&str>) -> String {
