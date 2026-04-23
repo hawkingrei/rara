@@ -491,7 +491,7 @@ pub(super) fn apply_codex_stream_event(
             }
             Ok(false)
         }
-        Some("response.output_item.done") => {
+        Some("response.output_item.done") | Some("conversation.item.done") => {
             if let Some(item) = payload.get("item") {
                 output_items.push(item.clone());
             }
