@@ -214,6 +214,7 @@ fn codex_responses_tools_use_upstream_schema_defaults_and_chatgpt_normalization(
 fn codex_stream_events_collect_output_items_usage_and_text_deltas() {
     let mut output_items = Vec::new();
     let mut usage = None;
+    let mut streamed_text = String::new();
     let mut deltas = Vec::new();
 
     let mut on_delta = |delta: String| deltas.push(delta);
@@ -222,6 +223,7 @@ fn codex_stream_events_collect_output_items_usage_and_text_deltas() {
         &json!({"type":"response.output_text.delta","delta":"Hello"}),
         &mut output_items,
         &mut usage,
+        &mut streamed_text,
         &mut on_delta_option,
     )
     .unwrap());
@@ -237,6 +239,7 @@ fn codex_stream_events_collect_output_items_usage_and_text_deltas() {
         }),
         &mut output_items,
         &mut usage,
+        &mut streamed_text,
         &mut no_delta_callback,
     )
     .unwrap());
@@ -251,15 +254,37 @@ fn codex_stream_events_collect_output_items_usage_and_text_deltas() {
         }),
         &mut output_items,
         &mut usage,
+        &mut streamed_text,
         &mut no_delta_callback,
     )
     .unwrap());
 
     assert_eq!(deltas, vec!["Hello".to_string()]);
+    assert_eq!(streamed_text, "Hello");
     assert_eq!(output_items.len(), 1);
     assert_eq!(output_items[0]["type"], "message");
     assert_eq!(usage.as_ref().unwrap()["input_tokens"], 11);
     assert_eq!(usage.as_ref().unwrap()["output_tokens"], 7);
+}
+
+#[test]
+fn codex_stream_delta_is_used_when_done_item_has_no_text() {
+    let response = parse_codex_response(&super::openai_compatible::build_codex_stream_response(
+        vec![json!({
+            "type": "reasoning",
+            "summary": []
+        })],
+        None,
+        "Hello from stream".to_string(),
+        "completed",
+    ))
+    .unwrap();
+
+    assert_eq!(response.content.len(), 1);
+    match &response.content[0] {
+        ContentBlock::Text { text } => assert_eq!(text, "Hello from stream"),
+        other => panic!("expected text block, got {other:?}"),
+    }
 }
 
 #[test]
