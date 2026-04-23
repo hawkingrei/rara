@@ -95,6 +95,19 @@ fn parse_repo_slug_supports_common_github_remote_forms() {
 }
 
 #[test]
+fn new_does_not_detect_repo_context_synchronously() {
+    let dir = tempdir().expect("tempdir");
+    let cm = ConfigManager {
+        path: dir.path().join("config.json"),
+    };
+    let app = TuiApp::new(cm).expect("app");
+
+    assert!(app.repo_context_task.is_none());
+    assert!(app.repo_slug.is_none());
+    assert!(app.current_pr_url.is_none());
+}
+
+#[test]
 fn push_entry_keeps_manual_transcript_scroll_position() {
     let dir = tempdir().expect("tempdir");
     let cm = ConfigManager {

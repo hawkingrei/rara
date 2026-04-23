@@ -348,6 +348,7 @@ pub struct TuiApp {
     pub state_db: Option<Arc<StateDb>>,
     pub state_db_status: Option<String>,
     pub running_task: Option<RunningTask>,
+    pub repo_context_task: Option<JoinHandle<(Option<String>, Option<String>)>>,
     pub repo_slug: Option<String>,
     pub current_pr_url: Option<String>,
 }

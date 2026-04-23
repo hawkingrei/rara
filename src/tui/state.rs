@@ -110,8 +110,6 @@ impl TuiApp {
 
     pub fn new(cm: ConfigManager) -> anyhow::Result<Self> {
         let cfg = cm.load()?;
-        let repo_slug = detect_repo_slug();
-        let current_pr_url = detect_current_pr_url();
         let overlay = if !cfg.has_api_key() && super::provider_requires_api_key(&cfg.provider) {
             if cfg.provider == "codex" {
                 Some(Overlay::AuthModePicker)
@@ -164,9 +162,37 @@ impl TuiApp {
             state_db: None,
             state_db_status: None,
             running_task: None,
-            repo_slug,
-            current_pr_url,
+            repo_context_task: None,
+            repo_slug: None,
+            current_pr_url: None,
         })
+    }
+
+    pub fn start_repo_context_detection(&mut self) {
+        if self.repo_context_task.is_some() {
+            return;
+        }
+
+        self.repo_context_task = Some(tokio::task::spawn_blocking(detect_repo_context));
+    }
+
+    pub async fn finish_repo_context_task_if_ready(&mut self) {
+        let should_finish = self
+            .repo_context_task
+            .as_ref()
+            .is_some_and(tokio::task::JoinHandle::is_finished);
+        if !should_finish {
+            return;
+        }
+
+        let handle = self
+            .repo_context_task
+            .take()
+            .expect("repo context task should exist");
+        if let Ok((repo_slug, current_pr_url)) = handle.await {
+            self.repo_slug = repo_slug;
+            self.current_pr_url = current_pr_url;
+        }
     }
 
     pub fn is_busy(&self) -> bool {
@@ -823,6 +849,10 @@ fn detect_current_pr_url() -> Option<String> {
 fn detect_repo_slug() -> Option<String> {
     let remote = command_stdout("git", &["remote", "get-url", "origin"])?;
     parse_repo_slug(remote.as_str())
+}
+
+fn detect_repo_context() -> (Option<String>, Option<String>) {
+    (detect_repo_slug(), detect_current_pr_url())
 }
 
 pub(crate) fn parse_repo_slug(remote: &str) -> Option<String> {
