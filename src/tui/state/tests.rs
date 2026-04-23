@@ -1,7 +1,7 @@
 use super::{
-    input_requests_command_palette, state_db_status_error, ActivePendingInteractionKind,
-    InteractionKind, Overlay, PendingInteractionSnapshot, ProviderFamily, RuntimeSnapshot,
-    TranscriptEntry, TranscriptTurn, TuiApp,
+    input_requests_command_palette, parse_repo_slug, state_db_status_error,
+    ActivePendingInteractionKind, InteractionKind, Overlay, PendingInteractionSnapshot,
+    ProviderFamily, RuntimeSnapshot, TranscriptEntry, TranscriptTurn, TuiApp,
 };
 use crate::codex_model_catalog::{CodexModelOption, CodexReasoningOption};
 use crate::config::{ConfigManager, RaraConfig};
@@ -76,6 +76,58 @@ fn prioritizes_active_pending_interaction_in_ui_order() {
         .expect("pending interaction");
     assert_eq!(active.kind, ActivePendingInteractionKind::PlanApproval);
     assert_eq!(active._snapshot.title, "Plan Ready");
+}
+
+#[test]
+fn parse_repo_slug_supports_common_github_remote_forms() {
+    assert_eq!(
+        parse_repo_slug("git@github.com:hawkingrei/rara.git").as_deref(),
+        Some("hawkingrei/rara")
+    );
+    assert_eq!(
+        parse_repo_slug("https://github.com/hawkingrei/rara.git").as_deref(),
+        Some("hawkingrei/rara")
+    );
+    assert_eq!(
+        parse_repo_slug("ssh://git@github.com/hawkingrei/rara.git").as_deref(),
+        Some("hawkingrei/rara")
+    );
+}
+
+#[test]
+fn push_entry_keeps_manual_transcript_scroll_position() {
+    let dir = tempdir().expect("tempdir");
+    let cm = ConfigManager {
+        path: dir.path().join("config.json"),
+    };
+    let mut app = TuiApp::new(cm).expect("app");
+    app.transcript_scroll = 6;
+
+    app.push_entry("System", "background update");
+
+    assert_eq!(app.transcript_scroll, 6);
+}
+
+#[test]
+fn finalize_agent_stream_keeps_manual_transcript_scroll_position() {
+    let dir = tempdir().expect("tempdir");
+    let cm = ConfigManager {
+        path: dir.path().join("config.json"),
+    };
+    let mut app = TuiApp::new(cm).expect("app");
+    app.transcript_scroll = 4;
+    app.active_turn.entries.push(TranscriptEntry {
+        role: "Agent".into(),
+        message: "draft".into(),
+    });
+
+    app.finalize_agent_stream(Some("final answer".into()));
+
+    assert_eq!(app.transcript_scroll, 4);
+    assert_eq!(
+        app.active_turn.entries.last().map(|entry| entry.message.as_str()),
+        Some("final answer")
+    );
 }
 
 #[test]

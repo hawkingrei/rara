@@ -2,6 +2,7 @@ mod bottom_pane;
 pub(crate) mod cells;
 mod history_pipeline;
 mod overlay;
+mod viewport;
 #[cfg(test)]
 mod tests;
 
@@ -19,6 +20,7 @@ use self::bottom_pane::render_bottom_pane;
 pub(crate) use self::cells::{ActiveCell, HistoryCell};
 use self::cells::{ActiveTurnCell, CommittedTurnCell, StartupCardCell};
 use self::overlay::render_overlay;
+use self::viewport::TranscriptViewport;
 use super::custom_terminal::Frame;
 use super::line_utils::prefix_lines;
 use super::state::{TranscriptEntry, TuiApp};
@@ -42,9 +44,8 @@ pub fn render(f: &mut Frame, app: &TuiApp) {
 }
 
 fn render_transcript(f: &mut Frame, app: &TuiApp, area: Rect) {
-    let transcript_lines = renderable_transcript_lines(app, area.width);
-    let transcript_visual_row_count = transcript_visual_row_count(&transcript_lines, area.width);
-    if !app.has_any_transcript() && transcript_lines.is_empty() {
+    let viewport = transcript_viewport(app, area.width, area.height);
+    if !app.has_any_transcript() && viewport.lines.is_empty() {
         if app.startup_card_inserted {
             f.render_widget(Paragraph::new(Vec::<Line<'static>>::new()), area);
             return;
@@ -82,15 +83,18 @@ fn render_transcript(f: &mut Frame, app: &TuiApp, area: Rect) {
         return;
     }
 
-    f.render_widget(
-        Paragraph::new(transcript_lines)
-            .wrap(Wrap { trim: false })
-            .scroll((
-                transcript_scroll_offset(app, area.height, transcript_visual_row_count),
-                0,
-            )),
-        area,
-    );
+    viewport.render(f, area);
+}
+
+pub(crate) fn transcript_viewport(
+    app: &TuiApp,
+    width: u16,
+    viewport_height: u16,
+) -> TranscriptViewport {
+    let lines = renderable_transcript_lines(app, width);
+    let visual_row_count = transcript_visual_row_count(&lines, width);
+    let scroll_offset = transcript_scroll_offset(app, viewport_height, visual_row_count);
+    TranscriptViewport::new(lines, scroll_offset)
 }
 
 fn renderable_transcript_lines(app: &TuiApp, width: u16) -> Vec<Line<'static>> {
@@ -210,19 +214,15 @@ pub(crate) fn current_turn_exploration_summary_from_entries(
             continue;
         }
         if let Some(action) = exploration_action_label(&entry.message) {
-            actions.push(action);
+            if !actions.iter().any(|existing| existing == &action) {
+                actions.push(action);
+            }
         }
     }
     if actions.is_empty() {
         return None;
     }
-
-    let lines = actions
-        .into_iter()
-        .map(|action| format!("└ {action}"))
-        .collect::<Vec<_>>();
-
-    Some(lines.join("\n"))
+    Some(compact_summary_lines(actions.as_slice(), 4, "more file(s) inspected"))
 }
 
 pub(crate) fn current_turn_tool_summary(
@@ -251,11 +251,64 @@ pub(crate) fn current_turn_tool_summary(
     Some(lines.join("\n"))
 }
 
+pub(crate) fn compact_summary_lines(
+    items: &[String],
+    max_visible: usize,
+    more_label: &str,
+) -> String {
+    if items.is_empty() {
+        return String::new();
+    }
+
+    let visible_count = items.len().min(max_visible);
+    let hidden_count = items.len().saturating_sub(visible_count);
+    let start = items.len().saturating_sub(visible_count);
+    let mut lines = items[start..]
+        .iter()
+        .map(|item| format!("└ {item}"))
+        .collect::<Vec<_>>();
+
+    if hidden_count > 0 {
+        lines.insert(0, format!("└ ... {hidden_count} {more_label}"));
+    }
+
+    lines.join("\n")
+}
+
+pub(crate) fn compact_summary_text(
+    summary: &str,
+    max_visible: usize,
+    more_label: &str,
+) -> String {
+    let items = summary
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(|line| {
+            line.trim_start_matches("└")
+                .trim_start_matches("•")
+                .trim()
+                .to_string()
+        })
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>();
+
+    if items.is_empty() {
+        return summary.trim().to_string();
+    }
+
+    compact_summary_lines(items.as_slice(), max_visible, more_label)
+}
+
 pub(crate) fn prefixed_message_lines(
     role: &str,
     message: &str,
     max_lines: usize,
 ) -> Vec<Line<'static>> {
+    if role == "You" {
+        return user_message_lines(message, max_lines);
+    }
+
     let message_lines = message.lines().collect::<Vec<_>>();
     if message_lines.is_empty() {
         return vec![Line::from(format!("{role}:"))];
@@ -283,16 +336,80 @@ pub(crate) fn prefixed_message_lines(
     lines
 }
 
+fn user_message_lines(message: &str, max_lines: usize) -> Vec<Line<'static>> {
+    let message_lines = message.lines().collect::<Vec<_>>();
+    if message_lines.is_empty() {
+        return vec![Line::from("›")];
+    }
+
+    let capped = if max_lines == usize::MAX {
+        message_lines.len()
+    } else {
+        max_lines
+    };
+
+    let mut lines = Vec::new();
+    if let Some(first) = message_lines.first() {
+        lines.push(Line::from(format!("› {first}")));
+    }
+    for line in message_lines.iter().skip(1).take(capped.saturating_sub(1)) {
+        lines.push(Line::from(format!("  {line}")));
+    }
+    if message_lines.len() > capped {
+        lines.push(Line::from(Span::styled(
+            format!("  ... {} more line(s)", message_lines.len() - capped),
+            Style::default().fg(Color::DarkGray),
+        )));
+    }
+    lines
+}
+
 pub(crate) fn formatted_message_lines(
     role: &str,
     message: &str,
     max_lines: usize,
     cwd: Option<&Path>,
 ) -> Vec<Line<'static>> {
-    if matches!(role, "Agent" | "System") {
+    if role == "Agent" {
+        return bulleted_markdown_message_lines(message, max_lines, cwd);
+    }
+    if role == "System" {
         return markdown_message_lines(role, message, max_lines, cwd);
     }
     prefixed_message_lines(role, message, max_lines)
+}
+
+fn bulleted_markdown_message_lines(
+    message: &str,
+    max_lines: usize,
+    cwd: Option<&Path>,
+) -> Vec<Line<'static>> {
+    let mut rendered = Vec::new();
+    super::markdown::append_markdown(message, None, cwd, &mut rendered);
+    let rendered_len = rendered.len();
+
+    if rendered.is_empty() {
+        return vec![Line::from("•")];
+    }
+
+    let capped = if max_lines == usize::MAX {
+        rendered.len()
+    } else {
+        max_lines.min(rendered.len())
+    };
+
+    let mut lines = prefix_lines(
+        rendered.into_iter().take(capped).collect(),
+        Span::styled("• ", Style::default().add_modifier(Modifier::DIM)),
+        Span::raw("  "),
+    );
+    if capped < rendered_len {
+        lines.push(Line::from(Span::styled(
+            format!("  ... {} more line(s)", rendered_len - capped),
+            Style::default().fg(Color::DarkGray),
+        )));
+    }
+    lines
 }
 
 fn markdown_message_lines(

@@ -240,9 +240,9 @@ fn render_composer(f: &mut Frame, app: &TuiApp, area: Rect) -> Option<(u16, u16)
             .wrap(Wrap { trim: false }),
         chunks[0],
     );
-    let hint = composer_hint(app);
+    let hint = composer_hint_line(app);
     f.render_widget(
-        Paragraph::new(Span::styled(hint, Style::default().fg(Color::Gray)))
+        Paragraph::new(hint)
             .alignment(Alignment::Left),
         chunks[1],
     );
@@ -320,6 +320,15 @@ fn composer_hint(app: &TuiApp) -> &'static str {
     } else {
         "/compact summarize history  /plan enter planning mode  /quit exit"
     }
+}
+
+fn composer_hint_line(app: &TuiApp) -> Line<'static> {
+    let mut spans = vec![Span::styled(composer_hint(app), Style::default().fg(Color::Gray))];
+    if let Some(repo_context) = app.repo_context_hint() {
+        spans.push(Span::raw("  "));
+        spans.push(Span::styled(repo_context, Style::default().fg(Color::DarkGray)));
+    }
+    Line::from(spans)
 }
 
 fn render_footer(f: &mut Frame, app: &TuiApp, area: Rect) {
@@ -435,7 +444,8 @@ mod tests {
     };
 
     use super::{
-        activity_status_line, composer_hint, footer_summary_text, queued_follow_up_preview_lines,
+        activity_status_line, composer_hint, composer_hint_line, footer_summary_text,
+        queued_follow_up_preview_lines,
     };
 
     #[test]
@@ -563,5 +573,22 @@ mod tests {
             composer_hint(&app),
             "pending follow-up  will submit after next tool call"
         );
+    }
+
+    #[test]
+    fn composer_hint_line_includes_repo_context_when_available() {
+        let temp = tempdir().unwrap();
+        let mut app = TuiApp::new(ConfigManager {
+            path: temp.path().join("config.json"),
+        })
+        .expect("build tui app");
+        app.repo_slug = Some("hawkingrei/rara".into());
+        app.current_pr_url = Some("https://github.com/hawkingrei/rara/pull/46".into());
+        app.snapshot.branch = "feat/test".into();
+
+        let rendered = composer_hint_line(&app).to_string();
+        assert!(rendered.contains("repo: hawkingrei/rara"));
+        assert!(rendered.contains("branch: feat/test"));
+        assert!(rendered.contains("PR: https://github.com/hawkingrei/rara/pull/46"));
     }
 }

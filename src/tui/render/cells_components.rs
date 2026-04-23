@@ -397,10 +397,9 @@ impl HistoryCell for RespondingCell<'_> {
                 message,
                 max_lines,
             } => prefixed_message_lines(role, message, *max_lines),
-            RespondingCellContent::Working(detail) => vec![
-                Line::from(section_span("Working", Color::Yellow)),
-                Line::from(format!("  {detail}")),
-            ],
+            RespondingCellContent::Working(detail) => {
+                vec![Line::from("Responding"), Line::from(format!("  {detail}"))]
+            }
         }
     }
 }

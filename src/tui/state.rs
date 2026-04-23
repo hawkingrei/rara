@@ -6,6 +6,7 @@ mod transcript;
 mod types;
 
 use std::cell::RefCell;
+use std::process::Command;
 
 pub use self::state_presets::{
     current_model_presets, selected_preset_idx_for_config, selected_provider_family_idx_for_config,
@@ -109,6 +110,8 @@ impl TuiApp {
 
     pub fn new(cm: ConfigManager) -> anyhow::Result<Self> {
         let cfg = cm.load()?;
+        let repo_slug = detect_repo_slug();
+        let current_pr_url = detect_current_pr_url();
         let overlay = if !cfg.has_api_key() && super::provider_requires_api_key(&cfg.provider) {
             if cfg.provider == "codex" {
                 Some(Overlay::AuthModePicker)
@@ -161,6 +164,8 @@ impl TuiApp {
             state_db: None,
             state_db_status: None,
             running_task: None,
+            repo_slug,
+            current_pr_url,
         })
     }
 
@@ -170,6 +175,39 @@ impl TuiApp {
 
     pub fn current_model_label(&self) -> &str {
         self.config.model.as_deref().unwrap_or("-")
+    }
+
+    pub fn repo_context_hint(&self) -> Option<String> {
+        let branch = self.snapshot.branch.trim();
+        let mut parts = Vec::new();
+
+        if let Some(repo_slug) = self
+            .repo_slug
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            parts.push(format!("repo: {repo_slug}"));
+        }
+
+        if !branch.is_empty() {
+            parts.push(format!("branch: {branch}"));
+        }
+
+        if let Some(pr_url) = self
+            .current_pr_url
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            parts.push(format!("PR: {pr_url}"));
+        }
+
+        if parts.is_empty() {
+            None
+        } else {
+            Some(parts.join("  "))
+        }
     }
 
     pub fn selected_preset_idx(&self) -> usize {
@@ -762,4 +800,40 @@ impl TuiApp {
         };
     }
 
+}
+
+fn command_stdout(program: &str, args: &[&str]) -> Option<String> {
+    let output = Command::new(program).args(args).output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let stdout = String::from_utf8(output.stdout).ok()?;
+    let trimmed = stdout.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+fn detect_current_pr_url() -> Option<String> {
+    command_stdout("gh", &["pr", "view", "--json", "url", "-q", ".url"])
+}
+
+fn detect_repo_slug() -> Option<String> {
+    let remote = command_stdout("git", &["remote", "get-url", "origin"])?;
+    parse_repo_slug(remote.as_str())
+}
+
+pub(crate) fn parse_repo_slug(remote: &str) -> Option<String> {
+    let remote = remote.trim();
+    if remote.is_empty() {
+        return None;
+    }
+
+    let stripped = remote
+        .strip_prefix("git@github.com:")
+        .or_else(|| remote.strip_prefix("https://github.com/"))
+        .or_else(|| remote.strip_prefix("ssh://git@github.com/"))?;
+    Some(stripped.trim_end_matches(".git").to_string())
 }

@@ -4,14 +4,16 @@ use ratatui::text::Line;
 use tempfile::tempdir;
 
 use crate::config::ConfigManager;
-use crate::tui::state::{TranscriptEntry, TranscriptTurn, TuiApp};
+use crate::tui::state::{Overlay, TranscriptEntry, TranscriptTurn, TuiApp};
 
 use super::cells::HistoryCell;
 use super::{
-    committed_turn_cell, current_turn_exploration_summary_from_entries, current_turn_tool_summary,
-    desired_viewport_height, renderable_transcript_lines, transcript_scroll_offset,
+    committed_turn_cell, compact_summary_text, current_turn_exploration_summary_from_entries,
+    current_turn_tool_summary, desired_viewport_height, renderable_transcript_lines,
+    transcript_scroll_offset, transcript_viewport,
     transcript_visual_row_count,
 };
+use super::viewport::TranscriptViewport;
 
 #[test]
 fn committed_turn_does_not_truncate_agent_response() {
@@ -101,9 +103,9 @@ fn renderable_transcript_lines_include_committed_and_active_turns() {
         .collect::<Vec<_>>()
         .join("\n");
 
-    assert!(rendered.contains("You: Earlier prompt"));
+    assert!(rendered.contains("› Earlier prompt"));
     assert!(rendered.contains("Committed answer"));
-    assert!(rendered.contains("You: Current prompt"));
+    assert!(rendered.contains("› Current prompt"));
 }
 
 #[test]
@@ -217,6 +219,124 @@ fn renderable_transcript_lines_cache_is_invalidated_when_committed_turns_change(
 }
 
 #[test]
+fn transcript_viewport_is_independent_from_overlay_state() {
+    let temp = tempdir().expect("tempdir");
+    let mut app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("build tui app");
+    app.committed_turns.push(TranscriptTurn {
+        entries: vec![
+            TranscriptEntry {
+                role: "You".into(),
+                message: "Earlier prompt".into(),
+            },
+            TranscriptEntry {
+                role: "Agent".into(),
+                message: "Committed answer".into(),
+            },
+        ],
+    });
+    app.active_turn.entries.push(TranscriptEntry {
+        role: "You".into(),
+        message: "Current prompt".into(),
+    });
+
+    let base = transcript_viewport(&app, 80, 18);
+    app.overlay = Some(Overlay::Setup);
+    let with_overlay = transcript_viewport(&app, 80, 18);
+
+    let base_rendered = base
+        .lines
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>();
+    let overlay_rendered = with_overlay
+        .lines
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>();
+
+    assert_eq!(base_rendered, overlay_rendered);
+    assert_eq!(base.scroll_offset, with_overlay.scroll_offset);
+}
+
+#[test]
+fn transcript_viewport_keeps_manual_scroll_when_overlay_opens() {
+    let temp = tempdir().expect("tempdir");
+    let mut app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("build tui app");
+    app.committed_turns.push(TranscriptTurn {
+        entries: vec![
+            TranscriptEntry {
+                role: "You".into(),
+                message: "Earlier prompt".into(),
+            },
+            TranscriptEntry {
+                role: "Agent".into(),
+                message: (1..=8)
+                    .map(|idx| format!("Line {idx}"))
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            },
+        ],
+    });
+    app.scroll_transcript(-3);
+
+    let base = transcript_viewport(&app, 60, 8);
+    app.overlay = Some(Overlay::Setup);
+    let with_overlay = transcript_viewport(&app, 60, 8);
+
+    assert_eq!(base.scroll_offset, with_overlay.scroll_offset);
+    assert_eq!(app.transcript_scroll, 3);
+}
+
+#[test]
+fn transcript_viewport_visible_window_keeps_partial_wrapped_line_offset() {
+    let viewport = TranscriptViewport::new(
+        vec![
+            Line::from("• This is a long first line that wraps across rows."),
+            Line::from("  Second line stays visible."),
+        ],
+        1,
+    );
+
+    let (lines, inner_scroll) = viewport.visible_window(12, 3);
+    let rendered = lines
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>();
+
+    assert_eq!(inner_scroll, 1);
+    assert_eq!(rendered.len(), 2);
+    assert!(rendered[0].contains("long first line"));
+}
+
+#[test]
+fn transcript_viewport_visible_window_slices_to_visible_rows() {
+    let viewport = TranscriptViewport::new(
+        vec![
+            Line::from("› First"),
+            Line::from("• Second"),
+            Line::from("  Third"),
+            Line::from("  Fourth"),
+        ],
+        1,
+    );
+
+    let (lines, inner_scroll) = viewport.visible_window(80, 2);
+    let rendered = lines
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>();
+
+    assert_eq!(inner_scroll, 0);
+    assert_eq!(rendered, vec!["• Second", "  Third"]);
+}
+
+#[test]
 fn exploration_summary_only_keeps_read_actions() {
     let entries = vec![
         TranscriptEntry {
@@ -250,4 +370,42 @@ fn exploration_summary_only_keeps_read_actions() {
     assert!(!rendered.contains("Glob src/**/*.rs"));
     assert!(!rendered.contains("Search planning mode src"));
     assert!(!rendered.contains("listing files"));
+}
+
+#[test]
+fn exploration_summary_compacts_long_read_lists() {
+    let entries = (1..=6)
+        .map(|idx| TranscriptEntry {
+            role: "Tool".into(),
+            message: format!("read_file src/module_{idx}.rs"),
+        })
+        .collect::<Vec<_>>();
+    let refs = entries.iter().collect::<Vec<_>>();
+
+    let rendered =
+        current_turn_exploration_summary_from_entries(refs.as_slice(), false, None)
+            .expect("exploration summary");
+    assert!(rendered.contains("... 2 more file(s) inspected"));
+    assert!(!rendered.contains("module_1.rs"));
+    assert!(!rendered.contains("module_2.rs"));
+    assert!(rendered.contains("module_3.rs"));
+    assert!(rendered.contains("module_6.rs"));
+}
+
+#[test]
+fn compact_summary_text_keeps_tail_of_long_explicit_blocks() {
+    let summary = [
+        "└ Read src/a.rs",
+        "└ Read src/b.rs",
+        "└ Read src/c.rs",
+        "└ Read src/d.rs",
+        "└ Read src/e.rs",
+    ]
+    .join("\n");
+
+    let rendered = compact_summary_text(&summary, 4, "more exploration step(s)");
+    assert!(rendered.contains("... 1 more exploration step(s)"));
+    assert!(!rendered.contains("src/a.rs"));
+    assert!(rendered.contains("src/b.rs"));
+    assert!(rendered.contains("src/e.rs"));
 }

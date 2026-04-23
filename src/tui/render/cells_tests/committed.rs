@@ -28,9 +28,9 @@ fn committed_turn_cell_keeps_user_summary_and_agent_sections_in_order() {
         .collect::<Vec<_>>()
         .join("\n");
 
-    let you_idx = rendered.find("You: Review this repo").unwrap();
+    let you_idx = rendered.find("› Review this repo").unwrap();
     let ran_idx = rendered.find(" Ran ").unwrap();
-    let agent_idx = rendered.find("Agent\n  Final recommendation").unwrap();
+    let agent_idx = rendered.find("• Final recommendation").unwrap();
 
     assert!(!rendered.contains(" Explored "));
     assert!(ran_idx < agent_idx);
@@ -61,7 +61,7 @@ fn committed_turn_cell_ignores_routine_system_notices() {
         .collect::<Vec<_>>()
         .join("\n");
 
-    assert!(rendered.contains("Agent\n  Final recommendation"));
+    assert!(rendered.contains("• Final recommendation"));
     assert!(!rendered.contains("System"));
     assert!(!rendered.contains("prompt finished"));
 }
@@ -98,11 +98,11 @@ fn committed_turn_cell_renders_materialized_sidecar_sections() {
         .collect::<Vec<_>>()
         .join("\n");
 
-    let you_idx = rendered.find("You: Review the workspace logic").unwrap();
+    let you_idx = rendered.find("› Review the workspace logic").unwrap();
     let explored_idx = rendered.find(" Explored ").unwrap();
     let planning_idx = rendered.find(" Planned ").unwrap();
     let agent_idx = rendered
-        .find("Agent\n  Here is the final recommendation.")
+        .find("• Here is the final recommendation.")
         .unwrap();
 
     assert!(you_idx < explored_idx);
@@ -146,7 +146,7 @@ fn committed_turn_cell_places_completion_records_before_final_agent_message() {
     let explored_idx = rendered.find(" Explored ").unwrap();
     let approval_idx = rendered.find(" Shell Approval Completed ").unwrap();
     let agent_idx = rendered
-        .find("Agent\n  I approved the one-off shell step")
+        .find("• I approved the one-off shell step")
         .unwrap();
 
     assert!(explored_idx < approval_idx);
@@ -194,7 +194,7 @@ fn committed_turn_cell_orders_completion_records_by_interaction_kind() {
     let planning_question_idx = rendered.find(" Planning Question Answered ").unwrap();
     let generic_question_idx = rendered.find(" Question Answered ").unwrap();
     let agent_idx = rendered
-        .find("Agent\n  Here is the final narrative summary.")
+        .find("• Here is the final narrative summary.")
         .unwrap();
 
     assert!(shell_idx < plan_idx);
