@@ -41,10 +41,24 @@ impl PlanStepKind {
 }
 
 pub(crate) fn status_plan_text(app: &TuiApp) -> String {
+    if !should_show_updated_plan(app) {
+        return "No active structured plan.".to_string();
+    }
     updated_plan_text(
         app.snapshot.plan_steps.as_slice(),
         app.snapshot.plan_explanation.as_deref(),
     )
+}
+
+pub(crate) fn should_show_updated_plan(app: &TuiApp) -> bool {
+    if app.snapshot.plan_steps.is_empty() {
+        return false;
+    }
+
+    matches!(
+        app.agent_execution_mode,
+        crate::agent::AgentExecutionMode::Plan
+    ) || app.has_pending_plan_approval()
 }
 
 pub(crate) fn updated_plan_text(steps: &[(String, String)], explanation: Option<&str>) -> String {
@@ -107,7 +121,12 @@ pub(crate) fn updated_plan_lines(
 
 #[cfg(test)]
 mod tests {
-    use super::{updated_plan_lines, updated_plan_text};
+    use tempfile::tempdir;
+
+    use crate::config::ConfigManager;
+    use crate::tui::state::TuiApp;
+
+    use super::{should_show_updated_plan, updated_plan_lines, updated_plan_text};
 
     #[test]
     fn updated_plan_text_formats_note_and_checklist() {
@@ -147,5 +166,20 @@ mod tests {
         assert!(rendered.contains("Updated Plan"));
         assert!(rendered.contains("Do not claim execution in planning mode."));
         assert!(rendered.contains("□ Capture the next implementation step"));
+    }
+
+    #[test]
+    fn active_plan_visibility_requires_plan_mode_or_approval() {
+        let temp = tempdir().expect("tempdir");
+        let mut app = TuiApp::new(ConfigManager {
+            path: temp.path().join("config.json"),
+        })
+        .expect("build tui app");
+        app.snapshot.plan_steps = vec![("pending".into(), "Inspect core modules".into())];
+
+        assert!(!should_show_updated_plan(&app));
+
+        app.set_pending_plan_approval(true);
+        assert!(should_show_updated_plan(&app));
     }
 }

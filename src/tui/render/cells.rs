@@ -9,7 +9,7 @@ use crate::tui::interaction_text::{
     pending_interaction_card_title, pending_interaction_detail_text,
     pending_interaction_shortcut_text, status_planning_suggestion_text,
 };
-use crate::tui::plan_display::updated_plan_lines;
+use crate::tui::plan_display::{should_show_updated_plan, updated_plan_lines};
 use crate::tui::state::{
     contains_structured_planning_output, ActivePendingInteractionKind, RuntimePhase,
     TranscriptEntry, TuiApp,
@@ -768,7 +768,8 @@ impl ActiveCell for ActiveTurnCell<'_> {
             cells.push(Box::new(UserCell::new(user_message)));
         }
 
-        if self.app.agent_execution_mode_label() == "plan" {
+        if self.app.agent_execution_mode_label() == "plan" && !self.app.has_pending_plan_approval()
+        {
             cells.push(Box::new(PlanModeCell));
         }
 
@@ -793,6 +794,8 @@ impl ActiveCell for ActiveTurnCell<'_> {
                 .map(|note| format!("└ {note}")),
             );
             Some(lines.join("\n"))
+        } else if !turn_live {
+            None
         } else {
             explicit_exploration.or_else(|| {
                 current_turn_exploration_summary(self.app, current_turn.as_slice(), turn_live)
@@ -862,7 +865,7 @@ impl ActiveCell for ActiveTurnCell<'_> {
             cells.push(Box::new(RunningCell::new(summary, running_active)));
         }
 
-        if !self.app.snapshot.plan_steps.is_empty() {
+        if should_show_updated_plan(self.app) {
             cells.push(Box::new(PlanSummaryCell::new(
                 self.app.snapshot.plan_steps.clone(),
                 self.app.snapshot.plan_explanation.clone(),
@@ -1061,6 +1064,7 @@ mod tests {
             path: temp.path().join("config.json"),
         })
         .expect("build tui app");
+        app.agent_execution_mode = crate::agent::AgentExecutionMode::Plan;
         app.runtime_phase = RuntimePhase::RunningTool;
         app.runtime_phase_detail = Some("waiting for tool output".into());
         app.active_turn = TranscriptTurn {
@@ -1220,6 +1224,7 @@ mod tests {
             path: temp.path().join("config.json"),
         })
         .expect("build tui app");
+        app.agent_execution_mode = crate::agent::AgentExecutionMode::Plan;
         app.runtime_phase = RuntimePhase::ProcessingResponse;
         app.runtime_phase_detail = Some("waiting for model response · 3s elapsed".into());
         app.active_turn = TranscriptTurn {
@@ -1676,6 +1681,7 @@ mod tests {
             path: temp.path().join("config.json"),
         })
         .expect("build tui app");
+        app.agent_execution_mode = crate::agent::AgentExecutionMode::Plan;
         app.active_turn = TranscriptTurn {
             entries: vec![TranscriptEntry {
                 role: "You".into(),
@@ -1715,6 +1721,7 @@ mod tests {
             path: temp.path().join("config.json"),
         })
         .expect("build tui app");
+        app.agent_execution_mode = crate::agent::AgentExecutionMode::Plan;
         app.active_turn = TranscriptTurn {
             entries: vec![TranscriptEntry {
                 role: "You".into(),
@@ -1747,6 +1754,65 @@ mod tests {
         assert!(rendered.contains("✔ Inspect the current plan UI"));
         assert!(rendered.contains("□ Introduce a dedicated plan formatter"));
         assert!(rendered.contains("□ Unify status and transcript rendering"));
+    }
+
+    #[test]
+    fn active_turn_cell_hides_stale_updated_plan_after_plan_turn_finishes() {
+        let temp = tempdir().unwrap();
+        let mut app = TuiApp::new(ConfigManager {
+            path: temp.path().join("config.json"),
+        })
+        .expect("build tui app");
+        app.active_turn = TranscriptTurn {
+            entries: vec![TranscriptEntry {
+                role: "You".into(),
+                message: "Implement the approved fix".into(),
+            }],
+        };
+        app.snapshot.plan_steps = vec![("pending".into(), "Inspect the config loading flow".into())];
+        app.snapshot.plan_explanation = Some("This should not keep rendering after plan exit.".into());
+
+        let rendered = ActiveTurnCell::new(&app, Some(Path::new(".")))
+            .display_lines(100)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(!rendered.contains("Updated Plan"));
+        assert!(rendered.contains("You: Implement the approved fix"));
+    }
+
+    #[test]
+    fn active_turn_cell_hides_stale_exploring_after_live_phase_finishes() {
+        let temp = tempdir().unwrap();
+        let mut app = TuiApp::new(ConfigManager {
+            path: temp.path().join("config.json"),
+        })
+        .expect("build tui app");
+        app.runtime_phase = RuntimePhase::Idle;
+        app.active_turn = TranscriptTurn {
+            entries: vec![
+                TranscriptEntry {
+                    role: "You".into(),
+                    message: "Inspect the repository".into(),
+                },
+                TranscriptEntry {
+                    role: "Exploring".into(),
+                    message: "└ Read src/main.rs".into(),
+                },
+            ],
+        };
+
+        let rendered = ActiveTurnCell::new(&app, Some(Path::new(".")))
+            .display_lines(100)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(!rendered.contains(" Exploring "));
+        assert!(rendered.contains("You: Inspect the repository"));
     }
 
     #[test]

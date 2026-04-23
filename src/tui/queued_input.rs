@@ -13,9 +13,9 @@ pub fn queued_follow_up_heading() -> &'static str {
 }
 
 pub fn pending_follow_up_hint() -> &'static str {
-    "queued follow-up pending  will submit after the next tool/result boundary"
+    "pending follow-up  will submit after next tool call"
 }
 
 pub fn queued_follow_up_hint() -> &'static str {
-    "queued follow-up pending  current task will finish before submission"
+    "queued follow-up  will submit after current turn"
 }

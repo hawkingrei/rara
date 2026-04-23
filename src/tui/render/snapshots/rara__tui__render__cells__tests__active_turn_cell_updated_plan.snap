@@ -4,6 +4,8 @@ expression: rendered
 ---
 You: Read the local codebase and propose the next refactor
 
+ Plan Mode 
+
  Exploring 
   └ Read src/oauth.rs
 
