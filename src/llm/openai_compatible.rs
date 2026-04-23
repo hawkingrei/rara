@@ -474,6 +474,33 @@ fn output_has_text_message(output: &[Value]) -> bool {
     })
 }
 
+fn codex_output_item_identity(item: &Value) -> Option<(&'static str, String)> {
+    if let Some(call_id) = item.get("call_id").and_then(Value::as_str) {
+        return Some(("call_id", call_id.to_string()));
+    }
+    if let Some(id) = item.get("id").and_then(Value::as_str) {
+        return Some(("id", id.to_string()));
+    }
+    None
+}
+
+fn upsert_codex_output_item(output_items: &mut Vec<Value>, item: &Value) {
+    let Some(identity) = codex_output_item_identity(item) else {
+        output_items.push(item.clone());
+        return;
+    };
+
+    if let Some(existing) = output_items.iter_mut().find(|existing| {
+        codex_output_item_identity(existing)
+            .map(|existing_identity| existing_identity == identity)
+            .unwrap_or(false)
+    }) {
+        *existing = item.clone();
+    } else {
+        output_items.push(item.clone());
+    }
+}
+
 pub(super) fn apply_codex_stream_event(
     payload: &Value,
     output_items: &mut Vec<Value>,
@@ -491,13 +518,15 @@ pub(super) fn apply_codex_stream_event(
             }
             Ok(false)
         }
-        Some("response.output_item.done") | Some("conversation.item.done") => {
+        Some("response.output_item.added")
+        | Some("response.output_item.done")
+        | Some("conversation.item.done") => {
             if let Some(item) = payload.get("item") {
-                output_items.push(item.clone());
+                upsert_codex_output_item(output_items, item);
             }
             Ok(false)
         }
-        Some("response.completed") => {
+        Some("response.done") | Some("response.completed") => {
             *usage = payload.get("response").and_then(|response| {
                 let usage = response.get("usage")?;
                 (!usage.is_null()).then(|| usage.clone())
