@@ -735,6 +735,7 @@ impl ActiveCell for ActiveTurnCell<'_> {
             .find(|entry| entry.role == "Agent")
             .map(|entry| entry.message.as_str());
         let streaming_agent_lines = self.app.agent_stream_lines();
+        let has_agent_stream = self.app.has_agent_stream();
         let latest_system = current_turn
             .iter()
             .rev()
@@ -914,21 +915,33 @@ impl ActiveCell for ActiveTurnCell<'_> {
 
         let responding_role = if turn_live { "Responding" } else { "Agent" };
 
-        if let Some(stream_lines) = streaming_agent_lines
-            .filter(|_| {
+        if has_agent_stream
+            && !suppress_intermediate_agent
+            && !suppress_planning_chatter
+            && !suppress_structured_plan_response
+        {
+            if let Some(stream_lines) = streaming_agent_lines {
+                cells.push(Box::new(RespondingCell::from_stream(stream_lines)));
+            } else if let Some(agent_message) = latest_agent {
+                cells.push(Box::new(RespondingCell::from_message(
+                    responding_role,
+                    agent_message,
+                    usize::MAX,
+                    self.cwd,
+                )));
+            } else {
+                cells.push(Box::new(RespondingCell::working(
+                    self.app
+                        .runtime_phase_detail
+                        .as_deref()
+                        .unwrap_or("streaming model output"),
+                )));
+            }
+        } else if let Some(agent_message) = latest_agent.filter(|_| {
                 !suppress_intermediate_agent
                     && !suppress_planning_chatter
                     && !suppress_structured_plan_response
-            })
-        {
-            cells.push(Box::new(RespondingCell::from_stream(stream_lines)));
-        } else if let Some(agent_message) =
-            latest_agent.filter(|_| {
-                !suppress_intermediate_agent
-                    && !suppress_planning_chatter
-                    && !suppress_structured_plan_response
-            })
-        {
+            }) {
             cells.push(Box::new(RespondingCell::from_message(
                 responding_role,
                 agent_message,
@@ -1817,6 +1830,39 @@ mod tests {
 
         assert!(rendered.contains(" Plan Decision "));
         assert!(rendered.contains("Approved and started implementation"));
+    }
+
+    #[test]
+    fn active_turn_cell_keeps_responding_section_while_agent_stream_exists() {
+        let temp = tempdir().unwrap();
+        let mut app = TuiApp::new(ConfigManager {
+            path: temp.path().join("config.json"),
+        })
+        .expect("build tui app");
+        app.active_turn = TranscriptTurn {
+            entries: vec![
+                TranscriptEntry {
+                    role: "You".into(),
+                    message: "你好".into(),
+                },
+                TranscriptEntry {
+                    role: "Tool Result".into(),
+                    message: "bash stdout: partial".into(),
+                },
+            ],
+        };
+        app.set_runtime_phase(RuntimePhase::ProcessingResponse, Some("streaming model output".into()));
+        app.append_agent_delta("你好");
+
+        let rendered = ActiveTurnCell::new(&app, Some(Path::new(".")))
+            .display_lines(100)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(rendered.contains("Responding"));
+        assert!(!rendered.contains("Working"));
     }
 
     #[test]
