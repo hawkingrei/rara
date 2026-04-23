@@ -336,4 +336,50 @@ fn finalize_agent_stream_updates_latest_committed_turn_when_final_text_arrives_l
             .map(|entry| entry.message.as_str()),
         Some("你好！有什么我可以帮你的？")
     );
+    assert_eq!(
+        app.committed_turns
+            .last()
+            .map(|turn| turn.entries.iter().filter(|entry| entry.role == "Agent").count()),
+        Some(1)
+    );
+}
+
+#[test]
+fn finalize_agent_stream_replaces_earlier_agent_entries_in_active_turn() {
+    let dir = tempdir().expect("tempdir");
+    let cm = ConfigManager {
+        path: dir.path().join("config.json"),
+    };
+    let mut app = TuiApp::new(cm).expect("app");
+    app.active_turn = TranscriptTurn {
+        entries: vec![
+            TranscriptEntry {
+                role: "You".into(),
+                message: "你好".into(),
+            },
+            TranscriptEntry {
+                role: "Agent".into(),
+                message: "你好".into(),
+            },
+            TranscriptEntry {
+                role: "System".into(),
+                message: "temporary runtime detail".into(),
+            },
+            TranscriptEntry {
+                role: "Agent".into(),
+                message: "你好！".into(),
+            },
+        ],
+    };
+
+    app.finalize_agent_stream(Some("你好！有什么我可以帮你的？".into()));
+
+    let agent_entries = app
+        .active_turn
+        .entries
+        .iter()
+        .filter(|entry| entry.role == "Agent")
+        .collect::<Vec<_>>();
+    assert_eq!(agent_entries.len(), 1);
+    assert_eq!(agent_entries[0].message, "你好！有什么我可以帮你的？");
 }
