@@ -50,8 +50,8 @@ pub fn render(f: &mut Frame, app: &TuiApp) {
 }
 
 fn render_transcript(f: &mut Frame, app: &TuiApp, area: Rect) {
-    let active_lines = active_turn_cell(app).display_lines(area.width);
-    if !app.has_any_transcript() && active_lines.is_empty() {
+    let transcript_lines = renderable_transcript_lines(app, area.width);
+    if !app.has_any_transcript() && transcript_lines.is_empty() {
         if app.startup_card_inserted {
             f.render_widget(Paragraph::new(Vec::<Line<'static>>::new()), area);
             return;
@@ -90,11 +90,37 @@ fn render_transcript(f: &mut Frame, app: &TuiApp, area: Rect) {
     }
 
     f.render_widget(
-        Paragraph::new(active_lines)
+        Paragraph::new(transcript_lines)
             .wrap(Wrap { trim: false })
             .scroll((app.transcript_scroll as u16, 0)),
         area,
     );
+}
+
+fn renderable_transcript_lines(app: &TuiApp, width: u16) -> Vec<Line<'static>> {
+    let cwd = (!app.snapshot.cwd.is_empty()).then(|| Path::new(app.snapshot.cwd.as_str()));
+    let mut lines = Vec::new();
+
+    for turn in &app.committed_turns {
+        let mut turn_lines = committed_turn_lines(turn.entries.as_slice(), cwd, width);
+        if turn_lines.is_empty() {
+            continue;
+        }
+        if !lines.is_empty() {
+            lines.push(Line::from(""));
+        }
+        lines.append(&mut turn_lines);
+    }
+
+    let mut active_lines = active_turn_cell(app).display_lines(width);
+    if !active_lines.is_empty() {
+        if !lines.is_empty() {
+            lines.push(Line::from(""));
+        }
+        lines.append(&mut active_lines);
+    }
+
+    lines
 }
 
 pub fn committed_turn_cell<'a>(
@@ -1544,13 +1570,16 @@ mod tests {
     use tempfile::tempdir;
 
     use crate::config::ConfigManager;
-    use crate::tui::state::TuiApp;
+    use crate::tui::state::{TranscriptTurn, TuiApp};
     use std::path::Path;
 
     use crate::tui::state::TranscriptEntry;
 
     use super::cells::HistoryCell;
-    use super::{committed_turn_cell, current_turn_tool_summary, desired_viewport_height};
+    use super::{
+        committed_turn_cell, current_turn_tool_summary, desired_viewport_height,
+        renderable_transcript_lines,
+    };
 
     #[test]
     fn committed_turn_does_not_truncate_agent_response() {
@@ -1608,5 +1637,40 @@ mod tests {
 
         let rendered = current_turn_tool_summary(&refs, false, None).expect("tool summary");
         assert!(rendered.contains("Apply patch src/tui/render.rs, src/tui/runtime/events.rs"));
+    }
+
+    #[test]
+    fn renderable_transcript_lines_include_committed_and_active_turns() {
+        let temp = tempdir().expect("tempdir");
+        let mut app = TuiApp::new(ConfigManager {
+            path: temp.path().join("config.json"),
+        })
+        .expect("build tui app");
+        app.committed_turns.push(TranscriptTurn {
+            entries: vec![
+                TranscriptEntry {
+                    role: "You".into(),
+                    message: "Earlier prompt".into(),
+                },
+                TranscriptEntry {
+                    role: "Agent".into(),
+                    message: "Committed answer".into(),
+                },
+            ],
+        });
+        app.active_turn.entries.push(TranscriptEntry {
+            role: "You".into(),
+            message: "Current prompt".into(),
+        });
+
+        let rendered = renderable_transcript_lines(&app, 100)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(rendered.contains("You: Earlier prompt"));
+        assert!(rendered.contains("Committed answer"));
+        assert!(rendered.contains("You: Current prompt"));
     }
 }
