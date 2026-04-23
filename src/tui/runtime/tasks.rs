@@ -1,35 +1,22 @@
-use secrecy::{ExposeSecret, SecretString};
+mod builder;
+mod oauth;
+#[cfg(test)]
+mod tests;
+
+use secrecy::ExposeSecret;
 use std::sync::Arc;
 use std::time::Instant;
 
-use anyhow::anyhow;
 use tokio::sync::mpsc;
 
 use crate::agent::{Agent, AgentOutputMode, BashApprovalMode};
-use crate::llm::LlmBackend;
-use crate::oauth::OAuthManager;
 use crate::redaction::sanitize_url_for_display;
-use crate::sandbox::SandboxManager;
-use crate::session::SessionManager;
-use crate::skill::SkillManager;
-use crate::tool::ToolManager;
-use crate::tools::agent::{AgentTool, ExploreAgentTool, PlanAgentTool, TeamCreateTool};
-use crate::tools::bash::BashTool;
-use crate::tools::context::RetrieveSessionContextTool;
-use crate::tools::file::{ListFilesTool, ReadFileTool, ReplaceTool, WriteFileTool};
-use crate::tools::patch::ApplyPatchTool;
-use crate::tools::search::{GlobTool, GrepTool};
-use crate::tools::skill::SkillTool;
-use crate::tools::vector::{RememberExperienceTool, RetrieveExperienceTool};
-use crate::tools::web::WebFetchTool;
-use crate::tools::workspace::UpdateProjectMemoryTool;
-use crate::vectordb::VectorDB;
-use crate::workspace::WorkspaceMemory;
 
 use super::super::state::{
     OAuthLoginMode, RunningTask, RuntimePhase, TaskCompletion, TaskKind, TuiApp, TuiEvent,
 };
 use super::events::{apply_tui_event, convert_agent_event, format_error_chain};
+use builder::rebuild_agent_with_progress;
 
 fn restore_execute_mode_after_plan_turn(app: &mut TuiApp, agent: &mut Agent) {
     if matches!(
@@ -333,49 +320,10 @@ pub(super) fn start_rebuild_task(app: &mut TuiApp) {
 
 pub(super) fn start_oauth_task(
     app: &mut TuiApp,
-    oauth_manager: Arc<OAuthManager>,
+    oauth_manager: Arc<crate::oauth::OAuthManager>,
     mode: OAuthLoginMode,
 ) {
-    oauth_manager.invalidate_saved_auth_cache();
-    if matches!(mode, OAuthLoginMode::Browser) && super::super::is_ssh_session() {
-        app.set_runtime_phase(
-            RuntimePhase::Failed,
-            Some("browser oauth unavailable in ssh".into()),
-        );
-        app.push_notice(
-            "Browser login is unavailable in SSH/headless sessions. Choose device code or API key instead.",
-        );
-        app.push_entry(
-            "Runtime",
-            "Browser login is unavailable in SSH/headless sessions. Use device-code login or API key instead.",
-        );
-        return;
-    }
-
-    let (sender, receiver) = mpsc::unbounded_channel();
-    let mode_label = match mode {
-        OAuthLoginMode::Browser => "browser login",
-        OAuthLoginMode::DeviceCode => "device-code login",
-    };
-    app.notice = Some(format!("Starting Codex {mode_label}."));
-    app.set_runtime_phase(
-        RuntimePhase::OAuthStarting,
-        Some(format!("starting {mode_label}")),
-    );
-    app.push_entry("Runtime", format!("Starting Codex {mode_label} flow."));
-
-    let handle = tokio::spawn(async move {
-        let result = run_oauth_login(oauth_manager, mode, sender.clone()).await;
-        TaskCompletion::OAuth { mode, result }
-    });
-
-    app.running_task = Some(RunningTask {
-        kind: TaskKind::OAuth,
-        receiver,
-        handle,
-        started_at: Instant::now(),
-        next_heartbeat_after_secs: u64::MAX,
-    });
+    oauth::start_oauth_task(app, oauth_manager, mode);
 }
 
 pub(super) async fn finish_running_task_if_ready(
@@ -624,238 +572,4 @@ fn emit_query_heartbeat(app: &mut TuiApp) {
     } else {
         format!("Waiting on {} · {}s elapsed", app.config.provider, elapsed)
     });
-}
-
-async fn run_oauth_login(
-    oauth_manager: Arc<OAuthManager>,
-    mode: OAuthLoginMode,
-    sender: mpsc::UnboundedSender<TuiEvent>,
-) -> anyhow::Result<SecretString> {
-    match mode {
-        OAuthLoginMode::Browser => {
-            let is_ssh = super::super::is_ssh_session();
-            if is_ssh {
-                let _ = sender.send(TuiEvent::Transcript {
-                    role: "Runtime",
-                    message: "SSH session detected. Browser login is unavailable because the callback listens on localhost.\nUse device-code login or API key instead."
-                        .into(),
-                });
-                return Err(anyhow!(
-                    "browser login is unavailable in SSH/headless sessions; use device-code login or API key instead"
-                ));
-            }
-            let session = oauth_manager.start_browser_login(true)?;
-            let _ = sender.send(TuiEvent::Transcript {
-                role: "Runtime",
-                message: format!(
-                    "Starting Codex browser login.\nOpen this URL if the browser does not launch automatically:\n{auth_url}",
-                    auth_url = session.auth_url()
-                ),
-            });
-            let _ = sender.send(TuiEvent::Transcript {
-                role: "Runtime",
-                message: "Waiting for browser callback.".into(),
-            });
-            let _ = sender.send(TuiEvent::Transcript {
-                role: "Runtime",
-                message: "Received browser callback, exchanging token.".into(),
-            });
-            session.complete(&oauth_manager).await
-        }
-        OAuthLoginMode::DeviceCode => {
-            let _ = sender.send(TuiEvent::Transcript {
-                role: "Runtime",
-                message: "Requesting Codex device code from OpenAI.".into(),
-            });
-            let device_code = oauth_manager.request_device_code().await?;
-            let _ = sender.send(TuiEvent::Transcript {
-                role: "Runtime",
-                message: format!(
-                    "Open this URL in a browser and enter the one-time code:\n{}\n\nCode: {}",
-                    device_code.verification_url, device_code.user_code
-                ),
-            });
-            let _ = sender.send(TuiEvent::Transcript {
-                role: "Runtime",
-                message: "Waiting for device-code confirmation.".into(),
-            });
-            oauth_manager.complete_device_code_login(&device_code).await
-        }
-    }
-}
-
-async fn rebuild_agent_with_progress(
-    config: &crate::config::RaraConfig,
-    progress: Option<crate::local_backend::LocalProgressReporter>,
-) -> anyhow::Result<Agent> {
-    let backend = crate::build_backend_with_progress(config, progress).await?;
-    let backend_arc: Arc<dyn LlmBackend> = backend.into();
-
-    let vdb = Arc::new(VectorDB::new("data/lancedb"));
-    let session_manager = Arc::new(SessionManager::new()?);
-    let workspace = Arc::new(WorkspaceMemory::new()?);
-    let sandbox_manager = Arc::new(SandboxManager::new()?);
-
-    let mut skill_manager = SkillManager::new();
-    let _ = skill_manager.load_all();
-    let skill_manager_arc = Arc::new(skill_manager);
-
-    let tool_manager = create_full_tool_manager(
-        backend_arc.clone(),
-        vdb.clone(),
-        session_manager.clone(),
-        workspace.clone(),
-        sandbox_manager.clone(),
-        skill_manager_arc,
-        crate::prompt::PromptRuntimeConfig::from_config(config),
-    );
-
-    let mut agent = Agent::new(tool_manager, backend_arc, vdb, session_manager, workspace);
-    agent.set_prompt_config(crate::prompt::PromptRuntimeConfig::from_config(config));
-    Ok(agent)
-}
-
-fn create_full_tool_manager(
-    backend: Arc<dyn LlmBackend>,
-    vdb: Arc<VectorDB>,
-    session_manager: Arc<SessionManager>,
-    workspace: Arc<WorkspaceMemory>,
-    sandbox: Arc<SandboxManager>,
-    skill_manager: Arc<SkillManager>,
-    prompt_config: crate::prompt::PromptRuntimeConfig,
-) -> ToolManager {
-    let mut tm = ToolManager::new();
-    tm.register(Box::new(BashTool {
-        sandbox: sandbox.clone(),
-    }));
-    tm.register(Box::new(ReadFileTool));
-    tm.register(Box::new(ApplyPatchTool));
-    tm.register(Box::new(WriteFileTool));
-    tm.register(Box::new(ListFilesTool));
-    tm.register(Box::new(ReplaceTool));
-    tm.register(Box::new(WebFetchTool));
-    tm.register(Box::new(GlobTool));
-    tm.register(Box::new(GrepTool));
-    tm.register(Box::new(RememberExperienceTool {
-        backend: backend.clone(),
-        db_uri: "data/lancedb".into(),
-    }));
-    tm.register(Box::new(RetrieveExperienceTool {
-        backend: backend.clone(),
-        db_uri: "data/lancedb".into(),
-    }));
-    tm.register(Box::new(RetrieveSessionContextTool {
-        backend: backend.clone(),
-        vdb: vdb.clone(),
-        session_manager: session_manager.clone(),
-    }));
-    tm.register(Box::new(UpdateProjectMemoryTool {
-        workspace: workspace.clone(),
-    }));
-    tm.register(Box::new(SkillTool {
-        skill_manager: skill_manager.clone(),
-    }));
-    tm.register(Box::new(AgentTool {
-        backend: backend.clone(),
-        vdb: vdb.clone(),
-        session_manager: session_manager.clone(),
-        workspace: workspace.clone(),
-        prompt_config: prompt_config.clone(),
-    }));
-    tm.register(Box::new(ExploreAgentTool {
-        backend: backend.clone(),
-        vdb: vdb.clone(),
-        session_manager: session_manager.clone(),
-        workspace: workspace.clone(),
-        prompt_config: prompt_config.clone(),
-    }));
-    tm.register(Box::new(PlanAgentTool {
-        backend: backend.clone(),
-        vdb: vdb.clone(),
-        session_manager: session_manager.clone(),
-        workspace: workspace.clone(),
-        prompt_config,
-    }));
-    tm.register(Box::new(TeamCreateTool {
-        backend,
-        vdb,
-        session_manager,
-        workspace,
-    }));
-    tm
-}
-
-#[cfg(test)]
-mod tests {
-    use crate::config::ConfigManager;
-    use crate::tui::state::TuiApp;
-    use tempfile::tempdir;
-
-    use super::{should_suggest_planning_mode, start_oauth_task};
-    use crate::oauth::OAuthManager;
-    use crate::tui::state::OAuthLoginMode;
-    use std::sync::Arc;
-
-    #[test]
-    fn suggests_planning_for_repo_review_requests() {
-        let temp = tempdir().unwrap();
-        let app = TuiApp::new(ConfigManager {
-            path: temp.path().join("config.json"),
-        })
-        .expect("build tui app");
-        assert!(should_suggest_planning_mode(
-            &app,
-            "看一下代码，并提出修改建议"
-        ));
-        assert!(should_suggest_planning_mode(
-            &app,
-            "Review this repository and propose architectural improvements."
-        ));
-    }
-
-    #[test]
-    fn skips_planning_for_simple_requests() {
-        let temp = tempdir().unwrap();
-        let app = TuiApp::new(ConfigManager {
-            path: temp.path().join("config.json"),
-        })
-        .expect("build tui app");
-        assert!(!should_suggest_planning_mode(
-            &app,
-            "Fix the typo in README."
-        ));
-        assert!(!should_suggest_planning_mode(
-            &app,
-            "What does this function do?"
-        ));
-    }
-
-    #[test]
-    fn browser_oauth_is_rejected_before_task_start_in_ssh() {
-        let temp = tempdir().unwrap();
-        let old_ssh = std::env::var_os("SSH_CONNECTION");
-        std::env::set_var("SSH_CONNECTION", "test");
-
-        let mut app = TuiApp::new(ConfigManager {
-            path: temp.path().join("config.json"),
-        })
-        .expect("build tui app");
-        let oauth_manager = Arc::new(
-            OAuthManager::new_for_config_dir(temp.path().join(".rara")).expect("oauth manager"),
-        );
-
-        start_oauth_task(&mut app, oauth_manager, OAuthLoginMode::Browser);
-
-        assert!(app.running_task.is_none());
-        assert!(app
-            .notice
-            .as_deref()
-            .is_some_and(|value| value.contains("Browser login is unavailable")));
-
-        if let Some(value) = old_ssh {
-            std::env::set_var("SSH_CONNECTION", value);
-        } else {
-            std::env::remove_var("SSH_CONNECTION");
-        }
-    }
 }

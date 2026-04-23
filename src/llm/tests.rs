@@ -140,7 +140,7 @@ fn parses_codex_responses_output_into_text_and_tool_use_blocks() {
         ContentBlock::ToolUse { id, name, input } => {
             assert_eq!(id, "call-1");
             assert_eq!(name, "read_file");
-            assert_eq!(input, &json!({"path":"Cargo.toml"}));
+            assert_eq!(*input, json!({"path":"Cargo.toml"}));
         }
         other => panic!("expected tool_use block, got {other:?}"),
     }
