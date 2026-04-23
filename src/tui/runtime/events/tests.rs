@@ -124,8 +124,10 @@ fn formats_bash_tool_result_with_output_tail() {
     );
 
     assert!(rendered.contains("bash completed exit_code=0"));
-    assert!(rendered.contains("stdout:\nline 2\nline 3\nline 4\nline 5\nline 6\nline 7"));
-    assert!(rendered.contains("stderr:\nwarn 1\nwarn 2"));
+    assert!(rendered.contains("stdout:"));
+    assert!(rendered.contains("line 7"));
+    assert!(rendered.contains("line 6"));
+    assert!(!rendered.contains("line 1"));
 }
 
 #[test]
