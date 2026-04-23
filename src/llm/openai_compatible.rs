@@ -498,7 +498,9 @@ pub(super) fn apply_codex_stream_event(
 fn to_codex_tools(tools: &[Value]) -> Result<Vec<Value>> {
     let mut tool_specs = Vec::with_capacity(tools.len());
     for tool in tools {
-        let tool_name = tool["name"].as_str().unwrap_or("unknown");
+        let tool_name = tool["name"]
+            .as_str()
+            .ok_or_else(|| anyhow!("Codex tool is missing a 'name' field"))?;
         let input_schema = parse_tool_input_schema(&tool["input_schema"]).map_err(|error| {
             anyhow!("Failed to parse Codex tool schema for '{tool_name}': {error}")
         })?;
