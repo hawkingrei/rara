@@ -162,13 +162,52 @@ fn codex_responses_request_includes_reasoning_effort_when_selected() {
         ],
         &[],
         Some("high"),
-    );
+    )
+    .unwrap();
 
     assert_eq!(request["model"], "gpt-5.4");
     assert_eq!(request["stream"], true);
     assert_eq!(request["reasoning"]["effort"], "high");
     assert_eq!(request["instructions"], "Follow project instructions.");
     assert_eq!(request["input"][0]["role"], "user");
+}
+
+#[test]
+fn codex_responses_tools_use_upstream_schema_defaults_and_chatgpt_normalization() {
+    let request = build_codex_responses_request(
+        "gpt-5.4",
+        &[Message {
+            role: "user".to_string(),
+            content: json!("Hello"),
+        }],
+        &[json!({
+            "name": "team_create",
+            "description": "Create a team task graph",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "tasks": {
+                        "type": "array"
+                    },
+                    "command": { "type": "string" },
+                    "program": { "type": "string" }
+                },
+                "anyOf": [
+                    { "required": ["command"] },
+                    { "required": ["program"] }
+                ]
+            }
+        })],
+        None,
+    )
+    .unwrap();
+
+    let parameters = &request["tools"][0]["parameters"];
+    assert_eq!(request["tools"][0]["type"], "function");
+    assert_eq!(parameters["type"], "object");
+    assert!(parameters.get("anyOf").is_none());
+    assert_eq!(parameters["properties"]["tasks"]["type"], "array");
+    assert_eq!(parameters["properties"]["tasks"]["items"]["type"], "string");
 }
 
 #[test]
