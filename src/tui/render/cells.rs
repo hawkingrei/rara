@@ -768,7 +768,8 @@ impl ActiveCell for ActiveTurnCell<'_> {
             cells.push(Box::new(UserCell::new(user_message)));
         }
 
-        if self.app.agent_execution_mode_label() == "plan" {
+        if self.app.agent_execution_mode_label() == "plan" && !self.app.has_pending_plan_approval()
+        {
             cells.push(Box::new(PlanModeCell));
         }
 
