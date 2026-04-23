@@ -352,7 +352,7 @@ pub(super) fn format_tool_result(name: &str, content: &str) -> String {
             if let Some(request) = value.get("request_user_input") {
                 if let Some(question) = request.get("question").and_then(serde_json::Value::as_str)
                 {
-                    rendered.push_str(&format!("\\nrequest_user_input: {}", question.trim()));
+                    rendered.push_str(&format!("\nrequest_user_input: {}", question.trim()));
                 }
                 if let Some(options) = request.get("options").and_then(serde_json::Value::as_array)
                 {
@@ -366,7 +366,7 @@ pub(super) fn format_tool_result(name: &str, content: &str) -> String {
                             ))
                         }) {
                             rendered.push_str(&format!(
-                                "\\noption: {} | {}",
+                                "\noption: {} | {}",
                                 label.trim(),
                                 description.trim()
                             ));
@@ -375,7 +375,7 @@ pub(super) fn format_tool_result(name: &str, content: &str) -> String {
                 }
                 if let Some(note) = request.get("note").and_then(serde_json::Value::as_str) {
                     if !note.trim().is_empty() {
-                        rendered.push_str(&format!("\\nnote: {}", note.trim()));
+                        rendered.push_str(&format!("\nnote: {}", note.trim()));
                     }
                 }
             }
@@ -404,14 +404,14 @@ pub(super) fn format_tool_result(name: &str, content: &str) -> String {
                 .unwrap_or(false);
             let mut summary = format!("bash completed exit_code={exit_code}");
             if live_streamed {
-                summary.push_str("\\nstreamed output shown above");
+                summary.push_str("\nstreamed output shown above");
                 return summary;
             }
             if let Some(stdout_preview) = output_tail_preview(stdout) {
-                summary.push_str(&format!("\\nstdout:\\n{stdout_preview}"));
+                summary.push_str(&format!("\nstdout:\n{stdout_preview}"));
             }
             if let Some(stderr_preview) = output_tail_preview(stderr) {
-                summary.push_str(&format!("\\nstderr:\\n{stderr_preview}"));
+                summary.push_str(&format!("\nstderr:\n{stderr_preview}"));
             }
             return summary;
         }
@@ -753,15 +753,20 @@ pub(super) fn subagent_request_input(message: &str) -> Option<DelegatedRequestIn
 fn first_non_empty_line(text: &str) -> &str {
     text.lines()
         .find(|line| !line.trim().is_empty())
-        .unwrap_or_default()
+        .unwrap_or(text)
 }
 
 pub(super) fn format_error_chain(err: &anyhow::Error) -> String {
-    let mut lines = vec![err.to_string()];
-    let mut current = err.source();
-    while let Some(source) = current {
-        lines.push(format!("caused by: {source}"));
-        current = source.source();
+    use crate::redaction::redact_secrets;
+
+    let mut lines = Vec::new();
+    for (idx, cause) in err.chain().enumerate() {
+        let rendered = redact_secrets(cause.to_string());
+        if idx == 0 {
+            lines.push(rendered);
+        } else {
+            lines.push(format!("caused by: {rendered}"));
+        }
     }
     lines.join("\n")
 }
