@@ -793,6 +793,8 @@ impl ActiveCell for ActiveTurnCell<'_> {
                 .map(|note| format!("└ {note}")),
             );
             Some(lines.join("\n"))
+        } else if !turn_live {
+            None
         } else {
             explicit_exploration.or_else(|| {
                 current_turn_exploration_summary(self.app, current_turn.as_slice(), turn_live)
@@ -1778,6 +1780,38 @@ mod tests {
 
         assert!(!rendered.contains("Updated Plan"));
         assert!(rendered.contains("You: Implement the approved fix"));
+    }
+
+    #[test]
+    fn active_turn_cell_hides_stale_exploring_after_live_phase_finishes() {
+        let temp = tempdir().unwrap();
+        let mut app = TuiApp::new(ConfigManager {
+            path: temp.path().join("config.json"),
+        })
+        .expect("build tui app");
+        app.runtime_phase = RuntimePhase::Idle;
+        app.active_turn = TranscriptTurn {
+            entries: vec![
+                TranscriptEntry {
+                    role: "You".into(),
+                    message: "Inspect the repository".into(),
+                },
+                TranscriptEntry {
+                    role: "Exploring".into(),
+                    message: "└ Read src/main.rs".into(),
+                },
+            ],
+        };
+
+        let rendered = ActiveTurnCell::new(&app, Some(Path::new(".")))
+            .display_lines(100)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(!rendered.contains(" Exploring "));
+        assert!(rendered.contains("You: Inspect the repository"));
     }
 
     #[test]
