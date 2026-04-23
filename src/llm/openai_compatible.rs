@@ -404,6 +404,7 @@ impl CodexBackend {
         let mut output_items = Vec::new();
         let mut usage = None;
         let mut completed = false;
+        let mut streamed_text = String::new();
 
         while let Some(event) = stream.next().await {
             let event =
@@ -417,6 +418,7 @@ impl CodexBackend {
                 &payload,
                 &mut output_items,
                 &mut usage,
+                &mut streamed_text,
                 &mut on_text_delta,
             )?;
         }
@@ -430,12 +432,30 @@ impl CodexBackend {
         parse_codex_response(&build_codex_stream_response(
             output_items,
             usage,
+            streamed_text,
             "completed",
         ))
     }
 }
 
-fn build_codex_stream_response(output: Vec<Value>, usage: Option<Value>, status: &str) -> Value {
+pub(super) fn build_codex_stream_response(
+    mut output: Vec<Value>,
+    usage: Option<Value>,
+    streamed_text: String,
+    status: &str,
+) -> Value {
+    if !streamed_text.trim().is_empty() && !output_has_text_message(&output) {
+        output.insert(
+            0,
+            json!({
+                "type": "message",
+                "content": [{
+                    "type": "output_text",
+                    "text": streamed_text,
+                }]
+            }),
+        );
+    }
     let mut response = serde_json::Map::new();
     response.insert("status".to_string(), Value::String(status.to_string()));
     response.insert("output".to_string(), Value::Array(output));
@@ -445,15 +465,26 @@ fn build_codex_stream_response(output: Vec<Value>, usage: Option<Value>, status:
     Value::Object(response)
 }
 
+fn output_has_text_message(output: &[Value]) -> bool {
+    output.iter().any(|item| {
+        item.get("type").and_then(Value::as_str) == Some("message")
+            && extract_codex_output_text(item.get("content"))
+                .map(|text| !text.trim().is_empty())
+                .unwrap_or(false)
+    })
+}
+
 pub(super) fn apply_codex_stream_event(
     payload: &Value,
     output_items: &mut Vec<Value>,
     usage: &mut Option<Value>,
+    streamed_text: &mut String,
     on_text_delta: &mut Option<&mut (dyn FnMut(String) + Send)>,
 ) -> Result<bool> {
     match payload.get("type").and_then(Value::as_str) {
         Some("response.output_text.delta") => {
             if let Some(delta) = payload.get("delta").and_then(Value::as_str) {
+                streamed_text.push_str(delta);
                 if let Some(callback) = on_text_delta.as_mut() {
                     callback(delta.to_string());
                 }
