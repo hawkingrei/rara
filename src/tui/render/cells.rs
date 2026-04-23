@@ -1046,13 +1046,12 @@ mod tests {
             .join("\n");
 
         let you_idx = rendered.find("You: Review this repo").unwrap();
-        let explored_idx = rendered.find(" Explored ").unwrap();
         let ran_idx = rendered.find(" Ran ").unwrap();
         let agent_idx = rendered.find("Agent\n  Final recommendation").unwrap();
 
-        assert!(you_idx < explored_idx);
-        assert!(explored_idx < ran_idx);
+        assert!(!rendered.contains(" Explored "));
         assert!(ran_idx < agent_idx);
+        assert!(you_idx < ran_idx);
     }
 
     #[test]
@@ -1102,13 +1101,12 @@ mod tests {
             .join("\n");
 
         let you_idx = rendered.find("You: Inspect the codebase").unwrap();
-        let exploring_idx = rendered.find(" Exploring ").unwrap();
         let running_idx = rendered.find(" Running ").unwrap();
         let plan_idx = rendered.find("Updated Plan").unwrap();
         let approval_idx = rendered.find(" Request Input ").unwrap();
 
-        assert!(you_idx < exploring_idx);
-        assert!(exploring_idx < running_idx);
+        assert!(!rendered.contains(" Exploring "));
+        assert!(you_idx < running_idx);
         assert!(running_idx < plan_idx);
         assert!(plan_idx < approval_idx);
     }
@@ -1175,7 +1173,7 @@ mod tests {
             "rendered_exploration_notes=\n{rendered}"
         );
         assert!(rendered.contains("Read src/main.rs"));
-        assert!(rendered.contains(
+        assert!(!rendered.contains(
             "I have inspected the repository structure and will now inspect the core modules."
         ));
         assert!(!rendered.contains("waiting for model response · 12s elapsed"));
