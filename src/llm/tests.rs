@@ -268,6 +268,44 @@ fn codex_stream_events_collect_output_items_usage_and_text_deltas() {
 }
 
 #[test]
+fn codex_stream_conversation_item_done_is_treated_as_output_item() {
+    let mut output_items = Vec::new();
+    let mut usage = None;
+    let mut streamed_text = String::new();
+    let mut no_delta_callback: Option<&mut (dyn FnMut(String) + Send)> = None;
+
+    assert!(!apply_codex_stream_event(
+        &json!({
+            "type":"conversation.item.done",
+            "item":{
+                "type":"message",
+                "role":"assistant",
+                "content":[{"type":"output_text","text":"Hello from conversation item"}]
+            }
+        }),
+        &mut output_items,
+        &mut usage,
+        &mut streamed_text,
+        &mut no_delta_callback,
+    )
+    .unwrap());
+
+    let response = parse_codex_response(&super::openai_compatible::build_codex_stream_response(
+        output_items,
+        usage,
+        streamed_text,
+        "completed",
+    ))
+    .unwrap();
+
+    assert_eq!(response.content.len(), 1);
+    match &response.content[0] {
+        ContentBlock::Text { text } => assert_eq!(text, "Hello from conversation item"),
+        other => panic!("expected text block, got {other:?}"),
+    }
+}
+
+#[test]
 fn codex_stream_delta_is_used_when_done_item_has_no_text() {
     let response = parse_codex_response(&super::openai_compatible::build_codex_stream_response(
         vec![json!({
