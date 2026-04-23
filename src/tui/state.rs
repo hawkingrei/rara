@@ -2,6 +2,7 @@ mod state_presets;
 
 use ratatui::text::Line;
 use serde_json::json;
+use std::cell::RefCell;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
@@ -287,6 +288,13 @@ pub struct TranscriptTurn {
     pub entries: Vec<TranscriptEntry>,
 }
 
+#[derive(Default)]
+pub(crate) struct CommittedTranscriptRenderCache {
+    pub generation: u64,
+    pub width: u16,
+    pub lines: Vec<Line<'static>>,
+}
+
 pub struct AgentMarkdownStreamState {
     raw_text: String,
     collector: MarkdownStreamCollector,
@@ -351,6 +359,8 @@ pub struct TuiApp {
     pub recent_commands: Vec<String>,
     pub recent_sessions: Vec<PersistedSessionSummary>,
     pub resume_picker_idx: usize,
+    pub committed_render_generation: u64,
+    pub committed_render_cache: RefCell<CommittedTranscriptRenderCache>,
     pub transcript_scroll: usize,
     pub agent_markdown_stream: Option<AgentMarkdownStreamState>,
     pub active_live: ActiveLiveSections,
@@ -471,6 +481,8 @@ impl TuiApp {
             recent_commands: Vec::new(),
             recent_sessions: Vec::new(),
             resume_picker_idx: 0,
+            committed_render_generation: 0,
+            committed_render_cache: RefCell::new(CommittedTranscriptRenderCache::default()),
             transcript_scroll: 0,
             agent_markdown_stream: None,
             active_live: ActiveLiveSections::default(),
@@ -889,6 +901,10 @@ impl TuiApp {
             .map(|stream| stream.display_lines.as_slice())
     }
 
+    pub fn has_agent_stream(&self) -> bool {
+        self.agent_markdown_stream.is_some()
+    }
+
     pub fn finalize_agent_stream(&mut self, final_message: Option<String>) {
         let fallback = self
             .agent_markdown_stream
@@ -906,6 +922,20 @@ impl TuiApp {
                 return;
             }
         }
+        if self.active_turn.entries.is_empty() {
+            if let Some(last) = self
+                .committed_turns
+                .last_mut()
+                .and_then(|turn| turn.entries.last_mut())
+            {
+                if last.role == "Agent" {
+                    last.message = message;
+                    self.invalidate_committed_render_cache();
+                    self.transcript_scroll = 0;
+                    return;
+                }
+            }
+        }
         self.push_entry("Agent", message);
     }
 
@@ -919,6 +949,7 @@ impl TuiApp {
         self.committed_turns.clear();
         self.active_turn.entries.clear();
         self.inserted_turns = 0;
+        self.invalidate_committed_render_cache();
         self.transcript_scroll = 0;
         self.agent_markdown_stream = None;
         self.clear_active_live_sections();
@@ -1392,6 +1423,7 @@ impl TuiApp {
         let ordinal = self.committed_turns.len();
         self.persist_turn(ordinal, &turn);
         self.committed_turns.push(turn);
+        self.invalidate_committed_render_cache();
         self.transcript_scroll = 0;
         self.clear_active_live_sections();
     }
@@ -1404,9 +1436,15 @@ impl TuiApp {
         self.committed_turns = turns;
         self.active_turn.entries.clear();
         self.inserted_turns = 0;
+        self.invalidate_committed_render_cache();
         self.transcript_scroll = 0;
         self.agent_markdown_stream = None;
         self.clear_active_live_sections();
+    }
+
+    pub(crate) fn invalidate_committed_render_cache(&mut self) {
+        self.committed_render_generation = self.committed_render_generation.wrapping_add(1);
+        *self.committed_render_cache.borrow_mut() = CommittedTranscriptRenderCache::default();
     }
 
     pub fn clear_active_live_sections(&mut self) {
@@ -1888,5 +1926,37 @@ mod tests {
         app.open_overlay(Overlay::ModelNameEditor);
 
         assert_eq!(app.model_name_input, "custom-model");
+    }
+
+    #[test]
+    fn finalize_agent_stream_updates_latest_committed_turn_when_final_text_arrives_late() {
+        let dir = tempdir().expect("tempdir");
+        let cm = ConfigManager {
+            path: dir.path().join("config.json"),
+        };
+        let mut app = TuiApp::new(cm).expect("app");
+        app.committed_turns.push(super::TranscriptTurn {
+            entries: vec![
+                super::TranscriptEntry {
+                    role: "You".into(),
+                    message: "你好".into(),
+                },
+                super::TranscriptEntry {
+                    role: "Agent".into(),
+                    message: "你好！".into(),
+                },
+            ],
+        });
+
+        app.finalize_agent_stream(Some("你好！有什么我可以帮你的？".into()));
+
+        assert!(app.active_turn.entries.is_empty());
+        assert_eq!(
+            app.committed_turns
+                .last()
+                .and_then(|turn| turn.entries.last())
+                .map(|entry| entry.message.as_str()),
+            Some("你好！有什么我可以帮你的？")
+        );
     }
 }

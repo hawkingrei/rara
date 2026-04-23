@@ -51,6 +51,7 @@ pub fn render(f: &mut Frame, app: &TuiApp) {
 
 fn render_transcript(f: &mut Frame, app: &TuiApp, area: Rect) {
     let transcript_lines = renderable_transcript_lines(app, area.width);
+    let transcript_visual_row_count = transcript_visual_row_count(&transcript_lines, area.width);
     if !app.has_any_transcript() && transcript_lines.is_empty() {
         if app.startup_card_inserted {
             f.render_widget(Paragraph::new(Vec::<Line<'static>>::new()), area);
@@ -92,15 +93,38 @@ fn render_transcript(f: &mut Frame, app: &TuiApp, area: Rect) {
     f.render_widget(
         Paragraph::new(transcript_lines)
             .wrap(Wrap { trim: false })
-            .scroll((app.transcript_scroll as u16, 0)),
+            .scroll((
+                transcript_scroll_offset(app, area.height, transcript_visual_row_count),
+                0,
+            )),
         area,
     );
 }
 
 fn renderable_transcript_lines(app: &TuiApp, width: u16) -> Vec<Line<'static>> {
+    let mut lines = committed_transcript_lines(app, width);
+
+    let mut active_lines = active_turn_cell(app).display_lines(width);
+    if !active_lines.is_empty() {
+        if !lines.is_empty() {
+            lines.push(Line::from(""));
+        }
+        lines.append(&mut active_lines);
+    }
+
+    lines
+}
+
+fn committed_transcript_lines(app: &TuiApp, width: u16) -> Vec<Line<'static>> {
+    {
+        let cache = app.committed_render_cache.borrow();
+        if cache.generation == app.committed_render_generation && cache.width == width {
+            return cache.lines.clone();
+        }
+    }
+
     let cwd = (!app.snapshot.cwd.is_empty()).then(|| Path::new(app.snapshot.cwd.as_str()));
     let mut lines = Vec::new();
-
     for turn in &app.committed_turns {
         let mut turn_lines = committed_turn_lines(turn.entries.as_slice(), cwd, width);
         if turn_lines.is_empty() {
@@ -112,15 +136,24 @@ fn renderable_transcript_lines(app: &TuiApp, width: u16) -> Vec<Line<'static>> {
         lines.append(&mut turn_lines);
     }
 
-    let mut active_lines = active_turn_cell(app).display_lines(width);
-    if !active_lines.is_empty() {
-        if !lines.is_empty() {
-            lines.push(Line::from(""));
-        }
-        lines.append(&mut active_lines);
-    }
-
+    let mut cache = app.committed_render_cache.borrow_mut();
+    cache.generation = app.committed_render_generation;
+    cache.width = width;
+    cache.lines = lines.clone();
     lines
+}
+
+fn transcript_scroll_offset(app: &TuiApp, viewport_height: u16, transcript_line_count: usize) -> u16 {
+    let max_offset = transcript_line_count.saturating_sub(viewport_height as usize);
+    let top_offset = max_offset.saturating_sub(app.transcript_scroll);
+    top_offset.min(u16::MAX as usize) as u16
+}
+
+fn transcript_visual_row_count(lines: &[Line<'static>], width: u16) -> usize {
+    let wrap_width = width.max(1) as usize;
+    lines.iter()
+        .map(|line| line.width().max(1).div_ceil(wrap_width))
+        .sum()
 }
 
 pub fn committed_turn_cell<'a>(
@@ -166,39 +199,6 @@ fn current_turn_exploration_summary(
     )
 }
 
-fn exploration_note_lines(current_turn: &[&TranscriptEntry]) -> Vec<String> {
-    let mut notes = Vec::new();
-    for entry in current_turn {
-        if entry.role != "Agent" {
-            continue;
-        }
-        for line in entry
-            .message
-            .lines()
-            .map(str::trim)
-            .filter(|line| !line.is_empty())
-        {
-            if line.starts_with("/search ")
-                || line.starts_with("/compact ")
-                || line.starts_with("/plan ")
-                || line.starts_with("/quit ")
-                || line.starts_with("key=")
-                || line.starts_with("history=")
-                || line.starts_with("tokens=")
-                || line.starts_with("ctx~=")
-                || line.starts_with("waiting for model response")
-            {
-                continue;
-            }
-            if notes.last().is_some_and(|existing| existing == line) {
-                continue;
-            }
-            notes.push(line.to_string());
-        }
-    }
-    notes
-}
-
 pub(crate) fn current_turn_exploration_summary_from_entries(
     current_turn: &[&TranscriptEntry],
     _show_live_detail: bool,
@@ -217,14 +217,10 @@ pub(crate) fn current_turn_exploration_summary_from_entries(
         return None;
     }
 
-    let mut lines = actions
+    let lines = actions
         .into_iter()
         .map(|action| format!("└ {action}"))
         .collect::<Vec<_>>();
-
-    for note in exploration_note_lines(current_turn) {
-        lines.push(format!("└ {note}"));
-    }
 
     Some(lines.join("\n"))
 }
@@ -376,30 +372,10 @@ fn exploration_action_label(message: &str) -> Option<String> {
     let name = parts.next()?;
     let rest = parts.collect::<Vec<_>>().join(" ");
     match name {
-        "list_files" => Some(format!(
-            "List {}",
-            if rest.is_empty() { "." } else { rest.as_str() }
-        )),
         "read_file" => Some(format!(
             "Read {}",
             if rest.is_empty() {
                 "file"
-            } else {
-                rest.as_str()
-            }
-        )),
-        "glob" => Some(format!(
-            "Glob {}",
-            if rest.is_empty() {
-                "workspace"
-            } else {
-                rest.as_str()
-            }
-        )),
-        "grep" => Some(format!(
-            "Search {}",
-            if rest.is_empty() {
-                "workspace"
             } else {
                 rest.as_str()
             }
@@ -1567,6 +1543,7 @@ pub(crate) fn display_width(value: &str) -> usize {
 
 #[cfg(test)]
 mod tests {
+    use ratatui::text::Line;
     use tempfile::tempdir;
 
     use crate::config::ConfigManager;
@@ -1578,7 +1555,8 @@ mod tests {
     use super::cells::HistoryCell;
     use super::{
         committed_turn_cell, current_turn_tool_summary, desired_viewport_height,
-        renderable_transcript_lines,
+        current_turn_exploration_summary_from_entries, renderable_transcript_lines,
+        transcript_scroll_offset, transcript_visual_row_count,
     };
 
     #[test]
@@ -1672,5 +1650,110 @@ mod tests {
         assert!(rendered.contains("You: Earlier prompt"));
         assert!(rendered.contains("Committed answer"));
         assert!(rendered.contains("You: Current prompt"));
+    }
+
+    #[test]
+    fn transcript_scroll_offset_keeps_zero_sticky_to_bottom() {
+        let temp = tempdir().expect("tempdir");
+        let mut app = TuiApp::new(ConfigManager {
+            path: temp.path().join("config.json"),
+        })
+        .expect("build tui app");
+        app.transcript_scroll = 0;
+
+        assert_eq!(transcript_scroll_offset(&app, 3, 10), 7);
+
+        app.scroll_transcript(-2);
+        assert_eq!(transcript_scroll_offset(&app, 3, 10), 5);
+    }
+
+    #[test]
+    fn transcript_scroll_offset_uses_wrapped_visual_height() {
+        let temp = tempdir().expect("tempdir");
+        let app = TuiApp::new(ConfigManager {
+            path: temp.path().join("config.json"),
+        })
+        .expect("build tui app");
+        let lines = vec![
+            Line::from("Agent"),
+            Line::from("  This is a long streamed response that should wrap across rows."),
+        ];
+
+        let visual_rows = transcript_visual_row_count(&lines, 12);
+        assert!(visual_rows > lines.len());
+        assert_eq!(transcript_scroll_offset(&app, 3, visual_rows), visual_rows as u16 - 3);
+    }
+
+    #[test]
+    fn renderable_transcript_lines_cache_is_invalidated_when_committed_turns_change() {
+        let temp = tempdir().expect("tempdir");
+        let mut app = TuiApp::new(ConfigManager {
+            path: temp.path().join("config.json"),
+        })
+        .expect("build tui app");
+        app.restore_committed_turns(vec![TranscriptTurn {
+            entries: vec![TranscriptEntry {
+                role: "Agent".into(),
+                message: "First answer".into(),
+            }],
+        }]);
+
+        let first = renderable_transcript_lines(&app, 100)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(first.contains("First answer"));
+
+        app.restore_committed_turns(vec![TranscriptTurn {
+            entries: vec![TranscriptEntry {
+                role: "Agent".into(),
+                message: "Second answer".into(),
+            }],
+        }]);
+
+        let second = renderable_transcript_lines(&app, 100)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(!second.contains("First answer"));
+        assert!(second.contains("Second answer"));
+    }
+
+    #[test]
+    fn exploration_summary_only_keeps_read_actions() {
+        let entries = vec![
+            TranscriptEntry {
+                role: "Tool".into(),
+                message: "list_files .".into(),
+            },
+            TranscriptEntry {
+                role: "Tool".into(),
+                message: "glob src/**/*.rs".into(),
+            },
+            TranscriptEntry {
+                role: "Tool".into(),
+                message: "grep planning mode src".into(),
+            },
+            TranscriptEntry {
+                role: "Tool".into(),
+                message: "read_file src/main.rs".into(),
+            },
+            TranscriptEntry {
+                role: "Agent".into(),
+                message: "I will start by listing files and then inspect the main entrypoint.".into(),
+            },
+        ];
+        let refs = entries.iter().collect::<Vec<_>>();
+
+        let rendered =
+            current_turn_exploration_summary_from_entries(refs.as_slice(), false, None)
+                .expect("exploration summary");
+        assert!(rendered.contains("Read src/main.rs"));
+        assert!(!rendered.contains("List ."));
+        assert!(!rendered.contains("Glob src/**/*.rs"));
+        assert!(!rendered.contains("Search planning mode src"));
+        assert!(!rendered.contains("listing files"));
     }
 }

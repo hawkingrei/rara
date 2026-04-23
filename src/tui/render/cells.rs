@@ -735,6 +735,7 @@ impl ActiveCell for ActiveTurnCell<'_> {
             .find(|entry| entry.role == "Agent")
             .map(|entry| entry.message.as_str());
         let streaming_agent_lines = self.app.agent_stream_lines();
+        let has_agent_stream = self.app.has_agent_stream();
         let latest_system = current_turn
             .iter()
             .rev()
@@ -914,21 +915,33 @@ impl ActiveCell for ActiveTurnCell<'_> {
 
         let responding_role = if turn_live { "Responding" } else { "Agent" };
 
-        if let Some(stream_lines) = streaming_agent_lines
-            .filter(|_| {
+        if has_agent_stream
+            && !suppress_intermediate_agent
+            && !suppress_planning_chatter
+            && !suppress_structured_plan_response
+        {
+            if let Some(stream_lines) = streaming_agent_lines {
+                cells.push(Box::new(RespondingCell::from_stream(stream_lines)));
+            } else if let Some(agent_message) = latest_agent {
+                cells.push(Box::new(RespondingCell::from_message(
+                    responding_role,
+                    agent_message,
+                    usize::MAX,
+                    self.cwd,
+                )));
+            } else {
+                cells.push(Box::new(RespondingCell::working(
+                    self.app
+                        .runtime_phase_detail
+                        .as_deref()
+                        .unwrap_or("streaming model output"),
+                )));
+            }
+        } else if let Some(agent_message) = latest_agent.filter(|_| {
                 !suppress_intermediate_agent
                     && !suppress_planning_chatter
                     && !suppress_structured_plan_response
-            })
-        {
-            cells.push(Box::new(RespondingCell::from_stream(stream_lines)));
-        } else if let Some(agent_message) =
-            latest_agent.filter(|_| {
-                !suppress_intermediate_agent
-                    && !suppress_planning_chatter
-                    && !suppress_structured_plan_response
-            })
-        {
+            }) {
             cells.push(Box::new(RespondingCell::from_message(
                 responding_role,
                 agent_message,
@@ -1033,13 +1046,12 @@ mod tests {
             .join("\n");
 
         let you_idx = rendered.find("You: Review this repo").unwrap();
-        let explored_idx = rendered.find(" Explored ").unwrap();
         let ran_idx = rendered.find(" Ran ").unwrap();
         let agent_idx = rendered.find("Agent\n  Final recommendation").unwrap();
 
-        assert!(you_idx < explored_idx);
-        assert!(explored_idx < ran_idx);
+        assert!(!rendered.contains(" Explored "));
         assert!(ran_idx < agent_idx);
+        assert!(you_idx < ran_idx);
     }
 
     #[test]
@@ -1089,13 +1101,12 @@ mod tests {
             .join("\n");
 
         let you_idx = rendered.find("You: Inspect the codebase").unwrap();
-        let exploring_idx = rendered.find(" Exploring ").unwrap();
         let running_idx = rendered.find(" Running ").unwrap();
         let plan_idx = rendered.find("Updated Plan").unwrap();
         let approval_idx = rendered.find(" Request Input ").unwrap();
 
-        assert!(you_idx < exploring_idx);
-        assert!(exploring_idx < running_idx);
+        assert!(!rendered.contains(" Exploring "));
+        assert!(you_idx < running_idx);
         assert!(running_idx < plan_idx);
         assert!(plan_idx < approval_idx);
     }
@@ -1162,7 +1173,7 @@ mod tests {
             "rendered_exploration_notes=\n{rendered}"
         );
         assert!(rendered.contains("Read src/main.rs"));
-        assert!(rendered.contains(
+        assert!(!rendered.contains(
             "I have inspected the repository structure and will now inspect the core modules."
         ));
         assert!(!rendered.contains("waiting for model response · 12s elapsed"));
@@ -1817,6 +1828,39 @@ mod tests {
 
         assert!(rendered.contains(" Plan Decision "));
         assert!(rendered.contains("Approved and started implementation"));
+    }
+
+    #[test]
+    fn active_turn_cell_keeps_responding_section_while_agent_stream_exists() {
+        let temp = tempdir().unwrap();
+        let mut app = TuiApp::new(ConfigManager {
+            path: temp.path().join("config.json"),
+        })
+        .expect("build tui app");
+        app.active_turn = TranscriptTurn {
+            entries: vec![
+                TranscriptEntry {
+                    role: "You".into(),
+                    message: "你好".into(),
+                },
+                TranscriptEntry {
+                    role: "Tool Result".into(),
+                    message: "bash stdout: partial".into(),
+                },
+            ],
+        };
+        app.set_runtime_phase(RuntimePhase::ProcessingResponse, Some("streaming model output".into()));
+        app.append_agent_delta("你好");
+
+        let rendered = ActiveTurnCell::new(&app, Some(Path::new(".")))
+            .display_lines(100)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(rendered.contains("Responding"));
+        assert!(!rendered.contains("Working"));
     }
 
     #[test]
