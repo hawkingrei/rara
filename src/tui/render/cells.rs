@@ -9,7 +9,7 @@ use crate::tui::interaction_text::{
     pending_interaction_card_title, pending_interaction_detail_text,
     pending_interaction_shortcut_text, status_planning_suggestion_text,
 };
-use crate::tui::plan_display::updated_plan_lines;
+use crate::tui::plan_display::{should_show_updated_plan, updated_plan_lines};
 use crate::tui::state::{
     contains_structured_planning_output, ActivePendingInteractionKind, RuntimePhase,
     TranscriptEntry, TuiApp,
@@ -862,7 +862,7 @@ impl ActiveCell for ActiveTurnCell<'_> {
             cells.push(Box::new(RunningCell::new(summary, running_active)));
         }
 
-        if !self.app.snapshot.plan_steps.is_empty() {
+        if should_show_updated_plan(self.app) {
             cells.push(Box::new(PlanSummaryCell::new(
                 self.app.snapshot.plan_steps.clone(),
                 self.app.snapshot.plan_explanation.clone(),
@@ -1747,6 +1747,33 @@ mod tests {
         assert!(rendered.contains("✔ Inspect the current plan UI"));
         assert!(rendered.contains("□ Introduce a dedicated plan formatter"));
         assert!(rendered.contains("□ Unify status and transcript rendering"));
+    }
+
+    #[test]
+    fn active_turn_cell_hides_stale_updated_plan_after_plan_turn_finishes() {
+        let temp = tempdir().unwrap();
+        let mut app = TuiApp::new(ConfigManager {
+            path: temp.path().join("config.json"),
+        })
+        .expect("build tui app");
+        app.active_turn = TranscriptTurn {
+            entries: vec![TranscriptEntry {
+                role: "You".into(),
+                message: "Implement the approved fix".into(),
+            }],
+        };
+        app.snapshot.plan_steps = vec![("pending".into(), "Inspect the config loading flow".into())];
+        app.snapshot.plan_explanation = Some("This should not keep rendering after plan exit.".into());
+
+        let rendered = ActiveTurnCell::new(&app, Some(Path::new(".")))
+            .display_lines(100)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(!rendered.contains("Updated Plan"));
+        assert!(rendered.contains("You: Implement the approved fix"));
     }
 
     #[test]

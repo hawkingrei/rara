@@ -561,7 +561,7 @@ mod tests {
 
         assert_eq!(
             composer_hint(&app),
-            "queued follow-up pending  will submit after the next tool/result boundary"
+            "pending follow-up  will submit after next tool call"
         );
     }
 }
