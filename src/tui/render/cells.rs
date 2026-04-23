@@ -467,7 +467,17 @@ impl ActiveCell for ActiveTurnCell<'_> {
             && matches!(
                 self.app.runtime_phase,
                 RuntimePhase::SendingPrompt | RuntimePhase::ProcessingResponse
-            );
+            )
+            && !has_exploration_summary
+            && !has_planning_summary
+            && !has_running_summary
+            && self.app.snapshot.plan_steps.is_empty()
+            && !suppress_planning_chatter
+            && !suppress_structured_plan_response
+            && self.app.pending_request_input().is_none()
+            && !self.app.has_pending_plan_approval()
+            && self.app.pending_command_approval().is_none()
+            && self.app.pending_planning_suggestion.is_none();
 
         if has_agent_stream
             && !suppress_intermediate_agent

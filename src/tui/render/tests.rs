@@ -310,7 +310,7 @@ fn transcript_viewport_visible_window_keeps_partial_wrapped_line_offset() {
         .collect::<Vec<_>>();
 
     assert_eq!(inner_scroll, 1);
-    assert_eq!(rendered.len(), 2);
+    assert_eq!(rendered.len(), 1);
     assert!(rendered[0].contains("long first line"));
 }
 
