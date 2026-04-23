@@ -474,14 +474,10 @@ fn output_has_text_message(output: &[Value]) -> bool {
     })
 }
 
-fn codex_output_item_identity(item: &Value) -> Option<(&'static str, &str)> {
-    if let Some(call_id) = item.get("call_id").and_then(Value::as_str) {
-        return Some(("call_id", call_id));
-    }
-    if let Some(id) = item.get("id").and_then(Value::as_str) {
-        return Some(("id", id));
-    }
-    None
+fn codex_output_item_identity(item: &Value) -> Option<&str> {
+    item.get("call_id")
+        .or_else(|| item.get("id"))
+        .and_then(Value::as_str)
 }
 
 fn upsert_codex_output_item(output_items: &mut Vec<Value>, item: &Value) {

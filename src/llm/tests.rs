@@ -362,6 +362,52 @@ fn codex_stream_output_item_added_is_upserted_by_done_item() {
 }
 
 #[test]
+fn codex_stream_output_item_matches_mixed_id_and_call_id() {
+    let mut output_items = Vec::new();
+    let mut usage = None;
+    let mut streamed_text = String::new();
+    let mut no_delta_callback: Option<&mut (dyn FnMut(String) + Send)> = None;
+
+    assert!(!apply_codex_stream_event(
+        &json!({
+            "type":"response.output_item.added",
+            "item":{
+                "id":"tool_1",
+                "type":"function_call",
+                "name":"bash",
+                "arguments":"{}"
+            }
+        }),
+        &mut output_items,
+        &mut usage,
+        &mut streamed_text,
+        &mut no_delta_callback,
+    )
+    .unwrap());
+
+    assert!(!apply_codex_stream_event(
+        &json!({
+            "type":"response.output_item.done",
+            "item":{
+                "call_id":"tool_1",
+                "type":"function_call",
+                "name":"bash",
+                "arguments":"{\"cmd\":\"pwd\"}"
+            }
+        }),
+        &mut output_items,
+        &mut usage,
+        &mut streamed_text,
+        &mut no_delta_callback,
+    )
+    .unwrap());
+
+    assert_eq!(output_items.len(), 1);
+    assert_eq!(output_items[0]["call_id"], "tool_1");
+    assert_eq!(output_items[0]["arguments"], "{\"cmd\":\"pwd\"}");
+}
+
+#[test]
 fn codex_stream_response_done_marks_completion() {
     let mut output_items = Vec::new();
     let mut usage = None;
