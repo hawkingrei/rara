@@ -1,17 +1,19 @@
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use codex_login::default_client::default_headers as codex_default_headers;
+use eventsource_stream::Eventsource;
+use futures::StreamExt;
 use secrecy::{ExposeSecret, SecretString};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 use crate::agent::Message;
 use crate::llm::{ContentBlock, LlmResponse, TokenUsage};
 use crate::redaction::{redact_secrets, sanitize_url_for_display};
 
 use super::shared::{
-    ContextBudget, LlmBackend, collect_assistant_content, extract_message_text,
-    extract_single_tool_result, http_client_for_target, model_context_budget, parse_tool_arguments,
-    render_openai_message_content,
+    collect_assistant_content, extract_message_text, extract_single_tool_result,
+    http_client_for_target, model_context_budget, parse_tool_arguments,
+    render_openai_message_content, ContextBudget, LlmBackend,
 };
 
 pub struct OpenAiCompatibleBackend {
@@ -278,30 +280,17 @@ impl CodexBackend {
 #[async_trait]
 impl LlmBackend for CodexBackend {
     async fn ask(&self, m: &[Message], t: &[Value]) -> Result<LlmResponse> {
-        let body =
-            build_codex_responses_request(&self.model, m, t, self.reasoning_effort.as_deref());
-        let responses_url = self.endpoint_url("responses");
-        let mut request = self.client.post(&responses_url);
-        for (name, value) in &codex_default_headers() {
-            request = request.header(name, value);
-        }
-        if let Some(api_key) = self.api_key.as_ref().map(SecretString::expose_secret) {
-            if !api_key.is_empty() {
-                request = request.header("Authorization", format!("Bearer {api_key}"));
-            }
-        }
-        let res = request.json(&body).send().await?;
+        self.ask_responses_streaming(m, t, None).await
+    }
 
-        if !res.status().is_success() {
-            return Err(anyhow!(
-                "API Error at {}: {}",
-                sanitize_url_for_display(&responses_url),
-                redact_secrets(res.text().await?)
-            ));
-        }
-
-        let resp_json: Value = res.json().await?;
-        parse_codex_response(&resp_json)
+    async fn ask_streaming(
+        &self,
+        messages: &[Message],
+        tools: &[Value],
+        on_text_delta: &mut (dyn FnMut(String) + Send),
+    ) -> Result<LlmResponse> {
+        self.ask_responses_streaming(messages, tools, Some(on_text_delta))
+            .await
     }
 
     async fn embed(&self, t: &str) -> Result<Vec<f32>> {
@@ -358,7 +347,7 @@ pub(super) fn build_codex_responses_request(
         "tool_choice": "auto",
         "parallel_tool_calls": true,
         "store": false,
-        "stream": false,
+        "stream": true,
         "include": [],
         "instructions": build_codex_instructions(messages),
         "text": Value::Null,
@@ -371,6 +360,134 @@ pub(super) fn build_codex_responses_request(
         body["reasoning"] = json!({ "effort": reasoning_effort });
     }
     body
+}
+
+impl CodexBackend {
+    async fn ask_responses_streaming(
+        &self,
+        messages: &[Message],
+        tools: &[Value],
+        mut on_text_delta: Option<&mut (dyn FnMut(String) + Send)>,
+    ) -> Result<LlmResponse> {
+        let body = build_codex_responses_request(
+            &self.model,
+            messages,
+            tools,
+            self.reasoning_effort.as_deref(),
+        );
+        let responses_url = self.endpoint_url("responses");
+        let mut request = self.client.post(&responses_url);
+        for (name, value) in &codex_default_headers() {
+            request = request.header(name, value);
+        }
+        if let Some(api_key) = self.api_key.as_ref().map(SecretString::expose_secret) {
+            if !api_key.is_empty() {
+                request = request.header("Authorization", format!("Bearer {api_key}"));
+            }
+        }
+
+        let res = request.json(&body).send().await?;
+        if !res.status().is_success() {
+            return Err(anyhow!(
+                "API Error at {}: {}",
+                sanitize_url_for_display(&responses_url),
+                redact_secrets(res.text().await?)
+            ));
+        }
+
+        let mut stream = res.bytes_stream().eventsource();
+        let mut output_items = Vec::new();
+        let mut usage = None;
+        let mut completed = false;
+
+        while let Some(event) = stream.next().await {
+            let event =
+                event.map_err(|error| anyhow!("Failed to decode Codex SSE event: {error}"))?;
+            if event.data.trim().is_empty() {
+                continue;
+            }
+            let payload: Value = serde_json::from_str(&event.data)
+                .map_err(|error| anyhow!("Failed to parse Codex SSE payload: {error}"))?;
+            completed |= apply_codex_stream_event(
+                &payload,
+                &mut output_items,
+                &mut usage,
+                &mut on_text_delta,
+            )?;
+        }
+
+        if !completed {
+            return Err(anyhow!(
+                "Codex response stream ended before response.completed"
+            ));
+        }
+
+        parse_codex_response(&build_codex_stream_response(
+            output_items,
+            usage,
+            "completed",
+        ))
+    }
+}
+
+fn build_codex_stream_response(output: Vec<Value>, usage: Option<Value>, status: &str) -> Value {
+    let mut response = serde_json::Map::new();
+    response.insert("status".to_string(), Value::String(status.to_string()));
+    response.insert("output".to_string(), Value::Array(output));
+    if let Some(usage) = usage {
+        response.insert("usage".to_string(), usage);
+    }
+    Value::Object(response)
+}
+
+pub(super) fn apply_codex_stream_event(
+    payload: &Value,
+    output_items: &mut Vec<Value>,
+    usage: &mut Option<Value>,
+    on_text_delta: &mut Option<&mut (dyn FnMut(String) + Send)>,
+) -> Result<bool> {
+    match payload.get("type").and_then(Value::as_str) {
+        Some("response.output_text.delta") => {
+            if let Some(delta) = payload.get("delta").and_then(Value::as_str) {
+                if let Some(callback) = on_text_delta.as_mut() {
+                    callback(delta.to_string());
+                }
+            }
+            Ok(false)
+        }
+        Some("response.output_item.done") => {
+            if let Some(item) = payload.get("item") {
+                output_items.push(item.clone());
+            }
+            Ok(false)
+        }
+        Some("response.completed") => {
+            *usage = payload.get("response").and_then(|response| {
+                let usage = response.get("usage")?;
+                (!usage.is_null()).then(|| usage.clone())
+            });
+            Ok(true)
+        }
+        Some("response.failed") => Err(anyhow!(
+            "{}",
+            payload
+                .get("response")
+                .and_then(|response| response.get("error"))
+                .and_then(|error| error.get("message"))
+                .and_then(Value::as_str)
+                .unwrap_or("response.failed event received")
+        )),
+        Some("response.incomplete") => Err(anyhow!(
+            "Incomplete response returned, reason: {}",
+            payload
+                .get("response")
+                .and_then(|response| response.get("incomplete_details"))
+                .and_then(|details| details.get("reason"))
+                .and_then(Value::as_str)
+                .unwrap_or("unknown")
+        )),
+        _ => Ok(false),
+    }
 }
 
 fn to_codex_tools(tools: &[Value]) -> Vec<Value> {
