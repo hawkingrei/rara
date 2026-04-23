@@ -6,6 +6,24 @@ use super::{PendingFollowUpMessage, RuntimePhase, TranscriptEntry, TranscriptTur
 use crate::redaction::redact_secrets;
 
 impl TuiApp {
+    fn replace_turn_agent_message(turn: &mut TranscriptTurn, message: String) -> bool {
+        let Some(last_agent_idx) = turn.entries.iter().rposition(|entry| entry.role == "Agent") else {
+            return false;
+        };
+
+        turn.entries[last_agent_idx].message = message;
+
+        let mut retained = Vec::with_capacity(turn.entries.len());
+        for (idx, entry) in turn.entries.drain(..).enumerate() {
+            if entry.role == "Agent" && idx != last_agent_idx {
+                continue;
+            }
+            retained.push(entry);
+        }
+        turn.entries = retained;
+        true
+    }
+
     fn reset_transcript_scroll_if_following_tail(&mut self) {
         // Keep the transcript pinned to the tail only when the user has not
         // manually scrolled upward. Once they scroll up, transcript mutations
@@ -74,21 +92,13 @@ impl TuiApp {
             return;
         };
 
-        if let Some(last) = self.active_turn.entries.last_mut() {
-            if last.role == "Agent" {
-                last.message = message;
-                self.reset_transcript_scroll_if_following_tail();
-                return;
-            }
+        if Self::replace_turn_agent_message(&mut self.active_turn, message.clone()) {
+            self.reset_transcript_scroll_if_following_tail();
+            return;
         }
         if self.active_turn.entries.is_empty() {
-            if let Some(last) = self
-                .committed_turns
-                .last_mut()
-                .and_then(|turn| turn.entries.last_mut())
-            {
-                if last.role == "Agent" {
-                    last.message = message;
+            if let Some(turn) = self.committed_turns.last_mut() {
+                if Self::replace_turn_agent_message(turn, message.clone()) {
                     self.invalidate_committed_render_cache();
                     self.reset_transcript_scroll_if_following_tail();
                     return;
