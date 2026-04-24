@@ -168,12 +168,10 @@ pub fn recommended_commands(app: &TuiApp) -> Vec<&'static CommandSpec> {
             "status", "help", "clear", "setup",
         ]
     };
-    let mut commands = names
+    names
         .iter()
         .filter_map(|name| command_spec_by_name(name))
-        .collect::<Vec<_>>();
-    commands.sort_by_key(|spec| spec.name);
-    commands
+        .collect()
 }
 
 pub fn recent_command_specs(app: &TuiApp) -> Vec<&'static CommandSpec> {
@@ -348,6 +346,22 @@ pub fn status_context_text(app: &TuiApp) -> String {
             .join("\n")
     };
 
+    let last_boundary = if let Some(version) = app.snapshot.last_compaction_boundary_version {
+        let before = app
+            .snapshot
+            .last_compaction_boundary_before_tokens
+            .map(|tokens| tokens.to_string())
+            .unwrap_or_else(|| "-".to_string());
+        let files = app
+            .snapshot
+            .last_compaction_boundary_recent_file_count
+            .map(|count| count.to_string())
+            .unwrap_or_else(|| "-".to_string());
+        format!("v{version} before_tokens={before} recent_file_count={files}")
+    } else {
+        "-".to_string()
+    };
+
     let mut sections = vec![
         format!(
             "Current Session\n  cwd: {}\n  branch: {}\n  session: {}\n  history messages: {}\n  transcript entries: {}",
@@ -384,21 +398,7 @@ pub fn status_context_text(app: &TuiApp) -> String {
                 .last_compaction_after_tokens
                 .map(|value| value.to_string())
                 .unwrap_or_else(|| "-".to_string()),
-            app.snapshot
-                .last_compaction_boundary_version
-                .map(|value| format!(
-                    "v{} before_tokens={} recent_file_count={}",
-                    value,
-                    app.snapshot
-                        .last_compaction_boundary_before_tokens
-                        .map(|tokens| tokens.to_string())
-                        .unwrap_or_else(|| "-".to_string()),
-                    app.snapshot
-                        .last_compaction_boundary_recent_file_count
-                        .map(|count| count.to_string())
-                        .unwrap_or_else(|| "-".to_string())
-                ))
-                .unwrap_or_else(|| "-".to_string())
+            last_boundary
         ),
         format!("Pending Interaction\n{}", pending_interactions),
     ];

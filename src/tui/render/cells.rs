@@ -105,16 +105,11 @@ fn ordered_exploration_agent_segments<'a>(
 
     flush_exploration(&mut segments, &mut exploration_items);
 
-    let exploration_group_count = segments
-        .iter()
-        .filter(|segment| matches!(segment, OrderedActiveSegment::Exploration(_)))
-        .count();
-    let agent_count = segments
-        .iter()
-        .filter(|segment| matches!(segment, OrderedActiveSegment::Agent(_)))
-        .count();
+    let simple_exploration_then_agent = segments.len() == 2
+        && matches!(segments.first(), Some(OrderedActiveSegment::Exploration(_)))
+        && matches!(segments.last(), Some(OrderedActiveSegment::Agent(_)));
 
-    if saw_interleaving && exploration_group_count >= 2 && agent_count >= 1 {
+    if saw_interleaving || (segments.len() > 1 && !simple_exploration_then_agent) {
         Some(segments)
     } else {
         None

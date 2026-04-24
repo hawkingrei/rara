@@ -514,6 +514,47 @@ fn active_turn_cell_preserves_exploration_agent_exploration_order() {
 }
 
 #[test]
+fn active_turn_cell_preserves_agent_then_exploration_order() {
+    let temp = tempdir().unwrap();
+    let mut app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("build tui app");
+    app.runtime_phase = RuntimePhase::RunningTool;
+    app.active_turn = TranscriptTurn {
+        entries: vec![
+            TranscriptEntry {
+                role: "You".into(),
+                message: "Inspect the bootstrap path".into(),
+            },
+            TranscriptEntry {
+                role: "Agent".into(),
+                message: "I have narrowed this down to the runtime bootstrap path.".into(),
+            },
+            TranscriptEntry {
+                role: "Tool".into(),
+                message: "read_file src/runtime_context.rs".into(),
+            },
+        ],
+    };
+
+    let rendered = ActiveTurnCell::new(&app, Some(Path::new(".")))
+        .display_lines(100)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let agent = rendered
+        .find("• I have narrowed this down to the runtime bootstrap path.")
+        .unwrap();
+    let exploring = rendered.find(" Exploring ").unwrap();
+
+    assert!(rendered.contains("Read src/runtime_context.rs"));
+    assert!(agent < exploring);
+}
+
+#[test]
 fn active_turn_cell_uses_responding_label_while_busy() {
     let temp = tempdir().unwrap();
     let mut app = TuiApp::new(ConfigManager {
