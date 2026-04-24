@@ -69,7 +69,7 @@ pub async fn run_tui(
     agent: Agent,
     oauth_manager: OAuthManager,
     startup_resume: StartupResumeTarget,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<Option<String>> {
     enable_raw_mode()?;
     let initial_size = terminal_size()?;
     let mut app = TuiApp::new(crate::config::ConfigManager::new()?)?;
@@ -98,6 +98,7 @@ pub async fn run_tui(
         Err(err) => app.set_state_db_error(err.to_string()),
     }
     let oauth_manager = Arc::new(oauth_manager);
+    app.codex_auth_mode = oauth_manager.saved_auth_mode().ok().flatten();
     let mut events = EventStream::new();
     let mut tick = interval(Duration::from_millis(100));
 
@@ -106,7 +107,7 @@ pub async fn run_tui(
     }
     app.start_repo_context_detection();
 
-    let result = loop {
+    let result: anyhow::Result<()> = loop {
         app.finish_repo_context_task_if_ready().await;
         finish_running_task_if_ready(&mut app, &mut agent_slot).await?;
         clamp_command_palette_selection(&mut app);
@@ -165,7 +166,16 @@ pub async fn run_tui(
         handle.abort();
     }
     teardown_terminal(terminal)?;
-    result
+    result?;
+
+    let session_id = agent_slot
+        .as_ref()
+        .map(|agent| agent.session_id.clone())
+        .filter(|session_id| !session_id.is_empty())
+        .or_else(|| {
+            (!app.snapshot.session_id.is_empty()).then(|| app.snapshot.session_id.clone())
+        });
+    Ok(session_id)
 }
 
 
@@ -402,12 +412,16 @@ async fn dispatch_event(
                 app.push_notice("Enter a Codex API key or press Esc to go back.");
             } else if value.is_empty() {
                 app.config.clear_api_key();
+                if app.config.provider == "codex" {
+                    app.codex_auth_mode = None;
+                }
                 app.config_manager.save(&app.config)?;
                 app.notice = Some("Cleared API key for the current provider.".into());
                 app.close_overlay();
             } else {
                 app.config.set_api_key(value.to_string());
                 if app.config.provider == "codex" {
+                    app.codex_auth_mode = Some(crate::oauth::SavedCodexAuthMode::ApiKey);
                     app.config
                         .apply_codex_defaults_for_base_url(crate::config::DEFAULT_CODEX_BASE_URL);
                 }
@@ -559,6 +573,7 @@ async fn dispatch_event(
                     } else {
                         let removed = oauth_manager.clear_saved_auth()?;
                         app.config.clear_provider_api_key("codex");
+                        app.codex_auth_mode = None;
                         app.config_manager.save(&app.config)?;
                         app.notice = Some(if removed {
                             "Cleared the saved provider credential.".into()

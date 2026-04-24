@@ -3,9 +3,9 @@ use anyhow::Result;
 use crate::agent::Message;
 use crate::session::{PersistedCompactionEvent, SessionManager};
 use crate::state_db::{
-    PersistedCompactState, PersistedInteraction, PersistedPlanStep, PersistedRecentThreadRecord,
-    PersistedRuntimeRolloutItem, PersistedStructuredRolloutEvent, PersistedThreadRecord,
-    PersistedTurnEntry, PersistedTurnSummary, StateDb,
+    PersistedCompactState, PersistedInteraction, PersistedPlanStep, PersistedPromptRuntimeState,
+    PersistedRecentThreadRecord, PersistedRuntimeRolloutItem, PersistedStructuredRolloutEvent,
+    PersistedThreadRecord, PersistedTurnEntry, PersistedTurnSummary, StateDb,
 };
 
 #[cfg(test)]
@@ -323,6 +323,7 @@ pub struct ThreadRuntimeState<'a> {
     pub agent_mode: &'a str,
     pub bash_approval: &'a str,
     pub plan_explanation: Option<&'a str>,
+    pub prompt_runtime: PersistedPromptRuntimeState,
     pub history_len: usize,
     pub transcript_len: usize,
     pub compact_state: PersistedCompactState,
@@ -348,6 +349,7 @@ impl<'a> ThreadRecorder<'a> {
             state.agent_mode,
             state.bash_approval,
             state.plan_explanation,
+            &state.prompt_runtime,
             state.history_len,
             state.transcript_len,
             &state.compact_state,

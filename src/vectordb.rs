@@ -18,6 +18,10 @@ impl VectorDB {
         }
     }
 
+    pub fn uri(&self) -> &str {
+        &self._uri
+    }
+
     pub async fn search_with_metadata(
         &self,
         _table_name: &str,

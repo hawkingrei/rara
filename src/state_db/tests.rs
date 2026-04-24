@@ -1,5 +1,6 @@
 use super::{
-    PersistedCompactState, PersistedInteraction, PersistedPlanStep, PersistedTurnEntry, StateDb,
+    PersistedCompactState, PersistedInteraction, PersistedPlanStep, PersistedPromptRuntimeState,
+    PersistedTurnEntry, StateDb,
 };
 use anyhow::Result;
 use rusqlite::Connection;
@@ -19,6 +20,7 @@ fn persists_metadata_and_rollout_artifact() -> Result<()> {
         "execute",
         "suggestion",
         Some("Inspect the repository and summarize issues."),
+        &PersistedPromptRuntimeState::default(),
         4,
         3,
         &PersistedCompactState::default(),
@@ -105,6 +107,7 @@ fn persists_interaction_payloads_for_restore() -> Result<()> {
         "execute",
         "suggestion",
         None,
+        &PersistedPromptRuntimeState::default(),
         2,
         1,
         &PersistedCompactState::default(),
@@ -153,6 +156,7 @@ fn persists_structured_approval_payloads_for_restore() -> Result<()> {
         "execute",
         "suggestion",
         None,
+        &PersistedPromptRuntimeState::default(),
         2,
         1,
         &PersistedCompactState::default(),
@@ -223,6 +227,7 @@ fn persists_compact_state_for_restore() -> Result<()> {
         "execute",
         "suggestion",
         None,
+        &PersistedPromptRuntimeState::default(),
         6,
         2,
         &PersistedCompactState {
@@ -264,5 +269,44 @@ fn persists_compact_state_for_restore() -> Result<()> {
     assert_eq!(recent.bash_approval, "suggestion");
     assert_eq!(recent.compaction_count, 3);
     assert_eq!(recent.last_compaction_after_tokens, Some(4_200));
+    Ok(())
+}
+
+#[test]
+fn persists_session_runtime_state_for_restore() -> Result<()> {
+    let temp = tempdir()?;
+    let db = StateDb::new_for_root_dir(temp.path().join(".rara"))?;
+    db.upsert_session(
+        "session-runtime",
+        "/tmp/workspace",
+        "main",
+        "codex",
+        "gpt-5.4",
+        Some("https://chatgpt.com/backend-api/codex"),
+        "plan",
+        "always",
+        Some("Restore should rebuild the same context surface."),
+        &PersistedPromptRuntimeState {
+            append_system_prompt: Some("appendix".to_string()),
+            warnings: vec!["missing custom prompt file".to_string()],
+        },
+        8,
+        3,
+        &PersistedCompactState::default(),
+    )?;
+
+    let runtime = db
+        .load_session_runtime_state("session-runtime")?
+        .expect("session runtime state");
+    assert_eq!(runtime.agent_mode, "plan");
+    assert_eq!(runtime.bash_approval, "always");
+    assert_eq!(
+        runtime.prompt_runtime.append_system_prompt.as_deref(),
+        Some("appendix")
+    );
+    assert_eq!(
+        runtime.prompt_runtime.warnings,
+        vec!["missing custom prompt file".to_string()]
+    );
     Ok(())
 }

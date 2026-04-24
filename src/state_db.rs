@@ -130,6 +130,19 @@ pub struct PersistedCompactState {
     pub last_compaction_boundary_version: Option<u32>,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PersistedPromptRuntimeState {
+    pub append_system_prompt: Option<String>,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PersistedSessionRuntimeState {
+    pub agent_mode: String,
+    pub bash_approval: String,
+    pub prompt_runtime: PersistedPromptRuntimeState,
+}
+
 pub struct StateDb {
     root_dir: PathBuf,
     path: PathBuf,
@@ -184,6 +197,7 @@ impl StateDb {
         agent_mode: &str,
         bash_approval: &str,
         plan_explanation: Option<&str>,
+        prompt_runtime: &PersistedPromptRuntimeState,
         history_len: usize,
         transcript_len: usize,
         compact_state: &PersistedCompactState,
@@ -193,11 +207,11 @@ impl StateDb {
         conn.execute(
             "INSERT INTO sessions (
                 id, cwd, branch, provider, model, base_url, agent_mode, bash_approval,
-                plan_explanation, history_len, transcript_len, compaction_count,
+                plan_explanation, prompt_runtime_json, history_len, transcript_len, compaction_count,
                 last_compaction_before_tokens, last_compaction_after_tokens,
                 last_compaction_recent_file_count, last_compaction_boundary_version,
                 created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 cwd = excluded.cwd,
                 branch = excluded.branch,
@@ -207,6 +221,7 @@ impl StateDb {
                 agent_mode = excluded.agent_mode,
                 bash_approval = excluded.bash_approval,
                 plan_explanation = excluded.plan_explanation,
+                prompt_runtime_json = excluded.prompt_runtime_json,
                 history_len = excluded.history_len,
                 transcript_len = excluded.transcript_len,
                 compaction_count = excluded.compaction_count,
@@ -225,6 +240,7 @@ impl StateDb {
                 agent_mode,
                 bash_approval,
                 plan_explanation,
+                serde_json::to_string(prompt_runtime)?,
                 history_len as i64,
                 transcript_len as i64,
                 compact_state.compaction_count as i64,
@@ -245,6 +261,45 @@ impl StateDb {
             ],
         )?;
         Ok(())
+    }
+
+    pub fn load_session_runtime_state(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<PersistedSessionRuntimeState>> {
+        let conn = self.conn.lock().expect("state db mutex poisoned");
+        let runtime_state = conn.query_row(
+            "SELECT agent_mode, bash_approval, prompt_runtime_json
+             FROM sessions
+             WHERE id = ?",
+            params![session_id],
+            |row| {
+                let prompt_runtime_json: Option<String> = row.get(2)?;
+                let prompt_runtime = prompt_runtime_json
+                    .as_deref()
+                    .filter(|value| !value.is_empty())
+                    .map(serde_json::from_str)
+                    .transpose()
+                    .map_err(|err| {
+                        rusqlite::Error::FromSqlConversionFailure(
+                            2,
+                            rusqlite::types::Type::Text,
+                            Box::new(err),
+                        )
+                    })?
+                    .unwrap_or_default();
+                Ok(PersistedSessionRuntimeState {
+                    agent_mode: row.get(0)?,
+                    bash_approval: row.get(1)?,
+                    prompt_runtime,
+                })
+            },
+        );
+        match runtime_state {
+            Ok(runtime_state) => Ok(Some(runtime_state)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(err) => Err(err.into()),
+        }
     }
 
     pub fn replace_plan_steps(&self, session_id: &str, steps: &[PersistedPlanStep]) -> Result<()> {
@@ -765,6 +820,7 @@ impl StateDb {
                 agent_mode TEXT NOT NULL,
                 bash_approval TEXT NOT NULL,
                 plan_explanation TEXT,
+                prompt_runtime_json TEXT,
                 history_len INTEGER NOT NULL DEFAULT 0,
                 transcript_len INTEGER NOT NULL DEFAULT 0,
                 compaction_count INTEGER NOT NULL DEFAULT 0,
@@ -817,6 +873,7 @@ impl StateDb {
             ",
         )?;
         ensure_column(&conn, "sessions", "plan_explanation", "TEXT")?;
+        ensure_column(&conn, "sessions", "prompt_runtime_json", "TEXT")?;
         ensure_column(
             &conn,
             "sessions",

@@ -36,6 +36,8 @@ impl Agent {
                     .collect(),
                 plan_explanation: self.plan_explanation.clone(),
                 compact_state: self.compact_state.clone(),
+                history: &self.history,
+                vdb_uri: self.vdb.uri(),
             },
         )
     }

@@ -6,8 +6,8 @@ use super::{
     state_db_status_error, InteractionKind, StateDb, TranscriptTurn, TuiApp,
 };
 use crate::state_db::{
-    PersistedCompactState, PersistedInteraction, PersistedPlanStep, PersistedRuntimeRolloutItem,
-    PersistedStructuredRolloutEvent, PersistedTurnEntry,
+    PersistedCompactState, PersistedInteraction, PersistedPlanStep, PersistedPromptRuntimeState,
+    PersistedRuntimeRolloutItem, PersistedStructuredRolloutEvent, PersistedTurnEntry,
 };
 use crate::thread_store::{ThreadRecorder, ThreadRuntimeState, ThreadStore};
 
@@ -55,6 +55,10 @@ impl TuiApp {
             agent_mode: self.agent_execution_mode_label(),
             bash_approval: self.bash_approval_mode_label(),
             plan_explanation: self.snapshot.plan_explanation.as_deref(),
+            prompt_runtime: PersistedPromptRuntimeState {
+                append_system_prompt: self.snapshot.prompt_append_system_prompt.clone(),
+                warnings: self.snapshot.prompt_warnings.clone(),
+            },
             history_len: self.snapshot.history_len,
             transcript_len: self.transcript_entry_count(),
             compact_state: PersistedCompactState {

@@ -4,7 +4,8 @@ use tempfile::tempdir;
 use crate::agent::Message;
 use crate::session::{PersistedCompactionEvent, SessionManager};
 use crate::state_db::{
-    PersistedCompactState, PersistedInteraction, PersistedPlanStep, PersistedTurnEntry, StateDb,
+    PersistedCompactState, PersistedInteraction, PersistedPlanStep, PersistedPromptRuntimeState,
+    PersistedTurnEntry, StateDb,
 };
 
 use super::{RolloutItem, ThreadRecorder, ThreadRuntimeState, ThreadStore};
@@ -32,6 +33,7 @@ fn load_thread_aggregates_history_state_and_rollout_items() -> Result<()> {
         "execute",
         "always",
         Some("Inspect current plan state."),
+        &PersistedPromptRuntimeState::default(),
         1,
         1,
         &PersistedCompactState {
@@ -141,6 +143,7 @@ fn load_thread_keeps_session_without_history_file() -> Result<()> {
         "execute",
         "always",
         None,
+        &PersistedPromptRuntimeState::default(),
         0,
         0,
         &PersistedCompactState::default(),
@@ -170,6 +173,7 @@ fn load_thread_prefers_structured_compaction_event_over_session_counters() -> Re
         "execute",
         "always",
         None,
+        &PersistedPromptRuntimeState::default(),
         0,
         0,
         &PersistedCompactState {
@@ -221,6 +225,7 @@ fn load_thread_prefers_structured_runtime_rollout_items() -> Result<()> {
         "execute",
         "always",
         Some("State DB summary should not override runtime rollout."),
+        &PersistedPromptRuntimeState::default(),
         0,
         0,
         &PersistedCompactState::default(),
@@ -297,6 +302,7 @@ fn thread_recorder_persists_runtime_state_via_state_db() -> Result<()> {
         agent_mode: "execute",
         bash_approval: "always",
         plan_explanation: Some("Keep persistence writes structured."),
+        prompt_runtime: PersistedPromptRuntimeState::default(),
         history_len: 3,
         transcript_len: 2,
         compact_state: PersistedCompactState {
@@ -332,6 +338,7 @@ fn list_recent_threads_exposes_thread_metadata_surface() -> Result<()> {
         agent_mode: "execute",
         bash_approval: "suggestion",
         plan_explanation: None,
+        prompt_runtime: PersistedPromptRuntimeState::default(),
         history_len: 2,
         transcript_len: 1,
         compact_state: PersistedCompactState {

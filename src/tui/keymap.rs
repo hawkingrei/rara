@@ -25,6 +25,10 @@ pub(super) fn map_key_to_event(key: KeyCode, app: &TuiApp) -> AppEvent {
             KeyCode::Esc | KeyCode::Enter => AppEvent::CloseOverlay,
             _ => AppEvent::Noop,
         },
+        Some(Overlay::Context) => match key {
+            KeyCode::Esc | KeyCode::Enter => AppEvent::CloseOverlay,
+            _ => AppEvent::Noop,
+        },
         Some(Overlay::Setup) => match key {
             KeyCode::Esc => AppEvent::CloseOverlay,
             KeyCode::Char('1') => AppEvent::SetModelSelection(0),
