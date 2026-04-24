@@ -4,5 +4,9 @@
 //! lightweight enough for branches that only need `mod context;` to compile.
 
 mod assembler;
+mod runtime;
 
 pub use self::assembler::{AssembledContext, ContextAssembler};
+pub use self::runtime::{
+    CompactionContextView, PlanContextView, PromptContextView, SharedRuntimeContext,
+};

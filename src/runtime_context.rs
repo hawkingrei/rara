@@ -1,0 +1,329 @@
+use std::sync::Arc;
+
+use anyhow::{bail, Context, Result};
+
+use crate::agent::Agent;
+use crate::config::{DEFAULT_CODEX_BASE_URL, DEFAULT_CODEX_MODEL, RaraConfig};
+use crate::llm::{
+    CodexBackend, GeminiBackend, LlmBackend, MockLlm, OllamaBackend, OpenAiCompatibleBackend,
+};
+use crate::local_backend::{LocalLlmBackend, LocalProgressReporter};
+use crate::prompt::PromptRuntimeConfig;
+use crate::sandbox::SandboxManager;
+use crate::session::SessionManager;
+use crate::skill::SkillManager;
+use crate::tool::ToolManager;
+use crate::tools::agent::{AgentTool, ExploreAgentTool, PlanAgentTool, TeamCreateTool};
+use crate::tools::bash::BashTool;
+use crate::tools::context::RetrieveSessionContextTool;
+use crate::tools::file::{ListFilesTool, ReadFileTool, ReplaceTool, WriteFileTool};
+use crate::tools::patch::ApplyPatchTool;
+use crate::tools::search::{GlobTool, GrepTool};
+use crate::tools::skill::SkillTool;
+use crate::tools::vector::{RememberExperienceTool, RetrieveExperienceTool};
+use crate::tools::web::WebFetchTool;
+use crate::tools::workspace::UpdateProjectMemoryTool;
+use crate::vectordb::VectorDB;
+use crate::workspace::WorkspaceMemory;
+
+pub(crate) struct RuntimeBootstrap {
+    pub backend: Arc<dyn LlmBackend>,
+    pub vdb: Arc<VectorDB>,
+    pub session_manager: Arc<SessionManager>,
+    pub workspace: Arc<WorkspaceMemory>,
+    pub tool_manager: ToolManager,
+    pub prompt_config: PromptRuntimeConfig,
+    pub warnings: Vec<String>,
+}
+
+impl RuntimeBootstrap {
+    pub(crate) fn into_agent(self) -> Agent {
+        let (agent, _) = self.into_parts();
+        agent
+    }
+
+    pub(crate) fn into_parts(self) -> (Agent, Vec<String>) {
+        let mut agent = Agent::new(
+            self.tool_manager,
+            self.backend,
+            self.vdb,
+            self.session_manager,
+            self.workspace,
+        );
+        agent.set_prompt_config(self.prompt_config);
+        (agent, self.warnings)
+    }
+}
+
+pub(crate) async fn initialize_rara_context(
+    config: &RaraConfig,
+    progress: Option<LocalProgressReporter>,
+) -> Result<RuntimeBootstrap> {
+    let backend = build_backend_with_progress(config, progress).await?;
+    let backend: Arc<dyn LlmBackend> = backend.into();
+
+    let workspace = Arc::new(WorkspaceMemory::new()?);
+    let vdb = Arc::new(VectorDB::new(&vector_db_uri_for_workspace(&workspace)));
+    let session_manager = Arc::new(SessionManager::new()?);
+    let sandbox_manager = Arc::new(SandboxManager::new()?);
+
+    let prompt_config = PromptRuntimeConfig::from_config(config);
+    let mut warnings = prompt_config.warnings.clone();
+    let skill_manager = load_skill_manager(&mut warnings);
+
+    let tool_manager = create_full_tool_manager(
+        backend.clone(),
+        vdb.clone(),
+        session_manager.clone(),
+        workspace.clone(),
+        sandbox_manager,
+        skill_manager,
+        prompt_config.clone(),
+    );
+
+    Ok(RuntimeBootstrap {
+        backend,
+        vdb,
+        session_manager,
+        workspace,
+        tool_manager,
+        prompt_config,
+        warnings,
+    })
+}
+
+pub(crate) async fn build_runtime_bootstrap(
+    config: &RaraConfig,
+    progress: Option<LocalProgressReporter>,
+) -> Result<RuntimeBootstrap> {
+    initialize_rara_context(config, progress).await
+}
+
+pub(crate) async fn build_backend(config: &RaraConfig) -> Result<Box<dyn LlmBackend>> {
+    build_backend_with_progress(config, None).await
+}
+
+pub(crate) async fn build_backend_with_progress(
+    config: &RaraConfig,
+    progress: Option<LocalProgressReporter>,
+) -> Result<Box<dyn LlmBackend>> {
+    match config.provider.as_str() {
+        "kimi" => Ok(Box::new(OpenAiCompatibleBackend::new(
+            Some(
+                config
+                    .api_key
+                    .clone()
+                    .context("API key required for Kimi provider")?,
+            ),
+            "https://api.moonshot.cn/v1".to_string(),
+            config
+                .model
+                .clone()
+                .unwrap_or_else(|| "moonshot-v1-8k".to_string()),
+        )?)),
+        "codex" => Ok(Box::new(CodexBackend::new(
+            config.api_key.clone(),
+            config
+                .base_url
+                .clone()
+                .unwrap_or_else(|| DEFAULT_CODEX_BASE_URL.to_string()),
+            config
+                .model
+                .clone()
+                .unwrap_or_else(|| DEFAULT_CODEX_MODEL.to_string()),
+            config.reasoning_effort.clone(),
+        )?)),
+        "openai-compatible" => Ok(Box::new(OpenAiCompatibleBackend::new(
+            config.api_key.clone(),
+            config
+                .base_url
+                .clone()
+                .unwrap_or_else(|| "https://api.openai.com/v1".to_string()),
+            config
+                .model
+                .clone()
+                .unwrap_or_else(|| "gpt-4o-mini".to_string()),
+        )?)),
+        "ollama" | "ollama-native" => Ok(Box::new(OllamaBackend::new(
+            config
+                .base_url
+                .clone()
+                .unwrap_or_else(|| "http://localhost:11434".to_string()),
+            config.model.clone().unwrap_or_else(|| "gemma4".to_string()),
+            config.thinking.unwrap_or(true),
+            config.num_ctx,
+        )?)),
+        "ollama-openai" => Ok(Box::new(OpenAiCompatibleBackend::new(
+            config.api_key.clone(),
+            config
+                .base_url
+                .clone()
+                .unwrap_or_else(|| "http://localhost:11434".to_string()),
+            config.model.clone().unwrap_or_else(|| "gemma4".to_string()),
+        )?)),
+        "gemini" => Ok(Box::new(GeminiBackend {
+            api_key: config
+                .api_key
+                .clone()
+                .context("API key required for Gemini provider")?,
+            model: config
+                .model
+                .clone()
+                .unwrap_or_else(|| "gemini-1.5-pro".to_string()),
+        })),
+        "gemma4" | "qwen3" | "qwn3" | "local" | "local-candle" => {
+            let config = config.clone();
+            let progress = progress.clone();
+            let backend = tokio::task::spawn_blocking(move || {
+                LocalLlmBackend::from_config_with_progress(&config, progress)
+            })
+            .await??;
+            Ok(Box::new(backend))
+        }
+        "mock" => Ok(Box::new(MockLlm)),
+        other => bail!("Unsupported provider '{other}'"),
+    }
+}
+
+fn create_full_tool_manager(
+    backend: Arc<dyn LlmBackend>,
+    vdb: Arc<VectorDB>,
+    session_manager: Arc<SessionManager>,
+    workspace: Arc<WorkspaceMemory>,
+    sandbox: Arc<SandboxManager>,
+    skill_manager: Arc<SkillManager>,
+    prompt_config: PromptRuntimeConfig,
+) -> ToolManager {
+    let mut tm = ToolManager::new();
+    let vector_db_uri = vector_db_uri_for_workspace(&workspace);
+
+    tm.register(Box::new(BashTool {
+        sandbox: sandbox.clone(),
+    }));
+    tm.register(Box::new(ReadFileTool));
+    tm.register(Box::new(ApplyPatchTool));
+    tm.register(Box::new(WriteFileTool));
+    tm.register(Box::new(ListFilesTool));
+    tm.register(Box::new(ReplaceTool));
+    tm.register(Box::new(WebFetchTool));
+    tm.register(Box::new(GlobTool));
+    tm.register(Box::new(GrepTool));
+    tm.register(Box::new(RememberExperienceTool {
+        backend: backend.clone(),
+        db_uri: vector_db_uri.clone(),
+    }));
+    tm.register(Box::new(RetrieveExperienceTool {
+        backend: backend.clone(),
+        db_uri: vector_db_uri,
+    }));
+    tm.register(Box::new(RetrieveSessionContextTool {
+        backend: backend.clone(),
+        vdb: vdb.clone(),
+        session_manager: session_manager.clone(),
+    }));
+    tm.register(Box::new(UpdateProjectMemoryTool {
+        workspace: workspace.clone(),
+    }));
+    tm.register(Box::new(SkillTool {
+        skill_manager: skill_manager.clone(),
+    }));
+    tm.register(Box::new(AgentTool {
+        backend: backend.clone(),
+        vdb: vdb.clone(),
+        session_manager: session_manager.clone(),
+        workspace: workspace.clone(),
+        prompt_config: prompt_config.clone(),
+    }));
+    tm.register(Box::new(ExploreAgentTool {
+        backend: backend.clone(),
+        vdb: vdb.clone(),
+        session_manager: session_manager.clone(),
+        workspace: workspace.clone(),
+        prompt_config: prompt_config.clone(),
+    }));
+    tm.register(Box::new(PlanAgentTool {
+        backend: backend.clone(),
+        vdb: vdb.clone(),
+        session_manager: session_manager.clone(),
+        workspace: workspace.clone(),
+        prompt_config,
+    }));
+    tm.register(Box::new(TeamCreateTool {
+        backend,
+        vdb,
+        session_manager,
+        workspace,
+    }));
+    tm
+}
+
+fn load_skill_manager(warnings: &mut Vec<String>) -> Arc<SkillManager> {
+    let mut skill_manager = SkillManager::new();
+    if let Err(err) = skill_manager.load_all() {
+        warnings.push(format!("Skill loading failed: {err}"));
+    }
+    Arc::new(skill_manager)
+}
+
+fn vector_db_uri_for_workspace(workspace: &WorkspaceMemory) -> String {
+    workspace.rara_dir.join("lancedb").display().to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        build_backend_with_progress, initialize_rara_context, vector_db_uri_for_workspace,
+    };
+    use crate::config::RaraConfig;
+    use crate::workspace::WorkspaceMemory;
+    use tempfile::tempdir;
+
+    #[test]
+    fn vector_db_uri_is_workspace_scoped() {
+        let temp = tempdir().expect("tempdir");
+        let workspace =
+            WorkspaceMemory::from_paths(temp.path().join("repo"), temp.path().join(".rara"));
+
+        assert_eq!(
+            vector_db_uri_for_workspace(&workspace),
+            temp.path().join(".rara").join("lancedb").display().to_string()
+        );
+    }
+
+    #[tokio::test]
+    async fn initialize_rara_context_surfaces_prompt_runtime_warnings() {
+        let config = RaraConfig {
+            provider: "mock".into(),
+            system_prompt_file: Some("missing-system-prompt.md".into()),
+            ..Default::default()
+        };
+
+        let bootstrap = initialize_rara_context(&config, None)
+            .await
+            .expect("bootstrap");
+
+        assert!(
+            bootstrap
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("system prompt"))
+        );
+    }
+
+    #[tokio::test]
+    async fn unsupported_provider_returns_error() {
+        let config = RaraConfig {
+            provider: "does-not-exist".to_string(),
+            ..Default::default()
+        };
+
+        let err = match build_backend_with_progress(&config, None).await {
+            Ok(_) => panic!("unsupported provider should fail"),
+            Err(err) => err,
+        };
+
+        assert!(err
+            .to_string()
+            .contains("Unsupported provider 'does-not-exist'"));
+    }
+}

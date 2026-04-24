@@ -48,7 +48,7 @@ Switching between providers must preserve and restore provider-local settings in
 - `base_url`
 - `model`
 - `revision`
-- `thinking`
+- `reasoning_summary`
 - `num_ctx`
 
 This allows the user to switch between Codex, Ollama, local models, and generic OpenAI-compatible endpoints without losing per-provider connection details.

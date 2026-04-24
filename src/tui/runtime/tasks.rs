@@ -472,8 +472,8 @@ pub(super) async fn finish_running_task_if_ready(
             }
         }
         TaskCompletion::Rebuild { result } => match result {
-            Ok(agent) => {
-                let mut agent = agent;
+            Ok(rebuilt) => {
+                let mut agent = rebuilt.agent;
                 agent.set_execution_mode(app.agent_execution_mode);
                 agent.set_bash_approval_mode(app.bash_approval_mode);
                 app.config_manager.save(&app.config)?;
@@ -496,6 +496,9 @@ pub(super) async fn finish_running_task_if_ready(
                 app.close_overlay();
                 app.set_runtime_phase(RuntimePhase::BackendReady, Some("backend ready".into()));
                 app.push_entry("Runtime", app.setup_status.clone().unwrap_or_default());
+                for warning in rebuilt.warnings {
+                    app.push_notice(warning);
+                }
                 app.finalize_active_turn();
                 try_start_queued_follow_up(app, agent_slot);
             }

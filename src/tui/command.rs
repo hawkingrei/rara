@@ -270,8 +270,13 @@ pub fn status_runtime_text(app: &TuiApp) -> String {
             "off"
         }
     } else {
-        "default"
+        "-"
     };
+    let reasoning_summary = app
+        .config
+        .reasoning_summary
+        .as_deref()
+        .unwrap_or(rara_config::DEFAULT_REASONING_SUMMARY);
     let (device, dtype) = if is_local_provider(&app.config.provider) {
         crate::local_backend::local_runtime_target()
             .unwrap_or_else(|_| ("unavailable".to_string(), "unavailable".to_string()))
@@ -279,7 +284,7 @@ pub fn status_runtime_text(app: &TuiApp) -> String {
         ("remote".to_string(), "-".to_string())
     };
     format!(
-        "provider={}\nmodel={}\nbase_url={}\nrevision={}\nagent_mode={}\nbash_approval={}\nmode={}\napi_key={}\nthinking={}\nreasoning_effort={}\ndevice={}\ndtype={}\nfocused={}\nphase={}\ndetail={}",
+        "provider={}\nmodel={}\nbase_url={}\nrevision={}\nagent_mode={}\nbash_approval={}\nmode={}\napi_key={}\nthinking={}\nreasoning_summary={}\nreasoning_effort={}\ndevice={}\ndtype={}\nfocused={}\nphase={}\ndetail={}",
         app.config.provider,
         app.current_model_label(),
         app.config.base_url.as_deref().unwrap_or("-"),
@@ -289,6 +294,7 @@ pub fn status_runtime_text(app: &TuiApp) -> String {
         mode,
         api_key_status(&app.config),
         thinking,
+        reasoning_summary,
         app.current_reasoning_effort_label(),
         device,
         dtype,
