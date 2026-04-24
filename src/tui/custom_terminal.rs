@@ -41,7 +41,7 @@ use ratatui::layout::Rect;
 use ratatui::layout::Size;
 use ratatui::style::Color;
 use ratatui::style::Modifier;
-use ratatui::widgets::Widget;
+use ratatui::widgets::{StatefulWidget, Widget};
 use unicode_width::UnicodeWidthStr;
 
 /// Returns the display width of a cell symbol, ignoring OSC escape sequences.
@@ -122,6 +122,15 @@ impl Frame<'_> {
 
     pub fn render_widget<W: Widget>(&mut self, widget: W, area: Rect) {
         widget.render(area, self.buffer);
+    }
+
+    pub fn render_stateful_widget<W: StatefulWidget>(
+        &mut self,
+        widget: W,
+        area: Rect,
+        state: &mut W::State,
+    ) {
+        widget.render(area, self.buffer, state);
     }
 
     /// After drawing this frame, make the cursor visible and put it at the specified (x, y)

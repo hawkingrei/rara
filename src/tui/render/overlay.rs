@@ -5,14 +5,15 @@ use ratatui::{
     layout::{Alignment, Constraint, Direction, Flex, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Tabs, Wrap},
+    widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Tabs, Wrap},
 };
 
 use super::super::command::{
     command_detail_text, command_spec_by_index, current_turn_preview, download_status_text,
     general_help_text, help_text, matching_commands, model_help_text,
     palette_command_by_index, palette_commands, quick_actions_text, recent_transcript_preview,
-    status_prompt_sources_text, status_resources_text, status_runtime_text, status_workspace_text,
+    status_context_text, status_prompt_sources_text, status_resources_text, status_runtime_text,
+    status_workspace_text,
 };
 use super::super::custom_terminal::Frame;
 use super::super::interaction_text::status_active_pending_interaction_text;
@@ -42,6 +43,10 @@ pub(super) fn render_overlay(
         }
         Overlay::Status => {
             render_status_modal(f, app, popup);
+            None
+        }
+        Overlay::Context => {
+            render_context_modal(f, app, popup);
             None
         }
         Overlay::Setup => {
@@ -120,28 +125,27 @@ fn render_help_modal(f: &mut Frame, app: &TuiApp, area: Rect, tab: HelpTab) {
             let query = app.input.trim_start().trim_start_matches('/');
             let items = matching_commands(query)
                 .into_iter()
-                .enumerate()
-                .map(|(idx, spec)| {
-                    let style = if idx == app.command_palette_idx {
-                        Style::default()
-                            .fg(Color::Cyan)
-                            .add_modifier(Modifier::BOLD)
-                    } else {
-                        Style::default()
-                    };
-                    ListItem::new(format!("{}  {}", spec.usage, spec.summary)).style(style)
-                })
+                .map(command_palette_item)
                 .collect::<Vec<_>>();
             let detail = command_spec_by_index(query, app.command_palette_idx)
                 .map(command_detail_text)
                 .unwrap_or_else(help_text);
-            f.render_widget(
-                List::new(items).block(
-                    Block::default()
-                        .borders(Borders::LEFT | Borders::RIGHT)
-                        .title(" Commands "),
-                ),
+            let mut state = command_palette_list_state(app.command_palette_idx);
+            f.render_stateful_widget(
+                List::new(items)
+                    .highlight_style(
+                        Style::default()
+                            .fg(Color::Cyan)
+                            .add_modifier(Modifier::BOLD),
+                    )
+                    .highlight_symbol("› ")
+                    .block(
+                        Block::default()
+                            .borders(Borders::LEFT | Borders::RIGHT)
+                            .title(" Commands "),
+                    ),
                 inner[0],
+                &mut state,
             );
             f.render_widget(
                 Paragraph::new(detail)
@@ -264,13 +268,22 @@ fn render_command_palette(f: &mut Frame, app: &TuiApp, area: Rect) {
         ),
         chunks[0],
     );
-    f.render_widget(
-        List::new(items).block(
-            Block::default()
-                .borders(Borders::LEFT | Borders::RIGHT)
-                .title(" Matches "),
-        ),
+    let mut state = command_palette_list_state(app.command_palette_idx);
+    f.render_stateful_widget(
+        List::new(items)
+            .highlight_style(
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            )
+            .highlight_symbol("› ")
+            .block(
+                Block::default()
+                    .borders(Borders::LEFT | Borders::RIGHT)
+                    .title(" Matches "),
+            ),
         body[0],
+        &mut state,
     );
     let detail = palette_command_by_index(app, query, app.command_palette_idx)
         .map(command_preview_text)
@@ -288,60 +301,78 @@ fn render_command_palette(f: &mut Frame, app: &TuiApp, area: Rect) {
     );
 }
 
+fn command_palette_list_state(selected_index: usize) -> ListState {
+    let mut state = ListState::default();
+    state.select(Some(selected_index));
+    state
+}
+
 fn palette_items_for_empty_query(app: &TuiApp) -> Vec<ListItem<'static>> {
     palette_commands(app, "")
         .into_iter()
-        .enumerate()
-        .map(|(idx, spec)| command_palette_item(idx, app.command_palette_idx, spec))
+        .map(command_palette_item)
         .collect()
 }
 
-fn palette_items_for_matches(app: &TuiApp, query: &str) -> Vec<ListItem<'static>> {
+fn palette_items_for_matches(_app: &TuiApp, query: &str) -> Vec<ListItem<'static>> {
     matching_commands(query)
         .into_iter()
-        .enumerate()
-        .scan(None::<&'static str>, |last_category, (idx, spec)| {
-            let mut lines = Vec::new();
-            if *last_category != Some(spec.category) {
-                lines.push(Line::from(Span::styled(
-                    format!("{} commands", spec.category),
-                    Style::default()
-                        .fg(Color::Yellow)
-                        .add_modifier(Modifier::BOLD),
-                )));
-                *last_category = Some(spec.category);
-            }
-            let style = if idx == app.command_palette_idx {
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default()
-            };
-            lines.push(Line::from(format!("{}  {}", spec.usage, spec.summary)));
-            lines.push(Line::from(""));
-            Some(ListItem::new(lines).style(style))
-        })
+        .map(command_palette_item)
         .collect()
 }
 
-fn command_palette_item(
-    index: usize,
-    selected_index: usize,
-    spec: &CommandSpec,
-) -> ListItem<'static> {
-    let style = if index == selected_index {
-        Style::default()
-            .fg(Color::Cyan)
-            .add_modifier(Modifier::BOLD)
-    } else {
-        Style::default()
-    };
-    ListItem::new(vec![
-        Line::from(format!("{}  {}", spec.usage, spec.summary)),
-        Line::from(""),
+fn command_palette_item(spec: &CommandSpec) -> ListItem<'static> {
+    ListItem::new(command_palette_line(spec))
+}
+
+fn command_palette_line(spec: &CommandSpec) -> Line<'static> {
+    Line::from(vec![
+        Span::styled(
+            format!("{:<12}", spec.usage),
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(format!("{}  ", spec.summary)),
+        Span::styled(
+            format!("[{}]", spec.category),
+            Style::default().fg(Color::DarkGray),
+        ),
     ])
-    .style(style)
+}
+
+#[cfg(test)]
+mod tests {
+    use ratatui::{buffer::Buffer, layout::Rect};
+    use ratatui::widgets::StatefulWidget;
+
+    use super::*;
+    use crate::tui::command::COMMAND_SPECS;
+
+    #[test]
+    fn command_palette_state_scrolls_to_selected_item() {
+        let items = (0..20)
+            .map(|idx| ListItem::new(format!("item {idx}")))
+            .collect::<Vec<_>>();
+        let area = Rect::new(0, 0, 20, 5);
+        let mut buffer = Buffer::empty(area);
+        let mut state = command_palette_list_state(10);
+
+        List::new(items).render(area, &mut buffer, &mut state);
+
+        assert!(state.offset() > 0);
+    }
+
+    #[test]
+    fn command_palette_line_is_compact_single_row() {
+        let spec = &COMMAND_SPECS[0];
+        let line = command_palette_line(spec).to_string();
+
+        assert!(line.contains(spec.usage));
+        assert!(line.contains(spec.summary));
+        assert!(line.contains(spec.category));
+        assert!(!line.contains('\n'));
+    }
 }
 
 fn render_status_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
@@ -468,6 +499,29 @@ fn render_status_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
         Paragraph::new("Esc close  Enter close  /help commands  /model switch runtime")
             .alignment(Alignment::Center),
         chunks[5],
+    );
+}
+
+fn render_context_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(8), Constraint::Length(2)])
+        .split(area);
+
+    f.render_widget(
+        Paragraph::new(status_context_text(app))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(" Context "),
+            )
+            .wrap(Wrap { trim: false }),
+        chunks[0],
+    );
+    f.render_widget(
+        Paragraph::new("Esc close  /context re-open  /status runtime details")
+            .alignment(Alignment::Center),
+        chunks[1],
     );
 }
 

@@ -57,7 +57,11 @@ use self::terminal_ui::{
 use crate::agent::AgentExecutionMode;
 use crate::agent::BashApprovalMode;
 
-pub async fn run_tui(agent: Agent, oauth_manager: OAuthManager) -> anyhow::Result<()> {
+pub async fn run_tui(
+    agent: Agent,
+    oauth_manager: OAuthManager,
+    resume_session_id: Option<String>,
+) -> anyhow::Result<Option<String>> {
     enable_raw_mode()?;
     let initial_size = terminal_size()?;
     let mut app = TuiApp::new(crate::config::ConfigManager::new()?)?;
@@ -67,8 +71,12 @@ pub async fn run_tui(agent: Agent, oauth_manager: OAuthManager) -> anyhow::Resul
     match StateDb::new() {
         Ok(state_db) => {
             let state_db = Arc::new(state_db);
-            restore_latest_session(&state_db, &mut app, &mut agent_slot)?;
-            app.attach_state_db(state_db);
+            app.attach_state_db(Arc::clone(&state_db));
+            if let Some(session_id) = resume_session_id.as_deref() {
+                restore_session_by_id(session_id, &mut app, &mut agent_slot)?;
+            } else {
+                restore_latest_session(&state_db, &mut app, &mut agent_slot)?;
+            }
         }
         Err(err) => app.set_state_db_error(err.to_string()),
     }
@@ -81,7 +89,7 @@ pub async fn run_tui(agent: Agent, oauth_manager: OAuthManager) -> anyhow::Resul
     }
     app.start_repo_context_detection();
 
-    let result = loop {
+    let result: anyhow::Result<()> = loop {
         app.finish_repo_context_task_if_ready().await;
         finish_running_task_if_ready(&mut app, &mut agent_slot).await?;
         clamp_command_palette_selection(&mut app);
@@ -140,7 +148,16 @@ pub async fn run_tui(agent: Agent, oauth_manager: OAuthManager) -> anyhow::Resul
         handle.abort();
     }
     teardown_terminal(terminal)?;
-    result
+    result?;
+
+    let session_id = agent_slot
+        .as_ref()
+        .map(|agent| agent.session_id.clone())
+        .filter(|session_id| !session_id.is_empty())
+        .or_else(|| {
+            (!app.snapshot.session_id.is_empty()).then(|| app.snapshot.session_id.clone())
+        });
+    Ok(session_id)
 }
 
 

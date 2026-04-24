@@ -54,11 +54,14 @@ struct Cli {
     revision: Option<String>,
 }
 
-#[derive(Subcommand)]
+#[derive(Subcommand, Debug)]
 enum Commands {
     Acp,
     Ask {
         prompt: String,
+    },
+    Resume {
+        session_id: Option<String>,
     },
     Login {
         #[arg(long)]
@@ -104,6 +107,9 @@ async fn main_impl() -> Result<()> {
     match cli.command.unwrap_or(Commands::Tui) {
         Commands::Acp => run_acp_command(&config).await?,
         Commands::Ask { prompt } => run_ask_command(&config, prompt).await?,
+        Commands::Resume { session_id } => {
+            run_tui_command(&config, oauth_manager, session_id).await?
+        }
         Commands::Login {
             device_auth,
             with_api_key,
@@ -116,7 +122,7 @@ async fn main_impl() -> Result<()> {
         )
         .await?,
         Commands::Logout => run_logout_command(&mut config, &config_manager, &oauth_manager)?,
-        Commands::Tui => run_tui_command(&config, oauth_manager).await?,
+        Commands::Tui => run_tui_command(&config, oauth_manager, None).await?,
     }
     Ok(())
 }
@@ -139,11 +145,23 @@ async fn run_ask_command(config: &RaraConfig, prompt: String) -> Result<()> {
     agent.query(prompt).await
 }
 
-async fn run_tui_command(config: &RaraConfig, oauth_manager: OAuthManager) -> Result<()> {
+async fn run_tui_command(
+    config: &RaraConfig,
+    oauth_manager: OAuthManager,
+    resume_session_id: Option<String>,
+) -> Result<()> {
     let bootstrap = runtime_context::initialize_rara_context(config, None).await?;
     emit_bootstrap_warnings(&bootstrap.warnings);
     let agent = bootstrap.into_agent();
-    crate::tui::run_tui(agent, oauth_manager).await
+    let resumed_session_id = crate::tui::run_tui(agent, oauth_manager, resume_session_id).await?;
+    if let Some(session_id) = resumed_session_id {
+        println!("{}", resume_hint(&session_id));
+    }
+    Ok(())
+}
+
+fn resume_hint(session_id: &str) -> String {
+    format!("Resume this session with: rara resume {session_id}")
 }
 
 async fn run_login_command(
@@ -220,6 +238,38 @@ fn run_logout_command(
         println!("No saved Codex credential was present.");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resume_hint_includes_exact_command() {
+        assert_eq!(
+            resume_hint("session-123"),
+            "Resume this session with: rara resume session-123"
+        );
+    }
+
+    #[test]
+    fn clap_parses_resume_command_with_optional_session_id() {
+        let cli = Cli::try_parse_from(["rara", "resume", "session-123"]).expect("parse resume");
+        match cli.command.expect("command") {
+            Commands::Resume { session_id } => {
+                assert_eq!(session_id.as_deref(), Some("session-123"));
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+
+        let cli = Cli::try_parse_from(["rara", "resume"]).expect("parse resume without id");
+        match cli.command.expect("command") {
+            Commands::Resume { session_id } => {
+                assert_eq!(session_id, None);
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
 }
 
 fn emit_bootstrap_warnings(warnings: &[String]) {
