@@ -3,7 +3,9 @@ use std::sync::Arc;
 use anyhow::{bail, Context, Result};
 
 use crate::agent::Agent;
-use crate::config::{DEFAULT_CODEX_BASE_URL, DEFAULT_CODEX_MODEL, RaraConfig};
+use crate::config::{
+    DEFAULT_CODEX_BASE_URL, DEFAULT_CODEX_MODEL, RaraConfig, REASONING_SUMMARY_NONE,
+};
 use crate::llm::{
     CodexBackend, GeminiBackend, LlmBackend, MockLlm, OllamaBackend, OpenAiCompatibleBackend,
 };
@@ -92,13 +94,6 @@ pub(crate) async fn initialize_rara_context(
     })
 }
 
-pub(crate) async fn build_runtime_bootstrap(
-    config: &RaraConfig,
-    progress: Option<LocalProgressReporter>,
-) -> Result<RuntimeBootstrap> {
-    initialize_rara_context(config, progress).await
-}
-
 pub(crate) async fn build_backend(config: &RaraConfig) -> Result<Box<dyn LlmBackend>> {
     build_backend_with_progress(config, None).await
 }
@@ -149,8 +144,11 @@ pub(crate) async fn build_backend_with_progress(
                 .base_url
                 .clone()
                 .unwrap_or_else(|| "http://localhost:11434".to_string()),
-            config.model.clone().unwrap_or_else(|| "gemma4".to_string()),
-            config.thinking.unwrap_or(true),
+            config
+                .model
+                .clone()
+                .context("Model required for Ollama provider")?,
+            ollama_thinking_enabled(config),
             config.num_ctx,
         )?)),
         "ollama-openai" => Ok(Box::new(OpenAiCompatibleBackend::new(
@@ -159,7 +157,10 @@ pub(crate) async fn build_backend_with_progress(
                 .base_url
                 .clone()
                 .unwrap_or_else(|| "http://localhost:11434".to_string()),
-            config.model.clone().unwrap_or_else(|| "gemma4".to_string()),
+            config
+                .model
+                .clone()
+                .context("Model required for Ollama OpenAI provider")?,
         )?)),
         "gemini" => Ok(Box::new(GeminiBackend {
             api_key: config
@@ -269,12 +270,20 @@ fn vector_db_uri_for_workspace(workspace: &WorkspaceMemory) -> String {
     workspace.rara_dir.join("lancedb").display().to_string()
 }
 
+fn ollama_thinking_enabled(config: &RaraConfig) -> bool {
+    match config.reasoning_summary.as_deref() {
+        Some(REASONING_SUMMARY_NONE) => false,
+        _ => config.thinking.unwrap_or(true),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        build_backend_with_progress, initialize_rara_context, vector_db_uri_for_workspace,
+        build_backend_with_progress, initialize_rara_context, ollama_thinking_enabled,
+        vector_db_uri_for_workspace,
     };
-    use crate::config::RaraConfig;
+    use crate::config::{RaraConfig, DEFAULT_REASONING_SUMMARY, REASONING_SUMMARY_NONE};
     use crate::workspace::WorkspaceMemory;
     use tempfile::tempdir;
 
@@ -325,5 +334,63 @@ mod tests {
         assert!(err
             .to_string()
             .contains("Unsupported provider 'does-not-exist'"));
+    }
+
+    #[tokio::test]
+    async fn ollama_requires_explicit_model_selection() {
+        let config = RaraConfig {
+            provider: "ollama".to_string(),
+            model: None,
+            ..Default::default()
+        };
+
+        let err = match build_backend_with_progress(&config, None).await {
+            Ok(_) => panic!("ollama without model should fail"),
+            Err(err) => err,
+        };
+
+        assert!(err.to_string().contains("Model required for Ollama provider"));
+    }
+
+    #[tokio::test]
+    async fn ollama_openai_requires_explicit_model_selection() {
+        let config = RaraConfig {
+            provider: "ollama-openai".to_string(),
+            model: None,
+            ..Default::default()
+        };
+
+        let err = match build_backend_with_progress(&config, None).await {
+            Ok(_) => panic!("ollama-openai without model should fail"),
+            Err(err) => err,
+        };
+
+        assert!(err
+            .to_string()
+            .contains("Model required for Ollama OpenAI provider"));
+    }
+
+    #[test]
+    fn ollama_thinking_respects_reasoning_summary_none() {
+        let config = RaraConfig {
+            provider: "ollama".into(),
+            thinking: Some(true),
+            reasoning_summary: Some(REASONING_SUMMARY_NONE.to_string()),
+            ..Default::default()
+        };
+
+        assert!(!ollama_thinking_enabled(&config));
+    }
+
+    #[test]
+    fn ollama_thinking_defaults_on_for_auto_reasoning_summary() {
+        let config = RaraConfig {
+            provider: "ollama".into(),
+            thinking: None,
+            reasoning_summary: Some(DEFAULT_REASONING_SUMMARY.to_string()),
+            ..Default::default()
+        };
+
+        assert!(ollama_thinking_enabled(&config));
     }
 }
