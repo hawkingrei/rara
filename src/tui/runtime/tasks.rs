@@ -42,7 +42,16 @@ fn merge_rebuilt_agent(mut rebuilt: Agent, previous: Agent) -> Agent {
     rebuilt.pending_approval = previous.pending_approval;
     rebuilt.completed_user_input = previous.completed_user_input;
     rebuilt.completed_approval = previous.completed_approval;
-    rebuilt.compact_state = previous.compact_state;
+    rebuilt.compact_state.estimated_history_tokens = previous.compact_state.estimated_history_tokens;
+    rebuilt.compact_state.compaction_count = previous.compact_state.compaction_count;
+    rebuilt.compact_state.last_compaction_before_tokens =
+        previous.compact_state.last_compaction_before_tokens;
+    rebuilt.compact_state.last_compaction_after_tokens =
+        previous.compact_state.last_compaction_after_tokens;
+    rebuilt.compact_state.last_compaction_recent_files =
+        previous.compact_state.last_compaction_recent_files;
+    rebuilt.compact_state.last_compaction_boundary =
+        previous.compact_state.last_compaction_boundary;
     rebuilt
 }
 
@@ -504,11 +513,6 @@ pub(super) async fn finish_running_task_if_ready(
                     app.current_model_label()
                 ));
                 app.notice = app.setup_status.clone();
-                let queued_follow_up_messages = std::mem::take(&mut app.queued_follow_up_messages);
-                let pending_follow_up_messages =
-                    std::mem::take(&mut app.pending_follow_up_messages);
-                app.pending_follow_up_messages = pending_follow_up_messages;
-                app.queued_follow_up_messages = queued_follow_up_messages;
                 *agent_slot = Some(agent);
                 if let Some(agent) = agent_slot.as_ref() {
                     app.sync_snapshot(agent);

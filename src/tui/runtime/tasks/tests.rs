@@ -108,15 +108,31 @@ fn merge_rebuilt_agent_preserves_session_and_turn_state() {
         status: PlanStepStatus::InProgress,
     }];
     previous.plan_explanation = Some("Do not reset the session during model switch.".into());
+    previous.compact_state.estimated_history_tokens = 1_200;
+    previous.compact_state.context_window_tokens = Some(8_192);
+    previous.compact_state.compact_threshold_tokens = 7_000;
+    previous.compact_state.reserved_output_tokens = 1_024;
     previous.compact_state.compaction_count = 2;
+    previous.compact_state.last_compaction_before_tokens = Some(5_000);
+    previous.compact_state.last_compaction_after_tokens = Some(2_100);
+    previous.compact_state.last_compaction_recent_files = vec!["src/main.rs".into()];
+    previous.compact_state.last_compaction_boundary =
+        Some(crate::agent::CompactBoundaryMetadata {
+            version: 1,
+            before_tokens: 5_000,
+            recent_file_count: 1,
+        });
 
-    let rebuilt = Agent::new(
+    let mut rebuilt = Agent::new(
         ToolManager::new(),
         backend,
         Arc::new(VectorDB::new(&rara_dir.join("other-lancedb").display().to_string())),
         session_manager,
         workspace,
     );
+    rebuilt.compact_state.context_window_tokens = Some(200_000);
+    rebuilt.compact_state.compact_threshold_tokens = 180_000;
+    rebuilt.compact_state.reserved_output_tokens = 8_192;
 
     let merged = merge_rebuilt_agent(rebuilt, previous);
 
@@ -127,5 +143,15 @@ fn merge_rebuilt_agent_preserves_session_and_turn_state() {
     assert_eq!(merged.execution_mode, AgentExecutionMode::Plan);
     assert_eq!(merged.bash_approval_mode, BashApprovalMode::Suggestion);
     assert_eq!(merged.current_plan.len(), 1);
+    assert_eq!(merged.compact_state.estimated_history_tokens, 1_200);
     assert_eq!(merged.compact_state.compaction_count, 2);
+    assert_eq!(merged.compact_state.last_compaction_before_tokens, Some(5_000));
+    assert_eq!(merged.compact_state.last_compaction_after_tokens, Some(2_100));
+    assert_eq!(
+        merged.compact_state.last_compaction_recent_files,
+        vec!["src/main.rs".to_string()]
+    );
+    assert_eq!(merged.compact_state.context_window_tokens, Some(200_000));
+    assert_eq!(merged.compact_state.compact_threshold_tokens, 180_000);
+    assert_eq!(merged.compact_state.reserved_output_tokens, 8_192);
 }
