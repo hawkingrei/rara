@@ -12,6 +12,7 @@ to align with the prompt-management patterns used by mature coding agents.
 - Prompt source discovery from workspace and runtime state.
 - Prompt override and append behavior from config.
 - Dedicated prompt handling for context compaction.
+- Shared runtime bootstrap wiring for prompt runtime inputs.
 
 ## Non-Goals
 
@@ -77,6 +78,17 @@ The effective prompt is assembled in this order:
 - `Agent::build_system_prompt()` must delegate to the prompt runtime instead of hand-building the
   prompt inline.
 - Compaction must pass the dedicated compact instruction down to every backend summarization path.
+
+### 4) Runtime Bootstrap Contract
+
+- Runtime/bootstrap callers must initialize workspace, prompt runtime config, skills, and tools
+  through one shared entrypoint instead of wiring those pieces independently in `main.rs` and TUI
+  rebuild paths.
+- The shared bootstrap entrypoint is `initialize_rara_context(...)` in `src/runtime_context.rs`.
+- Bootstrap warnings from prompt/runtime configuration or skill loading must remain visible to the
+  caller instead of being silently dropped.
+- Workspace-scoped persistence paths used by bootstrap-owned tools should derive from the resolved
+  workspace data directory rather than hard-coded literals such as `data/lancedb`.
 
 ## Validation Matrix
 

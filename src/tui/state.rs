@@ -13,11 +13,11 @@ pub use self::state_presets::{
 };
 pub use self::types::{
     ActiveLiveSections, ActivePendingInteraction, ActivePendingInteractionKind,
-    AgentMarkdownStreamState, CommandSpec, CompletedInteractionSnapshot, HelpTab,
-    InteractionKind, LocalCommand, LocalCommandKind, OAuthLoginMode, Overlay,
+    AgentMarkdownStreamState, CommandSpec, CompletedInteractionSnapshot, HelpTab, InteractionKind,
+    LocalCommand, LocalCommandKind, OAuthLoginMode, Overlay,
     PendingApprovalSnapshot, PendingInteractionSnapshot, ProviderFamily, RunningTask,
-    RuntimePhase, RuntimeSnapshot, TaskCompletion, TaskKind, TranscriptEntry, TranscriptTurn,
-    TuiApp, TuiEvent, PROVIDER_FAMILIES,
+    RebuildSuccess, RuntimePhase, RuntimeSnapshot, TaskCompletion, TaskKind, TranscriptEntry,
+    TranscriptTurn, TuiApp, TuiEvent, PROVIDER_FAMILIES,
 };
 use self::types::CommittedTranscriptRenderCache;
 use super::queued_input::PendingFollowUpMessage;
@@ -439,8 +439,7 @@ impl TuiApp {
     }
 
     pub fn sync_snapshot(&mut self, agent: &Agent) {
-        let (cwd, branch) = agent.workspace.get_env_info();
-        let effective_prompt = agent.effective_prompt();
+        let runtime_context = agent.shared_runtime_context();
         let existing_plan_completion = self
             .completed_interaction(InteractionKind::PlanApproval)
             .cloned();
@@ -528,59 +527,37 @@ impl TuiApp {
             );
         }
         self.snapshot = RuntimeSnapshot {
-            cwd,
-            branch,
-            session_id: agent.session_id.clone(),
-            history_len: agent.history.len(),
-            total_input_tokens: agent.total_input_tokens,
-            total_output_tokens: agent.total_output_tokens,
-            estimated_history_tokens: agent.compact_state.estimated_history_tokens,
-            context_window_tokens: agent.compact_state.context_window_tokens,
-            compact_threshold_tokens: agent.compact_state.compact_threshold_tokens,
-            reserved_output_tokens: agent.compact_state.reserved_output_tokens,
-            compaction_count: agent.compact_state.compaction_count,
-            last_compaction_before_tokens: agent.compact_state.last_compaction_before_tokens,
-            last_compaction_after_tokens: agent.compact_state.last_compaction_after_tokens,
-            last_compaction_recent_files: agent.compact_state.last_compaction_recent_files.clone(),
-            last_compaction_boundary_version: agent
-                .compact_state
-                .last_compaction_boundary
-                .map(|boundary| boundary.version),
-            last_compaction_boundary_before_tokens: agent
-                .compact_state
-                .last_compaction_boundary
-                .map(|boundary| boundary.before_tokens),
-            last_compaction_boundary_recent_file_count: agent
-                .compact_state
-                .last_compaction_boundary
-                .map(|boundary| boundary.recent_file_count),
-            plan_steps: agent
-                .current_plan
-                .iter()
-                .map(|step| {
-                    let status = match step.status {
-                        crate::agent::PlanStepStatus::Pending => "pending",
-                        crate::agent::PlanStepStatus::InProgress => "in_progress",
-                        crate::agent::PlanStepStatus::Completed => "completed",
-                    };
-                    (status.to_string(), step.step.clone())
-                })
-                .collect(),
-            plan_explanation: agent.plan_explanation.clone(),
+            cwd: runtime_context.cwd,
+            branch: runtime_context.branch,
+            session_id: runtime_context.session_id,
+            history_len: runtime_context.history_len,
+            total_input_tokens: runtime_context.total_input_tokens,
+            total_output_tokens: runtime_context.total_output_tokens,
+            estimated_history_tokens: runtime_context.compaction.estimated_history_tokens,
+            context_window_tokens: runtime_context.compaction.context_window_tokens,
+            compact_threshold_tokens: runtime_context.compaction.compact_threshold_tokens,
+            reserved_output_tokens: runtime_context.compaction.reserved_output_tokens,
+            compaction_count: runtime_context.compaction.compaction_count,
+            last_compaction_before_tokens: runtime_context.compaction.last_compaction_before_tokens,
+            last_compaction_after_tokens: runtime_context.compaction.last_compaction_after_tokens,
+            last_compaction_recent_files: runtime_context.compaction.last_compaction_recent_files,
+            last_compaction_boundary_version: runtime_context
+                .compaction
+                .last_compaction_boundary_version,
+            last_compaction_boundary_before_tokens: runtime_context
+                .compaction
+                .last_compaction_boundary_before_tokens,
+            last_compaction_boundary_recent_file_count: runtime_context
+                .compaction
+                .last_compaction_boundary_recent_file_count,
+            plan_steps: runtime_context.plan.steps,
+            plan_explanation: runtime_context.plan.explanation,
             pending_interactions,
             completed_interactions,
-            prompt_base_kind: effective_prompt.base_prompt_kind.label().to_string(),
-            prompt_section_keys: effective_prompt
-                .section_keys
-                .iter()
-                .map(|key| (*key).to_string())
-                .collect(),
-            prompt_source_status_lines: effective_prompt
-                .sources
-                .iter()
-                .map(|source| source.status_line())
-                .collect(),
-            prompt_warnings: agent.prompt_config().warnings.clone(),
+            prompt_base_kind: runtime_context.prompt.base_prompt_kind,
+            prompt_section_keys: runtime_context.prompt.section_keys,
+            prompt_source_status_lines: runtime_context.prompt.source_status_lines,
+            prompt_warnings: runtime_context.prompt.warnings,
         };
         self.agent_execution_mode = agent.execution_mode;
         self.bash_approval_mode = agent.bash_approval_mode;

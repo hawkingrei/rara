@@ -10,6 +10,9 @@ use std::path::{Path, PathBuf};
 pub const DEFAULT_CODEX_BASE_URL: &str = "https://api.openai.com/v1";
 pub const DEFAULT_CODEX_MODEL: &str = "gpt-5.4";
 pub const DEFAULT_CODEX_CHATGPT_BASE_URL: &str = "https://chatgpt.com/backend-api/codex";
+pub const DEFAULT_REASONING_SUMMARY: &str = "auto";
+pub const REASONING_SUMMARY_NONE: &str = "none";
+pub const REASONING_SUMMARY_DETAILED: &str = "detailed";
 pub const LEGACY_CODEX_BASE_URL: &str = "http://localhost:8080";
 pub const LEGACY_CODEX_MODEL: &str = "codex";
 pub const LEGACY_CODEX_MODEL_V1: &str = "gpt-5-codex";
@@ -51,6 +54,7 @@ pub struct ProviderConfigState {
     pub base_url: Option<String>,
     pub model: Option<String>,
     pub reasoning_effort: Option<String>,
+    pub reasoning_summary: Option<String>,
     pub revision: Option<String>,
     pub thinking: Option<bool>,
     pub num_ctx: Option<u32>,
@@ -68,6 +72,7 @@ pub struct RaraConfig {
     pub base_url: Option<String>,
     pub model: Option<String>,
     pub reasoning_effort: Option<String>,
+    pub reasoning_summary: Option<String>,
     pub revision: Option<String>,
     pub thinking: Option<bool>,
     pub num_ctx: Option<u32>,
@@ -134,6 +139,11 @@ impl RaraConfig {
         self.sync_active_provider_state();
     }
 
+    pub fn set_reasoning_summary(&mut self, value: Option<String>) {
+        self.reasoning_summary = normalize_reasoning_summary(value);
+        self.sync_active_provider_state();
+    }
+
     pub fn set_revision(&mut self, value: Option<String>) {
         self.revision = normalize_optional_string(value);
         self.sync_active_provider_state();
@@ -162,6 +172,15 @@ impl RaraConfig {
         }
     }
 
+    pub fn migrate_legacy_provider_state(&mut self) {
+        self.reasoning_summary =
+            migrate_reasoning_summary(self.reasoning_summary.take(), self.thinking);
+        for state in self.provider_states.values_mut() {
+            state.reasoning_summary =
+                migrate_reasoning_summary(state.reasoning_summary.take(), state.thinking);
+        }
+    }
+
     fn sync_active_provider_state(&mut self) {
         if self.provider.trim().is_empty() {
             return;
@@ -176,6 +195,7 @@ impl RaraConfig {
             base_url: self.base_url.clone(),
             model: self.model.clone(),
             reasoning_effort: self.reasoning_effort.clone(),
+            reasoning_summary: self.reasoning_summary.clone(),
             revision: self.revision.clone(),
             thinking: self.thinking,
             num_ctx: self.num_ctx,
@@ -187,6 +207,7 @@ impl RaraConfig {
         self.base_url = state.base_url;
         self.model = state.model;
         self.reasoning_effort = state.reasoning_effort;
+        self.reasoning_summary = state.reasoning_summary;
         self.revision = state.revision;
         self.thinking = state.thinking;
         self.num_ctx = state.num_ctx;
@@ -197,6 +218,7 @@ impl RaraConfig {
         self.base_url = None;
         self.model = None;
         self.reasoning_effort = None;
+        self.reasoning_summary = Some(DEFAULT_REASONING_SUMMARY.to_string());
         self.revision = None;
         self.thinking = None;
         self.num_ctx = None;
@@ -273,6 +295,31 @@ fn normalize_optional_string(value: Option<String>) -> Option<String> {
     })
 }
 
+fn normalize_reasoning_summary(value: Option<String>) -> Option<String> {
+    value.and_then(|value| {
+        let normalized = value.trim().to_ascii_lowercase();
+        match normalized.as_str() {
+            "" => None,
+            DEFAULT_REASONING_SUMMARY | REASONING_SUMMARY_NONE | REASONING_SUMMARY_DETAILED => {
+                Some(normalized)
+            }
+            _ => Some(DEFAULT_REASONING_SUMMARY.to_string()),
+        }
+    })
+}
+
+fn migrate_reasoning_summary(
+    reasoning_summary: Option<String>,
+    legacy_thinking: Option<bool>,
+) -> Option<String> {
+    normalize_reasoning_summary(reasoning_summary).or_else(|| {
+        Some(match legacy_thinking {
+            Some(false) => REASONING_SUMMARY_NONE.to_string(),
+            Some(true) | None => DEFAULT_REASONING_SUMMARY.to_string(),
+        })
+    })
+}
+
 fn serialize_secret_option<S>(
     value: &Option<SecretString>,
     serializer: S,
@@ -314,8 +361,13 @@ impl ConfigManager {
 
     pub fn load(&self) -> Result<RaraConfig> {
         match fs::read_to_string(&self.path) {
-            Ok(content) => serde_json::from_str(&content)
-                .map_err(|err| anyhow::anyhow!("failed to parse {}: {err}", self.path.display())),
+            Ok(content) => {
+                let mut config: RaraConfig = serde_json::from_str(&content).map_err(|err| {
+                    anyhow::anyhow!("failed to parse {}: {err}", self.path.display())
+                })?;
+                config.migrate_legacy_provider_state();
+                Ok(config)
+            }
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(Self::default_config()),
             Err(err) => Err(err.into()),
         }
@@ -330,6 +382,7 @@ impl ConfigManager {
     fn default_config() -> RaraConfig {
         RaraConfig {
             provider: "mock".to_string(),
+            reasoning_summary: Some(DEFAULT_REASONING_SUMMARY.to_string()),
             thinking: Some(true),
             ..Default::default()
         }
@@ -373,6 +426,7 @@ mod tests {
         config.set_api_key("sk-codex");
         config.set_model(Some("codex".to_string()));
         config.set_reasoning_effort(Some("high".to_string()));
+        config.set_reasoning_summary(Some("detailed".to_string()));
         config.set_base_url(Some("http://localhost:8080".to_string()));
 
         config.set_provider("ollama");
@@ -389,14 +443,58 @@ mod tests {
         assert_eq!(config.api_key(), Some("sk-codex"));
         assert_eq!(config.model.as_deref(), Some("codex"));
         assert_eq!(config.reasoning_effort.as_deref(), Some("high"));
+        assert_eq!(config.reasoning_summary.as_deref(), Some("detailed"));
         assert_eq!(config.base_url.as_deref(), Some("http://localhost:8080"));
         assert_eq!(config.num_ctx, None);
 
         config.set_provider("ollama");
         assert_eq!(config.model.as_deref(), Some("qwen3"));
         assert_eq!(config.reasoning_effort, None);
+        assert_eq!(
+            config.reasoning_summary.as_deref(),
+            Some(super::DEFAULT_REASONING_SUMMARY)
+        );
         assert_eq!(config.base_url.as_deref(), Some("http://localhost:11434"));
         assert_eq!(config.num_ctx, Some(32768));
+    }
+
+    #[test]
+    fn load_migrates_legacy_thinking_to_reasoning_summary() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("config.json");
+        fs::write(
+            &path,
+            r#"{
+  "provider": "codex",
+  "thinking": false,
+  "provider_states": {
+    "codex": {
+      "thinking": true
+    }
+  }
+}"#,
+        )
+        .expect("write config");
+        let manager = ConfigManager { path };
+
+        let config = manager.load().expect("load config");
+
+        assert_eq!(config.reasoning_summary.as_deref(), Some(super::REASONING_SUMMARY_NONE));
+        assert_eq!(
+            config.provider_states["codex"].reasoning_summary.as_deref(),
+            Some(super::DEFAULT_REASONING_SUMMARY)
+        );
+    }
+
+    #[test]
+    fn invalid_reasoning_summary_normalizes_to_auto() {
+        let mut config = RaraConfig::default();
+        config.set_reasoning_summary(Some("verbose".to_string()));
+
+        assert_eq!(
+            config.reasoning_summary.as_deref(),
+            Some(super::DEFAULT_REASONING_SUMMARY)
+        );
     }
 
     #[test]

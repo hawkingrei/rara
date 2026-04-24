@@ -1,4 +1,5 @@
 mod compact;
+mod context_view;
 mod planning;
 mod prompting;
 #[cfg(test)]

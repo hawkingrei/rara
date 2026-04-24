@@ -79,7 +79,8 @@ The global config should keep:
   - base URL
   - model
   - revision
-  - thinking
+  - reasoning summary mode
+  - provider-specific thinking/runtime toggles where applicable
   - context size
 
 Switching providers should restore the remembered provider-scoped state when it

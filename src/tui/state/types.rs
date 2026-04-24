@@ -202,12 +202,17 @@ pub enum TaskCompletion {
         result: anyhow::Result<bool>,
     },
     Rebuild {
-        result: anyhow::Result<Agent>,
+        result: anyhow::Result<RebuildSuccess>,
     },
     OAuth {
         mode: OAuthLoginMode,
         result: anyhow::Result<secrecy::SecretString>,
     },
+}
+
+pub struct RebuildSuccess {
+    pub agent: Agent,
+    pub warnings: Vec<String>,
 }
 
 pub enum TuiEvent {
