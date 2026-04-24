@@ -5,6 +5,7 @@ use tempfile::tempdir;
 use crate::agent::{Agent, AgentExecutionMode, BashApprovalMode, Message, PlanStep, PlanStepStatus};
 use crate::config::ConfigManager;
 use crate::oauth::OAuthManager;
+use crate::prompt::PromptRuntimeConfig;
 use crate::tui::state::{OAuthLoginMode, TuiApp};
 use crate::tool::ToolManager;
 use crate::vectordb::VectorDB;
@@ -122,6 +123,11 @@ fn merge_rebuilt_agent_preserves_session_and_turn_state() {
             before_tokens: 5_000,
             recent_file_count: 1,
         });
+    previous.set_prompt_config(PromptRuntimeConfig {
+        append_system_prompt: Some("keep appendix".to_string()),
+        warnings: vec!["missing custom prompt".to_string()],
+        ..PromptRuntimeConfig::default()
+    });
 
     let mut rebuilt = Agent::new(
         ToolManager::new(),
@@ -154,4 +160,12 @@ fn merge_rebuilt_agent_preserves_session_and_turn_state() {
     assert_eq!(merged.compact_state.context_window_tokens, Some(200_000));
     assert_eq!(merged.compact_state.compact_threshold_tokens, 180_000);
     assert_eq!(merged.compact_state.reserved_output_tokens, 8_192);
+    assert_eq!(
+        merged.prompt_config().append_system_prompt.as_deref(),
+        Some("keep appendix")
+    );
+    assert_eq!(
+        merged.prompt_config().warnings,
+        vec!["missing custom prompt".to_string()]
+    );
 }
