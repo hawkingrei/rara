@@ -29,6 +29,7 @@ fn restore_execute_mode_after_plan_turn(app: &mut TuiApp, agent: &mut Agent) {
 }
 
 fn merge_rebuilt_agent(mut rebuilt: Agent, previous: Agent) -> Agent {
+    let previous_prompt_config = previous.prompt_config().clone();
     rebuilt.session_id = previous.session_id;
     rebuilt.history = previous.history;
     rebuilt.total_input_tokens = previous.total_input_tokens;
@@ -52,6 +53,10 @@ fn merge_rebuilt_agent(mut rebuilt: Agent, previous: Agent) -> Agent {
         previous.compact_state.last_compaction_recent_files;
     rebuilt.compact_state.last_compaction_boundary =
         previous.compact_state.last_compaction_boundary;
+    let mut prompt_config = rebuilt.prompt_config().clone();
+    prompt_config.append_system_prompt = previous_prompt_config.append_system_prompt;
+    prompt_config.warnings = previous_prompt_config.warnings;
+    rebuilt.set_prompt_config(prompt_config);
     rebuilt
 }
 

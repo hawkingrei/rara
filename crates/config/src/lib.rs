@@ -44,7 +44,10 @@ pub struct ResolvedProviderValue<'a> {
 }
 
 impl<'a> ResolvedProviderValue<'a> {
-    pub fn display_or(self, fallback: &'a str) -> &'a str {
+    pub fn display_or<'b>(self, fallback: &'b str) -> &'b str
+    where
+        'a: 'b,
+    {
         self.value.unwrap_or(fallback)
     }
 }

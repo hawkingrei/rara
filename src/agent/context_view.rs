@@ -68,7 +68,7 @@ fn retrieval_source_entries(agent: &Agent) -> Vec<RetrievalSourceContextEntry> {
         .iter()
         .any(|source| source.kind_label() == "local_memory");
     let workspace_memory_path = agent.workspace.rara_dir.join("memory.md");
-    let workspace_memory_exists = workspace_memory_path.exists();
+    let workspace_memory_exists = agent.workspace.has_memory_file_cached();
     let workspace_memory_status = if workspace_memory_active {
         "active"
     } else if workspace_memory_exists {

@@ -17,6 +17,7 @@ pub struct WorkspaceMemory {
 struct WorkspaceCache {
     prompt_files: HashMap<PathBuf, CachedTextFile>,
     env_info: Option<CachedEnvInfo>,
+    memory_file_available: Option<bool>,
 }
 
 #[derive(Clone)]
@@ -49,13 +50,31 @@ impl WorkspaceMemory {
 
     pub fn read_memory_file(&self) -> Option<String> {
         let path = self.rara_dir.join("memory.md");
-        fs::read_to_string(path).ok()
+        let content = fs::read_to_string(path).ok();
+        if let Ok(mut cache) = self.cache.lock() {
+            cache.memory_file_available = Some(content.is_some());
+        }
+        content
     }
 
     pub fn write_memory_file(&self, content: &str) -> Result<()> {
         let path = self.rara_dir.join("memory.md");
         fs::write(path, content)?;
+        if let Ok(mut cache) = self.cache.lock() {
+            cache.memory_file_available = Some(true);
+        }
         Ok(())
+    }
+
+    pub fn has_memory_file_cached(&self) -> bool {
+        let mut cache = self.cache.lock().expect("workspace cache poisoned");
+        if let Some(available) = cache.memory_file_available {
+            return available;
+        }
+
+        let available = self.rara_dir.join("memory.md").exists();
+        cache.memory_file_available = Some(available);
+        available
     }
 
     pub fn discover_instructions(&self) -> Vec<String> {
@@ -304,5 +323,27 @@ mod tests {
 
         let workspace = WorkspaceMemory::from_paths(root, rara_dir);
         assert_eq!(workspace.read_git_branch(), "feature/fix-issue");
+    }
+
+    #[test]
+    fn has_memory_file_cached_tracks_write_and_read_paths() {
+        let dir = tempdir().expect("tempdir");
+        let root = dir.path().join("repo");
+        let rara_dir = root.join(".rara");
+        fs::create_dir_all(&rara_dir).expect("mkdir rara");
+
+        let workspace = WorkspaceMemory::from_paths(root, rara_dir.clone());
+        assert!(!workspace.has_memory_file_cached());
+
+        workspace
+            .write_memory_file("# Team Notes\n")
+            .expect("write memory");
+        assert!(workspace.has_memory_file_cached());
+
+        fs::remove_file(rara_dir.join("memory.md")).expect("remove memory");
+        assert!(workspace.has_memory_file_cached());
+
+        assert_eq!(workspace.read_memory_file(), None);
+        assert!(!workspace.has_memory_file_cached());
     }
 }
