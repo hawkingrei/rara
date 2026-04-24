@@ -165,6 +165,7 @@ impl TuiApp {
             repo_context_task: None,
             repo_slug: None,
             current_pr_url: None,
+            codex_auth_mode: None,
         })
     }
 
@@ -550,14 +551,19 @@ impl TuiApp {
             last_compaction_boundary_recent_file_count: runtime_context
                 .compaction
                 .last_compaction_boundary_recent_file_count,
+            compaction_source_entries: runtime_context.compaction.source_entries,
             plan_steps: runtime_context.plan.steps,
             plan_explanation: runtime_context.plan.explanation,
             pending_interactions,
             completed_interactions,
             prompt_base_kind: runtime_context.prompt.base_prompt_kind,
             prompt_section_keys: runtime_context.prompt.section_keys,
+            prompt_source_entries: runtime_context.prompt.source_entries,
             prompt_source_status_lines: runtime_context.prompt.source_status_lines,
+            prompt_append_system_prompt: runtime_context.prompt.append_system_prompt,
             prompt_warnings: runtime_context.prompt.warnings,
+            retrieval_source_entries: runtime_context.retrieval.entries,
+            retrieval_selected_items: runtime_context.retrieval.selected_items,
         };
         self.agent_execution_mode = agent.execution_mode;
         self.bash_approval_mode = agent.bash_approval_mode;

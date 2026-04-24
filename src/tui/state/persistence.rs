@@ -6,7 +6,8 @@ use super::{
     state_db_status_error, InteractionKind, StateDb, TranscriptTurn, TuiApp,
 };
 use crate::state_db::{
-    PersistedCompactState, PersistedInteraction, PersistedPlanStep, PersistedTurnEntry,
+    PersistedCompactState, PersistedInteraction, PersistedPlanStep, PersistedPromptRuntimeState,
+    PersistedTurnEntry,
 };
 
 impl TuiApp {
@@ -43,6 +44,10 @@ impl TuiApp {
             self.agent_execution_mode_label(),
             self.bash_approval_mode_label(),
             self.snapshot.plan_explanation.as_deref(),
+            &PersistedPromptRuntimeState {
+                append_system_prompt: self.snapshot.prompt_append_system_prompt.clone(),
+                warnings: self.snapshot.prompt_warnings.clone(),
+            },
             self.snapshot.history_len,
             self.transcript_entry_count(),
             &PersistedCompactState {

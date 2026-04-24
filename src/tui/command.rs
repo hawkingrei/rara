@@ -161,12 +161,9 @@ pub fn command_spec_by_name(name: &str) -> Option<&'static CommandSpec> {
 
 pub fn recommended_commands(app: &TuiApp) -> Vec<&'static CommandSpec> {
     let names: &[&str] = if app.is_busy() {
-        &["status", "context", "help", "clear"]
+        &["context", "help", "status"]
     } else {
-        &[
-            "compact", "resume", "plan", "approval", "context", "model", "base-url", "login", "logout",
-            "status", "help", "clear", "setup",
-        ]
+        &["context", "help", "model", "resume", "status"]
     };
     names
         .iter()
@@ -187,7 +184,7 @@ pub fn palette_commands(app: &TuiApp, query: &str) -> Vec<&'static CommandSpec> 
     }
 
     let mut commands = recommended_commands(app);
-    for spec in recent_command_specs(app) {
+    for spec in recent_command_specs(app).into_iter().take(2) {
         if !commands.iter().any(|existing| existing.name == spec.name) {
             commands.push(spec);
         }
@@ -301,7 +298,23 @@ pub fn status_context_text(app: &TuiApp) -> String {
     } else {
         app.snapshot.prompt_section_keys.join(", ")
     };
-    let prompt_sources = if app.snapshot.prompt_source_status_lines.is_empty() {
+    let prompt_sources = if !app.snapshot.prompt_source_entries.is_empty() {
+        app.snapshot
+            .prompt_source_entries
+            .iter()
+            .map(|entry| {
+                format!(
+                    "  {}. {} ({})\n     path: {}\n     why: {}",
+                    entry.order,
+                    entry.label,
+                    entry.kind,
+                    entry.display_path,
+                    entry.inclusion_reason
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    } else if app.snapshot.prompt_source_status_lines.is_empty() {
         "  - No prompt sources discovered.".to_string()
     } else {
         app.snapshot
@@ -361,6 +374,64 @@ pub fn status_context_text(app: &TuiApp) -> String {
     } else {
         "-".to_string()
     };
+    let compaction_sources = if app.snapshot.compaction_source_entries.is_empty() {
+        "  - No compacted-history inputs are active.".to_string()
+    } else {
+        app.snapshot
+            .compaction_source_entries
+            .iter()
+            .map(|entry| {
+                format!(
+                    "  {}. {} ({})\n     detail: {}\n     why: {}",
+                    entry.order,
+                    entry.label,
+                    entry.kind,
+                    entry.detail,
+                    entry.inclusion_reason
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let retrieval_sources = if app.snapshot.retrieval_source_entries.is_empty() {
+        "  - No retrieval or memory sources are registered.".to_string()
+    } else {
+        app.snapshot
+            .retrieval_source_entries
+            .iter()
+            .map(|entry| {
+                format!(
+                    "  {}. {} ({}) [{}]\n     detail: {}\n     why: {}",
+                    entry.order,
+                    entry.label,
+                    entry.kind,
+                    entry.status,
+                    entry.detail,
+                    entry.inclusion_reason
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let retrieval_selected_items = if app.snapshot.retrieval_selected_items.is_empty() {
+        "  - No recalled memory items are active in the current turn.".to_string()
+    } else {
+        app.snapshot
+            .retrieval_selected_items
+            .iter()
+            .map(|entry| {
+                format!(
+                    "  {}. {} ({})\n     detail: {}\n     why: {}",
+                    entry.order,
+                    entry.label,
+                    entry.kind,
+                    entry.detail,
+                    entry.inclusion_reason
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
 
     let mut sections = vec![
         format!(
@@ -372,7 +443,7 @@ pub fn status_context_text(app: &TuiApp) -> String {
             app.transcript_entry_count(),
         ),
         format!(
-            "Included Now\n  base prompt: {}\n  active sections: {}\n  sources:\n{}",
+            "Included Now\n  base prompt: {}\n  active sections: {}\n  sources (in assembly order):\n{}",
             app.snapshot.prompt_base_kind, active_sections, prompt_sources
         ),
         format!(
@@ -381,7 +452,7 @@ pub fn status_context_text(app: &TuiApp) -> String {
             plan_lines
         ),
         format!(
-            "Compaction State\n  estimated history tokens: {}\n  context window: {}\n  threshold: {}\n  reserved output: {}\n  compactions: {}\n  last compaction: {} -> {}\n  last boundary: {}",
+            "Compaction State\n  estimated history tokens: {}\n  context window: {}\n  threshold: {}\n  reserved output: {}\n  compactions: {}\n  last compaction: {} -> {}\n  last boundary: {}\n  compacted inputs:\n{}",
             app.snapshot.estimated_history_tokens,
             app.snapshot
                 .context_window_tokens
@@ -398,7 +469,12 @@ pub fn status_context_text(app: &TuiApp) -> String {
                 .last_compaction_after_tokens
                 .map(|value| value.to_string())
                 .unwrap_or_else(|| "-".to_string()),
-            last_boundary
+            last_boundary,
+            compaction_sources
+        ),
+        format!(
+            "Retrieval / Memory State\nsources:\n{}\nselected now:\n{}",
+            retrieval_sources, retrieval_selected_items
         ),
         format!("Pending Interaction\n{}", pending_interactions),
     ];
@@ -425,11 +501,25 @@ pub fn status_runtime_text(app: &TuiApp) -> String {
     } else {
         "-"
     };
-    let reasoning_summary = app
-        .config
+    let surface = app.config.effective_provider_surface();
+    let reasoning_summary = surface
         .reasoning_summary
-        .as_deref()
-        .unwrap_or(rara_config::DEFAULT_REASONING_SUMMARY);
+        .display_or(rara_config::DEFAULT_REASONING_SUMMARY);
+    let reasoning_effort_label = app.current_reasoning_effort_label();
+    let codex_auth_mode = match app.codex_auth_mode {
+        Some(crate::oauth::SavedCodexAuthMode::ApiKey) => "api_key",
+        Some(crate::oauth::SavedCodexAuthMode::Chatgpt) => "chatgpt",
+        None => "-",
+    };
+    let codex_endpoint_kind = if app.config.provider == "codex" {
+        match app.codex_auth_mode {
+            Some(crate::oauth::SavedCodexAuthMode::Chatgpt) => "chatgpt_codex",
+            Some(crate::oauth::SavedCodexAuthMode::ApiKey) => "openai_api",
+            None => "unknown",
+        }
+    } else {
+        "-"
+    };
     let (device, dtype) = if is_local_provider(&app.config.provider) {
         crate::local_backend::local_runtime_target()
             .unwrap_or_else(|_| ("unavailable".to_string(), "unavailable".to_string()))
@@ -437,18 +527,26 @@ pub fn status_runtime_text(app: &TuiApp) -> String {
         ("remote".to_string(), "-".to_string())
     };
     format!(
-        "provider={}\nmodel={}\nbase_url={}\nrevision={}\nagent_mode={}\nbash_approval={}\nmode={}\napi_key={}\nthinking={}\nreasoning_summary={}\nreasoning_effort={}\ndevice={}\ndtype={}\nfocused={}\nphase={}\ndetail={}",
-        app.config.provider,
-        app.current_model_label(),
-        app.config.base_url.as_deref().unwrap_or("-"),
-        app.config.revision.as_deref().unwrap_or("main"),
+        "provider={}\nmodel={}\nmodel_source={}\nbase_url={}\nbase_url_source={}\nrevision={}\nrevision_source={}\nagent_mode={}\nbash_approval={}\nmode={}\napi_key={}\napi_key_source={}\ncodex_auth_mode={}\ncodex_endpoint_kind={}\nthinking={}\nreasoning_summary={}\nreasoning_summary_source={}\nreasoning_effort={}\nreasoning_effort_source={}\ndevice={}\ndtype={}\nfocused={}\nphase={}\ndetail={}",
+        surface.provider,
+        surface.model.display_or(app.current_model_label()),
+        surface.model.source.label(),
+        surface.base_url.display_or("-"),
+        surface.base_url.source.label(),
+        surface.revision.display_or("main"),
+        surface.revision.source.label(),
         app.agent_execution_mode_label(),
         app.bash_approval_mode_label(),
         mode,
         api_key_status(&app.config),
+        surface.api_key.source.label(),
+        codex_auth_mode,
+        codex_endpoint_kind,
         thinking,
         reasoning_summary,
-        app.current_reasoning_effort_label(),
+        surface.reasoning_summary.source.label(),
+        surface.reasoning_effort.display_or(reasoning_effort_label.as_str()),
+        surface.reasoning_effort.source.label(),
         device,
         dtype,
         app.terminal_focused,
@@ -801,7 +899,8 @@ pub fn normalize_command_token(value: &str) -> String {
 mod tests {
     use super::{
         help_text, matching_commands, normalize_command_token, palette_commands,
-        parse_local_command, status_context_text, status_resources_text, LocalCommandKind,
+        parse_local_command, status_context_text, status_resources_text, status_runtime_text,
+        LocalCommandKind,
     };
     use crate::config::ConfigManager;
     use crate::tui::state::{RuntimeSnapshot, TuiApp};
@@ -921,6 +1020,21 @@ mod tests {
     }
 
     #[test]
+    fn palette_commands_keep_empty_query_default_list_small() {
+        let dir = tempdir().expect("tempdir");
+        let app = TuiApp::new(ConfigManager {
+            path: dir.path().join("config.json"),
+        })
+        .expect("app");
+
+        let names = palette_commands(&app, "")
+            .into_iter()
+            .map(|spec| spec.name)
+            .collect::<Vec<_>>();
+        assert_eq!(names, vec!["context", "help", "model", "resume", "status"]);
+    }
+
+    #[test]
     fn help_text_lists_built_in_commands_alphabetically() {
         let rendered = help_text();
         let approval_idx = rendered.find("/approval").expect("approval");
@@ -976,8 +1090,93 @@ mod tests {
             cwd: "/workspace/rara".into(),
             branch: "main".into(),
             session_id: "session-123".into(),
+            estimated_history_tokens: 12_345,
+            context_window_tokens: Some(200_000),
+            compact_threshold_tokens: 180_000,
+            reserved_output_tokens: 8_192,
+            compaction_count: 1,
+            last_compaction_before_tokens: Some(12_000),
+            last_compaction_after_tokens: Some(4_500),
+            last_compaction_boundary_version: Some(1),
+            last_compaction_boundary_before_tokens: Some(12_000),
+            last_compaction_boundary_recent_file_count: Some(2),
+            compaction_source_entries: vec![crate::context::CompactionSourceContextEntry {
+                order: 1,
+                kind: "compacted_summary".into(),
+                label: "Compacted Thread Summary".into(),
+                detail: "User Intent".into(),
+                inclusion_reason:
+                    "included because older thread history was compacted into a structured summary instead of being replayed verbatim".into(),
+            }],
+            retrieval_source_entries: vec![
+                crate::context::RetrievalSourceContextEntry {
+                    order: 1,
+                    kind: "workspace_memory".into(),
+                    label: "Workspace Memory".into(),
+                    status: "active".into(),
+                    detail: "/workspace/rara/.rara/memory.md".into(),
+                    inclusion_reason:
+                        "included now because the local workspace memory file was discovered as an explicit prompt source".into(),
+                },
+                crate::context::RetrievalSourceContextEntry {
+                    order: 2,
+                    kind: "thread_history".into(),
+                    label: "Thread History".into(),
+                    status: "available".into(),
+                    detail: "session=session-123 messages=4".into(),
+                    inclusion_reason:
+                        "available as the session-local history source for restore and future recall surfaces".into(),
+                },
+            ],
+            retrieval_selected_items: vec![
+                crate::context::RetrievalSelectedItemContextEntry {
+                    order: 1,
+                    kind: "workspace_memory".into(),
+                    label: "Workspace Memory".into(),
+                    detail: "/workspace/rara/.rara/memory.md; 3 line(s); first line: # Team Notes"
+                        .into(),
+                    inclusion_reason:
+                        "selected because the current effective prompt includes the workspace memory file as an active input".into(),
+                },
+                crate::context::RetrievalSelectedItemContextEntry {
+                    order: 2,
+                    kind: "compacted_summary".into(),
+                    label: "Compacted Thread Summary".into(),
+                    detail: "User Intent".into(),
+                    inclusion_reason:
+                        "included because older thread history was compacted into a structured summary instead of being replayed verbatim".into(),
+                },
+                crate::context::RetrievalSelectedItemContextEntry {
+                    order: 3,
+                    kind: "retrieved_workspace_memory".into(),
+                    label: "Retrieved Experience".into(),
+                    detail: "query=bootstrap contract; recalled=2 item(s); preview: Prefer one shared bootstrap path. | Keep session restore aligned with direct execution.".into(),
+                    inclusion_reason:
+                        "selected because the retrieval tool returned relevant durable memory candidates for the current task".into(),
+                },
+            ],
             prompt_base_kind: "codex".into(),
             prompt_section_keys: vec!["stable_instructions".into(), "workspace".into()],
+            prompt_source_entries: vec![
+                crate::context::PromptSourceContextEntry {
+                    order: 1,
+                    kind: "project_instruction".into(),
+                    label: "Project Instruction (AGENTS.md)".into(),
+                    display_path: "AGENTS.md".into(),
+                    status_line: "project instruction: AGENTS.md".into(),
+                    inclusion_reason:
+                        "included as a repository instruction discovered while walking from the workspace root toward the current focus directory".into(),
+                },
+                crate::context::PromptSourceContextEntry {
+                    order: 2,
+                    kind: "local_instruction".into(),
+                    label: "RARA Local Instruction".into(),
+                    display_path: "/workspace/rara/.rara/instructions.md".into(),
+                    status_line: "local instruction: /workspace/rara/.rara/instructions.md".into(),
+                    inclusion_reason:
+                        "included as a workspace-local RARA instruction override".into(),
+                },
+            ],
             prompt_source_status_lines: vec![
                 "AGENTS.md from workspace root".into(),
                 "workspace instruction file".into(),
@@ -989,7 +1188,66 @@ mod tests {
         let rendered = status_context_text(&app);
         assert!(rendered.contains("Current Session"));
         assert!(rendered.contains("Included Now"));
-        assert!(rendered.contains("AGENTS.md from workspace root"));
+        assert!(rendered.contains("sources (in assembly order):"));
+        assert!(rendered.contains("1. Project Instruction (AGENTS.md) (project_instruction)"));
+        assert!(rendered.contains("path: AGENTS.md"));
+        assert!(rendered.contains("why: included as a repository instruction"));
+        assert!(rendered.contains("compacted inputs:"));
+        assert!(rendered.contains("1. Compacted Thread Summary (compacted_summary)"));
+        assert!(rendered.contains("Retrieval / Memory State"));
+        assert!(rendered.contains("sources:"));
+        assert!(rendered.contains("1. Workspace Memory (workspace_memory) [active]"));
+        assert!(rendered.contains("2. Thread History (thread_history) [available]"));
+        assert!(rendered.contains("selected now:"));
+        assert!(rendered.contains("1. Workspace Memory (workspace_memory)"));
+        assert!(rendered.contains("2. Compacted Thread Summary (compacted_summary)"));
+        assert!(rendered.contains("3. Retrieved Experience (retrieved_workspace_memory)"));
         assert!(rendered.contains("[pending] Implement /context"));
+    }
+
+    #[test]
+    fn status_runtime_text_reports_model_and_reasoning_sources() {
+        let dir = tempdir().expect("tempdir");
+        let mut app = TuiApp::new(ConfigManager {
+            path: dir.path().join("config.json"),
+        })
+        .expect("app");
+
+        app.config.set_provider("openai-compatible");
+        app.config
+            .set_base_url(Some("http://proxy.local/v1".to_string()));
+        app.config.set_model(Some("custom-model".to_string()));
+        app.config
+            .set_reasoning_summary(Some("detailed".to_string()));
+
+        let rendered = status_runtime_text(&app);
+        assert!(rendered.contains("model=custom-model"));
+        assert!(rendered.contains("model_source=provider_state"));
+        assert!(rendered.contains("base_url_source=provider_state"));
+        assert!(rendered.contains("api_key_source=unset"));
+        assert!(rendered.contains("reasoning_summary=detailed"));
+        assert!(rendered.contains("reasoning_summary_source=provider_state"));
+        assert!(rendered.contains("reasoning_effort_source=unset"));
+        assert!(rendered.contains("revision_source=unset"));
+    }
+
+    #[test]
+    fn status_runtime_text_reports_codex_auth_surface() {
+        let dir = tempdir().expect("tempdir");
+        let mut app = TuiApp::new(ConfigManager {
+            path: dir.path().join("config.json"),
+        })
+        .expect("app");
+
+        app.config.set_provider("codex");
+        app.config
+            .set_base_url(Some(rara_config::DEFAULT_CODEX_CHATGPT_BASE_URL.to_string()));
+        app.config
+            .set_model(Some(rara_config::DEFAULT_CODEX_MODEL.to_string()));
+        app.codex_auth_mode = Some(crate::oauth::SavedCodexAuthMode::Chatgpt);
+
+        let rendered = status_runtime_text(&app);
+        assert!(rendered.contains("codex_auth_mode=chatgpt"));
+        assert!(rendered.contains("codex_endpoint_kind=chatgpt_codex"));
     }
 }

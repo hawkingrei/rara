@@ -18,6 +18,48 @@ pub const LEGACY_CODEX_MODEL: &str = "codex";
 pub const LEGACY_CODEX_MODEL_V1: &str = "gpt-5-codex";
 pub const LEGACY_CODEX_MODEL_V1_MINI: &str = "gpt-5-codex-mini";
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConfigValueSource {
+    ProviderState,
+    LegacyGlobal,
+    BuiltInDefault,
+    Unset,
+}
+
+impl ConfigValueSource {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::ProviderState => "provider_state",
+            Self::LegacyGlobal => "legacy_global",
+            Self::BuiltInDefault => "built_in_default",
+            Self::Unset => "unset",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ResolvedProviderValue<'a> {
+    pub value: Option<&'a str>,
+    pub source: ConfigValueSource,
+}
+
+impl<'a> ResolvedProviderValue<'a> {
+    pub fn display_or(self, fallback: &'a str) -> &'a str {
+        self.value.unwrap_or(fallback)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EffectiveProviderSurface<'a> {
+    pub provider: &'a str,
+    pub model: ResolvedProviderValue<'a>,
+    pub base_url: ResolvedProviderValue<'a>,
+    pub revision: ResolvedProviderValue<'a>,
+    pub reasoning_effort: ResolvedProviderValue<'a>,
+    pub reasoning_summary: ResolvedProviderValue<'a>,
+    pub api_key: ResolvedProviderValue<'a>,
+}
+
 pub fn should_reset_codex_base_url(url: Option<&str>) -> bool {
     url.map(str::trim).map_or(true, |value| {
         value.is_empty() || value == LEGACY_CODEX_BASE_URL
@@ -222,6 +264,148 @@ impl RaraConfig {
         self.revision = None;
         self.thinking = None;
         self.num_ctx = None;
+    }
+
+    pub fn model_source(&self) -> ConfigValueSource {
+        provider_scoped_string_source(
+            self.provider_states.get(&self.provider),
+            self.model.as_deref(),
+            |state| state.model.as_deref(),
+            false,
+        )
+    }
+
+    pub fn reasoning_summary_source(&self) -> ConfigValueSource {
+        let provider_state = self.provider_states.get(&self.provider);
+        if let Some(state) = provider_state {
+            if self.reasoning_summary.as_deref() == state.reasoning_summary.as_deref() {
+                return match self.reasoning_summary.as_deref() {
+                    Some(_) => ConfigValueSource::ProviderState,
+                    None => ConfigValueSource::BuiltInDefault,
+                };
+            }
+        }
+
+        match self.reasoning_summary.as_deref() {
+            Some(DEFAULT_REASONING_SUMMARY) | None => ConfigValueSource::BuiltInDefault,
+            Some(_) => ConfigValueSource::LegacyGlobal,
+        }
+    }
+
+    pub fn base_url_source(&self) -> ConfigValueSource {
+        provider_scoped_string_source(
+            self.provider_states.get(&self.provider),
+            self.base_url.as_deref(),
+            |state| state.base_url.as_deref(),
+            false,
+        )
+    }
+
+    pub fn revision_source(&self) -> ConfigValueSource {
+        provider_scoped_string_source(
+            self.provider_states.get(&self.provider),
+            self.revision.as_deref(),
+            |state| state.revision.as_deref(),
+            false,
+        )
+    }
+
+    pub fn reasoning_effort_source(&self) -> ConfigValueSource {
+        provider_scoped_string_source(
+            self.provider_states.get(&self.provider),
+            self.reasoning_effort.as_deref(),
+            |state| state.reasoning_effort.as_deref(),
+            false,
+        )
+    }
+
+    pub fn api_key_source(&self) -> ConfigValueSource {
+        provider_scoped_secret_source(
+            self.provider_states.get(&self.provider),
+            self.api_key.as_ref(),
+            |state| state.api_key.as_ref(),
+        )
+    }
+
+    pub fn effective_provider_surface(&self) -> EffectiveProviderSurface<'_> {
+        EffectiveProviderSurface {
+            provider: &self.provider,
+            model: ResolvedProviderValue {
+                value: self.model.as_deref(),
+                source: self.model_source(),
+            },
+            base_url: ResolvedProviderValue {
+                value: self.base_url.as_deref(),
+                source: self.base_url_source(),
+            },
+            revision: ResolvedProviderValue {
+                value: self.revision.as_deref(),
+                source: self.revision_source(),
+            },
+            reasoning_effort: ResolvedProviderValue {
+                value: self.reasoning_effort.as_deref(),
+                source: self.reasoning_effort_source(),
+            },
+            reasoning_summary: ResolvedProviderValue {
+                value: self.reasoning_summary.as_deref(),
+                source: self.reasoning_summary_source(),
+            },
+            api_key: ResolvedProviderValue {
+                value: self.api_key(),
+                source: self.api_key_source(),
+            },
+        }
+    }
+}
+
+fn provider_scoped_string_source<'a, F>(
+    provider_state: Option<&'a ProviderConfigState>,
+    current: Option<&'a str>,
+    provider_getter: F,
+    has_built_in_default: bool,
+) -> ConfigValueSource
+where
+    F: Fn(&'a ProviderConfigState) -> Option<&'a str>,
+{
+    if let Some(state) = provider_state {
+        if current == provider_getter(state) {
+            return match current {
+                Some(_) => ConfigValueSource::ProviderState,
+                None if has_built_in_default => ConfigValueSource::BuiltInDefault,
+                None => ConfigValueSource::Unset,
+            };
+        }
+    }
+
+    match current {
+        Some(_) => ConfigValueSource::LegacyGlobal,
+        None if has_built_in_default => ConfigValueSource::BuiltInDefault,
+        None => ConfigValueSource::Unset,
+    }
+}
+
+fn provider_scoped_secret_source<'a, F>(
+    provider_state: Option<&'a ProviderConfigState>,
+    current: Option<&'a SecretString>,
+    provider_getter: F,
+) -> ConfigValueSource
+where
+    F: Fn(&'a ProviderConfigState) -> Option<&'a SecretString>,
+{
+    let current = current.map(SecretString::expose_secret);
+    if let Some(state) = provider_state {
+        let provider_value = provider_getter(state).map(SecretString::expose_secret);
+        if current == provider_value {
+            return match current {
+                Some(value) if !value.trim().is_empty() => ConfigValueSource::ProviderState,
+                _ => ConfigValueSource::Unset,
+            };
+        }
+    }
+
+    match current {
+        Some(value) if !value.trim().is_empty() => ConfigValueSource::LegacyGlobal,
+        _ => ConfigValueSource::Unset,
     }
 }
 
@@ -495,6 +679,64 @@ mod tests {
             config.reasoning_summary.as_deref(),
             Some(super::DEFAULT_REASONING_SUMMARY)
         );
+    }
+
+    #[test]
+    fn reports_provider_and_default_value_sources() {
+        let mut config = RaraConfig {
+            provider: "openai-compatible".to_string(),
+            ..Default::default()
+        };
+        config.set_model(Some("custom-model".to_string()));
+        config.set_base_url(Some("http://proxy.local/v1".to_string()));
+        config.set_reasoning_summary(Some("detailed".to_string()));
+
+        assert_eq!(config.model_source(), super::ConfigValueSource::ProviderState);
+        assert_eq!(config.base_url_source(), super::ConfigValueSource::ProviderState);
+        assert_eq!(
+            config.reasoning_summary_source(),
+            super::ConfigValueSource::ProviderState
+        );
+
+        let mut defaulted = RaraConfig::default();
+        defaulted.provider = "mock".to_string();
+        defaulted.reasoning_summary = Some(super::DEFAULT_REASONING_SUMMARY.to_string());
+        assert_eq!(
+            defaulted.reasoning_summary_source(),
+            super::ConfigValueSource::BuiltInDefault
+        );
+        assert_eq!(defaulted.model_source(), super::ConfigValueSource::Unset);
+    }
+
+    #[test]
+    fn effective_provider_surface_reports_values_and_sources() {
+        let mut config = RaraConfig {
+            provider: "openai-compatible".to_string(),
+            ..Default::default()
+        };
+        config.set_api_key("sk-test");
+        config.set_model(Some("custom-model".to_string()));
+        config.set_base_url(Some("http://proxy.local/v1".to_string()));
+        config.set_reasoning_effort(Some("high".to_string()));
+        config.set_reasoning_summary(Some("detailed".to_string()));
+
+        let surface = config.effective_provider_surface();
+        assert_eq!(surface.provider, "openai-compatible");
+        assert_eq!(surface.model.value, Some("custom-model"));
+        assert_eq!(surface.model.source, super::ConfigValueSource::ProviderState);
+        assert_eq!(surface.base_url.value, Some("http://proxy.local/v1"));
+        assert_eq!(surface.base_url.source, super::ConfigValueSource::ProviderState);
+        assert_eq!(surface.reasoning_effort.value, Some("high"));
+        assert_eq!(
+            surface.reasoning_effort.source,
+            super::ConfigValueSource::ProviderState
+        );
+        assert_eq!(surface.reasoning_summary.value, Some("detailed"));
+        assert_eq!(
+            surface.reasoning_summary.source,
+            super::ConfigValueSource::ProviderState
+        );
+        assert_eq!(surface.api_key.source, super::ConfigValueSource::ProviderState);
     }
 
     #[test]

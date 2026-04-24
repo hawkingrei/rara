@@ -12,6 +12,9 @@ use super::super::queued_input::PendingFollowUpMessage;
 use crate::agent::{Agent, AgentExecutionMode, BashApprovalMode};
 use crate::codex_model_catalog::CodexModelOption;
 use crate::config::{ConfigManager, RaraConfig};
+use crate::context::{CompactionSourceContextEntry, PromptSourceContextEntry};
+use crate::context::{RetrievalSelectedItemContextEntry, RetrievalSourceContextEntry};
+use crate::oauth::SavedCodexAuthMode;
 use crate::state_db::{PersistedSessionSummary, StateDb};
 use crate::tool::ToolOutputStream;
 use crate::tools::bash::BashCommandInput;
@@ -122,14 +125,19 @@ pub struct RuntimeSnapshot {
     pub last_compaction_boundary_version: Option<u32>,
     pub last_compaction_boundary_before_tokens: Option<usize>,
     pub last_compaction_boundary_recent_file_count: Option<usize>,
+    pub compaction_source_entries: Vec<CompactionSourceContextEntry>,
     pub plan_steps: Vec<(String, String)>,
     pub plan_explanation: Option<String>,
     pub pending_interactions: Vec<PendingInteractionSnapshot>,
     pub completed_interactions: Vec<CompletedInteractionSnapshot>,
     pub prompt_base_kind: String,
     pub prompt_section_keys: Vec<String>,
+    pub prompt_source_entries: Vec<PromptSourceContextEntry>,
     pub prompt_source_status_lines: Vec<String>,
+    pub prompt_append_system_prompt: Option<String>,
     pub prompt_warnings: Vec<String>,
+    pub retrieval_source_entries: Vec<RetrievalSourceContextEntry>,
+    pub retrieval_selected_items: Vec<RetrievalSelectedItemContextEntry>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -358,4 +366,5 @@ pub struct TuiApp {
     pub repo_context_task: Option<JoinHandle<(Option<String>, Option<String>)>>,
     pub repo_slug: Option<String>,
     pub current_pr_url: Option<String>,
+    pub codex_auth_mode: Option<SavedCodexAuthMode>,
 }

@@ -505,4 +505,8 @@ async fn save_api_key_input_sets_codex_defaults_before_rebuild() {
     assert!(!should_quit);
     assert_eq!(app.config.model.as_deref(), Some(DEFAULT_CODEX_MODEL));
     assert_eq!(app.config.base_url.as_deref(), Some(DEFAULT_CODEX_BASE_URL));
+    assert_eq!(
+        app.codex_auth_mode,
+        Some(crate::oauth::SavedCodexAuthMode::ApiKey)
+    );
 }
