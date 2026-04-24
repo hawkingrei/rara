@@ -28,6 +28,17 @@ pub struct PromptSource {
 }
 
 impl PromptSource {
+    pub fn kind_label(&self) -> &'static str {
+        match self.kind {
+            PromptSourceKind::ProjectInstruction => "project_instruction",
+            PromptSourceKind::LocalInstruction => "local_instruction",
+            PromptSourceKind::LocalMemory => "local_memory",
+            PromptSourceKind::CustomSystemPrompt => "custom_system_prompt",
+            PromptSourceKind::AppendSystemPrompt => "append_system_prompt",
+            PromptSourceKind::CompactPrompt => "compact_prompt",
+        }
+    }
+
     pub fn status_line(&self) -> String {
         match self.kind {
             PromptSourceKind::ProjectInstruction => {
@@ -44,6 +55,29 @@ impl PromptSource {
                 format!("append system prompt: {}", self.display_path)
             }
             PromptSourceKind::CompactPrompt => format!("compact prompt: {}", self.display_path),
+        }
+    }
+
+    pub fn inclusion_reason(&self) -> &'static str {
+        match self.kind {
+            PromptSourceKind::ProjectInstruction => {
+                "included as a repository instruction discovered while walking from the workspace root toward the current focus directory"
+            }
+            PromptSourceKind::LocalInstruction => {
+                "included as a workspace-local RARA instruction override"
+            }
+            PromptSourceKind::LocalMemory => {
+                "included as durable workspace memory from the local RARA memory file"
+            }
+            PromptSourceKind::CustomSystemPrompt => {
+                "included as the configured base system prompt"
+            }
+            PromptSourceKind::AppendSystemPrompt => {
+                "included as an appended system prompt after the base and discovered workspace sources"
+            }
+            PromptSourceKind::CompactPrompt => {
+                "included as the compact/summary instruction used during history compaction"
+            }
         }
     }
 }

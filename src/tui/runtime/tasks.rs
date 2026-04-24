@@ -28,6 +28,24 @@ fn restore_execute_mode_after_plan_turn(app: &mut TuiApp, agent: &mut Agent) {
     }
 }
 
+fn merge_rebuilt_agent(mut rebuilt: Agent, previous: Agent) -> Agent {
+    rebuilt.session_id = previous.session_id;
+    rebuilt.history = previous.history;
+    rebuilt.total_input_tokens = previous.total_input_tokens;
+    rebuilt.total_output_tokens = previous.total_output_tokens;
+    rebuilt.tool_result_store = previous.tool_result_store;
+    rebuilt.execution_mode = previous.execution_mode;
+    rebuilt.bash_approval_mode = previous.bash_approval_mode;
+    rebuilt.current_plan = previous.current_plan;
+    rebuilt.plan_explanation = previous.plan_explanation;
+    rebuilt.pending_user_input = previous.pending_user_input;
+    rebuilt.pending_approval = previous.pending_approval;
+    rebuilt.completed_user_input = previous.completed_user_input;
+    rebuilt.completed_approval = previous.completed_approval;
+    rebuilt.compact_state = previous.compact_state;
+    rebuilt
+}
+
 fn try_start_queued_follow_up(app: &mut TuiApp, agent_slot: &mut Option<Agent>) {
     if app.running_task.is_none() {
         app.release_pending_follow_ups();
@@ -474,6 +492,9 @@ pub(super) async fn finish_running_task_if_ready(
         TaskCompletion::Rebuild { result } => match result {
             Ok(rebuilt) => {
                 let mut agent = rebuilt.agent;
+                if let Some(previous) = agent_slot.take() {
+                    agent = merge_rebuilt_agent(agent, previous);
+                }
                 agent.set_execution_mode(app.agent_execution_mode);
                 agent.set_bash_approval_mode(app.bash_approval_mode);
                 app.config_manager.save(&app.config)?;
@@ -486,7 +507,6 @@ pub(super) async fn finish_running_task_if_ready(
                 let queued_follow_up_messages = std::mem::take(&mut app.queued_follow_up_messages);
                 let pending_follow_up_messages =
                     std::mem::take(&mut app.pending_follow_up_messages);
-                app.reset_transcript();
                 app.pending_follow_up_messages = pending_follow_up_messages;
                 app.queued_follow_up_messages = queued_follow_up_messages;
                 *agent_slot = Some(agent);
@@ -514,6 +534,7 @@ pub(super) async fn finish_running_task_if_ready(
                 app.config.set_provider("codex");
                 app.config
                     .set_api_key(credential.expose_secret().to_string());
+                app.codex_auth_mode = Some(crate::oauth::SavedCodexAuthMode::Chatgpt);
                 let base_url = match mode {
                     OAuthLoginMode::Browser | OAuthLoginMode::DeviceCode => {
                         crate::config::DEFAULT_CODEX_CHATGPT_BASE_URL

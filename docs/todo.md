@@ -14,16 +14,13 @@ From higher-leverage structural work toward later UX parity work:
 
 ## Architecture / Runtime
 
-- [ ] Make agent, TUI, and session restore consume the same context assembly contract instead of rebuilding overlapping runtime state in parallel.
-- [ ] Add context assembly observability so a turn can explain which prompt/context sources were injected, where they came from, and in what order.
-- [ ] Add a Claude-style `/context` surface that exposes the effective runtime context clearly: active instructions, workspace sources, compacted history/memory inputs, and why they were included for the current turn.
-- [ ] Refactor `src/main.rs` into smaller bootstrap modules for CLI parsing, backend construction, runtime bootstrap, and tool registration.
-- [ ] Extract `create_full_tool_manager` and related runtime builders out of `src/main.rs` so the entrypoint stops owning all dependency wiring directly.
+- [ ] Extend the shared runtime context and `/context` from prompt-injected / compacted selected memory items into real recalled vector/thread memory selection so the runtime can explain why those items won the retrieval budget.
 
 ## Configuration / Provider Surface
 
 - [ ] Replace provider-scoped `thinking: bool` with a Codex-style reasoning summary configuration model plus config migration.
 - [ ] Surface provider-scoped reasoning configuration in `/status` and provider/model switching flows, including where the effective value came from.
+- [ ] Support in-session model/provider switching via backend hot-swap without resetting the active TUI transcript, session id, plan state, pending interactions, or compacted history.
 - [ ] Align Codex endpoint selection with auth mode so ChatGPT/Codex login and OpenAI API key sessions do not blindly share the same provider URL.
 - [ ] Split Codex-specific persisted auth/config back out to `~/.codex` while keeping provider-agnostic RARA config and runtime/session state under `~/.rara`.
 

@@ -9,9 +9,8 @@ use ratatui::{
 };
 
 use super::super::command::{
-    command_detail_text, command_spec_by_index, current_turn_preview, download_status_text,
-    general_help_text, help_text, matching_commands, model_help_text,
-    palette_command_by_index, palette_commands, quick_actions_text, recent_transcript_preview,
+    current_turn_preview, download_status_text, general_help_text, matching_commands,
+    model_help_text, palette_commands, quick_actions_text, recent_transcript_preview,
     status_context_text, status_prompt_sources_text, status_resources_text, status_runtime_text,
     status_workspace_text,
 };
@@ -30,52 +29,82 @@ pub(super) fn render_overlay(
     app: &TuiApp,
     overlay: Overlay,
 ) -> Option<(u16, u16)> {
-    let popup = centered_rect(78, 70, f.area());
-    f.render_widget(Clear, popup);
     match overlay {
         Overlay::Help(tab) => {
+            let popup = centered_rect(78, 70, f.area());
+            f.render_widget(Clear, popup);
             render_help_modal(f, app, popup, tab);
             None
         }
         Overlay::CommandPalette => {
+            let popup = command_palette_rect(f.area(), app);
+            f.render_widget(Clear, popup);
             render_command_palette(f, app, popup);
             None
         }
         Overlay::Status => {
+            let popup = centered_rect(78, 70, f.area());
+            f.render_widget(Clear, popup);
             render_status_modal(f, app, popup);
             None
         }
         Overlay::Context => {
+            let popup = centered_rect(78, 70, f.area());
+            f.render_widget(Clear, popup);
             render_context_modal(f, app, popup);
             None
         }
         Overlay::Setup => {
+            let popup = centered_rect(78, 70, f.area());
+            f.render_widget(Clear, popup);
             render_setup_modal(f, app, popup);
             None
         }
         Overlay::ProviderPicker => {
+            let popup = centered_rect(78, 70, f.area());
+            f.render_widget(Clear, popup);
             render_provider_picker_modal(f, app, popup);
             None
         }
         Overlay::ResumePicker => {
+            let popup = centered_rect(78, 70, f.area());
+            f.render_widget(Clear, popup);
             render_resume_picker_modal(f, app, popup);
             None
         }
         Overlay::ModelPicker => {
+            let popup = centered_rect(78, 70, f.area());
+            f.render_widget(Clear, popup);
             render_model_picker_modal(f, app, popup);
             None
         }
         Overlay::ReasoningEffortPicker => {
+            let popup = centered_rect(78, 70, f.area());
+            f.render_widget(Clear, popup);
             render_reasoning_effort_picker_modal(f, app, popup);
             None
         }
-        Overlay::BaseUrlEditor => render_base_url_editor_modal(f, app, popup),
+        Overlay::BaseUrlEditor => {
+            let popup = centered_rect(78, 70, f.area());
+            f.render_widget(Clear, popup);
+            render_base_url_editor_modal(f, app, popup)
+        }
         Overlay::AuthModePicker => {
+            let popup = centered_rect(78, 70, f.area());
+            f.render_widget(Clear, popup);
             render_auth_mode_picker_modal(f, app, popup);
             None
         }
-        Overlay::ApiKeyEditor => render_api_key_editor_modal(f, app, popup),
-        Overlay::ModelNameEditor => render_model_name_editor_modal(f, app, popup),
+        Overlay::ApiKeyEditor => {
+            let popup = centered_rect(78, 70, f.area());
+            f.render_widget(Clear, popup);
+            render_api_key_editor_modal(f, app, popup)
+        }
+        Overlay::ModelNameEditor => {
+            let popup = centered_rect(78, 70, f.area());
+            f.render_widget(Clear, popup);
+            render_model_name_editor_modal(f, app, popup)
+        }
     }
 }
 
@@ -99,59 +128,38 @@ fn render_help_modal(f: &mut Frame, app: &TuiApp, area: Rect, tab: HelpTab) {
     };
     f.render_widget(
         Tabs::new(titles)
-            .block(Block::default().borders(Borders::ALL).title(" Help "))
+            .block(Block::default().borders(Borders::LEFT | Borders::RIGHT))
             .select(selected)
-            .highlight_style(
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-            ),
+            .style(Style::default().fg(Color::DarkGray))
+            .highlight_style(help_selected_tab_style()),
         chunks[0],
     );
     match tab {
         HelpTab::General => {
             f.render_widget(
-                Paragraph::new(general_help_text())
+                Paragraph::new(panel_text("general", general_help_text()))
                     .block(Block::default().borders(Borders::LEFT | Borders::RIGHT))
                     .wrap(Wrap { trim: false }),
                 chunks[1],
             );
         }
         HelpTab::Commands => {
-            let inner = Layout::default()
-                .direction(Direction::Horizontal)
-                .constraints([Constraint::Percentage(52), Constraint::Percentage(48)])
-                .split(chunks[1]);
             let query = app.input.trim_start().trim_start_matches('/');
-            let items = matching_commands(query)
+            let items = help_command_items(query)
                 .into_iter()
                 .map(command_palette_item)
                 .collect::<Vec<_>>();
-            let detail = command_spec_by_index(query, app.command_palette_idx)
-                .map(command_detail_text)
-                .unwrap_or_else(help_text);
             let mut state = command_palette_list_state(app.command_palette_idx);
             f.render_stateful_widget(
                 List::new(items)
-                    .highlight_style(
-                        Style::default()
-                            .fg(Color::Cyan)
-                            .add_modifier(Modifier::BOLD),
-                    )
+                    .highlight_style(command_list_highlight_style())
                     .highlight_symbol("› ")
                     .block(
                         Block::default()
                             .borders(Borders::LEFT | Borders::RIGHT)
-                            .title(" Commands "),
                     ),
-                inner[0],
+                chunks[1],
                 &mut state,
-            );
-            f.render_widget(
-                Paragraph::new(detail)
-                    .block(Block::default().borders(Borders::RIGHT).title(" Detail "))
-                    .wrap(Wrap { trim: false }),
-                inner[1],
             );
         }
         HelpTab::Runtime => {
@@ -172,55 +180,53 @@ fn render_help_modal(f: &mut Frame, app: &TuiApp, area: Rect, tab: HelpTab) {
                 .constraints([Constraint::Length(6), Constraint::Min(8)])
                 .split(inner[1]);
             f.render_widget(
-                Paragraph::new(status_runtime_text(app))
+                Paragraph::new(panel_text("runtime", &status_runtime_text(app)))
                     .block(
                         Block::default()
                             .borders(Borders::LEFT | Borders::RIGHT)
-                            .title(" Runtime "),
                     )
                     .wrap(Wrap { trim: false }),
                 left[0],
             );
             f.render_widget(
-                Paragraph::new(status_workspace_text(app))
+                Paragraph::new(panel_text("workspace", &status_workspace_text(app)))
                     .block(
                         Block::default()
                             .borders(Borders::LEFT | Borders::RIGHT)
-                            .title(" Workspace "),
                     )
                     .wrap(Wrap { trim: false }),
                 left[1],
             );
             f.render_widget(
-                Paragraph::new(status_prompt_sources_text(app))
+                Paragraph::new(panel_text("prompt sources", &status_prompt_sources_text(app)))
                     .block(
                         Block::default()
                             .borders(Borders::LEFT | Borders::RIGHT)
-                            .title(" Prompt Sources "),
                     )
                     .wrap(Wrap { trim: false }),
                 left[2],
             );
             f.render_widget(
-                Paragraph::new(status_resources_text(app))
+                Paragraph::new(panel_text("resources", &status_resources_text(app)))
                     .block(
                         Block::default()
                             .borders(Borders::RIGHT)
-                            .title(" Resources "),
                     )
                     .wrap(Wrap { trim: false }),
                 right[0],
             );
             f.render_widget(
-                Paragraph::new(format!(
-                    "{}\n\n{}",
-                    model_help_text(app),
-                    recent_transcript_preview(app, 4)
+                Paragraph::new(panel_text(
+                    "models / recent",
+                    &format!(
+                        "{}\n\n{}",
+                        model_help_text(app),
+                        recent_transcript_preview(app, 4)
+                    ),
                 ))
                 .block(
                     Block::default()
                         .borders(Borders::RIGHT)
-                        .title(" Models / Recent "),
                 )
                 .wrap(Wrap { trim: false }),
                 right[1],
@@ -229,7 +235,7 @@ fn render_help_modal(f: &mut Frame, app: &TuiApp, area: Rect, tab: HelpTab) {
     }
     f.render_widget(
         Paragraph::new(
-            "Esc close  1 general  2 commands  3 runtime  Up/Down move in command lists",
+            "Esc close  1 general  2 commands  3 runtime  / open slash menu",
         )
         .alignment(Alignment::Center),
         chunks[2],
@@ -240,64 +246,25 @@ fn render_command_palette(f: &mut Frame, app: &TuiApp, area: Rect) {
     let query = app.input.trim_start().trim_start_matches('/');
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(3),
-            Constraint::Min(8),
-            Constraint::Length(2),
-        ])
+        .constraints([Constraint::Min(1), Constraint::Length(1)])
         .split(area);
-    let body = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
-        .split(chunks[1]);
     let items = if query.is_empty() {
         palette_items_for_empty_query(app)
     } else {
         palette_items_for_matches(app, query)
     };
-    let intro = if query.is_empty() {
-        "Recommended and recent commands are listed first. Enter runs the highlighted command immediately."
-    } else {
-        "Use Up/Down to inspect matches. Enter runs the highlighted command immediately."
-    };
-    f.render_widget(
-        Paragraph::new(intro).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(format!(" Commands matching /{} ", query)),
-        ),
-        chunks[0],
-    );
     let mut state = command_palette_list_state(app.command_palette_idx);
     f.render_stateful_widget(
         List::new(items)
-            .highlight_style(
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-            )
-            .highlight_symbol("› ")
-            .block(
-                Block::default()
-                    .borders(Borders::LEFT | Borders::RIGHT)
-                    .title(" Matches "),
-            ),
-        body[0],
+            .highlight_style(command_list_highlight_style())
+            .highlight_symbol("› "),
+        chunks[0],
         &mut state,
     );
-    let detail = palette_command_by_index(app, query, app.command_palette_idx)
-        .map(command_preview_text)
-        .unwrap_or_else(help_text);
     f.render_widget(
-        Paragraph::new(detail)
-            .block(Block::default().borders(Borders::RIGHT).title(" Detail "))
-            .wrap(Wrap { trim: false }),
-        body[1],
-    );
-    f.render_widget(
-        Paragraph::new("Esc close  Enter run highlighted command  Keep typing to refine")
-            .alignment(Alignment::Center),
-        chunks[2],
+        Paragraph::new(command_palette_footer_text(query))
+        .alignment(Alignment::Left),
+        chunks[1],
     );
 }
 
@@ -321,6 +288,10 @@ fn palette_items_for_matches(_app: &TuiApp, query: &str) -> Vec<ListItem<'static
         .collect()
 }
 
+fn help_command_items(query: &str) -> Vec<&'static CommandSpec> {
+    matching_commands(query)
+}
+
 fn command_palette_item(spec: &CommandSpec) -> ListItem<'static> {
     ListItem::new(command_palette_line(spec))
 }
@@ -328,17 +299,37 @@ fn command_palette_item(spec: &CommandSpec) -> ListItem<'static> {
 fn command_palette_line(spec: &CommandSpec) -> Line<'static> {
     Line::from(vec![
         Span::styled(
-            format!("{:<12}", spec.usage),
-            Style::default()
-                .fg(Color::White)
-                .add_modifier(Modifier::BOLD),
+            format!("{:<11}", spec.usage),
+            Style::default().add_modifier(Modifier::BOLD),
         ),
-        Span::raw(format!("{}  ", spec.summary)),
-        Span::styled(
-            format!("[{}]", spec.category),
-            Style::default().fg(Color::DarkGray),
-        ),
+        Span::styled(spec.summary.to_string(), Style::default().fg(Color::Gray)),
     ])
+}
+
+fn command_palette_footer_text(query: &str) -> &'static str {
+    if query.is_empty() {
+        "enter run  esc close"
+    } else {
+        "up/down move  enter run  esc close"
+    }
+}
+
+fn panel_text(title: &str, body: &str) -> String {
+    format!("{title}\n\n{body}")
+}
+
+fn command_list_highlight_style() -> Style {
+    Style::default()
+        .fg(Color::White)
+        .bg(Color::DarkGray)
+        .add_modifier(Modifier::BOLD)
+}
+
+fn help_selected_tab_style() -> Style {
+    Style::default()
+        .fg(Color::White)
+        .bg(Color::DarkGray)
+        .add_modifier(Modifier::BOLD)
 }
 
 #[cfg(test)]
@@ -370,8 +361,30 @@ mod tests {
 
         assert!(line.contains(spec.usage));
         assert!(line.contains(spec.summary));
-        assert!(line.contains(spec.category));
         assert!(!line.contains('\n'));
+    }
+
+    #[test]
+    fn help_command_items_are_alphabetical_for_empty_query() {
+        let items = help_command_items("");
+
+        assert_eq!(items.len(), COMMAND_SPECS.len());
+        assert_eq!(items.first().map(|spec| spec.name), Some("approval"));
+        assert_eq!(items.last().map(|spec| spec.name), Some("status"));
+    }
+
+    #[test]
+    fn command_palette_footer_is_minimal_for_empty_query() {
+        assert_eq!(command_palette_footer_text(""), "enter run  esc close");
+        assert_eq!(
+            command_palette_footer_text("mod"),
+            "up/down move  enter run  esc close"
+        );
+    }
+
+    #[test]
+    fn panel_text_prefixes_body_with_lightweight_heading() {
+        assert_eq!(panel_text("runtime", "provider=codex"), "runtime\n\nprovider=codex");
     }
 }
 
@@ -400,62 +413,45 @@ fn render_status_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
         .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
         .split(chunks[1]);
     f.render_widget(
-        Paragraph::new(status_runtime_text(app))
-            .block(Block::default().borders(Borders::ALL).title(" Runtime "))
+        Paragraph::new(panel_text("runtime", &status_runtime_text(app)))
+            .block(Block::default().borders(Borders::LEFT | Borders::RIGHT))
             .wrap(Wrap { trim: false }),
         top[0],
     );
     f.render_widget(
-        Paragraph::new(status_workspace_text(app))
-            .block(Block::default().borders(Borders::ALL).title(" Workspace "))
+        Paragraph::new(panel_text("workspace", &status_workspace_text(app)))
+            .block(Block::default().borders(Borders::LEFT | Borders::RIGHT))
             .wrap(Wrap { trim: false }),
         top[1],
     );
     f.render_widget(
-        Paragraph::new(status_resources_text(app))
-            .block(Block::default().borders(Borders::ALL).title(" Resources "))
+        Paragraph::new(panel_text("resources", &status_resources_text(app)))
+            .block(Block::default().borders(Borders::LEFT | Borders::RIGHT))
             .wrap(Wrap { trim: false }),
         top[2],
     );
     f.render_widget(
-        Paragraph::new(status_prompt_sources_text(app))
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title(" Prompt Sources "),
-            )
+        Paragraph::new(panel_text("prompt sources", &status_prompt_sources_text(app)))
+            .block(Block::default().borders(Borders::LEFT | Borders::RIGHT))
             .wrap(Wrap { trim: false }),
         chunks[1],
     );
     let right_panel = download_status_text(app).unwrap_or_else(|| quick_actions_text().to_string());
-    let right_title = if matches!(
-        app.runtime_phase,
-        crate::tui::state::RuntimePhase::RebuildingBackend
-            | crate::tui::state::RuntimePhase::BackendReady
-    ) {
-        " Download "
-    } else {
-        " Quick Actions "
-    };
     f.render_widget(
-        Paragraph::new(model_help_text(app))
-            .block(Block::default().borders(Borders::ALL).title(" Models "))
+        Paragraph::new(panel_text("models", &model_help_text(app)))
+            .block(Block::default().borders(Borders::LEFT | Borders::RIGHT))
             .wrap(Wrap { trim: false }),
         middle[0],
     );
     f.render_widget(
-        Paragraph::new(right_panel)
-            .block(Block::default().borders(Borders::ALL).title(right_title))
+        Paragraph::new(panel_text("downloads / actions", &right_panel))
+            .block(Block::default().borders(Borders::LEFT | Borders::RIGHT))
             .wrap(Wrap { trim: false }),
         middle[1],
     );
     f.render_widget(
-        Paragraph::new(status_plan_text(app))
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title(" Updated Plan "),
-            )
+        Paragraph::new(panel_text("updated plan", &status_plan_text(app)))
+            .block(Block::default().borders(Borders::LEFT | Borders::RIGHT))
             .wrap(Wrap { trim: false }),
         chunks[2],
     );
@@ -463,40 +459,29 @@ fn render_status_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
         .split(chunks[3]);
-    let (interaction_title, interaction_text) = status_active_pending_interaction_text(app)
-        .unwrap_or((" Request Input ", "No pending interaction.".to_string()));
+    let interaction_text = status_active_pending_interaction_text(app)
+        .map(|(_, text)| text)
+        .unwrap_or_else(|| "No pending interaction.".to_string());
     f.render_widget(
-        Paragraph::new(interaction_text)
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title(interaction_title),
-            )
+        Paragraph::new(panel_text("request input", &interaction_text))
+            .block(Block::default().borders(Borders::LEFT | Borders::RIGHT))
             .wrap(Wrap { trim: false }),
         lower[0],
     );
     f.render_widget(
-        Paragraph::new(current_turn_preview(app, 10))
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title(" Current Turn "),
-            )
+        Paragraph::new(panel_text("current turn", &current_turn_preview(app, 10)))
+            .block(Block::default().borders(Borders::LEFT | Borders::RIGHT))
             .wrap(Wrap { trim: false }),
         lower[1],
     );
     f.render_widget(
-        Paragraph::new(recent_transcript_preview(app, 8))
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title(" Recent Activity "),
-            )
+        Paragraph::new(panel_text("recent activity", &recent_transcript_preview(app, 8)))
+            .block(Block::default().borders(Borders::LEFT | Borders::RIGHT))
             .wrap(Wrap { trim: false }),
         chunks[4],
     );
     f.render_widget(
-        Paragraph::new("Esc close  Enter close  /help commands  /model switch runtime")
+        Paragraph::new("esc close  enter close  /help  /model")
             .alignment(Alignment::Center),
         chunks[5],
     );
@@ -509,17 +494,13 @@ fn render_context_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
         .split(area);
 
     f.render_widget(
-        Paragraph::new(status_context_text(app))
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title(" Context "),
-            )
+        Paragraph::new(panel_text("context", &status_context_text(app)))
+            .block(Block::default().borders(Borders::LEFT | Borders::RIGHT))
             .wrap(Wrap { trim: false }),
         chunks[0],
     );
     f.render_widget(
-        Paragraph::new("Esc close  /context re-open  /status runtime details")
+        Paragraph::new("esc close  /status")
             .alignment(Alignment::Center),
         chunks[1],
     );
@@ -547,6 +528,33 @@ fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
     horizontal[1]
 }
 
-fn command_preview_text(spec: &CommandSpec) -> String {
-    format!("{}\n\n{}", spec.usage, spec.summary)
+fn command_palette_rect(area: Rect, app: &TuiApp) -> Rect {
+    let query = app.input.trim_start().trim_start_matches('/');
+    let item_count = if query.is_empty() {
+        palette_commands(app, "").len()
+    } else {
+        matching_commands(query).len()
+    };
+    let visible_rows = item_count.clamp(1, 8) as u16;
+    let height = visible_rows
+        .saturating_add(1)
+        .min(area.height.saturating_sub(2).max(3));
+    let width = 64.min(area.width.saturating_sub(4).max(24));
+    let vertical = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Length(height),
+            Constraint::Min(1),
+        ])
+        .split(area);
+    let horizontal = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Min(2),
+            Constraint::Length(width),
+            Constraint::Min(2),
+        ])
+        .split(vertical[1]);
+    horizontal[1]
 }

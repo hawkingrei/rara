@@ -10,6 +10,11 @@ use std::sync::Arc;
 #[test]
 fn shared_runtime_context_collects_prompt_plan_and_compaction_state() {
     let (_temp, session_manager, workspace, rara_dir) = test_runtime_storage();
+    std::fs::write(
+        rara_dir.join("memory.md"),
+        "# Team Notes\n\nPrefer the shared bootstrap path.\n",
+    )
+    .expect("write workspace memory");
     let backend = Arc::new(SequencedBackend::new(vec![LlmResponse {
         content: vec![ContentBlock::Text {
             text: "ok".to_string(),
@@ -62,10 +67,63 @@ fn shared_runtime_context_collects_prompt_plan_and_compaction_state() {
         role: "user".to_string(),
         content: json!([{"type":"text","text":"hello"}]),
     });
+    agent.history.push(Message {
+        role: "system".to_string(),
+        content: json!({
+            "type": "compact_boundary",
+            "version": 3,
+            "before_tokens": 5000,
+            "recent_file_count": 2
+        }),
+    });
+    agent.history.push(Message {
+        role: "system".to_string(),
+        content: json!("STRUCTURED SUMMARY OF PREVIOUS CONVERSATION:\nUser Intent\n- finish the refactor"),
+    });
+    agent.history.push(Message {
+        role: "system".to_string(),
+        content: json!("RECENT FILES FROM COMPACTED HISTORY:\n- src/main.rs\n- src/runtime_context.rs"),
+    });
+    agent.history.push(Message {
+        role: "system".to_string(),
+        content: json!("RECENT FILE EXCERPTS FROM COMPACTED HISTORY:\n### src/main.rs (lines 1-3)\ncode"),
+    });
+    agent.history.push(Message {
+        role: "assistant".to_string(),
+        content: json!([
+            {
+                "type": "tool_use",
+                "id": "tool-retrieve-1",
+                "name": "retrieve_experience",
+                "input": { "query": "bootstrap contract" }
+            },
+            {
+                "type": "tool_use",
+                "id": "tool-retrieve-2",
+                "name": "retrieve_session_context",
+                "input": { "query": "previous auth flow" }
+            }
+        ]),
+    });
+    agent.history.push(Message {
+        role: "user".to_string(),
+        content: json!([
+            {
+                "type": "tool_result",
+                "tool_use_id": "tool-retrieve-1",
+                "content": "Tool retrieve_experience completed with relevant_experiences.\nPayload:\n{\n  \"relevant_experiences\": [\n    \"Prefer one shared bootstrap path.\",\n    \"Keep session restore aligned with direct execution.\"\n  ]\n}"
+            },
+            {
+                "type": "tool_result",
+                "tool_use_id": "tool-retrieve-2",
+                "content": "Tool retrieve_session_context completed with status, summary.\nPayload:\n{\n  \"status\": \"ok\",\n  \"summary\": \"Auth picker already moved behind the shared runtime bootstrap.\"\n}"
+            }
+        ]),
+    });
 
     let runtime = agent.shared_runtime_context();
 
-    assert_eq!(runtime.history_len, 1);
+    assert_eq!(runtime.history_len, 7);
     assert_eq!(runtime.total_input_tokens, 11);
     assert_eq!(runtime.total_output_tokens, 7);
     assert_eq!(runtime.prompt.base_prompt_kind, "default");
@@ -73,6 +131,9 @@ fn shared_runtime_context_collects_prompt_plan_and_compaction_state() {
         .prompt
         .section_keys
         .contains(&"append_system_prompt".to_string()));
+    assert_eq!(runtime.prompt.source_entries.len(), runtime.prompt.source_status_lines.len());
+    assert_eq!(runtime.prompt.source_entries[0].order, 1);
+    assert!(!runtime.prompt.source_entries[0].inclusion_reason.is_empty());
     assert!(runtime
         .prompt
         .warnings
@@ -99,4 +160,41 @@ fn shared_runtime_context_collects_prompt_plan_and_compaction_state() {
             "src/runtime_context.rs".to_string()
         ]
     );
+    assert_eq!(runtime.compaction.source_entries.len(), 4);
+    assert_eq!(runtime.compaction.source_entries[0].kind, "compact_boundary");
+    assert_eq!(runtime.compaction.source_entries[1].kind, "compacted_summary");
+    assert_eq!(runtime.compaction.source_entries[2].kind, "recent_files");
+    assert_eq!(runtime.compaction.source_entries[3].kind, "recent_file_excerpts");
+    assert_eq!(runtime.retrieval.entries.len(), 3);
+    assert_eq!(runtime.retrieval.entries[0].kind, "workspace_memory");
+    assert_eq!(runtime.retrieval.entries[0].status, "active");
+    assert_eq!(runtime.retrieval.entries[1].kind, "thread_history");
+    assert_eq!(runtime.retrieval.entries[1].status, "available");
+    assert_eq!(runtime.retrieval.entries[2].kind, "vector_memory");
+    assert_eq!(runtime.retrieval.entries[2].status, "available");
+    assert_eq!(runtime.retrieval.selected_items.len(), 6);
+    assert_eq!(runtime.retrieval.selected_items[0].kind, "workspace_memory");
+    assert!(runtime.retrieval.selected_items[0]
+        .detail
+        .contains(".rara/memory.md"));
+    assert!(runtime.retrieval.selected_items[0]
+        .detail
+        .contains("first line: # Team Notes"));
+    assert_eq!(runtime.retrieval.selected_items[1].kind, "compacted_summary");
+    assert_eq!(runtime.retrieval.selected_items[2].kind, "recent_files");
+    assert_eq!(runtime.retrieval.selected_items[3].kind, "recent_file_excerpts");
+    assert_eq!(
+        runtime.retrieval.selected_items[4].kind,
+        "retrieved_workspace_memory"
+    );
+    assert!(runtime.retrieval.selected_items[4]
+        .detail
+        .contains("query=bootstrap contract"));
+    assert_eq!(
+        runtime.retrieval.selected_items[5].kind,
+        "retrieved_thread_memory"
+    );
+    assert!(runtime.retrieval.selected_items[5]
+        .detail
+        .contains("previous auth flow"));
 }

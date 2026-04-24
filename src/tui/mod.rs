@@ -81,6 +81,7 @@ pub async fn run_tui(
         Err(err) => app.set_state_db_error(err.to_string()),
     }
     let oauth_manager = Arc::new(oauth_manager);
+    app.codex_auth_mode = oauth_manager.saved_auth_mode().ok().flatten();
     let mut events = EventStream::new();
     let mut tick = interval(Duration::from_millis(100));
 
@@ -394,12 +395,16 @@ async fn dispatch_event(
                 app.push_notice("Enter a Codex API key or press Esc to go back.");
             } else if value.is_empty() {
                 app.config.clear_api_key();
+                if app.config.provider == "codex" {
+                    app.codex_auth_mode = None;
+                }
                 app.config_manager.save(&app.config)?;
                 app.notice = Some("Cleared API key for the current provider.".into());
                 app.close_overlay();
             } else {
                 app.config.set_api_key(value.to_string());
                 if app.config.provider == "codex" {
+                    app.codex_auth_mode = Some(crate::oauth::SavedCodexAuthMode::ApiKey);
                     app.config
                         .apply_codex_defaults_for_base_url(crate::config::DEFAULT_CODEX_BASE_URL);
                 }
@@ -551,6 +556,7 @@ async fn dispatch_event(
                     } else {
                         let removed = oauth_manager.clear_saved_auth()?;
                         app.config.clear_provider_api_key("codex");
+                        app.codex_auth_mode = None;
                         app.config_manager.save(&app.config)?;
                         app.notice = Some(if removed {
                             "Cleared the saved provider credential.".into()

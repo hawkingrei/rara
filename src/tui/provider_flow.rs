@@ -11,6 +11,8 @@ pub(super) fn sync_codex_credential_from_auth_store(
     app: &mut TuiApp,
     oauth_manager: &OAuthManager,
 ) -> anyhow::Result<bool> {
+    let saved_auth_mode = oauth_manager.saved_auth_mode()?;
+    app.codex_auth_mode = saved_auth_mode;
     let codex_state = app.config.provider_states.get("codex");
     let has_ready_codex_state = codex_state
         .and_then(|state| state.api_key.as_ref())
@@ -26,12 +28,13 @@ pub(super) fn sync_codex_credential_from_auth_store(
     }
 
     if !oauth_manager.has_saved_auth()? {
+        app.codex_auth_mode = None;
         return Ok(false);
     }
 
     let credential = oauth_manager.load_saved_credential()?;
     let credential = credential.expose_secret().trim().to_string();
-    let expected_base_url = match oauth_manager.saved_auth_mode()? {
+    let expected_base_url = match saved_auth_mode {
         Some(crate::oauth::SavedCodexAuthMode::Chatgpt) => {
             crate::config::DEFAULT_CODEX_CHATGPT_BASE_URL
         }

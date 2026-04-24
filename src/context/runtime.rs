@@ -1,17 +1,43 @@
 use crate::agent::PlanStepStatus;
-use crate::prompt::EffectivePrompt;
+use crate::prompt::{EffectivePrompt, PromptSource};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PromptSourceContextEntry {
+    pub order: usize,
+    pub kind: String,
+    pub label: String,
+    pub display_path: String,
+    pub status_line: String,
+    pub inclusion_reason: String,
+}
+
+impl PromptSourceContextEntry {
+    fn from_prompt_source(order: usize, source: &PromptSource) -> Self {
+        Self {
+            order,
+            kind: source.kind_label().to_string(),
+            label: source.label.clone(),
+            display_path: source.display_path.clone(),
+            status_line: source.status_line(),
+            inclusion_reason: source.inclusion_reason().to_string(),
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PromptContextView {
     pub base_prompt_kind: String,
     pub section_keys: Vec<String>,
+    pub source_entries: Vec<PromptSourceContextEntry>,
     pub source_status_lines: Vec<String>,
+    pub append_system_prompt: Option<String>,
     pub warnings: Vec<String>,
 }
 
 impl PromptContextView {
     pub fn from_effective_prompt(
         effective_prompt: EffectivePrompt,
+        append_system_prompt: Option<String>,
         warnings: Vec<String>,
     ) -> Self {
         Self {
@@ -21,11 +47,18 @@ impl PromptContextView {
                 .iter()
                 .map(|key| (*key).to_string())
                 .collect(),
+            source_entries: effective_prompt
+                .sources
+                .iter()
+                .enumerate()
+                .map(|(idx, source)| PromptSourceContextEntry::from_prompt_source(idx + 1, source))
+                .collect(),
             source_status_lines: effective_prompt
                 .sources
                 .iter()
                 .map(|source| source.status_line())
                 .collect(),
+            append_system_prompt,
             warnings,
         }
     }
@@ -74,6 +107,16 @@ pub struct CompactionContextView {
     pub last_compaction_boundary_version: Option<u32>,
     pub last_compaction_boundary_before_tokens: Option<usize>,
     pub last_compaction_boundary_recent_file_count: Option<usize>,
+    pub source_entries: Vec<CompactionSourceContextEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompactionSourceContextEntry {
+    pub order: usize,
+    pub kind: String,
+    pub label: String,
+    pub detail: String,
+    pub inclusion_reason: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -87,4 +130,30 @@ pub struct SharedRuntimeContext {
     pub prompt: PromptContextView,
     pub plan: PlanContextView,
     pub compaction: CompactionContextView,
+    pub retrieval: RetrievalContextView,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RetrievalContextView {
+    pub entries: Vec<RetrievalSourceContextEntry>,
+    pub selected_items: Vec<RetrievalSelectedItemContextEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RetrievalSourceContextEntry {
+    pub order: usize,
+    pub kind: String,
+    pub label: String,
+    pub status: String,
+    pub detail: String,
+    pub inclusion_reason: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RetrievalSelectedItemContextEntry {
+    pub order: usize,
+    pub kind: String,
+    pub label: String,
+    pub detail: String,
+    pub inclusion_reason: String,
 }
