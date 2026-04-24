@@ -1,4 +1,4 @@
-use crate::agent::PlanStepStatus;
+use crate::agent::{CompactState, PlanStepStatus};
 use crate::prompt::EffectivePrompt;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -62,6 +62,23 @@ impl PlanContextView {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContextBudgetView {
+    pub context_window_tokens: Option<usize>,
+    pub compact_threshold_tokens: usize,
+    pub reserved_output_tokens: usize,
+}
+
+impl ContextBudgetView {
+    pub fn from_compact_state(state: &CompactState) -> Self {
+        Self {
+            context_window_tokens: state.context_window_tokens,
+            compact_threshold_tokens: state.compact_threshold_tokens,
+            reserved_output_tokens: state.reserved_output_tokens,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CompactionContextView {
     pub estimated_history_tokens: usize,
     pub context_window_tokens: Option<usize>,
@@ -76,6 +93,30 @@ pub struct CompactionContextView {
     pub last_compaction_boundary_recent_file_count: Option<usize>,
 }
 
+impl CompactionContextView {
+    pub fn from_compact_state(state: &CompactState) -> Self {
+        Self {
+            estimated_history_tokens: state.estimated_history_tokens,
+            context_window_tokens: state.context_window_tokens,
+            compact_threshold_tokens: state.compact_threshold_tokens,
+            reserved_output_tokens: state.reserved_output_tokens,
+            compaction_count: state.compaction_count,
+            last_compaction_before_tokens: state.last_compaction_before_tokens,
+            last_compaction_after_tokens: state.last_compaction_after_tokens,
+            last_compaction_recent_files: state.last_compaction_recent_files.clone(),
+            last_compaction_boundary_version: state
+                .last_compaction_boundary
+                .map(|boundary| boundary.version),
+            last_compaction_boundary_before_tokens: state
+                .last_compaction_boundary
+                .map(|boundary| boundary.before_tokens),
+            last_compaction_boundary_recent_file_count: state
+                .last_compaction_boundary
+                .map(|boundary| boundary.recent_file_count),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SharedRuntimeContext {
     pub cwd: String,
@@ -84,6 +125,7 @@ pub struct SharedRuntimeContext {
     pub history_len: usize,
     pub total_input_tokens: u32,
     pub total_output_tokens: u32,
+    pub budget: ContextBudgetView,
     pub prompt: PromptContextView,
     pub plan: PlanContextView,
     pub compaction: CompactionContextView,

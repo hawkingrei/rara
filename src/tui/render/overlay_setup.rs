@@ -4,6 +4,7 @@ use ratatui::{
     text::Line,
     widgets::{Block, Borders, List, ListItem, Paragraph, Wrap},
 };
+use std::path::Path;
 
 use crate::tui::auth_mode_picker::build_auth_mode_picker_view;
 use crate::tui::command::api_key_status;
@@ -143,23 +144,23 @@ pub(super) fn render_resume_picker_modal(f: &mut Frame, app: &TuiApp, area: Rect
             Constraint::Length(2),
         ])
         .split(area);
-    let intro = if app.recent_sessions.is_empty() {
-        "No persisted sessions found yet."
+    let intro = if app.recent_threads.is_empty() {
+        "No persisted threads found yet."
     } else {
-        "Choose a recent session to restore its transcript, plan state, and interaction cards."
+        "Choose a recent thread to restore its transcript, plan state, and interaction cards."
     };
     f.render_widget(
         Paragraph::new(intro).block(
             Block::default()
                 .borders(Borders::ALL)
-                .title(" Resume Session "),
+                .title(" Resume Thread "),
         ),
         chunks[0],
     );
-    let items = if app.recent_sessions.is_empty() {
-        vec![ListItem::new("No sessions available.")]
+    let items = if app.recent_threads.is_empty() {
+        vec![ListItem::new("No threads available.")]
     } else {
-        app.recent_sessions
+        app.recent_threads
             .iter()
             .enumerate()
             .map(|(idx, session)| {
@@ -170,18 +171,34 @@ pub(super) fn render_resume_picker_modal(f: &mut Frame, app: &TuiApp, area: Rect
                 } else {
                     Style::default()
                 };
-                let when = format!("updated_at={}", session.updated_at);
+                let when = format!("updated_at={}", session.metadata.updated_at);
                 let preview = if session.preview.is_empty() {
                     "(no preview)".to_string()
                 } else {
                     session.preview.clone()
                 };
+                let workspace = Path::new(&session.metadata.cwd)
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .filter(|name| !name.is_empty())
+                    .unwrap_or("-");
+                let compaction = if session.compaction.compaction_count > 0 {
+                    format!("compact={}", session.compaction.compaction_count)
+                } else {
+                    "compact=0".to_string()
+                };
                 ListItem::new(vec![
                     Line::from(format!(
                         "{}  {} / {}  branch={}",
-                        session.session_id, session.provider, session.model, session.branch
+                        session.metadata.session_id,
+                        session.metadata.provider,
+                        session.metadata.model,
+                        session.metadata.branch
                     )),
-                    Line::from(format!("  {when}")),
+                    Line::from(format!(
+                        "  {when}  mode={}  workspace={}  {}",
+                        session.metadata.agent_mode, workspace, compaction
+                    )),
                     Line::from(format!("  {preview}")),
                     Line::from(""),
                 ])

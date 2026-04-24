@@ -31,8 +31,8 @@ pub const COMMAND_SPECS: [CommandSpec; 13] = [
         category: "Session",
         name: "resume",
         usage: "/resume",
-        summary: "Pick and restore a recent local session.",
-        detail: "Open the recent session picker backed by the local SQLite state DB and rollout artifacts. This restores committed turns, plan state, and interaction cards for the selected session.",
+        summary: "Pick and restore a recent local thread.",
+        detail: "Open the recent thread picker backed by the local thread store and rollout artifacts. This restores committed turns, plan state, and interaction cards for the selected thread.",
     },
     CommandSpec {
         category: "Session",
@@ -250,7 +250,7 @@ pub fn help_text() -> String {
         .collect::<Vec<_>>()
         .join("\n");
     format!(
-        "Built-in commands:\n{}\n\nCompaction:\n  /compact   summarize older conversation history now\n\nSessions:\n  /resume    reopen a recent local session\n\nModes:\n  /plan      enter planning mode for the current task\n  RARA may suggest planning mode for non-trivial tasks\n  /approval  toggle bash approval mode\n\nAuth:\n  /login     open the provider auth picker\n  /logout    clear the saved provider credential\n\nEditing:\n  apply_patch  preferred for editing existing files\n  write_file   use for new files or full rewrites\n  replace      simple fallback for unique string replacement\n\nKeyboard:\n  Enter submit\n  Esc close current overlay\n  S open setup\n\nExit:\n  /quit\n  /exit\n\nModel switching:\n  /model\n\nProvider URL:\n  /base-url",
+        "Built-in commands:\n{}\n\nCompaction:\n  /compact   summarize older conversation history now\n\nThreads:\n  /resume    reopen a recent local thread\n\nModes:\n  /plan      enter planning mode for the current task\n  RARA may suggest planning mode for non-trivial tasks\n  /approval  toggle bash approval mode\n\nAuth:\n  /login     open the provider auth picker\n  /logout    clear the saved provider credential\n\nEditing:\n  apply_patch  preferred for editing existing files\n  write_file   use for new files or full rewrites\n  replace      simple fallback for unique string replacement\n\nKeyboard:\n  Enter submit\n  Esc close current overlay\n  S open setup\n\nExit:\n  /quit\n  /exit\n\nModel switching:\n  /model\n\nProvider URL:\n  /base-url",
         commands
     )
 }

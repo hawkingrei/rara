@@ -1,4 +1,8 @@
-use crate::agent::Message;
+use crate::agent::{CompactState, Message, PlanStepStatus};
+use crate::context::{
+    CompactionContextView, ContextBudgetView, PlanContextView, PromptContextView,
+    SharedRuntimeContext,
+};
 use crate::llm::{ContextBudget, LlmBackend};
 use crate::prompt::{self, EffectivePrompt, PromptMode, PromptRuntimeConfig};
 use crate::workspace::WorkspaceMemory;
@@ -8,6 +12,20 @@ use serde_json::Value;
 pub struct AssembledContext {
     pub effective_prompt: EffectivePrompt,
     pub compact_instruction: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct RuntimeContextInputs {
+    pub cwd: String,
+    pub branch: String,
+    pub session_id: String,
+    pub history_len: usize,
+    pub total_input_tokens: u32,
+    pub total_output_tokens: u32,
+    pub execution_mode: String,
+    pub plan_steps: Vec<(PlanStepStatus, String)>,
+    pub plan_explanation: Option<String>,
+    pub compact_state: CompactState,
 }
 
 impl AssembledContext {
@@ -44,6 +62,33 @@ impl<'a> ContextAssembler<'a> {
 
     pub fn compact_instruction(&self) -> String {
         prompt::build_compact_instruction(self.runtime)
+    }
+
+    pub fn assemble_runtime(
+        &self,
+        mode: PromptMode,
+        inputs: RuntimeContextInputs,
+    ) -> SharedRuntimeContext {
+        let effective_prompt = self.effective_prompt(mode);
+        SharedRuntimeContext {
+            cwd: inputs.cwd,
+            branch: inputs.branch,
+            session_id: inputs.session_id,
+            history_len: inputs.history_len,
+            total_input_tokens: inputs.total_input_tokens,
+            total_output_tokens: inputs.total_output_tokens,
+            budget: ContextBudgetView::from_compact_state(&inputs.compact_state),
+            prompt: PromptContextView::from_effective_prompt(
+                effective_prompt,
+                self.runtime.warnings.clone(),
+            ),
+            plan: PlanContextView::from_agent_state(
+                inputs.execution_mode.as_str(),
+                inputs.plan_steps.into_iter(),
+                inputs.plan_explanation,
+            ),
+            compaction: CompactionContextView::from_compact_state(&inputs.compact_state),
+        }
     }
 
     pub fn budget_for(
@@ -116,6 +161,48 @@ mod tests {
             .effective_prompt
             .section_keys
             .contains(&"append_system_prompt"));
+    }
+
+    #[test]
+    fn assemble_runtime_collects_budget_and_runtime_views() {
+        let workspace = test_workspace();
+        let runtime = PromptRuntimeConfig {
+            append_system_prompt: Some("appendix".to_string()),
+            warnings: vec!["missing prompt file".to_string()],
+            ..PromptRuntimeConfig::default()
+        };
+
+        let runtime_context = ContextAssembler::new(&workspace, &runtime).assemble_runtime(
+            PromptMode::Plan,
+            RuntimeContextInputs {
+                cwd: "repo".to_string(),
+                branch: "main".to_string(),
+                session_id: "session-1".to_string(),
+                history_len: 3,
+                total_input_tokens: 11,
+                total_output_tokens: 7,
+                execution_mode: "plan".to_string(),
+                plan_steps: vec![(PlanStepStatus::Pending, "inspect bootstrap".to_string())],
+                plan_explanation: Some("Keep one assembly path.".to_string()),
+                compact_state: crate::agent::CompactState {
+                    estimated_history_tokens: 1234,
+                    context_window_tokens: Some(8192),
+                    compact_threshold_tokens: 7000,
+                    reserved_output_tokens: 1024,
+                    ..Default::default()
+                },
+            },
+        );
+
+        assert_eq!(runtime_context.session_id, "session-1");
+        assert_eq!(runtime_context.budget.context_window_tokens, Some(8192));
+        assert_eq!(runtime_context.budget.compact_threshold_tokens, 7000);
+        assert_eq!(runtime_context.plan.execution_mode, "plan");
+        assert_eq!(runtime_context.plan.steps.len(), 1);
+        assert_eq!(
+            runtime_context.prompt.warnings,
+            vec!["missing prompt file".to_string()]
+        );
     }
 
     #[test]

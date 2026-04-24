@@ -1,5 +1,6 @@
 use super::*;
 use crate::llm::ContextBudget;
+use crate::session::PersistedCompactionEvent;
 use std::sync::OnceLock;
 
 const RECENT_FILE_CARRY_OVER_LIMIT: usize = 5;
@@ -162,6 +163,17 @@ impl Agent {
             before_tokens: current_tokens,
             recent_file_count: self.compact_state.last_compaction_recent_files.len(),
         });
+        self.session_manager.save_compaction_event(
+            &self.session_id,
+            &PersistedCompactionEvent {
+                event_index: self.compact_state.compaction_count,
+                before_tokens: current_tokens,
+                after_tokens: compacted_tokens,
+                boundary_version: COMPACT_BOUNDARY_VERSION,
+                recent_files: self.compact_state.last_compaction_recent_files.clone(),
+                summary,
+            },
+        )?;
         Ok(())
     }
 

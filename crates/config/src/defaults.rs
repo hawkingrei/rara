@@ -1,0 +1,35 @@
+pub const DEFAULT_CODEX_BASE_URL: &str = "https://api.openai.com/v1";
+pub const DEFAULT_CODEX_MODEL: &str = "gpt-5.4";
+pub const DEFAULT_CODEX_CHATGPT_BASE_URL: &str = "https://chatgpt.com/backend-api/codex";
+pub const DEFAULT_REASONING_SUMMARY: &str = "auto";
+pub const REASONING_SUMMARY_NONE: &str = "none";
+pub const REASONING_SUMMARY_DETAILED: &str = "detailed";
+pub const LEGACY_CODEX_BASE_URL: &str = "http://localhost:8080";
+pub const LEGACY_CODEX_MODEL: &str = "codex";
+pub const LEGACY_CODEX_MODEL_V1: &str = "gpt-5-codex";
+pub const LEGACY_CODEX_MODEL_V1_MINI: &str = "gpt-5-codex-mini";
+
+pub fn should_reset_codex_base_url(url: Option<&str>) -> bool {
+    url.map(str::trim).map_or(true, |value| {
+        value.is_empty() || value == LEGACY_CODEX_BASE_URL
+    })
+}
+
+pub fn should_reset_codex_model(model: Option<&str>) -> bool {
+    model.map(str::trim).map_or(true, |value| {
+        value.is_empty()
+            || matches!(
+                value,
+                LEGACY_CODEX_MODEL | LEGACY_CODEX_MODEL_V1 | LEGACY_CODEX_MODEL_V1_MINI
+            )
+    })
+}
+
+pub fn should_apply_codex_base_url(url: Option<&str>, expected: &str) -> bool {
+    url.map(str::trim).map_or(true, |value| {
+        value.is_empty()
+            || value == LEGACY_CODEX_BASE_URL
+            || ((value == DEFAULT_CODEX_BASE_URL || value == DEFAULT_CODEX_CHATGPT_BASE_URL)
+                && value != expected)
+    })
+}

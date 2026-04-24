@@ -241,15 +241,28 @@ fn persists_compact_state_for_restore() -> Result<()> {
     assert_eq!(compact_state.last_compaction_recent_file_count, Some(2));
     assert_eq!(compact_state.last_compaction_boundary_version, Some(1));
 
-    let sessions = db.list_recent_sessions(5)?;
-    let summary = sessions
+    let threads = db.list_recent_thread_summaries(5)?;
+    let summary = threads
         .iter()
         .find(|item| item.session_id == "session-compact")
-        .expect("session summary");
+        .expect("recent thread summary");
     assert_eq!(summary.compaction_count, 3);
     assert_eq!(summary.last_compaction_before_tokens, Some(12_000));
     assert_eq!(summary.last_compaction_after_tokens, Some(4_200));
     assert_eq!(summary.last_compaction_recent_file_count, Some(2));
     assert_eq!(summary.last_compaction_boundary_version, Some(1));
+
+    let recent_threads = db.list_recent_thread_records(5)?;
+    let recent = recent_threads
+        .iter()
+        .find(|item| item.session_id == "session-compact")
+        .expect("recent thread record");
+    assert_eq!(recent.cwd, "/tmp/workspace");
+    assert_eq!(recent.provider, "ollama");
+    assert_eq!(recent.model, "gemma4");
+    assert_eq!(recent.agent_mode, "execute");
+    assert_eq!(recent.bash_approval, "suggestion");
+    assert_eq!(recent.compaction_count, 3);
+    assert_eq!(recent.last_compaction_after_tokens, Some(4_200));
     Ok(())
 }
