@@ -303,7 +303,9 @@ fn queued_follow_up_preview_lines(app: &TuiApp) -> Vec<Line<'static>> {
 }
 
 fn composer_hint(app: &TuiApp) -> &'static str {
-    if app.input.trim_start().starts_with('/') {
+    if matches!(app.overlay, Some(super::super::state::Overlay::CommandPalette)) {
+        ""
+    } else if app.input.trim_start().starts_with('/') {
         "slash command  Enter run  Esc close"
     } else if app.has_pending_follow_up_messages() {
         pending_follow_up_hint()
@@ -323,9 +325,15 @@ fn composer_hint(app: &TuiApp) -> &'static str {
 }
 
 fn composer_hint_line(app: &TuiApp) -> Line<'static> {
-    let mut spans = vec![Span::styled(composer_hint(app), Style::default().fg(Color::Gray))];
+    let hint = composer_hint(app);
+    let mut spans = Vec::new();
+    if !hint.is_empty() {
+        spans.push(Span::styled(hint, Style::default().fg(Color::Gray)));
+    }
     if let Some(repo_context) = app.repo_context_hint() {
-        spans.push(Span::raw("  "));
+        if !spans.is_empty() {
+            spans.push(Span::raw("  "));
+        }
         spans.push(Span::styled(repo_context, Style::default().fg(Color::DarkGray)));
     }
     Line::from(spans)
@@ -590,5 +598,23 @@ mod tests {
         assert!(rendered.contains("repo: hawkingrei/rara"));
         assert!(rendered.contains("branch: feat/test"));
         assert!(rendered.contains("PR: https://github.com/hawkingrei/rara/pull/46"));
+    }
+
+    #[test]
+    fn composer_hint_line_hides_slash_hint_while_palette_is_open() {
+        let temp = tempdir().unwrap();
+        let mut app = TuiApp::new(ConfigManager {
+            path: temp.path().join("config.json"),
+        })
+        .expect("build tui app");
+        app.input = "/".into();
+        app.overlay = Some(crate::tui::state::Overlay::CommandPalette);
+        app.repo_slug = Some("hawkingrei/rara".into());
+        app.snapshot.branch = "main".into();
+
+        let rendered = composer_hint_line(&app).to_string();
+        assert!(!rendered.contains("slash command"));
+        assert!(rendered.contains("repo: hawkingrei/rara"));
+        assert!(rendered.contains("branch: main"));
     }
 }
