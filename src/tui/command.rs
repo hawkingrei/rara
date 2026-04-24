@@ -1,11 +1,11 @@
 use crate::config::RaraConfig;
 
 use super::state::{
-    current_model_presets, CommandSpec, LocalCommand, LocalCommandKind, ProviderFamily, TuiApp,
-    PROVIDER_FAMILIES,
+    current_model_presets, CommandSpec, LocalCommand, LocalCommandKind, PendingInteractionSnapshot,
+    ProviderFamily, TuiApp, PROVIDER_FAMILIES,
 };
 
-pub const COMMAND_SPECS: [CommandSpec; 13] = [
+pub const COMMAND_SPECS: [CommandSpec; 14] = [
     CommandSpec {
         category: "Session",
         name: "help",
@@ -19,6 +19,13 @@ pub const COMMAND_SPECS: [CommandSpec; 13] = [
         usage: "/status",
         summary: "Show current provider, model, revision, workspace, and runtime counters.",
         detail: "Open a runtime status modal with provider, model, revision, workspace, session, token counters, and cache location.",
+    },
+    CommandSpec {
+        category: "Session",
+        name: "context",
+        usage: "/context",
+        summary: "Inspect the effective runtime context for the current turn.",
+        detail: "Open a context modal that explains the effective prompt sources, active sections, workspace/runtime state, plan state, compaction metadata, and pending interaction inputs for the current turn.",
     },
     CommandSpec {
         category: "Session",
@@ -113,6 +120,7 @@ pub fn parse_local_command(input: &str) -> Option<LocalCommand> {
     let kind = match name {
         "help" => LocalCommandKind::Help,
         "status" => LocalCommandKind::Status,
+        "context" => LocalCommandKind::Context,
         "clear" => LocalCommandKind::Clear,
         "resume" => LocalCommandKind::Resume,
         "plan" => LocalCommandKind::Plan,
@@ -153,17 +161,19 @@ pub fn command_spec_by_name(name: &str) -> Option<&'static CommandSpec> {
 
 pub fn recommended_commands(app: &TuiApp) -> Vec<&'static CommandSpec> {
     let names: &[&str] = if app.is_busy() {
-        &["status", "help", "clear"]
+        &["status", "context", "help", "clear"]
     } else {
         &[
-            "compact", "resume", "plan", "approval", "model", "base-url", "login", "logout",
+            "compact", "resume", "plan", "approval", "context", "model", "base-url", "login", "logout",
             "status", "help", "clear", "setup",
         ]
     };
-    names
+    let mut commands = names
         .iter()
         .filter_map(|name| command_spec_by_name(name))
-        .collect()
+        .collect::<Vec<_>>();
+    commands.sort_by_key(|spec| spec.name);
+    commands
 }
 
 pub fn recent_command_specs(app: &TuiApp) -> Vec<&'static CommandSpec> {
@@ -184,8 +194,11 @@ pub fn palette_commands(app: &TuiApp, query: &str) -> Vec<&'static CommandSpec> 
             commands.push(spec);
         }
     }
+    commands.sort_by_key(|spec| spec.name);
     if commands.is_empty() {
-        COMMAND_SPECS.iter().collect()
+        let mut commands = COMMAND_SPECS.iter().collect::<Vec<_>>();
+        commands.sort_by_key(|spec| spec.name);
+        commands
     } else {
         commands
     }
@@ -204,7 +217,7 @@ pub fn command_detail_text(spec: &CommandSpec) -> String {
 }
 
 pub fn general_help_text() -> &'static str {
-    "RARA uses a single composer as the control surface.\n\nNormal input goes to the current agent.\nSlash commands stay local and open overlays or update runtime state.\n\nCompaction:\n  /compact forces one history compaction pass\n\nModes:\n  /plan enters planning mode for the current task\n  RARA may suggest planning mode first for non-trivial repository work\n  /approval toggles bash approval between suggestion and always\n\nAuth:\n  /login opens the provider auth picker\n  /logout clears the saved provider credential\n\nEditing:\n  apply_patch is the default tool for updating existing files\n  write_file is for new files or full rewrites\n  replace is only a simple fallback for unique string swaps\n\nKeyboard:\n  Enter submit current composer input\n  Esc close the current overlay only\n  Up/Down or j/k move inside lists\n  1/2/3 switch help tabs or choose guided model options\n\nExit:\n  /quit or /exit leave the TUI."
+    "RARA uses a single composer as the control surface.\n\nNormal input goes to the current agent.\nSlash commands stay local and open overlays or update runtime state.\n\nCompaction:\n  /compact forces one history compaction pass\n\nContext:\n  /context shows the effective runtime context for the current turn\n\nModes:\n  /plan enters planning mode for the current task\n  RARA may suggest planning mode first for non-trivial repository work\n  /approval toggles bash approval between suggestion and always\n\nAuth:\n  /login opens the provider auth picker\n  /logout clears the saved provider credential\n\nEditing:\n  apply_patch is the default tool for updating existing files\n  write_file is for new files or full rewrites\n  replace is only a simple fallback for unique string swaps\n\nKeyboard:\n  Enter submit current composer input\n  Esc close the current overlay only\n  Up/Down or j/k move inside lists\n  1/2/3 switch help tabs or choose guided model options\n\nExit:\n  /quit or /exit leave the TUI."
 }
 
 fn command_score(spec: &CommandSpec, query: &str) -> Option<u8> {
@@ -244,8 +257,10 @@ fn subsequence_match(haystack: &str, needle: &str) -> bool {
 }
 
 pub fn help_text() -> String {
-    let commands = COMMAND_SPECS
-        .iter()
+    let mut specs = COMMAND_SPECS.iter().collect::<Vec<_>>();
+    specs.sort_by_key(|spec| spec.name);
+    let commands = specs
+        .into_iter()
         .map(|spec| format!("  {}  {}", spec.usage, spec.summary))
         .collect::<Vec<_>>()
         .join("\n");
@@ -253,6 +268,144 @@ pub fn help_text() -> String {
         "Built-in commands:\n{}\n\nCompaction:\n  /compact   summarize older conversation history now\n\nSessions:\n  /resume    reopen a recent local session\n\nModes:\n  /plan      enter planning mode for the current task\n  RARA may suggest planning mode for non-trivial tasks\n  /approval  toggle bash approval mode\n\nAuth:\n  /login     open the provider auth picker\n  /logout    clear the saved provider credential\n\nEditing:\n  apply_patch  preferred for editing existing files\n  write_file   use for new files or full rewrites\n  replace      simple fallback for unique string replacement\n\nKeyboard:\n  Enter submit\n  Esc close current overlay\n  S open setup\n\nExit:\n  /quit\n  /exit\n\nModel switching:\n  /model\n\nProvider URL:\n  /base-url",
         commands
     )
+}
+
+fn format_pending_interaction(snapshot: &PendingInteractionSnapshot) -> String {
+    let kind = match snapshot.kind {
+        super::state::InteractionKind::RequestInput => "request_input",
+        super::state::InteractionKind::Approval => "approval",
+        super::state::InteractionKind::PlanApproval => "plan_approval",
+    };
+    let mut lines = vec![format!(
+        "- kind={kind} title={} summary={}",
+        snapshot.title,
+        if snapshot.summary.is_empty() {
+            "-"
+        } else {
+            snapshot.summary.as_str()
+        }
+    )];
+    if !snapshot.options.is_empty() {
+        lines.push(format!("  options={}", snapshot.options.len()));
+    }
+    if let Some(source) = snapshot.source.as_deref() {
+        lines.push(format!("  source={source}"));
+    }
+    if let Some(note) = snapshot.note.as_deref() {
+        lines.push(format!("  note={note}"));
+    }
+    lines.join("\n")
+}
+
+pub fn status_context_text(app: &TuiApp) -> String {
+    let active_sections = if app.snapshot.prompt_section_keys.is_empty() {
+        "-".to_string()
+    } else {
+        app.snapshot.prompt_section_keys.join(", ")
+    };
+    let prompt_sources = if app.snapshot.prompt_source_status_lines.is_empty() {
+        "  - No prompt sources discovered.".to_string()
+    } else {
+        app.snapshot
+            .prompt_source_status_lines
+            .iter()
+            .map(|line| format!("  - {line}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let prompt_warnings = if app.snapshot.prompt_warnings.is_empty() {
+        None
+    } else {
+        Some(format!(
+            "Warnings:\n{}",
+            app.snapshot
+                .prompt_warnings
+                .iter()
+                .map(|warning| format!("  - {warning}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        ))
+    };
+    let plan_lines = if app.snapshot.plan_steps.is_empty() {
+        "  - No active plan steps.".to_string()
+    } else {
+        app.snapshot
+            .plan_steps
+            .iter()
+            .map(|(status, step)| format!("  - [{status}] {step}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let pending_interactions = if app.snapshot.pending_interactions.is_empty() {
+        "  - None.".to_string()
+    } else {
+        app.snapshot
+            .pending_interactions
+            .iter()
+            .map(format_pending_interaction)
+            .map(|entry| format!("  {entry}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+
+    let mut sections = vec![
+        format!(
+            "Current Session\n  cwd: {}\n  branch: {}\n  session: {}\n  history messages: {}\n  transcript entries: {}",
+            app.snapshot.cwd,
+            app.snapshot.branch,
+            app.snapshot.session_id,
+            app.snapshot.history_len,
+            app.transcript_entry_count(),
+        ),
+        format!(
+            "Included Now\n  base prompt: {}\n  active sections: {}\n  sources:\n{}",
+            app.snapshot.prompt_base_kind, active_sections, prompt_sources
+        ),
+        format!(
+            "Plan State\n  explanation: {}\n{}",
+            app.snapshot.plan_explanation.as_deref().unwrap_or("-"),
+            plan_lines
+        ),
+        format!(
+            "Compaction State\n  estimated history tokens: {}\n  context window: {}\n  threshold: {}\n  reserved output: {}\n  compactions: {}\n  last compaction: {} -> {}\n  last boundary: {}",
+            app.snapshot.estimated_history_tokens,
+            app.snapshot
+                .context_window_tokens
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "-".to_string()),
+            app.snapshot.compact_threshold_tokens,
+            app.snapshot.reserved_output_tokens,
+            app.snapshot.compaction_count,
+            app.snapshot
+                .last_compaction_before_tokens
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "-".to_string()),
+            app.snapshot
+                .last_compaction_after_tokens
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "-".to_string()),
+            app.snapshot
+                .last_compaction_boundary_version
+                .map(|value| format!(
+                    "v{} before_tokens={} recent_file_count={}",
+                    value,
+                    app.snapshot
+                        .last_compaction_boundary_before_tokens
+                        .map(|tokens| tokens.to_string())
+                        .unwrap_or_else(|| "-".to_string()),
+                    app.snapshot
+                        .last_compaction_boundary_recent_file_count
+                        .map(|count| count.to_string())
+                        .unwrap_or_else(|| "-".to_string())
+                ))
+                .unwrap_or_else(|| "-".to_string())
+        ),
+        format!("Pending Interaction\n{}", pending_interactions),
+    ];
+    if let Some(warnings) = prompt_warnings {
+        sections.insert(2, warnings);
+    }
+    sections.join("\n\n")
 }
 
 pub fn status_runtime_text(app: &TuiApp) -> String {
@@ -494,14 +647,15 @@ fn download_stage_index(stage: &str) -> usize {
 }
 
 pub fn quick_actions_text() -> &'static str {
-    "/help      browse commands and keyboard hints\n\
-     /model     open guided model switching\n\
+    "/approval  toggle bash approval mode\n\
      /base-url  open the provider URL editor\n\
-     /status    inspect runtime and workspace\n\
-     /plan      enter planning mode for the current task\n\
-     /approval  toggle bash approval mode\n\
      /clear     reset the visible transcript\n\
+     /context   inspect effective runtime context\n\
+     /help      browse commands and keyboard hints\n\
+     /model     open guided model switching\n\
+     /plan      enter planning mode for the current task\n\
      /setup     open fallback setup\n\
+     /status    inspect runtime and workspace\n\
      /quit      leave the TUI"
 }
 
@@ -646,8 +800,8 @@ pub fn normalize_command_token(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        matching_commands, normalize_command_token, parse_local_command, status_resources_text,
-        LocalCommandKind,
+        help_text, matching_commands, normalize_command_token, palette_commands,
+        parse_local_command, status_context_text, status_resources_text, LocalCommandKind,
     };
     use crate::config::ConfigManager;
     use crate::tui::state::{RuntimeSnapshot, TuiApp};
@@ -658,6 +812,13 @@ mod tests {
         let command = parse_local_command("/model anything").expect("command should parse");
         assert!(matches!(command.kind, LocalCommandKind::Model));
         assert_eq!(command.arg.as_deref(), Some("anything"));
+    }
+
+    #[test]
+    fn parses_context_command() {
+        let command = parse_local_command("/context").expect("command should parse");
+        assert!(matches!(command.kind, LocalCommandKind::Context));
+        assert!(command.arg.is_none());
     }
 
     #[test]
@@ -743,6 +904,38 @@ mod tests {
     }
 
     #[test]
+    fn palette_commands_are_sorted_alphabetically_for_empty_query() {
+        let dir = tempdir().expect("tempdir");
+        let app = TuiApp::new(ConfigManager {
+            path: dir.path().join("config.json"),
+        })
+        .expect("app");
+
+        let names = palette_commands(&app, "")
+            .into_iter()
+            .map(|spec| spec.name)
+            .collect::<Vec<_>>();
+        let mut sorted = names.clone();
+        sorted.sort();
+        assert_eq!(names, sorted);
+    }
+
+    #[test]
+    fn help_text_lists_built_in_commands_alphabetically() {
+        let rendered = help_text();
+        let approval_idx = rendered.find("/approval").expect("approval");
+        let base_url_idx = rendered.find("/base-url").expect("base-url");
+        let clear_idx = rendered.find("/clear").expect("clear");
+        let compact_idx = rendered.find("/compact").expect("compact");
+        let context_idx = rendered.find("/context").expect("context");
+
+        assert!(approval_idx < base_url_idx);
+        assert!(base_url_idx < clear_idx);
+        assert!(clear_idx < compact_idx);
+        assert!(compact_idx < context_idx);
+    }
+
+    #[test]
     fn status_resources_text_includes_recent_compacted_files() {
         let dir = tempdir().expect("tempdir");
         let cm = ConfigManager {
@@ -770,5 +963,33 @@ mod tests {
         assert!(rendered.contains(
             "recent_compact_files=src/agent/compact.rs, crates/instructions/src/prompt.rs"
         ));
+    }
+
+    #[test]
+    fn status_context_text_includes_prompt_sources_and_plan_state() {
+        let dir = tempdir().expect("tempdir");
+        let cm = ConfigManager {
+            path: dir.path().join("config.json"),
+        };
+        let mut app = TuiApp::new(cm).expect("app");
+        app.snapshot = RuntimeSnapshot {
+            cwd: "/workspace/rara".into(),
+            branch: "main".into(),
+            session_id: "session-123".into(),
+            prompt_base_kind: "codex".into(),
+            prompt_section_keys: vec!["stable_instructions".into(), "workspace".into()],
+            prompt_source_status_lines: vec![
+                "AGENTS.md from workspace root".into(),
+                "workspace instruction file".into(),
+            ],
+            plan_steps: vec![("pending".into(), "Implement /context".into())],
+            ..RuntimeSnapshot::default()
+        };
+
+        let rendered = status_context_text(&app);
+        assert!(rendered.contains("Current Session"));
+        assert!(rendered.contains("Included Now"));
+        assert!(rendered.contains("AGENTS.md from workspace root"));
+        assert!(rendered.contains("[pending] Implement /context"));
     }
 }

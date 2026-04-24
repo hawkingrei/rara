@@ -28,6 +28,7 @@ pub enum Overlay {
     Help(HelpTab),
     CommandPalette,
     Status,
+    Context,
     Setup,
     ProviderPicker,
     ModelPicker,
@@ -51,6 +52,7 @@ pub enum ProviderFamily {
 pub enum LocalCommandKind {
     Help,
     Status,
+    Context,
     Clear,
     Resume,
     Plan,
