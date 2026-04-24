@@ -120,7 +120,7 @@ fn active_turn_cell_keeps_exploration_notes_inside_exploring_block() {
         "rendered_exploration_notes=\n{rendered}"
     );
     assert!(rendered.contains("Read src/main.rs"));
-    assert!(!rendered.contains(
+    assert!(rendered.contains(
         "I have inspected the repository structure and will now inspect the core modules."
     ));
     assert!(!rendered.contains("waiting for model response · 12s elapsed"));
