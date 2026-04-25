@@ -240,6 +240,20 @@ impl Agent {
     where
         F: FnMut(AgentEvent) + Send,
     {
+        let tool_schemas = self.visible_tool_schemas();
+        self.run_model_turn_with_tools(output_mode, report, tool_schemas.as_slice())
+            .await
+    }
+
+    async fn run_model_turn_with_tools<F>(
+        &mut self,
+        output_mode: AgentOutputMode,
+        report: &mut F,
+        tool_schemas: &[Value],
+    ) -> Result<TurnOutput>
+    where
+        F: FnMut(AgentEvent) + Send,
+    {
         report(AgentEvent::Status("Sending prompt to model.".to_string()));
         let mut messages = self
             .history
@@ -258,7 +272,7 @@ impl Agent {
         let mut streamed_any_delta = false;
         let response = self
             .llm_backend
-            .ask_streaming(&messages, &self.visible_tool_schemas(), &mut |delta| {
+            .ask_streaming(&messages, tool_schemas, &mut |delta| {
                 streamed_any_delta = true;
                 report(AgentEvent::AssistantDelta(delta));
             })
@@ -420,10 +434,25 @@ impl Agent {
             }
             *tool_rounds += 1;
             if *tool_rounds > MAX_TOOL_ROUNDS_PER_TURN {
-                return Err(anyhow::anyhow!(
-                    "Tool loop exceeded {} rounds without reaching a final answer",
-                    MAX_TOOL_ROUNDS_PER_TURN
+                report(AgentEvent::Status(
+                    "Tool loop reached the limit. Requesting a final answer without more tool calls."
+                        .to_string(),
                 ));
+                self.push_history_message(self.runtime_continuation_message(
+                    RuntimeContinuationPhase::FinalAnswerRequired,
+                    *tool_rounds,
+                ));
+                let final_turn = self.run_model_turn_with_tools(output_mode, report, &[]).await?;
+                self.last_query_plan_updated = final_turn.plan_updated;
+                self.push_history_message(final_turn.assistant_message);
+                if !final_turn.tool_calls.is_empty() || !final_turn.had_text_response {
+                    return Err(anyhow::anyhow!(
+                        "Tool loop exceeded {} rounds and the model still did not provide a final answer",
+                        MAX_TOOL_ROUNDS_PER_TURN
+                    ));
+                }
+                self.complete_active_plan_step();
+                break;
             }
 
             let tool_results = self

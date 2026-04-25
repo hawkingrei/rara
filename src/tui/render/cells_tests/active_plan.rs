@@ -35,8 +35,8 @@ fn active_turn_cell_renders_plan_approval_as_interaction_card() {
     assert_snapshot!("active_turn_cell_plan_approval", rendered);
     assert!(rendered.contains(" Awaiting Approval "));
     assert!(rendered.contains("Updated Plan"));
-    assert!(rendered.contains("Start implementation now"));
-    assert!(rendered.contains("Continue planning"));
+    assert!(rendered.contains("1. yes"));
+    assert!(rendered.contains("2. keep planning"));
     assert!(rendered.contains("Generalize instruction discovery"));
 }
 

@@ -46,6 +46,7 @@ pub(super) struct InspectionProgress {
 #[derive(Clone, Copy)]
 pub(super) enum RuntimeContinuationPhase {
     ToolResultsAvailable,
+    FinalAnswerRequired,
     PlanContinuationRequired,
     PlanStructuredOutcomeRequired,
     ExecutionContinuationRequired,
@@ -665,6 +666,7 @@ impl RuntimeContinuationPhase {
     fn label(self) -> &'static str {
         match self {
             Self::ToolResultsAvailable => "tool_results_available",
+            Self::FinalAnswerRequired => "final_answer_required",
             Self::PlanContinuationRequired => "plan_continuation_required",
             Self::PlanStructuredOutcomeRequired => "plan_structured_outcome_required",
             Self::ExecutionContinuationRequired => "execution_continuation_required",
@@ -680,6 +682,13 @@ impl RuntimeContinuationPhase {
                 "Either call the next tool directly, or provide the final answer.",
                 "Do not ask the user to continue.",
                 "Do not repeat tool results verbatim.",
+            ],
+            Self::FinalAnswerRequired => vec![
+                "The tool loop reached the execution limit for this turn.",
+                "Do not call any more tools.",
+                "Synthesize the result from the repository context and tool results already in the conversation.",
+                "Provide the final answer now.",
+                "Do not ask the user to continue.",
             ],
             Self::PlanContinuationRequired => vec![
                 "Continue planning immediately.",
