@@ -5,7 +5,7 @@ use super::state::{
     ProviderFamily, TuiApp, PROVIDER_FAMILIES,
 };
 
-pub const COMMAND_SPECS: [CommandSpec; 14] = [
+pub const COMMAND_SPECS: [CommandSpec; 13] = [
     CommandSpec {
         category: "Session",
         name: "help",
@@ -61,13 +61,6 @@ pub const COMMAND_SPECS: [CommandSpec; 14] = [
         usage: "/compact",
         summary: "Compact the current conversation history immediately.",
         detail: "Force one explicit history compaction pass using the current backend summarizer. This keeps the current turn/session but replaces older history with a summary, closer to Codex manual compaction than a silent trim.",
-    },
-    CommandSpec {
-        category: "Setup",
-        name: "setup",
-        usage: "/setup",
-        summary: "Open the fallback setup screen.",
-        detail: "Open the setup overlay for local model presets and OAuth. This is the fallback config surface, not the primary interaction flow.",
     },
     CommandSpec {
         category: "Models",
@@ -126,7 +119,6 @@ pub fn parse_local_command(input: &str) -> Option<LocalCommand> {
         "plan" => LocalCommandKind::Plan,
         "approval" => LocalCommandKind::Approval,
         "compact" => LocalCommandKind::Compact,
-        "setup" => LocalCommandKind::Setup,
         "model" => LocalCommandKind::Model,
         "base-url" => LocalCommandKind::BaseUrl,
         "login" => LocalCommandKind::Login,
@@ -260,7 +252,7 @@ pub fn help_text() -> String {
         .collect::<Vec<_>>()
         .join("\n");
     format!(
-        "Built-in commands:\n{}\n\nCompaction:\n  /compact   summarize older conversation history now\n\nThreads:\n  /resume    reopen a recent local thread\n\nModes:\n  /plan      enter planning mode for the current task\n  RARA may suggest planning mode for non-trivial tasks\n  /approval  toggle bash approval mode\n\nAuth:\n  /login     open the provider auth picker\n  /logout    clear the saved provider credential\n\nEditing:\n  apply_patch  preferred for editing existing files\n  write_file   use for new files or full rewrites\n  replace      simple fallback for unique string replacement\n\nKeyboard:\n  Enter submit\n  Esc close current overlay\n  S open setup\n\nExit:\n  /quit\n  /exit\n\nModel switching:\n  /model\n\nProvider URL:\n  /base-url",
+        "Built-in commands:\n{}\n\nCompaction:\n  /compact   summarize older conversation history now\n\nThreads:\n  /resume    reopen a recent local thread\n\nModes:\n  /plan      enter planning mode for the current task\n  RARA may suggest planning mode for non-trivial tasks\n  /approval  toggle bash approval mode\n\nAuth:\n  /login     open the provider auth picker\n  /logout    clear the saved provider credential\n\nEditing:\n  apply_patch  preferred for editing existing files\n  write_file   use for new files or full rewrites\n  replace      simple fallback for unique string replacement\n\nKeyboard:\n  Enter submit\n  Esc close current overlay\n\nExit:\n  /quit\n  /exit\n\nModel switching:\n  /model\n\nProvider URL:\n  /base-url",
         commands
     )
 }
@@ -778,7 +770,6 @@ pub fn quick_actions_text() -> &'static str {
      /help      browse commands and keyboard hints\n\
      /model     open guided model switching\n\
      /plan      enter planning mode for the current task\n\
-     /setup     open fallback setup\n\
      /status    inspect runtime and workspace\n\
      /quit      leave the TUI"
 }
@@ -1011,7 +1002,7 @@ mod tests {
             .map(|spec| spec.name)
             .collect::<Vec<_>>();
         assert_eq!(names.first().copied(), Some("status"));
-        assert!(names.contains(&"setup"));
+        assert!(!names.contains(&"setup"));
     }
 
     #[test]

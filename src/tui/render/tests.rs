@@ -245,7 +245,7 @@ fn transcript_viewport_is_independent_from_overlay_state() {
     });
 
     let base = transcript_viewport(&app, 80, 18);
-    app.overlay = Some(Overlay::Setup);
+    app.overlay = Some(Overlay::Status);
     let with_overlay = transcript_viewport(&app, 80, 18);
 
     let base_rendered = base
@@ -288,7 +288,7 @@ fn transcript_viewport_keeps_manual_scroll_when_overlay_opens() {
     app.scroll_transcript(-3);
 
     let base = transcript_viewport(&app, 60, 8);
-    app.overlay = Some(Overlay::Setup);
+    app.overlay = Some(Overlay::Status);
     let with_overlay = transcript_viewport(&app, 60, 8);
 
     assert_eq!(base.scroll_offset, with_overlay.scroll_offset);

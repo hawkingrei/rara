@@ -114,7 +114,7 @@ impl TuiApp {
             if cfg.provider == "codex" {
                 Some(Overlay::AuthModePicker)
             } else {
-                Some(Overlay::Setup)
+                Some(Overlay::ApiKeyEditor)
             }
         } else {
             None

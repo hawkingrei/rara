@@ -29,26 +29,6 @@ pub(super) fn map_key_to_event(key: KeyCode, app: &TuiApp) -> AppEvent {
             KeyCode::Esc | KeyCode::Enter => AppEvent::CloseOverlay,
             _ => AppEvent::Noop,
         },
-        Some(Overlay::Setup) => match key {
-            KeyCode::Esc => AppEvent::CloseOverlay,
-            KeyCode::Char('1') => AppEvent::SetModelSelection(0),
-            KeyCode::Char('2') => AppEvent::SetModelSelection(1),
-            KeyCode::Char('3') => AppEvent::SetModelSelection(2),
-            KeyCode::Char('4') => AppEvent::SetModelSelection(3),
-            KeyCode::Char('5') => AppEvent::SetModelSelection(4),
-            KeyCode::Char('6') => AppEvent::SetModelSelection(5),
-            KeyCode::Char('7') => AppEvent::SetModelSelection(6),
-            KeyCode::Char('8') => AppEvent::SetModelSelection(7),
-            KeyCode::Char('9') => AppEvent::SetModelSelection(8),
-            KeyCode::Char('m') => AppEvent::CycleModelSelection,
-            KeyCode::Char('l')
-                if matches!(app.selected_provider_family(), ProviderFamily::Codex) =>
-            {
-                AppEvent::OpenOverlay(Overlay::AuthModePicker)
-            }
-            KeyCode::Enter => AppEvent::ApplyOverlaySelection,
-            _ => AppEvent::Noop,
-        },
         Some(Overlay::ProviderPicker) => match key {
             KeyCode::Esc => AppEvent::CloseOverlay,
             KeyCode::Up | KeyCode::Char('k') => AppEvent::MoveProviderSelection(-1),
@@ -187,7 +167,6 @@ pub(super) fn map_key_to_event(key: KeyCode, app: &TuiApp) -> AppEvent {
             {
                 AppEvent::SelectPendingOption(2)
             }
-            KeyCode::Char('s') if app.input.is_empty() => AppEvent::OpenOverlay(Overlay::Setup),
             KeyCode::Backspace => AppEvent::Backspace,
             KeyCode::Char(c) => AppEvent::InputChar(c),
             _ => AppEvent::Noop,
