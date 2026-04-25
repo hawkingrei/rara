@@ -27,7 +27,12 @@ impl Agent {
     }
 
     pub fn assemble_runtime_context(&self) -> crate::context::SharedRuntimeContext {
-        self.assemble_turn_context().runtime
+        let mode = match self.execution_mode {
+            AgentExecutionMode::Execute => PromptMode::Execute,
+            AgentExecutionMode::Plan => PromptMode::Plan,
+        };
+        self.context_assembler()
+            .assemble_runtime(mode, self.runtime_context_inputs())
     }
 
     fn runtime_context_inputs(&self) -> RuntimeContextInputs<'_> {

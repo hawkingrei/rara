@@ -44,7 +44,9 @@ pub(crate) fn desired_viewport_height(app: &TuiApp, width: u16, rows: u16) -> u1
 pub(crate) fn desired_bottom_pane_height(app: &TuiApp, width: u16, rows: u16) -> u16 {
     let composer_rows = desired_composer_height(app, width, rows);
     let total = composer_rows.saturating_add(2);
-    total.clamp(5, rows.max(1))
+    let max = rows.max(1);
+    let min = 5.min(max);
+    total.clamp(min, max)
 }
 
 pub(super) fn render_bottom_pane(f: &mut Frame, app: &TuiApp, area: Rect) -> Option<(u16, u16)> {

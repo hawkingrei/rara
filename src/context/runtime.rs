@@ -128,6 +128,7 @@ pub struct ContextBudgetView {
 impl ContextBudgetView {
     pub fn from_compact_state(
         state: &CompactState,
+        system_prompt_budget: usize,
         stable_instructions_budget: usize,
         workspace_prompt_budget: usize,
         active_turn_budget: usize,
@@ -137,8 +138,7 @@ impl ContextBudgetView {
         let remaining_input_budget = state.context_window_tokens.map(|window| {
             window
                 .saturating_sub(state.reserved_output_tokens)
-                .saturating_sub(stable_instructions_budget)
-                .saturating_sub(workspace_prompt_budget)
+                .saturating_sub(system_prompt_budget)
                 .saturating_sub(active_turn_budget)
                 .saturating_sub(compacted_history_budget)
                 .saturating_sub(retrieved_memory_budget)

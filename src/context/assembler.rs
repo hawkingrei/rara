@@ -109,7 +109,8 @@ impl<'a> ContextAssembler<'a> {
         effective_prompt: EffectivePrompt,
         inputs: RuntimeContextInputs<'_>,
     ) -> SharedRuntimeContext {
-        let stable_instructions_budget = estimate_text_tokens(effective_prompt.text.as_str());
+        let system_prompt_budget = estimate_text_tokens(effective_prompt.text.as_str());
+        let stable_instructions_budget = system_prompt_budget;
         let workspace_prompt_budget = effective_prompt
             .sources
             .iter()
@@ -144,8 +145,7 @@ impl<'a> ContextAssembler<'a> {
         let selection_budget = inputs.compact_state.context_window_tokens.map(|window| {
             window
                 .saturating_sub(inputs.compact_state.reserved_output_tokens)
-                .saturating_sub(stable_instructions_budget)
-                .saturating_sub(workspace_prompt_budget)
+                .saturating_sub(system_prompt_budget)
                 .saturating_sub(active_turn_budget)
                 .saturating_sub(compacted_history_budget)
         });
@@ -191,6 +191,7 @@ impl<'a> ContextAssembler<'a> {
             total_output_tokens: inputs.total_output_tokens,
             budget: ContextBudgetView::from_compact_state(
                 &inputs.compact_state,
+                system_prompt_budget,
                 stable_instructions_budget,
                 workspace_prompt_budget,
                 active_turn_budget,
@@ -1405,6 +1406,21 @@ mod tests {
             payload.get("summary").and_then(Value::as_str),
             Some("plain json payload without wrapper")
         );
+    }
+
+    #[test]
+    fn runtime_budget_does_not_double_count_workspace_prompt_sources() {
+        let state = crate::agent::CompactState {
+            context_window_tokens: Some(3_000),
+            compact_threshold_tokens: 2_800,
+            reserved_output_tokens: 1_000,
+            ..Default::default()
+        };
+
+        let budget = ContextBudgetView::from_compact_state(&state, 900, 900, 250, 200, 150, 75);
+
+        assert_eq!(budget.workspace_prompt_budget, 250);
+        assert_eq!(budget.remaining_input_budget, Some(675));
     }
 
     #[test]

@@ -348,6 +348,18 @@ fn bottom_pane_preserves_space_only_input_layout() {
 }
 
 #[test]
+fn bottom_pane_height_does_not_panic_on_tiny_terminal() {
+    let temp = tempdir().expect("tempdir");
+    let app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("build tui app");
+
+    assert_eq!(desired_bottom_pane_height(&app, 80, 1), 1);
+    assert_eq!(desired_bottom_pane_height(&app, 80, 3), 3);
+}
+
+#[test]
 fn transcript_viewport_visible_window_keeps_partial_wrapped_line_offset() {
     let viewport = TranscriptViewport::new(
         vec![
