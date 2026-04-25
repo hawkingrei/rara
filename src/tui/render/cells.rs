@@ -65,20 +65,22 @@ fn is_progress_stack_title(line: &Line<'static>) -> bool {
     )
 }
 
-fn should_compact_active_cell_gap(previous: &[Line<'static>], next: &[Line<'static>]) -> bool {
-    previous
-        .first()
-        .is_some_and(is_progress_stack_title)
-        && next.first().is_some_and(is_progress_stack_title)
-}
-
 fn split_progress_sentences(message: &str) -> Vec<String> {
     let mut sentences = Vec::new();
     let mut current = String::new();
+    let mut chars = message.chars().peekable();
 
-    for ch in message.chars() {
+    while let Some(ch) = chars.next() {
         current.push(ch);
-        if matches!(ch, '.' | '!' | '?') {
+
+        let next = chars.peek().copied();
+        let previous = current.chars().rev().nth(1);
+        let is_decimal_separator =
+            ch == '.' && previous.is_some_and(|prev| prev.is_ascii_digit())
+                && next.is_some_and(|peek| peek.is_ascii_digit());
+        let continues_punctuation = next.is_some_and(|peek| matches!(peek, '.' | '!' | '?'));
+
+        if matches!(ch, '.' | '!' | '?') && !is_decimal_separator && !continues_punctuation {
             let trimmed = current.trim();
             if !trimmed.is_empty() {
                 sentences.push(trimmed.to_string());
@@ -102,42 +104,47 @@ fn compact_live_response_message(message: &str) -> String {
     }
 
     let next_markers = [
-        "Next ",
-        "I will ",
-        "I'll ",
-        "Then I will ",
-        "Then I'll ",
-        "I am going to ",
+        "next ",
+        "i will ",
+        "i'll ",
+        "then i will ",
+        "then i'll ",
+        "i am going to ",
     ];
 
-    let mut selected = Vec::new();
-    let mut next_step = None;
+    let mut selected_indices = vec![0];
+    let mut next_step_idx = None;
 
-    for sentence in &sentences {
-        if next_step.is_none()
+    for (idx, sentence) in sentences.iter().enumerate().skip(1) {
+        let lowered = sentence.to_ascii_lowercase();
+        if next_step_idx.is_none()
             && next_markers
                 .iter()
-                .any(|marker| sentence.starts_with(marker))
+                .any(|marker| lowered.starts_with(marker))
         {
-            next_step = Some(sentence.clone());
-            continue;
-        }
-
-        if selected.len() < 2 {
-            selected.push(sentence.clone());
+            next_step_idx = Some(idx);
+            break;
         }
     }
 
-    if let Some(next_step) = next_step {
-        if !selected.iter().any(|line| line == &next_step) {
-            selected.push(next_step);
-        }
-    } else if let Some(sentence) = sentences.get(selected.len()) {
-        selected.push(sentence.clone());
+    if let Some(idx) = next_step_idx {
+        selected_indices.push(idx);
     }
 
-    selected.truncate(3);
-    selected.join("\n")
+    let mut idx = 1;
+    while selected_indices.len() < 3 && idx < sentences.len() {
+        if !selected_indices.contains(&idx) {
+            selected_indices.push(idx);
+        }
+        idx += 1;
+    }
+
+    selected_indices.sort_unstable();
+    selected_indices
+        .into_iter()
+        .map(|idx| sentences[idx].clone())
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn ordered_exploration_agent_segments<'a>(
@@ -361,18 +368,16 @@ impl HistoryCell for CommittedTurnCell<'_> {
         }
 
         let mut lines = Vec::new();
-        let mut previous_cell_lines: Option<Vec<Line<'static>>> = None;
+        let mut previous_was_progress_stack_title = false;
         for (idx, cell) in cells.into_iter().enumerate() {
             let cell_lines = cell.display_lines(width);
-            if idx > 0
-                && !previous_cell_lines
-                    .as_deref()
-                    .is_some_and(|previous| should_compact_active_cell_gap(previous, cell_lines.as_slice()))
-            {
+            let current_is_progress_stack_title =
+                cell_lines.first().is_some_and(is_progress_stack_title);
+            if idx > 0 && !(previous_was_progress_stack_title && current_is_progress_stack_title) {
                 lines.push(Line::from(""));
             }
-            lines.extend(cell_lines.iter().cloned());
-            previous_cell_lines = Some(cell_lines);
+            lines.extend(cell_lines);
+            previous_was_progress_stack_title = current_is_progress_stack_title;
         }
 
         trim_trailing_empty_lines(&mut lines);
@@ -512,15 +517,8 @@ impl ActiveCell for ActiveTurnCell<'_> {
         let exploration_summary = if uses_ordered_exploration_agent_segments {
             None
         } else if has_live_exploration {
-            let items = self
-                .app
-                .active_live
-                .exploration_actions
-                .iter()
-                .cloned()
-                .collect::<Vec<_>>();
             Some(compact_progress_summary_lines(
-                items.as_slice(),
+                self.app.active_live.exploration_actions.as_slice(),
                 self.app.active_live.exploration_notes.as_slice(),
                 4,
                 "more exploration step(s)",
@@ -546,15 +544,8 @@ impl ActiveCell for ActiveTurnCell<'_> {
             .map(|entry| entry.message.clone());
 
         let planning_summary = if has_live_planning {
-            let items = self
-                .app
-                .active_live
-                .planning_actions
-                .iter()
-                .cloned()
-                .collect::<Vec<_>>();
             Some(compact_progress_summary_lines(
-                items.as_slice(),
+                self.app.active_live.planning_actions.as_slice(),
                 self.app.active_live.planning_notes.as_slice(),
                 4,
                 "more planning step(s)",
@@ -574,15 +565,8 @@ impl ActiveCell for ActiveTurnCell<'_> {
             .map(|entry| entry.message.clone());
 
         let running_summary = if has_live_running {
-            let items = self
-                .app
-                .active_live
-                .running_actions
-                .iter()
-                .cloned()
-                .collect::<Vec<_>>();
             Some(compact_recent_first_summary_lines(
-                items.as_slice(),
+                self.app.active_live.running_actions.as_slice(),
                 4,
                 "more running step(s)",
             ))
@@ -768,22 +752,57 @@ impl ActiveCell for ActiveTurnCell<'_> {
         }
 
         let mut lines = Vec::new();
-        let mut previous_cell_lines: Option<Vec<Line<'static>>> = None;
+        let mut previous_was_progress_stack_title = false;
         for (idx, cell) in cells.into_iter().enumerate() {
             let cell_lines = cell.display_lines(width);
-            if idx > 0
-                && !previous_cell_lines
-                    .as_deref()
-                    .is_some_and(|previous| should_compact_active_cell_gap(previous, cell_lines.as_slice()))
-            {
+            let current_is_progress_stack_title =
+                cell_lines.first().is_some_and(is_progress_stack_title);
+            if idx > 0 && !(previous_was_progress_stack_title && current_is_progress_stack_title) {
                 lines.push(Line::from(""));
             }
-            lines.extend(cell_lines.iter().cloned());
-            previous_cell_lines = Some(cell_lines);
+            lines.extend(cell_lines);
+            previous_was_progress_stack_title = current_is_progress_stack_title;
         }
 
         trim_trailing_empty_lines(&mut lines);
         lines
+    }
+}
+
+#[cfg(test)]
+mod helper_tests {
+    use super::{compact_live_response_message, split_progress_sentences};
+
+    #[test]
+    fn split_progress_sentences_keeps_ellipses_and_decimal_versions() {
+        let sentences =
+            split_progress_sentences("Wait... I checked v1.0 parsing. Next I will inspect restore.");
+
+        assert_eq!(
+            sentences,
+            vec![
+                "Wait...".to_string(),
+                "I checked v1.0 parsing.".to_string(),
+                "Next I will inspect restore.".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn compact_live_response_message_preserves_selected_sentence_order() {
+        let rendered = compact_live_response_message(
+            "Next I will inspect restore. I checked the auth path. I checked the persistence path. Then I will verify chronology.",
+        );
+
+        assert_eq!(
+            rendered,
+            [
+                "Next I will inspect restore.",
+                "I checked the auth path.",
+                "Then I will verify chronology.",
+            ]
+            .join("\n")
+        );
     }
 }
 
