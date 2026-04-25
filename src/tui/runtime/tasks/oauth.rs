@@ -5,7 +5,9 @@ use secrecy::SecretString;
 use tokio::sync::mpsc;
 
 use crate::oauth::OAuthManager;
-use crate::tui::state::{OAuthLoginMode, RunningTask, RuntimePhase, TaskCompletion, TaskKind, TuiApp, TuiEvent};
+use crate::tui::state::{
+    OAuthLoginMode, RunningTask, RuntimePhase, TaskCompletion, TaskKind, TuiApp, TuiEvent,
+};
 
 pub(crate) fn start_oauth_task(
     app: &mut TuiApp,

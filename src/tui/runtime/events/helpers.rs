@@ -496,7 +496,11 @@ pub(super) fn append_tool_progress(
 }
 
 fn limit_tool_progress_entry(message: &mut String) {
-    let line_count = message.as_bytes().iter().filter(|&&byte| byte == b'\n').count();
+    let line_count = message
+        .as_bytes()
+        .iter()
+        .filter(|&&byte| byte == b'\n')
+        .count();
     if line_count <= super::TOOL_PROGRESS_LINE_LIMIT {
         return;
     }

@@ -6,8 +6,5 @@ pub(super) async fn rebuild_agent_with_progress(
 ) -> anyhow::Result<RebuildSuccess> {
     let bootstrap = crate::runtime_context::initialize_rara_context(config, progress).await?;
     let (agent, warnings) = bootstrap.into_parts();
-    Ok(RebuildSuccess {
-        agent,
-        warnings,
-    })
+    Ok(RebuildSuccess { agent, warnings })
 }

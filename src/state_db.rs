@@ -8,6 +8,8 @@ use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::thread_rollout_log;
+
 #[cfg(test)]
 mod tests;
 
@@ -17,14 +19,14 @@ pub struct PersistedTurnEntry {
     pub message: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PersistedPlanStep {
     pub step_index: usize,
     pub status: String,
     pub step: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PersistedInteraction {
     pub kind: String,
     pub status: String,
@@ -39,10 +41,76 @@ pub struct PersistedTurnSummary {
     pub event_count: usize,
     pub artifact_path: String,
     pub preview: String,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum PersistedRuntimeRolloutItem {
+    PlanState {
+        explanation: Option<String>,
+        steps: Vec<PersistedPlanStep>,
+    },
+    Interaction(PersistedInteraction),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum PersistedStructuredRolloutEvent {
+    Compaction {
+        #[serde(default)]
+        recorded_at: Option<i64>,
+        event_index: usize,
+        before_tokens: usize,
+        after_tokens: usize,
+        boundary_version: u32,
+        recent_files: Vec<String>,
+        summary: String,
+    },
+    RuntimeState {
+        #[serde(default)]
+        recorded_at: Option<i64>,
+        explanation: Option<String>,
+        steps: Vec<PersistedPlanStep>,
+        interactions: Vec<PersistedInteraction>,
+    },
+    PlanState {
+        #[serde(default)]
+        recorded_at: Option<i64>,
+        explanation: Option<String>,
+        steps: Vec<PersistedPlanStep>,
+    },
+    Interaction {
+        #[serde(default)]
+        recorded_at: Option<i64>,
+        #[serde(flatten)]
+        interaction: PersistedInteraction,
+    },
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct PersistedLegacyRolloutMigration {
+    pub structured_events: Vec<PersistedStructuredRolloutEvent>,
+    pub runtime_rollout: Vec<PersistedRuntimeRolloutItem>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PersistedThreadLineage {
+    pub origin_kind: String,
+    pub forked_from_thread_id: Option<String>,
+}
+
+impl Default for PersistedThreadLineage {
+    fn default() -> Self {
+        Self {
+            origin_kind: "fresh".to_string(),
+            forked_from_thread_id: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
-pub struct PersistedSessionSummary {
+pub struct PersistedRecentThreadSummary {
     pub session_id: String,
     pub provider: String,
     pub model: String,
@@ -54,6 +122,47 @@ pub struct PersistedSessionSummary {
     pub last_compaction_after_tokens: Option<usize>,
     pub last_compaction_recent_file_count: Option<usize>,
     pub last_compaction_boundary_version: Option<u32>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PersistedRecentThreadRecord {
+    pub session_id: String,
+    pub cwd: String,
+    pub branch: String,
+    pub provider: String,
+    pub model: String,
+    pub base_url: Option<String>,
+    pub agent_mode: String,
+    pub bash_approval: String,
+    pub created_at: i64,
+    pub history_len: usize,
+    pub transcript_len: usize,
+    pub updated_at: i64,
+    pub lineage: PersistedThreadLineage,
+    pub preview: String,
+    pub compaction_count: usize,
+    pub last_compaction_before_tokens: Option<usize>,
+    pub last_compaction_after_tokens: Option<usize>,
+    pub last_compaction_recent_file_count: Option<usize>,
+    pub last_compaction_boundary_version: Option<u32>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PersistedThreadRecord {
+    pub session_id: String,
+    pub cwd: String,
+    pub branch: String,
+    pub provider: String,
+    pub model: String,
+    pub base_url: Option<String>,
+    pub agent_mode: String,
+    pub bash_approval: String,
+    pub created_at: i64,
+    pub lineage: PersistedThreadLineage,
+    pub plan_explanation: Option<String>,
+    pub history_len: usize,
+    pub transcript_len: usize,
+    pub updated_at: i64,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -137,16 +246,52 @@ impl StateDb {
         transcript_len: usize,
         compact_state: &PersistedCompactState,
     ) -> Result<()> {
+        self.upsert_session_with_lineage(
+            session_id,
+            cwd,
+            branch,
+            provider,
+            model,
+            base_url,
+            agent_mode,
+            bash_approval,
+            &PersistedThreadLineage::default(),
+            plan_explanation,
+            prompt_runtime,
+            history_len,
+            transcript_len,
+            compact_state,
+        )
+    }
+
+    pub fn upsert_session_with_lineage(
+        &self,
+        session_id: &str,
+        cwd: &str,
+        branch: &str,
+        provider: &str,
+        model: &str,
+        base_url: Option<&str>,
+        agent_mode: &str,
+        bash_approval: &str,
+        lineage: &PersistedThreadLineage,
+        plan_explanation: Option<&str>,
+        prompt_runtime: &PersistedPromptRuntimeState,
+        history_len: usize,
+        transcript_len: usize,
+        compact_state: &PersistedCompactState,
+    ) -> Result<()> {
         let now = epoch_seconds();
         let conn = self.conn.lock().expect("state db mutex poisoned");
         conn.execute(
             "INSERT INTO sessions (
                 id, cwd, branch, provider, model, base_url, agent_mode, bash_approval,
+                origin_kind, forked_from_thread_id,
                 plan_explanation, prompt_runtime_json, history_len, transcript_len, compaction_count,
                 last_compaction_before_tokens, last_compaction_after_tokens,
                 last_compaction_recent_file_count, last_compaction_boundary_version,
                 created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 cwd = excluded.cwd,
                 branch = excluded.branch,
@@ -155,6 +300,8 @@ impl StateDb {
                 base_url = excluded.base_url,
                 agent_mode = excluded.agent_mode,
                 bash_approval = excluded.bash_approval,
+                origin_kind = excluded.origin_kind,
+                forked_from_thread_id = excluded.forked_from_thread_id,
                 plan_explanation = excluded.plan_explanation,
                 prompt_runtime_json = excluded.prompt_runtime_json,
                 history_len = excluded.history_len,
@@ -174,6 +321,8 @@ impl StateDb {
                 base_url,
                 agent_mode,
                 bash_approval,
+                lineage.origin_kind,
+                lineage.forked_from_thread_id,
                 plan_explanation,
                 serde_json::to_string(prompt_runtime)?,
                 history_len as i64,
@@ -332,6 +481,7 @@ impl StateDb {
                 .display()
                 .to_string(),
             preview: turn_preview(entries),
+            updated_at: now,
         })
     }
 
@@ -353,7 +503,7 @@ impl StateDb {
     pub fn load_turn_summaries(&self, session_id: &str) -> Result<Vec<PersistedTurnSummary>> {
         let conn = self.conn.lock().expect("state db mutex poisoned");
         let mut stmt = conn.prepare(
-            "SELECT ordinal, event_count, artifact_path, preview
+            "SELECT ordinal, event_count, artifact_path, preview, updated_at
              FROM turns
              WHERE session_id = ?
              ORDER BY ordinal ASC",
@@ -364,6 +514,7 @@ impl StateDb {
                 event_count: row.get::<_, i64>(1)? as usize,
                 artifact_path: row.get(2)?,
                 preview: row.get(3)?,
+                updated_at: row.get(4)?,
             })
         })?;
         let mut summaries = Vec::new();
@@ -371,6 +522,110 @@ impl StateDb {
             summaries.push(row?);
         }
         Ok(summaries)
+    }
+
+    pub fn load_legacy_runtime_rollout(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<PersistedRuntimeRolloutItem>> {
+        let path = self.legacy_runtime_rollout_path(session_id);
+        if !path.exists() {
+            return Ok(Vec::new());
+        }
+        let content = fs::read_to_string(path)?;
+        Ok(serde_json::from_str(&content)?)
+    }
+
+    pub fn load_rollout_events(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<PersistedStructuredRolloutEvent>> {
+        thread_rollout_log::load_rollout_events(&self.rollout_root(), session_id)
+    }
+
+    pub fn load_legacy_rollout_migration(
+        &self,
+        session_id: &str,
+    ) -> Result<PersistedLegacyRolloutMigration> {
+        let migration = PersistedLegacyRolloutMigration {
+            structured_events: self.load_rollout_events(session_id)?,
+            runtime_rollout: self.load_legacy_runtime_rollout(session_id)?,
+        };
+        self.backfill_rollout_log_from_legacy(session_id, &migration)?;
+        Ok(migration)
+    }
+
+    pub fn append_compaction_rollout_event(
+        &self,
+        session_id: &str,
+        event_index: usize,
+        before_tokens: usize,
+        after_tokens: usize,
+        boundary_version: u32,
+        recent_files: &[String],
+        summary: &str,
+    ) -> Result<()> {
+        self.append_rollout_event_line(
+            session_id,
+            &PersistedStructuredRolloutEvent::Compaction {
+                recorded_at: Some(epoch_seconds()),
+                event_index,
+                before_tokens,
+                after_tokens,
+                boundary_version,
+                recent_files: recent_files.to_vec(),
+                summary: summary.to_string(),
+            },
+        )
+    }
+
+    pub fn replace_runtime_rollout_events(
+        &self,
+        session_id: &str,
+        items: &[PersistedStructuredRolloutEvent],
+    ) -> Result<()> {
+        let mut explanation = None;
+        let mut steps = Vec::new();
+        let mut interactions = Vec::new();
+        for item in items {
+            match item {
+                PersistedStructuredRolloutEvent::RuntimeState {
+                    recorded_at: _,
+                    explanation: item_explanation,
+                    steps: item_steps,
+                    interactions: item_interactions,
+                } => {
+                    explanation = item_explanation.clone();
+                    steps = item_steps.clone();
+                    interactions = item_interactions.clone();
+                }
+                PersistedStructuredRolloutEvent::PlanState {
+                    recorded_at: _,
+                    explanation: item_explanation,
+                    steps: item_steps,
+                } => {
+                    explanation = item_explanation.clone();
+                    steps = item_steps.clone();
+                }
+                PersistedStructuredRolloutEvent::Interaction {
+                    recorded_at: _,
+                    interaction,
+                } => {
+                    interactions.push(interaction.clone());
+                }
+                PersistedStructuredRolloutEvent::Compaction { .. } => {}
+            }
+        }
+
+        self.append_rollout_event_line(
+            session_id,
+            &PersistedStructuredRolloutEvent::RuntimeState {
+                recorded_at: Some(epoch_seconds()),
+                explanation,
+                steps,
+                interactions,
+            },
+        )
     }
 
     pub fn load_plan_steps(&self, session_id: &str) -> Result<Vec<PersistedPlanStep>> {
@@ -475,21 +730,62 @@ impl StateDb {
         }
     }
 
-    pub fn latest_session_id(&self) -> Result<Option<String>> {
+    pub fn latest_thread_id(&self) -> Result<Option<String>> {
         let conn = self.conn.lock().expect("state db mutex poisoned");
-        let session_id = conn.query_row(
+        let thread_id = conn.query_row(
             "SELECT id FROM sessions ORDER BY updated_at DESC LIMIT 1",
             [],
             |row| row.get::<_, String>(0),
         );
-        match session_id {
+        match thread_id {
             Ok(id) => Ok(Some(id)),
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(err) => Err(err.into()),
         }
     }
 
-    pub fn list_recent_sessions(&self, limit: usize) -> Result<Vec<PersistedSessionSummary>> {
+    pub fn load_thread_record(&self, session_id: &str) -> Result<Option<PersistedThreadRecord>> {
+        let conn = self.conn.lock().expect("state db mutex poisoned");
+        let record = conn.query_row(
+            "SELECT id, cwd, branch, provider, model, base_url, agent_mode, bash_approval,
+                    origin_kind, forked_from_thread_id, created_at, plan_explanation,
+                    history_len, transcript_len, updated_at
+             FROM sessions
+             WHERE id = ?",
+            params![session_id],
+            |row| {
+                Ok(PersistedThreadRecord {
+                    session_id: row.get(0)?,
+                    cwd: row.get(1)?,
+                    branch: row.get(2)?,
+                    provider: row.get(3)?,
+                    model: row.get(4)?,
+                    base_url: row.get(5)?,
+                    agent_mode: row.get(6)?,
+                    bash_approval: row.get(7)?,
+                    lineage: PersistedThreadLineage {
+                        origin_kind: row.get(8)?,
+                        forked_from_thread_id: row.get(9)?,
+                    },
+                    created_at: row.get(10)?,
+                    plan_explanation: row.get(11)?,
+                    history_len: row.get::<_, i64>(12)? as usize,
+                    transcript_len: row.get::<_, i64>(13)? as usize,
+                    updated_at: row.get(14)?,
+                })
+            },
+        );
+        match record {
+            Ok(record) => Ok(Some(record)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(err) => Err(err.into()),
+        }
+    }
+
+    pub fn list_recent_thread_summaries(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<PersistedRecentThreadSummary>> {
         let conn = self.conn.lock().expect("state db mutex poisoned");
         let mut stmt = conn.prepare(
             "SELECT s.id, s.provider, s.model, s.branch, s.updated_at,
@@ -507,7 +803,7 @@ impl StateDb {
              LIMIT ?",
         )?;
         let rows = stmt.query_map(params![limit as i64], |row| {
-            Ok(PersistedSessionSummary {
+            Ok(PersistedRecentThreadSummary {
                 session_id: row.get(0)?,
                 provider: row.get(1)?,
                 model: row.get(2)?,
@@ -527,6 +823,69 @@ impl StateDb {
                 last_compaction_boundary_version: row
                     .get::<_, Option<i64>>(9)?
                     .map(|value| value as u32),
+            })
+        })?;
+        let mut threads = Vec::new();
+        for row in rows {
+            threads.push(row?);
+        }
+        Ok(threads)
+    }
+
+    pub fn list_recent_thread_records(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<PersistedRecentThreadRecord>> {
+        let conn = self.conn.lock().expect("state db mutex poisoned");
+        let mut stmt = conn.prepare(
+            "SELECT s.id, s.cwd, s.branch, s.provider, s.model, s.base_url,
+                    s.agent_mode, s.bash_approval, s.created_at, s.history_len, s.transcript_len,
+                    s.updated_at, s.origin_kind, s.forked_from_thread_id,
+                    s.compaction_count, s.last_compaction_before_tokens,
+                    s.last_compaction_after_tokens, s.last_compaction_recent_file_count,
+                    s.last_compaction_boundary_version,
+                    COALESCE((
+                        SELECT preview FROM turns
+                        WHERE session_id = s.id
+                        ORDER BY ordinal DESC
+                        LIMIT 1
+                    ), '') AS preview
+             FROM sessions s
+             ORDER BY s.updated_at DESC
+             LIMIT ?",
+        )?;
+        let rows = stmt.query_map(params![limit as i64], |row| {
+            Ok(PersistedRecentThreadRecord {
+                session_id: row.get(0)?,
+                cwd: row.get(1)?,
+                branch: row.get(2)?,
+                provider: row.get(3)?,
+                model: row.get(4)?,
+                base_url: row.get(5)?,
+                agent_mode: row.get(6)?,
+                bash_approval: row.get(7)?,
+                created_at: row.get(8)?,
+                history_len: row.get::<_, i64>(9)? as usize,
+                transcript_len: row.get::<_, i64>(10)? as usize,
+                updated_at: row.get(11)?,
+                lineage: PersistedThreadLineage {
+                    origin_kind: row.get(12)?,
+                    forked_from_thread_id: row.get(13)?,
+                },
+                compaction_count: row.get::<_, i64>(14)? as usize,
+                last_compaction_before_tokens: row
+                    .get::<_, Option<i64>>(15)?
+                    .map(|value| value as usize),
+                last_compaction_after_tokens: row
+                    .get::<_, Option<i64>>(16)?
+                    .map(|value| value as usize),
+                last_compaction_recent_file_count: row
+                    .get::<_, Option<i64>>(17)?
+                    .map(|value| value as usize),
+                last_compaction_boundary_version: row
+                    .get::<_, Option<i64>>(18)?
+                    .map(|value| value as u32),
+                preview: row.get(19)?,
             })
         })?;
         let mut sessions = Vec::new();
@@ -556,6 +915,52 @@ impl StateDb {
         PathBuf::from(session_id).join(format!("{ordinal:06}.json"))
     }
 
+    fn legacy_runtime_rollout_path(&self, session_id: &str) -> PathBuf {
+        self.rollout_root().join(session_id).join("runtime.json")
+    }
+
+    fn backfill_rollout_log_from_legacy(
+        &self,
+        session_id: &str,
+        migration: &PersistedLegacyRolloutMigration,
+    ) -> Result<()> {
+        let path =
+            thread_rollout_log::rollout_events_log_path(&self.rollout_root(), session_id);
+        if path.exists() {
+            return Ok(());
+        }
+
+        let canonical_events = canonical_rollout_events_for_legacy_migration(migration);
+        if canonical_events.is_empty() {
+            return Ok(());
+        }
+
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let temp_path = path.with_extension("jsonl.tmp");
+        let mut file = fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(&temp_path)?;
+        for event in canonical_events {
+            serde_json::to_writer(&mut file, &event)?;
+            use std::io::Write;
+            file.write_all(b"\n")?;
+        }
+        fs::rename(temp_path, path)?;
+        Ok(())
+    }
+
+    pub(crate) fn append_rollout_event_line(
+        &self,
+        session_id: &str,
+        item: &PersistedStructuredRolloutEvent,
+    ) -> Result<()> {
+        thread_rollout_log::append_rollout_event_line(&self.rollout_root(), session_id, item)
+    }
+
     fn init_schema(&self) -> Result<()> {
         let conn = self.conn.lock().expect("state db mutex poisoned");
         conn.execute_batch(
@@ -569,6 +974,8 @@ impl StateDb {
                 base_url TEXT,
                 agent_mode TEXT NOT NULL,
                 bash_approval TEXT NOT NULL,
+                origin_kind TEXT NOT NULL DEFAULT 'fresh',
+                forked_from_thread_id TEXT,
                 plan_explanation TEXT,
                 prompt_runtime_json TEXT,
                 history_len INTEGER NOT NULL DEFAULT 0,
@@ -627,6 +1034,13 @@ impl StateDb {
         ensure_column(
             &conn,
             "sessions",
+            "origin_kind",
+            "TEXT NOT NULL DEFAULT 'fresh'",
+        )?;
+        ensure_column(&conn, "sessions", "forked_from_thread_id", "TEXT")?;
+        ensure_column(
+            &conn,
+            "sessions",
             "compaction_count",
             "INTEGER NOT NULL DEFAULT 0",
         )?;
@@ -659,6 +1073,68 @@ fn epoch_seconds() -> i64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs() as i64
+}
+
+fn canonical_rollout_events_for_legacy_migration(
+    migration: &PersistedLegacyRolloutMigration,
+) -> Vec<PersistedStructuredRolloutEvent> {
+    let mut events = migration.structured_events.clone();
+    if events
+        .iter()
+        .any(|event| matches!(event, PersistedStructuredRolloutEvent::RuntimeState { .. }))
+    {
+        return events;
+    }
+
+    let saw_plan_state = events
+        .iter()
+        .any(|event| matches!(event, PersistedStructuredRolloutEvent::PlanState { .. }));
+    let saw_interaction = events
+        .iter()
+        .any(|event| matches!(event, PersistedStructuredRolloutEvent::Interaction { .. }));
+
+    if !saw_plan_state {
+        if let Some((explanation, steps)) = legacy_runtime_plan_state(&migration.runtime_rollout) {
+            events.push(PersistedStructuredRolloutEvent::PlanState {
+                recorded_at: None,
+                explanation,
+                steps,
+            });
+        }
+    }
+    if !saw_interaction {
+        events.extend(
+            legacy_runtime_interactions(&migration.runtime_rollout)
+                .into_iter()
+                .map(|interaction| PersistedStructuredRolloutEvent::Interaction {
+                    recorded_at: None,
+                    interaction,
+                }),
+        );
+    }
+
+    events
+}
+
+fn legacy_runtime_plan_state(
+    items: &[PersistedRuntimeRolloutItem],
+) -> Option<(Option<String>, Vec<PersistedPlanStep>)> {
+    items.iter().find_map(|item| match item {
+        PersistedRuntimeRolloutItem::PlanState { explanation, steps } => {
+            Some((explanation.clone(), steps.clone()))
+        }
+        PersistedRuntimeRolloutItem::Interaction(_) => None,
+    })
+}
+
+fn legacy_runtime_interactions(items: &[PersistedRuntimeRolloutItem]) -> Vec<PersistedInteraction> {
+    items
+        .iter()
+        .filter_map(|item| match item {
+            PersistedRuntimeRolloutItem::Interaction(interaction) => Some(interaction.clone()),
+            PersistedRuntimeRolloutItem::PlanState { .. } => None,
+        })
+        .collect()
 }
 
 fn turn_preview(entries: &[PersistedTurnEntry]) -> String {

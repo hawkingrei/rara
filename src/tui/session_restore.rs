@@ -8,23 +8,28 @@ use crate::agent::{
     PlanStepStatus,
 };
 use crate::state_db::StateDb;
+use crate::thread_store::{CompactionRecord, RolloutItem, ThreadStore};
 use crate::tools::bash::BashCommandInput;
 
 use super::state::{TranscriptEntry, TranscriptTurn, TuiApp};
 
-pub(super) fn restore_latest_session(
+pub(super) fn restore_latest_thread(
     state_db: &Arc<StateDb>,
     app: &mut TuiApp,
     agent_slot: &mut Option<Agent>,
 ) -> Result<()> {
-    let Some(session_id) = state_db.latest_session_id()? else {
+    let Some(agent) = agent_slot.as_ref() else {
         return Ok(());
     };
-    restore_session_by_id(session_id.as_str(), app, agent_slot)
+    let store = ThreadStore::new(agent.session_manager.as_ref(), state_db.as_ref());
+    let Some(thread_id) = store.latest_thread_id()? else {
+        return Ok(());
+    };
+    restore_thread_by_id(thread_id.as_str(), app, agent_slot)
 }
 
-pub(super) fn restore_session_by_id(
-    session_id: &str,
+pub(super) fn restore_thread_by_id(
+    thread_id: &str,
     app: &mut TuiApp,
     agent_slot: &mut Option<Agent>,
 ) -> Result<()> {
@@ -34,11 +39,20 @@ pub(super) fn restore_session_by_id(
     let Some(state_db) = app.state_db.as_ref() else {
         return Ok(());
     };
-    agent.session_id = session_id.to_string();
-    if let Ok(history) = agent.session_manager.load_session(session_id) {
-        agent.history = history;
-    }
-    if let Some(runtime_state) = state_db.load_session_runtime_state(session_id)? {
+    let thread_store = ThreadStore::new(agent.session_manager.as_ref(), state_db.as_ref());
+    let thread = thread_store.load_thread(thread_id)?;
+    let crate::thread_store::ThreadSnapshot {
+        metadata,
+        history,
+        compaction,
+        plan_explanation,
+        plan_steps,
+        interactions,
+        rollout_items,
+    } = thread;
+    agent.history = history;
+    agent.session_id = metadata.session_id;
+    if let Some(runtime_state) = state_db.load_session_runtime_state(thread_id)? {
         agent.set_execution_mode(parse_agent_mode(runtime_state.agent_mode.as_str()));
         agent.set_bash_approval_mode(parse_bash_approval_mode(
             runtime_state.bash_approval.as_str(),
@@ -48,28 +62,17 @@ pub(super) fn restore_session_by_id(
         prompt_config.warnings = runtime_state.prompt_runtime.warnings;
         agent.set_prompt_config(prompt_config);
     }
-    let persisted_compact_state = state_db.load_session_compact_state(session_id)?;
-    agent.compact_state.compaction_count = persisted_compact_state.compaction_count;
-    agent.compact_state.last_compaction_before_tokens =
-        persisted_compact_state.last_compaction_before_tokens;
-    agent.compact_state.last_compaction_after_tokens =
-        persisted_compact_state.last_compaction_after_tokens;
-    agent.compact_state.last_compaction_boundary =
-        match persisted_compact_state.last_compaction_boundary_version {
-            Some(version) => Some(CompactBoundaryMetadata {
-                version,
-                before_tokens: persisted_compact_state
-                    .last_compaction_before_tokens
-                    .unwrap_or_default(),
-                recent_file_count: persisted_compact_state
-                    .last_compaction_recent_file_count
-                    .unwrap_or_default(),
-            }),
-            None => latest_compact_boundary_metadata(&agent.history),
-        };
-    let persisted_steps = state_db.load_plan_steps(session_id)?;
-    if !persisted_steps.is_empty() {
-        agent.current_plan = persisted_steps
+    apply_compaction_record(agent, &compaction);
+    agent.compact_state.last_compaction_boundary = match compaction.boundary_version {
+        Some(version) => Some(CompactBoundaryMetadata {
+            version,
+            before_tokens: compaction.before_tokens.unwrap_or_default(),
+            recent_file_count: compaction.recent_file_count.unwrap_or_default(),
+        }),
+        None => latest_compact_boundary_metadata(&agent.history),
+    };
+    if !plan_steps.is_empty() {
+        agent.current_plan = plan_steps
             .into_iter()
             .map(|step| PlanStep {
                 step: step.step,
@@ -83,12 +86,11 @@ pub(super) fn restore_session_by_id(
     } else {
         agent.current_plan.clear();
     }
-    agent.plan_explanation = state_db.load_session_plan_explanation(session_id)?;
+    agent.plan_explanation = plan_explanation;
     agent.pending_user_input = None;
     agent.pending_approval = None;
     agent.completed_user_input = None;
     agent.completed_approval = None;
-    let interactions = state_db.load_interactions(session_id)?;
     for interaction in interactions {
         match (interaction.kind.as_str(), interaction.status.as_str()) {
             ("request_input", "pending") => {
@@ -170,19 +172,24 @@ pub(super) fn restore_session_by_id(
             _ => {}
         }
     }
-    let summaries = state_db.load_turn_summaries(session_id)?;
-    let mut turns = Vec::with_capacity(summaries.len());
-    for summary in summaries {
-        let entries = state_db
-            .load_turn_entries(session_id, summary.ordinal)?
-            .into_iter()
-            .map(|entry| TranscriptEntry {
-                role: entry.role,
-                message: entry.message,
-            })
-            .collect::<Vec<_>>();
-        if !entries.is_empty() {
-            turns.push(TranscriptTurn { entries });
+    let mut turns = Vec::new();
+    for item in rollout_items {
+        match item {
+            RolloutItem::Turn(turn) if !turn.entries.is_empty() => {
+                let entries = turn
+                    .entries
+                    .into_iter()
+                    .map(|entry| TranscriptEntry {
+                        role: entry.role,
+                        message: entry.message,
+                    })
+                    .collect::<Vec<_>>();
+                turns.push(TranscriptTurn { entries });
+            }
+            RolloutItem::Turn(_)
+            | RolloutItem::Compaction(_)
+            | RolloutItem::PlanState { .. }
+            | RolloutItem::Interaction(_) => {}
         }
     }
     if !turns.is_empty() {
@@ -191,8 +198,14 @@ pub(super) fn restore_session_by_id(
         app.reset_transcript();
     }
     app.sync_snapshot(agent);
-    app.notice = Some(format!("Resumed session {session_id}."));
+    app.notice = Some(format!("Resumed thread {thread_id}."));
     Ok(())
+}
+
+fn apply_compaction_record(agent: &mut Agent, compaction: &CompactionRecord) {
+    agent.compact_state.compaction_count = compaction.compaction_count;
+    agent.compact_state.last_compaction_before_tokens = compaction.before_tokens;
+    agent.compact_state.last_compaction_after_tokens = compaction.after_tokens;
 }
 
 fn parse_agent_mode(mode: &str) -> AgentExecutionMode {
@@ -254,7 +267,9 @@ mod tests {
         let mut original_agent = Agent::new(
             ToolManager::new(),
             backend.clone(),
-            Arc::new(VectorDB::new(&rara_dir.join("lancedb").display().to_string())),
+            Arc::new(VectorDB::new(
+                &rara_dir.join("lancedb").display().to_string(),
+            )),
             session_manager.clone(),
             workspace.clone(),
         );
@@ -300,7 +315,9 @@ mod tests {
         let restored_agent = Agent::new(
             ToolManager::new(),
             backend,
-            Arc::new(VectorDB::new(&rara_dir.join("lancedb").display().to_string())),
+            Arc::new(VectorDB::new(
+                &rara_dir.join("lancedb").display().to_string(),
+            )),
             session_manager,
             workspace,
         );
@@ -311,12 +328,12 @@ mod tests {
         .expect("restored app");
         restored_app.attach_state_db(state_db);
 
-        restore_session_by_id(
+        restore_thread_by_id(
             expected_runtime.session_id.as_str(),
             &mut restored_app,
             &mut restored_slot,
         )
-        .expect("restore session");
+        .expect("restore thread");
 
         let restored_agent = restored_slot.expect("restored agent");
         let restored_runtime = restored_agent.shared_runtime_context();
@@ -325,16 +342,31 @@ mod tests {
         assert_eq!(restored_runtime.branch, expected_runtime.branch);
         assert_eq!(restored_runtime.session_id, expected_runtime.session_id);
         assert_eq!(restored_runtime.history_len, expected_runtime.history_len);
-        assert_eq!(restored_runtime.prompt.base_prompt_kind, expected_runtime.prompt.base_prompt_kind);
-        assert_eq!(restored_runtime.prompt.section_keys, expected_runtime.prompt.section_keys);
-        assert_eq!(restored_runtime.prompt.source_entries, expected_runtime.prompt.source_entries);
+        assert_eq!(
+            restored_runtime.prompt.base_prompt_kind,
+            expected_runtime.prompt.base_prompt_kind
+        );
+        assert_eq!(
+            restored_runtime.prompt.section_keys,
+            expected_runtime.prompt.section_keys
+        );
+        assert_eq!(
+            restored_runtime.prompt.source_entries,
+            expected_runtime.prompt.source_entries
+        );
         assert_eq!(
             restored_runtime.prompt.append_system_prompt,
             expected_runtime.prompt.append_system_prompt
         );
-        assert_eq!(restored_runtime.prompt.warnings, expected_runtime.prompt.warnings);
+        assert_eq!(
+            restored_runtime.prompt.warnings,
+            expected_runtime.prompt.warnings
+        );
         assert_eq!(restored_runtime.plan.steps, expected_runtime.plan.steps);
-        assert_eq!(restored_runtime.plan.explanation, expected_runtime.plan.explanation);
+        assert_eq!(
+            restored_runtime.plan.explanation,
+            expected_runtime.plan.explanation
+        );
         assert_eq!(
             restored_runtime.compaction.last_compaction_boundary_version,
             expected_runtime.compaction.last_compaction_boundary_version
@@ -348,7 +380,10 @@ mod tests {
             restored_app.snapshot.prompt_append_system_prompt,
             restored_runtime.prompt.append_system_prompt
         );
-        assert_eq!(restored_app.snapshot.plan_steps, restored_runtime.plan.steps);
+        assert_eq!(
+            restored_app.snapshot.plan_steps,
+            restored_runtime.plan.steps
+        );
         assert_eq!(
             restored_app.snapshot.plan_explanation,
             restored_runtime.plan.explanation
@@ -379,7 +414,9 @@ mod tests {
         let mut original_agent = Agent::new(
             ToolManager::new(),
             backend.clone(),
-            Arc::new(VectorDB::new(&rara_dir.join("lancedb").display().to_string())),
+            Arc::new(VectorDB::new(
+                &rara_dir.join("lancedb").display().to_string(),
+            )),
             session_manager.clone(),
             workspace.clone(),
         );
@@ -407,7 +444,9 @@ mod tests {
         let restored_agent = Agent::new(
             ToolManager::new(),
             backend,
-            Arc::new(VectorDB::new(&rara_dir.join("lancedb").display().to_string())),
+            Arc::new(VectorDB::new(
+                &rara_dir.join("lancedb").display().to_string(),
+            )),
             session_manager,
             workspace,
         );
@@ -418,12 +457,12 @@ mod tests {
         .expect("restored app");
         restored_app.attach_state_db(state_db);
 
-        restore_session_by_id(
+        restore_thread_by_id(
             original_agent.session_id.as_str(),
             &mut restored_app,
             &mut restored_slot,
         )
-        .expect("restore session");
+        .expect("restore thread");
 
         let restored_agent = restored_slot.expect("restored agent");
         assert_eq!(restored_agent.session_id, "session-without-history");

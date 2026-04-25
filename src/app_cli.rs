@@ -6,6 +6,8 @@ use crate::llm::{LlmBackend, MockLlm};
 use crate::oauth::{OAuthManager, SavedCodexAuthMode};
 use crate::redaction::redact_secrets;
 use crate::runtime_context;
+use crate::thread_cli;
+use crate::tui::StartupResumeTarget;
 use anyhow::{bail, Result};
 use clap::{Parser, Subcommand};
 use secrecy::ExposeSecret;
@@ -39,8 +41,23 @@ enum Commands {
     Ask {
         prompt: String,
     },
+    Fork {
+        #[arg(value_name = "THREAD_ID")]
+        thread_id: String,
+    },
+    Thread {
+        #[arg(value_name = "THREAD_ID")]
+        thread_id: String,
+    },
+    Threads {
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+    },
     Resume {
-        session_id: Option<String>,
+        #[arg(value_name = "THREAD_ID")]
+        thread_id: Option<String>,
+        #[arg(long, conflicts_with = "thread_id")]
+        last: bool,
     },
     Login {
         #[arg(long)]
@@ -63,22 +80,41 @@ pub(crate) async fn run_cli() -> Result<()> {
     match command.unwrap_or(Commands::Tui) {
         Commands::Acp => run_acp_command(&config).await?,
         Commands::Ask { prompt } => run_ask_command(&config, prompt).await?,
-        Commands::Resume { session_id } => {
-            run_tui_command(&config, oauth_manager, session_id).await?
+        Commands::Fork { thread_id } => thread_cli::run_fork_command(&thread_id)?,
+        Commands::Thread { thread_id } => thread_cli::run_thread_command(&thread_id)?,
+        Commands::Threads { limit } => thread_cli::run_threads_command(limit)?,
+        Commands::Resume { thread_id, last } => {
+            run_tui_command(
+                &config,
+                oauth_manager,
+                startup_resume_target_for_command(&Commands::Resume { thread_id, last })
+                    .expect("resume command should always map to a startup target"),
+            )
+            .await?
         }
         Commands::Login {
             device_auth,
             with_api_key,
-        } => run_login_command(
-            &mut config,
-            &config_manager,
-            &oauth_manager,
-            device_auth,
-            with_api_key,
-        )
-        .await?,
+        } => {
+            run_login_command(
+                &mut config,
+                &config_manager,
+                &oauth_manager,
+                device_auth,
+                with_api_key,
+            )
+            .await?
+        }
         Commands::Logout => run_logout_command(&mut config, &config_manager, &oauth_manager)?,
-        Commands::Tui => run_tui_command(&config, oauth_manager, None).await?,
+        Commands::Tui => {
+            run_tui_command(
+                &config,
+                oauth_manager,
+                startup_resume_target_for_command(&Commands::Tui)
+                    .expect("tui command should always map to a startup target"),
+            )
+            .await?
+        }
     }
     Ok(())
 }
@@ -123,16 +159,41 @@ async fn run_ask_command(config: &RaraConfig, prompt: String) -> Result<()> {
 async fn run_tui_command(
     config: &RaraConfig,
     oauth_manager: OAuthManager,
-    resume_session_id: Option<String>,
+    startup_resume: StartupResumeTarget,
 ) -> Result<()> {
     let bootstrap = runtime_context::initialize_rara_context(config, None).await?;
     emit_bootstrap_warnings(&bootstrap.warnings);
     let agent = bootstrap.into_agent();
-    let resumed_session_id = crate::tui::run_tui(agent, oauth_manager, resume_session_id).await?;
-    if let Some(session_id) = resumed_session_id {
-        println!("{}", resume_hint(&session_id));
+    let resumed_thread_id = crate::tui::run_tui(agent, oauth_manager, startup_resume).await?;
+    if let Some(thread_id) = resumed_thread_id {
+        println!("{}", resume_hint(&thread_id));
     }
     Ok(())
+}
+
+fn startup_resume_target_for_command(command: &Commands) -> Option<StartupResumeTarget> {
+    match command {
+        Commands::Resume {
+            thread_id: Some(thread_id),
+            ..
+        } => Some(StartupResumeTarget::ThreadId(thread_id.clone())),
+        Commands::Resume {
+            thread_id: None,
+            last: true,
+        } => Some(StartupResumeTarget::Latest),
+        Commands::Resume {
+            thread_id: None,
+            last: false,
+        } => Some(StartupResumeTarget::Picker),
+        Commands::Tui => Some(StartupResumeTarget::Fresh),
+        Commands::Acp
+        | Commands::Ask { .. }
+        | Commands::Fork { .. }
+        | Commands::Thread { .. }
+        | Commands::Threads { .. }
+        | Commands::Login { .. }
+        | Commands::Logout => None,
+    }
 }
 
 async fn run_login_command(
@@ -147,8 +208,8 @@ async fn run_login_command(
     }
     if with_api_key {
         let oauth_reader = oauth_manager.clone();
-        let api_key = tokio::task::spawn_blocking(move || oauth_reader.read_api_key_from_stdin())
-            .await??;
+        let api_key =
+            tokio::task::spawn_blocking(move || oauth_reader.read_api_key_from_stdin()).await??;
         let credential = oauth_manager.save_api_key(api_key.expose_secret())?;
         save_codex_credential(
             config,
@@ -213,8 +274,8 @@ fn run_logout_command(
     Ok(())
 }
 
-fn resume_hint(session_id: &str) -> String {
-    format!("Resume this session with: rara resume {session_id}")
+fn resume_hint(thread_id: &str) -> String {
+    format!("Resume this thread with: rara resume {thread_id}")
 }
 
 fn emit_bootstrap_warnings(warnings: &[String]) {
@@ -246,27 +307,78 @@ mod tests {
     #[test]
     fn resume_hint_includes_exact_command() {
         assert_eq!(
-            resume_hint("session-123"),
-            "Resume this session with: rara resume session-123"
+            resume_hint("thread-123"),
+            "Resume this thread with: rara resume thread-123"
         );
     }
 
     #[test]
-    fn clap_parses_resume_command_with_optional_session_id() {
-        let cli = Cli::try_parse_from(["rara", "resume", "session-123"]).expect("parse resume");
+    fn clap_parses_resume_command_with_optional_thread_id() {
+        let cli = Cli::try_parse_from(["rara", "resume", "thread-123"]).expect("parse resume");
         match cli.command.expect("command") {
-            Commands::Resume { session_id } => {
-                assert_eq!(session_id.as_deref(), Some("session-123"));
+            Commands::Resume { thread_id, last } => {
+                assert_eq!(thread_id.as_deref(), Some("thread-123"));
+                assert!(!last);
             }
             other => panic!("unexpected command: {other:?}"),
         }
 
         let cli = Cli::try_parse_from(["rara", "resume"]).expect("parse resume without id");
         match cli.command.expect("command") {
-            Commands::Resume { session_id } => {
-                assert_eq!(session_id, None);
+            Commands::Resume { thread_id, last } => {
+                assert_eq!(thread_id, None);
+                assert!(!last);
             }
             other => panic!("unexpected command: {other:?}"),
         }
+
+        let cli = Cli::try_parse_from(["rara", "resume", "--last"]).expect("parse resume latest");
+        match cli.command.expect("command") {
+            Commands::Resume { thread_id, last } => {
+                assert_eq!(thread_id, None);
+                assert!(last);
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn clap_parses_fork_command() {
+        let cli = Cli::try_parse_from(["rara", "fork", "thread-123"]).expect("parse fork");
+        match cli.command.expect("command") {
+            Commands::Fork { thread_id } => {
+                assert_eq!(thread_id, "thread-123");
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn startup_resume_targets_are_explicit() {
+        assert!(matches!(
+            startup_resume_target_for_command(&Commands::Tui),
+            Some(StartupResumeTarget::Fresh)
+        ));
+        assert!(matches!(
+            startup_resume_target_for_command(&Commands::Resume {
+                thread_id: None,
+                last: false
+            }),
+            Some(StartupResumeTarget::Picker)
+        ));
+        assert!(matches!(
+            startup_resume_target_for_command(&Commands::Resume {
+                thread_id: None,
+                last: true
+            }),
+            Some(StartupResumeTarget::Latest)
+        ));
+        assert!(matches!(
+            startup_resume_target_for_command(&Commands::Resume {
+                thread_id: Some("thread-123".to_string()),
+                last: false
+            }),
+            Some(StartupResumeTarget::ThreadId(thread_id)) if thread_id == "thread-123"
+        ));
     }
 }

@@ -12,6 +12,53 @@ From higher-leverage structural work toward later UX parity work:
 4. Memory / retrieval / thread persistence
 5. TUI transcript parity and command-surface polish
 
+## Phase 1: Architecture Closure
+
+Goal: lock down the boundaries that are most likely to keep expanding unless they are made explicit now.
+
+Acceptance:
+- agent, TUI, and session restore share the same context/runtime assembly contract
+- `/status` (or equivalent debug output) can explain which context sources were injected, where they came from, and in what order
+- `src/main.rs` remains a thin startup orchestrator instead of continuing to own runtime assembly
+
+Priority order for this phase:
+
+1. Split `crates/config/src/lib.rs`
+   - Target modules:
+     - `defaults.rs`
+     - `provider_surface.rs`
+     - `migration.rs`
+     - `secrets.rs`
+     - `serde_helpers.rs`
+     - `model.rs`
+   - Why first:
+     - low-risk organization win
+     - makes `reasoning_summary` and provider migration logic easier to test
+     - gives backend hot-swap a clearer config entry surface
+
+2. Land the Stage 1 context-architecture boundary as real objects
+   - Minimum first cut:
+     - define `ContextBudget`
+     - define `ContextAssembler`
+     - route existing prompt/context assembly through one entrypoint
+     - keep current retrieval behavior, but make the assembler own the final assembled context
+   - Why now:
+     - makes model input assembly explainable
+     - reduces the risk of TUI/runtime/backend each building overlapping prompts differently
+     - sets up compaction, resume, and later memory recall work
+
+3. Deepen the new thread persistence boundary
+   - Introduce objects along the lines of:
+     - `ThreadStore`
+     - `ThreadRecorder`
+     - `RolloutItem`
+     - `CompactionRecord`
+   - Why before more provider hot-swap work:
+     - restore reliability
+     - plan-state continuity
+     - pending-interaction continuity
+     - compaction fidelity all depend on this boundary being explicit
+
 ## Architecture / Runtime
 
 - [ ] Extend the shared runtime context and `/context` from prompt-injected / compacted selected memory items into real recalled vector/thread memory selection so the runtime can explain why those items won the retrieval budget.
@@ -34,8 +81,8 @@ From higher-leverage structural work toward later UX parity work:
 
 ## Memory / Retrieval / Persistence
 
-- [ ] Implement the Stage 1 context-architecture boundary from `docs/features/context-architecture.md`: explicit `ContextBudget` and `ContextAssembler` layers instead of implicit context assembly across unrelated modules.
-- [ ] Implement a local `ThreadStore` / `ThreadRecorder` boundary so thread metadata, rollout history, plan state, and pending interactions are persisted as structured items.
+- [ ] Extend the new local `ThreadStore` / `ThreadRecorder` boundary from a façade over `SessionManager` + `StateDb` into a true structured thread store with explicit thread metadata and rollout-item ownership.
+- [ ] Complete the thread lifecycle surface around the new thread boundary: stable `threads`/`thread`/`resume --last`/`fork` flows now exist, but richer lineage metadata and a clearer `latest thread` contract still need to land.
 - [ ] Make compaction a first-class runtime event with persisted summaries, token counters, and boundary metadata.
 - [ ] Define thread-scoped and workspace-scoped `MemoryRecord` storage plus promotion rules so durable findings are not mixed with transient turn context.
 - [ ] Replace the current placeholder retrieval path with real vector retrieval over Lance/LanceDB, including metadata-aware ranking for thread and workspace memory selection.
@@ -47,7 +94,7 @@ From higher-leverage structural work toward later UX parity work:
 - [ ] Continue improving transcript rendering stability across long and streaming sessions: reduce scroll jumps and flicker, strengthen bottom anchoring, and prevent stale transient sections from reappearing after their live phase ends.
 - [ ] Rework long `Exploring` / `Explored` handling to follow Codex more closely: keep live exploration compact and summarize committed exploration into a source-aware digest instead of dumping long raw traces.
 - [ ] Decouple setup/help/model overlays from transcript layout so overlays behave as a pure top layer and do not perturb history viewport sizing.
-- [ ] After exit, print a Codex/Claude-style resume hint that tells the user how to restore the session quickly (for example the exact `resume` command or session identifier to use).
+- [ ] After exit, print a Codex/Claude-style resume hint that tells the user how to restore the current thread quickly (for example the exact `rara resume <THREAD_ID>` or `rara resume --last` command to use).
 - [ ] Add Claude-style repository context hints beneath the input area, especially the current GitHub PR link when the workspace maps to an open PR.
 - [ ] Add Codex/Claude-style transcript role cards for `You` / `Agent` / `System` without mixing status chrome into committed transcript history.
 - [ ] Bring the main response UI closer to Codex / Claude Code: stabilize active response blocks while streaming and avoid falling back to generic transcript rows for states that should stay in dedicated response cards.

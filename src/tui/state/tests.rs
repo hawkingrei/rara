@@ -6,6 +6,7 @@ use super::{
 use crate::codex_model_catalog::{CodexModelOption, CodexReasoningOption};
 use crate::config::{ConfigManager, RaraConfig};
 use crate::config::{DEFAULT_CODEX_BASE_URL, DEFAULT_CODEX_MODEL};
+use crate::state_db::{PersistedCompactState, PersistedPromptRuntimeState, StateDb};
 use tempfile::tempdir;
 
 #[test]
@@ -138,7 +139,10 @@ fn finalize_agent_stream_keeps_manual_transcript_scroll_position() {
 
     assert_eq!(app.transcript_scroll, 4);
     assert_eq!(
-        app.active_turn.entries.last().map(|entry| entry.message.as_str()),
+        app.active_turn
+            .entries
+            .last()
+            .map(|entry| entry.message.as_str()),
         Some("final answer")
     );
 }
@@ -307,6 +311,45 @@ fn model_name_editor_seeds_from_selected_provider_state() {
 }
 
 #[test]
+fn resume_picker_refreshes_recent_threads_on_open() {
+    let dir = tempdir().expect("tempdir");
+    let cm = ConfigManager {
+        path: dir.path().join("config.json"),
+    };
+    let mut app = TuiApp::new(cm).expect("app");
+    let state_db = StateDb::new_for_root_dir(dir.path().join(".rara")).expect("state db");
+    app.attach_state_db(std::sync::Arc::new(state_db));
+
+    assert!(app.recent_threads.is_empty());
+
+    app.state_db
+        .as_ref()
+        .expect("state db")
+        .upsert_session(
+            "thread-1",
+            "/tmp/workspace",
+            "main",
+            "ollama",
+            "qwen3",
+            None,
+            "execute",
+            "always",
+            None,
+            &PersistedPromptRuntimeState::default(),
+            0,
+            0,
+            &PersistedCompactState::default(),
+        )
+        .expect("upsert thread");
+
+    app.open_overlay(Overlay::ResumePicker);
+
+    assert_eq!(app.recent_threads.len(), 1);
+    assert_eq!(app.recent_threads[0].metadata.session_id, "thread-1");
+    assert_eq!(app.resume_picker_idx, 0);
+}
+
+#[test]
 fn finalize_agent_stream_updates_latest_committed_turn_when_final_text_arrives_late() {
     let dir = tempdir().expect("tempdir");
     let cm = ConfigManager {
@@ -337,9 +380,11 @@ fn finalize_agent_stream_updates_latest_committed_turn_when_final_text_arrives_l
         Some("你好！有什么我可以帮你的？")
     );
     assert_eq!(
-        app.committed_turns
-            .last()
-            .map(|turn| turn.entries.iter().filter(|entry| entry.role == "Agent").count()),
+        app.committed_turns.last().map(|turn| turn
+            .entries
+            .iter()
+            .filter(|entry| entry.role == "Agent")
+            .count()),
         Some(1)
     );
 }

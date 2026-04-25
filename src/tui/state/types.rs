@@ -15,7 +15,8 @@ use crate::config::{ConfigManager, RaraConfig};
 use crate::context::{CompactionSourceContextEntry, PromptSourceContextEntry};
 use crate::context::{RetrievalSelectedItemContextEntry, RetrievalSourceContextEntry};
 use crate::oauth::SavedCodexAuthMode;
-use crate::state_db::{PersistedSessionSummary, StateDb};
+use crate::state_db::StateDb;
+use crate::thread_store::ThreadSummary;
 use crate::tool::ToolOutputStream;
 use crate::tools::bash::BashCommandInput;
 
@@ -348,7 +349,7 @@ pub struct TuiApp {
     pub model_name_input: String,
     pub codex_model_options: Vec<CodexModelOption>,
     pub recent_commands: Vec<String>,
-    pub recent_sessions: Vec<PersistedSessionSummary>,
+    pub recent_threads: Vec<ThreadSummary>,
     pub resume_picker_idx: usize,
     pub committed_render_generation: u64,
     pub committed_render_cache: RefCell<CommittedTranscriptRenderCache>,

@@ -7,7 +7,8 @@ use crate::redaction::redact_secrets;
 
 impl TuiApp {
     fn replace_turn_agent_message(turn: &mut TranscriptTurn, message: String) -> bool {
-        let Some(last_agent_idx) = turn.entries.iter().rposition(|entry| entry.role == "Agent") else {
+        let Some(last_agent_idx) = turn.entries.iter().rposition(|entry| entry.role == "Agent")
+        else {
             return false;
         };
 
@@ -255,7 +256,8 @@ impl TuiApp {
 
     pub(crate) fn invalidate_committed_render_cache(&mut self) {
         self.committed_render_generation = self.committed_render_generation.wrapping_add(1);
-        *self.committed_render_cache.borrow_mut() = super::CommittedTranscriptRenderCache::default();
+        *self.committed_render_cache.borrow_mut() =
+            super::CommittedTranscriptRenderCache::default();
     }
 
     pub fn clear_active_live_sections(&mut self) {

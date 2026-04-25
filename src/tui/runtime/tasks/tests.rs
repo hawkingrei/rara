@@ -2,15 +2,17 @@ use std::sync::Arc;
 
 use tempfile::tempdir;
 
-use crate::agent::{Agent, AgentExecutionMode, BashApprovalMode, Message, PlanStep, PlanStepStatus};
+use crate::agent::{
+    Agent, AgentExecutionMode, BashApprovalMode, Message, PlanStep, PlanStepStatus,
+};
 use crate::config::ConfigManager;
 use crate::oauth::OAuthManager;
 use crate::prompt::PromptRuntimeConfig;
-use crate::tui::state::{OAuthLoginMode, TuiApp};
+use crate::session::SessionManager;
 use crate::tool::ToolManager;
+use crate::tui::state::{OAuthLoginMode, TuiApp};
 use crate::vectordb::VectorDB;
 use crate::workspace::WorkspaceMemory;
-use crate::session::SessionManager;
 use serde_json::json;
 
 use super::{merge_rebuilt_agent, should_suggest_planning_mode, start_oauth_task};
@@ -39,8 +41,14 @@ fn skips_planning_for_simple_requests() {
         path: temp.path().join("config.json"),
     })
     .expect("build tui app");
-    assert!(!should_suggest_planning_mode(&app, "Fix the typo in README."));
-    assert!(!should_suggest_planning_mode(&app, "What does this function do?"));
+    assert!(!should_suggest_planning_mode(
+        &app,
+        "Fix the typo in README."
+    ));
+    assert!(!should_suggest_planning_mode(
+        &app,
+        "What does this function do?"
+    ));
 }
 
 #[test]
@@ -81,7 +89,10 @@ fn merge_rebuilt_agent_preserves_session_and_turn_state() {
     std::fs::create_dir_all(rara_dir.join("sessions")).expect("sessions");
     std::fs::create_dir_all(rara_dir.join("tool-results")).expect("tool results");
 
-    let workspace = Arc::new(WorkspaceMemory::from_paths(workspace_root.clone(), rara_dir.clone()));
+    let workspace = Arc::new(WorkspaceMemory::from_paths(
+        workspace_root.clone(),
+        rara_dir.clone(),
+    ));
     let session_manager = Arc::new(SessionManager {
         storage_dir: rara_dir.join("rollouts"),
         legacy_storage_dir: rara_dir.join("sessions"),
@@ -91,7 +102,9 @@ fn merge_rebuilt_agent_preserves_session_and_turn_state() {
     let mut previous = Agent::new(
         ToolManager::new(),
         backend.clone(),
-        Arc::new(VectorDB::new(&rara_dir.join("lancedb").display().to_string())),
+        Arc::new(VectorDB::new(
+            &rara_dir.join("lancedb").display().to_string(),
+        )),
         session_manager.clone(),
         workspace.clone(),
     );
@@ -117,12 +130,11 @@ fn merge_rebuilt_agent_preserves_session_and_turn_state() {
     previous.compact_state.last_compaction_before_tokens = Some(5_000);
     previous.compact_state.last_compaction_after_tokens = Some(2_100);
     previous.compact_state.last_compaction_recent_files = vec!["src/main.rs".into()];
-    previous.compact_state.last_compaction_boundary =
-        Some(crate::agent::CompactBoundaryMetadata {
-            version: 1,
-            before_tokens: 5_000,
-            recent_file_count: 1,
-        });
+    previous.compact_state.last_compaction_boundary = Some(crate::agent::CompactBoundaryMetadata {
+        version: 1,
+        before_tokens: 5_000,
+        recent_file_count: 1,
+    });
     previous.set_prompt_config(PromptRuntimeConfig {
         append_system_prompt: Some("keep appendix".to_string()),
         warnings: vec!["missing custom prompt".to_string()],
@@ -132,7 +144,9 @@ fn merge_rebuilt_agent_preserves_session_and_turn_state() {
     let mut rebuilt = Agent::new(
         ToolManager::new(),
         backend,
-        Arc::new(VectorDB::new(&rara_dir.join("other-lancedb").display().to_string())),
+        Arc::new(VectorDB::new(
+            &rara_dir.join("other-lancedb").display().to_string(),
+        )),
         session_manager,
         workspace,
     );
@@ -151,8 +165,14 @@ fn merge_rebuilt_agent_preserves_session_and_turn_state() {
     assert_eq!(merged.current_plan.len(), 1);
     assert_eq!(merged.compact_state.estimated_history_tokens, 1_200);
     assert_eq!(merged.compact_state.compaction_count, 2);
-    assert_eq!(merged.compact_state.last_compaction_before_tokens, Some(5_000));
-    assert_eq!(merged.compact_state.last_compaction_after_tokens, Some(2_100));
+    assert_eq!(
+        merged.compact_state.last_compaction_before_tokens,
+        Some(5_000)
+    );
+    assert_eq!(
+        merged.compact_state.last_compaction_after_tokens,
+        Some(2_100)
+    );
     assert_eq!(
         merged.compact_state.last_compaction_recent_files,
         vec!["src/main.rs".to_string()]

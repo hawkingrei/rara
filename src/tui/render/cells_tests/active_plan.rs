@@ -241,7 +241,10 @@ fn active_turn_cell_keeps_responding_section_while_agent_stream_exists() {
             },
         ],
     };
-    app.set_runtime_phase(RuntimePhase::ProcessingResponse, Some("streaming model output".into()));
+    app.set_runtime_phase(
+        RuntimePhase::ProcessingResponse,
+        Some("streaming model output".into()),
+    );
     app.append_agent_delta("你好");
 
     let rendered = ActiveTurnCell::new(&app, Some(Path::new(".")))

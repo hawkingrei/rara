@@ -41,7 +41,9 @@ pub(super) fn map_key_to_event(key: KeyCode, app: &TuiApp) -> AppEvent {
             KeyCode::Char('8') => AppEvent::SetModelSelection(7),
             KeyCode::Char('9') => AppEvent::SetModelSelection(8),
             KeyCode::Char('m') => AppEvent::CycleModelSelection,
-            KeyCode::Char('l') if matches!(app.selected_provider_family(), ProviderFamily::Codex) => {
+            KeyCode::Char('l')
+                if matches!(app.selected_provider_family(), ProviderFamily::Codex) =>
+            {
                 AppEvent::OpenOverlay(Overlay::AuthModePicker)
             }
             KeyCode::Enter => AppEvent::ApplyOverlaySelection,
@@ -90,12 +92,18 @@ pub(super) fn map_key_to_event(key: KeyCode, app: &TuiApp) -> AppEvent {
                 AppEvent::OpenOverlay(Overlay::BaseUrlEditor)
             }
             KeyCode::Char('a')
-                if matches!(app.selected_provider_family(), ProviderFamily::OpenAiCompatible) =>
+                if matches!(
+                    app.selected_provider_family(),
+                    ProviderFamily::OpenAiCompatible
+                ) =>
             {
                 AppEvent::OpenOverlay(Overlay::ApiKeyEditor)
             }
             KeyCode::Char('n')
-                if matches!(app.selected_provider_family(), ProviderFamily::OpenAiCompatible) =>
+                if matches!(
+                    app.selected_provider_family(),
+                    ProviderFamily::OpenAiCompatible
+                ) =>
             {
                 AppEvent::OpenOverlay(Overlay::ModelNameEditor)
             }
@@ -149,8 +157,12 @@ pub(super) fn map_key_to_event(key: KeyCode, app: &TuiApp) -> AppEvent {
         None => match key {
             KeyCode::Esc => AppEvent::Noop,
             KeyCode::Enter => AppEvent::SubmitComposer,
-            KeyCode::Up | KeyCode::Char('k') if app.input.is_empty() => AppEvent::ScrollTranscript(-1),
-            KeyCode::Down | KeyCode::Char('j') if app.input.is_empty() => AppEvent::ScrollTranscript(1),
+            KeyCode::Up | KeyCode::Char('k') if app.input.is_empty() => {
+                AppEvent::ScrollTranscript(-1)
+            }
+            KeyCode::Down | KeyCode::Char('j') if app.input.is_empty() => {
+                AppEvent::ScrollTranscript(1)
+            }
             KeyCode::PageUp if app.input.is_empty() => AppEvent::ScrollTranscript(-8),
             KeyCode::PageDown if app.input.is_empty() => AppEvent::ScrollTranscript(8),
             KeyCode::Char('1')

@@ -9,10 +9,10 @@ use crate::llm::{ContentBlock, LlmBackend};
 use crate::prompt::{self, PromptMode, PromptRuntimeConfig};
 use crate::session::SessionManager;
 use crate::tool::ToolManager;
+use crate::tool::ToolOutputStream;
 use crate::tool_result::{
     default_tool_result_store_dir, repair_tool_result_history, ToolResultStore,
 };
-use crate::tool::ToolOutputStream;
 use crate::tools::bash::BashCommandInput;
 use crate::vectordb::{MemoryMetadata, VectorDB};
 use crate::workspace::WorkspaceMemory;
@@ -142,7 +142,7 @@ impl Agent {
             tool_result_store: ToolResultStore::new(
                 default_tool_result_store_dir().expect("tool result store dir"),
             )
-                .expect("tool result store"),
+            .expect("tool result store"),
             execution_mode: AgentExecutionMode::Execute,
             bash_approval_mode: BashApprovalMode::Always,
             current_plan: Vec::new(),

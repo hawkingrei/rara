@@ -2,19 +2,36 @@ use std::sync::Arc;
 
 use serde_json::json;
 
-use super::{
-    state_db_status_error, InteractionKind, StateDb, TranscriptTurn, TuiApp,
-};
+use super::{state_db_status_error, InteractionKind, StateDb, TranscriptTurn, TuiApp};
 use crate::state_db::{
     PersistedCompactState, PersistedInteraction, PersistedPlanStep, PersistedPromptRuntimeState,
-    PersistedTurnEntry,
+    PersistedStructuredRolloutEvent, PersistedTurnEntry,
 };
+use crate::thread_store::{ThreadRecorder, ThreadRuntimeState, ThreadStore};
 
 impl TuiApp {
+    pub(super) fn refresh_recent_threads(&mut self) {
+        let Some(state_db) = self.state_db.as_ref() else {
+            self.recent_threads.clear();
+            return;
+        };
+        self.recent_threads =
+            ThreadStore::list_recent_threads_for_db(state_db, 20).unwrap_or_default();
+    }
+
+    pub(super) fn refresh_recent_threads_for_resume_picker(&mut self) {
+        self.refresh_recent_threads();
+        self.resume_picker_idx = self
+            .recent_threads
+            .is_empty()
+            .then_some(0)
+            .unwrap_or_else(|| self.resume_picker_idx.min(self.recent_threads.len() - 1));
+    }
+
     pub fn attach_state_db(&mut self, state_db: Arc<StateDb>) {
         let status = state_db.path().display().to_string();
-        self.recent_sessions = state_db.list_recent_sessions(20).unwrap_or_default();
         self.state_db = Some(state_db);
+        self.refresh_recent_threads();
         self.state_db_status = Some(status);
         if !self.snapshot.session_id.is_empty() {
             self.persist_runtime_state();
@@ -33,24 +50,25 @@ impl TuiApp {
         if self.snapshot.session_id.is_empty() {
             return;
         }
+        let recorder = ThreadRecorder::new(state_db);
 
-        if let Err(err) = state_db.upsert_session(
-            &self.snapshot.session_id,
-            &self.snapshot.cwd,
-            &self.snapshot.branch,
-            &self.config.provider,
-            self.current_model_label(),
-            self.config.base_url.as_deref(),
-            self.agent_execution_mode_label(),
-            self.bash_approval_mode_label(),
-            self.snapshot.plan_explanation.as_deref(),
-            &PersistedPromptRuntimeState {
+        if let Err(err) = recorder.persist_runtime_state(&ThreadRuntimeState {
+            session_id: &self.snapshot.session_id,
+            cwd: &self.snapshot.cwd,
+            branch: &self.snapshot.branch,
+            provider: &self.config.provider,
+            model: self.current_model_label(),
+            base_url: self.config.base_url.as_deref(),
+            agent_mode: self.agent_execution_mode_label(),
+            bash_approval: self.bash_approval_mode_label(),
+            plan_explanation: self.snapshot.plan_explanation.as_deref(),
+            prompt_runtime: PersistedPromptRuntimeState {
                 append_system_prompt: self.snapshot.prompt_append_system_prompt.clone(),
                 warnings: self.snapshot.prompt_warnings.clone(),
             },
-            self.snapshot.history_len,
-            self.transcript_entry_count(),
-            &PersistedCompactState {
+            history_len: self.snapshot.history_len,
+            transcript_len: self.transcript_entry_count(),
+            compact_state: PersistedCompactState {
                 compaction_count: self.snapshot.compaction_count,
                 last_compaction_before_tokens: self.snapshot.last_compaction_before_tokens,
                 last_compaction_after_tokens: self.snapshot.last_compaction_after_tokens,
@@ -59,7 +77,7 @@ impl TuiApp {
                 ),
                 last_compaction_boundary_version: self.snapshot.last_compaction_boundary_version,
             },
-        ) {
+        }) {
             self.state_db_status = Some(state_db_status_error("write failed", err.to_string()));
             return;
         }
@@ -75,7 +93,7 @@ impl TuiApp {
                 step: step.clone(),
             })
             .collect::<Vec<_>>();
-        if let Err(err) = state_db.replace_plan_steps(&self.snapshot.session_id, &plan_steps) {
+        if let Err(err) = recorder.replace_plan_steps(&self.snapshot.session_id, &plan_steps) {
             self.state_db_status =
                 Some(state_db_status_error("plan write failed", err.to_string()));
             return;
@@ -153,7 +171,7 @@ impl TuiApp {
             });
         }
 
-        if let Err(err) = state_db.replace_interactions(&self.snapshot.session_id, &interactions) {
+        if let Err(err) = recorder.replace_interactions(&self.snapshot.session_id, &interactions) {
             self.state_db_status = Some(state_db_status_error(
                 "interaction write failed",
                 err.to_string(),
@@ -161,8 +179,32 @@ impl TuiApp {
             return;
         }
 
-        self.recent_sessions = state_db.list_recent_sessions(20).unwrap_or_default();
-        self.state_db_status = Some(state_db.path().display().to_string());
+        let mut structured_rollout = Vec::new();
+        if !plan_steps.is_empty() || self.snapshot.plan_explanation.is_some() {
+            structured_rollout.push(PersistedStructuredRolloutEvent::PlanState {
+                recorded_at: None,
+                explanation: self.snapshot.plan_explanation.clone(),
+                steps: plan_steps,
+            });
+        }
+        structured_rollout.extend(interactions.iter().cloned().map(|interaction| {
+            PersistedStructuredRolloutEvent::Interaction {
+                recorded_at: None,
+                interaction,
+            }
+        }));
+        if let Err(err) =
+            recorder.replace_runtime_rollout_events(&self.snapshot.session_id, &structured_rollout)
+        {
+            self.state_db_status = Some(state_db_status_error(
+                "structured rollout write failed",
+                err.to_string(),
+            ));
+            return;
+        }
+
+        let state_db_status = state_db.path().display().to_string();
+        self.state_db_status = Some(state_db_status);
     }
 
     pub(super) fn persist_turn(&mut self, ordinal: usize, turn: &TranscriptTurn) {
@@ -172,6 +214,7 @@ impl TuiApp {
         if self.snapshot.session_id.is_empty() {
             return;
         }
+        let recorder = ThreadRecorder::new(state_db);
         let entries = turn
             .entries
             .iter()
@@ -180,7 +223,7 @@ impl TuiApp {
                 message: entry.message.clone(),
             })
             .collect::<Vec<_>>();
-        if let Err(err) = state_db.persist_turn(&self.snapshot.session_id, ordinal, &entries) {
+        if let Err(err) = recorder.persist_turn(&self.snapshot.session_id, ordinal, &entries) {
             self.state_db_status =
                 Some(state_db_status_error("turn write failed", err.to_string()));
         }

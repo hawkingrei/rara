@@ -47,7 +47,7 @@ use self::runtime::{
     start_query_task, start_rebuild_task,
 };
 use self::session_restore::{
-    provider_requires_api_key, restore_latest_session, restore_session_by_id,
+    provider_requires_api_key, restore_latest_thread, restore_thread_by_id,
 };
 use self::state::{LocalCommandKind, Overlay, TaskKind, TuiApp, PROVIDER_FAMILIES};
 use self::terminal_ui::{
@@ -57,10 +57,18 @@ use self::terminal_ui::{
 use crate::agent::AgentExecutionMode;
 use crate::agent::BashApprovalMode;
 
+#[derive(Debug, Clone)]
+pub enum StartupResumeTarget {
+    Fresh,
+    Latest,
+    ThreadId(String),
+    Picker,
+}
+
 pub async fn run_tui(
     agent: Agent,
     oauth_manager: OAuthManager,
-    resume_session_id: Option<String>,
+    startup_resume: StartupResumeTarget,
 ) -> anyhow::Result<Option<String>> {
     enable_raw_mode()?;
     let initial_size = terminal_size()?;
@@ -71,11 +79,20 @@ pub async fn run_tui(
     match StateDb::new() {
         Ok(state_db) => {
             let state_db = Arc::new(state_db);
-            app.attach_state_db(Arc::clone(&state_db));
-            if let Some(session_id) = resume_session_id.as_deref() {
-                restore_session_by_id(session_id, &mut app, &mut agent_slot)?;
-            } else {
-                restore_latest_session(&state_db, &mut app, &mut agent_slot)?;
+            app.attach_state_db(state_db);
+            match &startup_resume {
+                StartupResumeTarget::Fresh => {}
+                StartupResumeTarget::Latest => {
+                    if let Some(state_db) = app.state_db.as_ref().cloned() {
+                        restore_latest_thread(&state_db, &mut app, &mut agent_slot)?;
+                    }
+                }
+                StartupResumeTarget::ThreadId(thread_id) => {
+                    restore_thread_by_id(thread_id.as_str(), &mut app, &mut agent_slot)?;
+                }
+                StartupResumeTarget::Picker => {
+                    app.open_overlay(Overlay::ResumePicker);
+                }
             }
         }
         Err(err) => app.set_state_db_error(err.to_string()),
@@ -155,12 +172,9 @@ pub async fn run_tui(
         .as_ref()
         .map(|agent| agent.session_id.clone())
         .filter(|session_id| !session_id.is_empty())
-        .or_else(|| {
-            (!app.snapshot.session_id.is_empty()).then(|| app.snapshot.session_id.clone())
-        });
+        .or_else(|| (!app.snapshot.session_id.is_empty()).then(|| app.snapshot.session_id.clone()));
     Ok(session_id)
 }
-
 
 async fn dispatch_event(
     event: AppEvent,
@@ -215,7 +229,7 @@ async fn dispatch_event(
             app.provider_picker_idx = next as usize;
         }
         AppEvent::MoveResumeSelection(delta) => {
-            let len = app.recent_sessions.len();
+            let len = app.recent_threads.len();
             if len > 0 {
                 let next = (app.resume_picker_idx as i32 + delta).clamp(0, len as i32 - 1);
                 app.resume_picker_idx = next as usize;
@@ -254,8 +268,8 @@ async fn dispatch_event(
             }
         }
         AppEvent::SetResumeSelection(idx) => {
-            if !app.recent_sessions.is_empty() {
-                app.resume_picker_idx = idx.min(app.recent_sessions.len() - 1);
+            if !app.recent_threads.is_empty() {
+                app.resume_picker_idx = idx.min(app.recent_threads.len() - 1);
             }
         }
         AppEvent::SetModelSelection(idx) => {
@@ -458,12 +472,12 @@ async fn dispatch_event(
             Some(Overlay::ResumePicker) => {
                 if app.is_busy() {
                     app.push_notice("A task is already running. Wait for it to finish.");
-                } else if let Some(session_id) = app
-                    .recent_sessions
+                } else if let Some(thread_id) = app
+                    .recent_threads
                     .get(app.resume_picker_idx)
-                    .map(|session| session.session_id.clone())
+                    .map(|session| session.metadata.session_id.clone())
                 {
-                    restore_session_by_id(session_id.as_str(), app, agent_slot)?;
+                    restore_thread_by_id(thread_id.as_str(), app, agent_slot)?;
                     app.close_overlay();
                 }
             }
