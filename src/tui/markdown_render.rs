@@ -8,10 +8,10 @@ use ratatui::{
     text::{Line, Span, Text},
 };
 
-use crate::tui::highlight::highlight_code_to_lines;
 use self::local_links::{
     is_local_path_like_link, render_local_link_target, should_render_link_destination,
 };
+use crate::tui::highlight::highlight_code_to_lines;
 
 #[derive(Default)]
 struct MarkdownStyles {

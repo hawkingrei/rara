@@ -26,7 +26,9 @@ fn shared_runtime_context_collects_prompt_plan_and_compaction_state() {
     let mut agent = Agent::new(
         ToolManager::new(),
         backend,
-        Arc::new(VectorDB::new(&rara_dir.join("lancedb").display().to_string())),
+        Arc::new(VectorDB::new(
+            &rara_dir.join("lancedb").display().to_string(),
+        )),
         session_manager,
         workspace,
     );
@@ -56,8 +58,10 @@ fn shared_runtime_context_collects_prompt_plan_and_compaction_state() {
     agent.compact_state.compaction_count = 2;
     agent.compact_state.last_compaction_before_tokens = Some(5000);
     agent.compact_state.last_compaction_after_tokens = Some(2100);
-    agent.compact_state.last_compaction_recent_files =
-        vec!["src/main.rs".to_string(), "src/runtime_context.rs".to_string()];
+    agent.compact_state.last_compaction_recent_files = vec![
+        "src/main.rs".to_string(),
+        "src/runtime_context.rs".to_string(),
+    ];
     agent.compact_state.last_compaction_boundary = Some(crate::agent::CompactBoundaryMetadata {
         version: 3,
         before_tokens: 5000,
@@ -78,15 +82,21 @@ fn shared_runtime_context_collects_prompt_plan_and_compaction_state() {
     });
     agent.history.push(Message {
         role: "system".to_string(),
-        content: json!("STRUCTURED SUMMARY OF PREVIOUS CONVERSATION:\nUser Intent\n- finish the refactor"),
+        content: json!(
+            "STRUCTURED SUMMARY OF PREVIOUS CONVERSATION:\nUser Intent\n- finish the refactor"
+        ),
     });
     agent.history.push(Message {
         role: "system".to_string(),
-        content: json!("RECENT FILES FROM COMPACTED HISTORY:\n- src/main.rs\n- src/runtime_context.rs"),
+        content: json!(
+            "RECENT FILES FROM COMPACTED HISTORY:\n- src/main.rs\n- src/runtime_context.rs"
+        ),
     });
     agent.history.push(Message {
         role: "system".to_string(),
-        content: json!("RECENT FILE EXCERPTS FROM COMPACTED HISTORY:\n### src/main.rs (lines 1-3)\ncode"),
+        content: json!(
+            "RECENT FILE EXCERPTS FROM COMPACTED HISTORY:\n### src/main.rs (lines 1-3)\ncode"
+        ),
     });
     agent.history.push(Message {
         role: "assistant".to_string(),
@@ -131,7 +141,10 @@ fn shared_runtime_context_collects_prompt_plan_and_compaction_state() {
         .prompt
         .section_keys
         .contains(&"append_system_prompt".to_string()));
-    assert_eq!(runtime.prompt.source_entries.len(), runtime.prompt.source_status_lines.len());
+    assert_eq!(
+        runtime.prompt.source_entries.len(),
+        runtime.prompt.source_status_lines.len()
+    );
     assert_eq!(runtime.prompt.source_entries[0].order, 1);
     assert!(!runtime.prompt.source_entries[0].inclusion_reason.is_empty());
     assert!(runtime
@@ -161,10 +174,19 @@ fn shared_runtime_context_collects_prompt_plan_and_compaction_state() {
         ]
     );
     assert_eq!(runtime.compaction.source_entries.len(), 4);
-    assert_eq!(runtime.compaction.source_entries[0].kind, "compact_boundary");
-    assert_eq!(runtime.compaction.source_entries[1].kind, "compacted_summary");
+    assert_eq!(
+        runtime.compaction.source_entries[0].kind,
+        "compact_boundary"
+    );
+    assert_eq!(
+        runtime.compaction.source_entries[1].kind,
+        "compacted_summary"
+    );
     assert_eq!(runtime.compaction.source_entries[2].kind, "recent_files");
-    assert_eq!(runtime.compaction.source_entries[3].kind, "recent_file_excerpts");
+    assert_eq!(
+        runtime.compaction.source_entries[3].kind,
+        "recent_file_excerpts"
+    );
     assert_eq!(runtime.retrieval.entries.len(), 3);
     assert_eq!(runtime.retrieval.entries[0].kind, "workspace_memory");
     assert_eq!(runtime.retrieval.entries[0].status, "active");
@@ -180,9 +202,15 @@ fn shared_runtime_context_collects_prompt_plan_and_compaction_state() {
     assert!(runtime.retrieval.selected_items[0]
         .detail
         .contains("first line: # Team Notes"));
-    assert_eq!(runtime.retrieval.selected_items[1].kind, "compacted_summary");
+    assert_eq!(
+        runtime.retrieval.selected_items[1].kind,
+        "compacted_summary"
+    );
     assert_eq!(runtime.retrieval.selected_items[2].kind, "recent_files");
-    assert_eq!(runtime.retrieval.selected_items[3].kind, "recent_file_excerpts");
+    assert_eq!(
+        runtime.retrieval.selected_items[3].kind,
+        "recent_file_excerpts"
+    );
     assert_eq!(
         runtime.retrieval.selected_items[4].kind,
         "retrieved_workspace_memory"

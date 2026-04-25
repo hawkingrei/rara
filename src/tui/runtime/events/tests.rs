@@ -1,12 +1,12 @@
 use serde_json::json;
 use tempfile::tempdir;
 
-use super::helpers::{
-    format_apply_patch_result, format_apply_patch_use, format_tool_progress,
-    format_tool_result, is_oauth_prompt_message, planning_note_lines,
-    scrub_internal_control_tokens, subagent_request_input,
-};
 use super::apply_tui_event;
+use super::helpers::{
+    format_apply_patch_result, format_apply_patch_use, format_tool_progress, format_tool_result,
+    is_oauth_prompt_message, planning_note_lines, scrub_internal_control_tokens,
+    subagent_request_input,
+};
 use crate::agent::AgentExecutionMode;
 use crate::config::ConfigManager;
 use crate::tool::ToolOutputStream;
@@ -197,5 +197,7 @@ fn detects_persistent_oauth_prompt_messages() {
     assert!(is_oauth_prompt_message(
         "Starting Codex browser login.\nOpen this URL if the browser does not launch automatically:\nhttps://example.test"
     ));
-    assert!(!is_oauth_prompt_message("Waiting for device-code confirmation."));
+    assert!(!is_oauth_prompt_message(
+        "Waiting for device-code confirmation."
+    ));
 }

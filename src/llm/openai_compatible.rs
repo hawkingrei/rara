@@ -10,8 +10,9 @@ use crate::llm::{ContentBlock, LlmResponse, TokenUsage};
 use crate::redaction::{redact_secrets, sanitize_url_for_display};
 
 use super::shared::{
-    collect_assistant_content, extract_message_text, extract_single_tool_result, http_client_for_target,
-    model_context_budget, parse_tool_arguments, render_openai_message_content, ContextBudget, LlmBackend,
+    collect_assistant_content, extract_message_text, extract_single_tool_result,
+    http_client_for_target, model_context_budget, parse_tool_arguments,
+    render_openai_message_content, ContextBudget, LlmBackend,
 };
 
 #[cfg(test)]

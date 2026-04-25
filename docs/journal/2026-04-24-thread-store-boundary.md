@@ -23,8 +23,8 @@ structured thread-facing objects.
   separately.
 - `tui/state/persistence.rs` now writes runtime state, plan state, interaction
   state, and committed turns through `ThreadRecorder`.
-- Added a first-pass unified structured rollout-event file:
-  - `events.json`
+- Added a first-pass unified structured rollout-event log:
+  - `events.jsonl`
   - used for `compaction`, `plan_state`, and `interaction` items
   - preferred by `ThreadStore` over older specialized persistence files
   - now also the only new write target for non-turn rollout items
@@ -53,10 +53,11 @@ The local thread boundary still adapts the existing storage model:
 - `SessionManager` remains the owner of `history.json`;
 - `StateDb` remains the owner of structured session metadata, committed
   transcript turns, and compatibility fallbacks for runtime state;
-- `events.json` now acts as the preferred structured rollout-event surface for
+- `events.jsonl` now acts as the preferred structured rollout-event surface for
   non-turn thread items.
-- older compatibility files such as `runtime.json` and `compactions.json` are
-  now fallback read sources instead of the primary write path.
+- older compatibility files such as `events.json`, `runtime.json`, and
+  `compactions.json` are now fallback read sources instead of the primary write
+  path.
 
 The new boundary is therefore a façade, not yet a storage redesign.
 
@@ -113,12 +114,34 @@ to TUI resume:
   - avoids depending on backend initialization so thread inspection remains a
     persistence concern rather than a model/provider concern
 
-This does not yet implement `fork`, but it establishes a cleaner thread
-lifecycle split:
+This establishes a cleaner thread lifecycle split:
 
 - `threads` for listing
 - `thread` for inspection
 - `resume` for continuation
+- `fork` for branching the current materialized thread state into a new thread
+
+## Fork Checkpoint
+
+The thread lifecycle now includes a minimal persisted fork path:
+
+- `rara fork <THREAD_ID>` creates a new thread id instead of mutating the
+  source thread
+- the forked thread preserves:
+  - canonicalized history
+  - current plan/interactions runtime state
+  - committed turns
+  - structured compaction events
+- the forked thread writes lineage metadata:
+  - `origin_kind = "fork"`
+  - `forked_from_thread_id = <source thread>`
+
+The current fork is intentionally minimal:
+
+- it clones the source thread's current materialized state
+- it does not yet add TUI-native fork flows
+- it does not yet preserve richer lineage such as parent/child indexes or
+  resume-derived origins
 
 ## Internal Naming Checkpoint
 
@@ -133,11 +156,62 @@ well:
 This does not change storage or schema yet. It only reduces the chance that new
 thread-lifecycle work keeps growing on top of stale session-shaped read APIs.
 
+## Rollout Migration Checkpoint
+
+The non-turn rollout boundary now treats old JSON files as migration sources
+instead of active write targets:
+
+- `events.jsonl` is the only new write target for structured non-turn rollout
+  items.
+- `events.json`, `runtime.json`, and `compactions.json` are still readable for
+  compatibility, but they are now read through migration/backfill paths.
+- reading legacy rollout state now backfills the canonical `events.jsonl` log so
+  subsequent thread loads can stay on the append-only path.
+- `ThreadStore::load_thread(...)` now consumes one unified non-turn migration
+  result instead of stitching runtime fallback and compaction fallback together
+  at separate call sites.
+
+This is still not a full storage redesign, but it does move the runtime closer
+to the Codex/Claude-style model where append-only rollout logs are the primary
+source of truth and compatibility files become import-only legacy paths.
+
+## History Migration Checkpoint
+
+Thread history is now starting to follow the same contract:
+
+- the canonical history path is `rollouts/<thread>/history.json`
+- older `sessions/<thread>.json` files are still readable for compatibility
+- reading legacy history now backfills the canonical history file under the
+  rollout root
+- `ThreadStore::load_thread(...)` now restores history through that explicit
+  history-migration helper instead of reading raw history files directly
+
+This keeps thread restore on a more uniform "read through migration, then stay
+on canonical paths" model instead of mixing one-off file lookups into the
+thread boundary.
+
+## Materialization Checkpoint
+
+`ThreadStore` now has an explicit thread-materialization step instead of doing
+all history + metadata + rollout assembly inline in `load_thread(...)`:
+
+- `load_thread(...)` is now a thin wrapper
+- `materialize_thread_state(...)` is the single place that assembles:
+  - canonicalized history
+  - thread metadata
+  - compaction state
+  - plan/interactions
+  - ordered rollout items
+
+This is still an internal object boundary, not a new persisted format, but it
+gives later thread-lifecycle work a clearer place to add lineage, fork, or
+other thread-scoped materialization rules without bloating the restore entry
+point again.
+
 ## Follow-Up
 
 Still open:
 
-- fully converge old fallback files/tables behind one canonical rollout-item
-  writer;
-- add explicit `ThreadStore` metadata and lineage/fork fields;
+- add richer lineage metadata beyond the minimal `forked_from_thread_id`
+  surface;
 - separate thread lifecycle objects from TUI-specific restore logic further.

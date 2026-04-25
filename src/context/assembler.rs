@@ -82,7 +82,10 @@ impl<'a> ContextAssembler<'a> {
                 inputs.session_id.as_str(),
                 inputs.vdb_uri,
             ),
-            selected_items: retrieval_selected_items(effective_prompt.sources.as_slice(), inputs.history),
+            selected_items: retrieval_selected_items(
+                effective_prompt.sources.as_slice(),
+                inputs.history,
+            ),
         };
         let mut compaction = CompactionContextView::from_compact_state(&inputs.compact_state);
         compaction.source_entries = compaction_source_entries(inputs.history);
@@ -139,8 +142,16 @@ fn retrieval_source_entries(
     } else {
         "missing"
     };
-    let thread_history_status = if history.is_empty() { "empty" } else { "available" };
-    let vector_memory_status = if vdb_uri.is_empty() { "missing" } else { "available" };
+    let thread_history_status = if history.is_empty() {
+        "empty"
+    } else {
+        "available"
+    };
+    let vector_memory_status = if vdb_uri.is_empty() {
+        "missing"
+    } else {
+        "available"
+    };
 
     vec![
         RetrievalSourceContextEntry {
@@ -372,7 +383,10 @@ fn compaction_source_entries(history: &[Message]) -> Vec<CompactionSourceContext
 }
 
 fn summarize_workspace_memory_source(content: &str) -> String {
-    let line_count = content.lines().filter(|line| !line.trim().is_empty()).count();
+    let line_count = content
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .count();
     match line_count {
         0 => "empty".to_string(),
         1 => "1 non-empty line".to_string(),
@@ -432,9 +446,7 @@ fn summarize_compact_boundary(item: &Value) -> String {
         .and_then(Value::as_u64)
         .map(|value| value.to_string())
         .unwrap_or_else(|| "-".to_string());
-    format!(
-        "version={version} before_tokens={before_tokens} recent_files={recent_file_count}"
-    )
+    format!("version={version} before_tokens={before_tokens} recent_files={recent_file_count}")
 }
 
 #[cfg(test)]

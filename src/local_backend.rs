@@ -15,7 +15,7 @@ use serde_json::Value;
 
 use crate::agent::Message;
 use crate::config::RaraConfig;
-use crate::llm::{ContentBlock, LlmBackend, LlmResponse, TokenUsage, hashed_embedding};
+use crate::llm::{hashed_embedding, ContentBlock, LlmBackend, LlmResponse, TokenUsage};
 
 use self::model::{
     build_hf_api, default_local_model_cache_dir as model_cache_dir, load_safetensors,

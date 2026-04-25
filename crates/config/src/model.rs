@@ -184,7 +184,8 @@ impl RaraConfig {
                 Some(DEFAULT_REASONING_SUMMARY),
             ),
             api_key: resolve_provider_value(
-                provider_state.and_then(|state| state.api_key.as_ref().map(SecretString::expose_secret)),
+                provider_state
+                    .and_then(|state| state.api_key.as_ref().map(SecretString::expose_secret)),
                 self.api_key.as_ref().map(SecretString::expose_secret),
                 None,
             ),
@@ -463,7 +464,10 @@ mod tests {
 
         let config = manager.load().expect("load config");
 
-        assert_eq!(config.reasoning_summary.as_deref(), Some(REASONING_SUMMARY_NONE));
+        assert_eq!(
+            config.reasoning_summary.as_deref(),
+            Some(REASONING_SUMMARY_NONE)
+        );
         assert_eq!(
             config.provider_states["codex"].reasoning_summary.as_deref(),
             Some(DEFAULT_REASONING_SUMMARY)

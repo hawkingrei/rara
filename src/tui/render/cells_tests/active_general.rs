@@ -284,8 +284,14 @@ fn active_turn_cell_updated_plan_snapshot() {
     app.snapshot = RuntimeSnapshot {
         plan_steps: vec![
             ("completed".into(), "Inspect the current auth bridge".into()),
-            ("in_progress".into(), "Replace the bespoke OAuth flow".into()),
-            ("pending".into(), "Add snapshot tests for the auth picker".into()),
+            (
+                "in_progress".into(),
+                "Replace the bespoke OAuth flow".into(),
+            ),
+            (
+                "pending".into(),
+                "Add snapshot tests for the auth picker".into(),
+            ),
         ],
         plan_explanation: Some(
             "Prefer direct Codex auth reuse before extending more TUI flows.".into(),
@@ -399,8 +405,7 @@ fn active_turn_cell_uses_planning_sidecar_for_non_structured_plan_output() {
             },
             TranscriptEntry {
                 role: "Planning".into(),
-                message: "The current discovery is hardcoded to root-level markdown files."
-                    .into(),
+                message: "The current discovery is hardcoded to root-level markdown files.".into(),
             },
         ],
     };
@@ -571,9 +576,8 @@ fn active_turn_cell_uses_responding_label_while_busy() {
             },
             TranscriptEntry {
                 role: "Agent".into(),
-                message:
-                    "I have inspected the main module and will continue with the tool layer."
-                        .into(),
+                message: "I have inspected the main module and will continue with the tool layer."
+                    .into(),
             },
         ],
     };

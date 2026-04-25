@@ -2,9 +2,9 @@ mod bottom_pane;
 pub(crate) mod cells;
 mod history_pipeline;
 mod overlay;
-mod viewport;
 #[cfg(test)]
 mod tests;
+mod viewport;
 
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
@@ -139,7 +139,11 @@ fn committed_transcript_lines(app: &TuiApp, width: u16) -> Vec<Line<'static>> {
     lines
 }
 
-fn transcript_scroll_offset(app: &TuiApp, viewport_height: u16, transcript_line_count: usize) -> u16 {
+fn transcript_scroll_offset(
+    app: &TuiApp,
+    viewport_height: u16,
+    transcript_line_count: usize,
+) -> u16 {
     let max_offset = transcript_line_count.saturating_sub(viewport_height as usize);
     let top_offset = max_offset.saturating_sub(app.transcript_scroll);
     top_offset.min(u16::MAX as usize) as u16
@@ -147,7 +151,8 @@ fn transcript_scroll_offset(app: &TuiApp, viewport_height: u16, transcript_line_
 
 fn transcript_visual_row_count(lines: &[Line<'static>], width: u16) -> usize {
     let wrap_width = width.max(1) as usize;
-    lines.iter()
+    lines
+        .iter()
         .map(|line| line.width().max(1).div_ceil(wrap_width))
         .sum()
 }
@@ -222,7 +227,11 @@ pub(crate) fn current_turn_exploration_summary_from_entries(
     if actions.is_empty() {
         return None;
     }
-    Some(compact_summary_lines(actions.as_slice(), 4, "more file(s) inspected"))
+    Some(compact_summary_lines(
+        actions.as_slice(),
+        4,
+        "more file(s) inspected",
+    ))
 }
 
 pub(crate) fn current_turn_tool_summary(
@@ -275,11 +284,7 @@ pub(crate) fn compact_summary_lines(
     lines.join("\n")
 }
 
-pub(crate) fn compact_summary_text(
-    summary: &str,
-    max_visible: usize,
-    more_label: &str,
-) -> String {
+pub(crate) fn compact_summary_text(summary: &str, max_visible: usize, more_label: &str) -> String {
     let items = summary
         .lines()
         .map(str::trim)
@@ -556,7 +561,6 @@ fn tool_action_label(message: &str) -> Option<String> {
         )),
     }
 }
-
 
 pub(crate) fn section_span<'a>(title: &'a str, color: Color) -> Span<'a> {
     Span::styled(

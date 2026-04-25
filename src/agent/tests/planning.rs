@@ -16,7 +16,7 @@ use crate::tool_result::ToolResultStore;
 use crate::vectordb::VectorDB;
 use crate::workspace::WorkspaceMemory;
 
-use super::support::{SequencedBackend, StubTool, test_runtime_storage};
+use super::support::{test_runtime_storage, SequencedBackend, StubTool};
 
 #[tokio::test]
 async fn appends_continuation_after_tool_result() {
@@ -94,7 +94,11 @@ async fn resumes_after_plan_approval_via_structured_continuation() {
     }];
 
     agent
-        .resume_after_plan_approval_with_events(false, super::super::AgentOutputMode::Silent, |_| {})
+        .resume_after_plan_approval_with_events(
+            false,
+            super::super::AgentOutputMode::Silent,
+            |_| {},
+        )
         .await
         .expect("resume should succeed");
 

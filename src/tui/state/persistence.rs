@@ -2,23 +2,30 @@ use std::sync::Arc;
 
 use serde_json::json;
 
-use super::{
-    state_db_status_error, InteractionKind, StateDb, TranscriptTurn, TuiApp,
-};
+use super::{state_db_status_error, InteractionKind, StateDb, TranscriptTurn, TuiApp};
 use crate::state_db::{
     PersistedCompactState, PersistedInteraction, PersistedPlanStep, PersistedPromptRuntimeState,
-    PersistedRuntimeRolloutItem, PersistedStructuredRolloutEvent, PersistedTurnEntry,
+    PersistedStructuredRolloutEvent, PersistedTurnEntry,
 };
 use crate::thread_store::{ThreadRecorder, ThreadRuntimeState, ThreadStore};
 
 impl TuiApp {
-    fn refresh_recent_threads(&mut self) {
+    pub(super) fn refresh_recent_threads(&mut self) {
         let Some(state_db) = self.state_db.as_ref() else {
             self.recent_threads.clear();
             return;
         };
-        self.recent_threads = ThreadStore::list_recent_threads_for_db(state_db, 20)
-            .unwrap_or_default();
+        self.recent_threads =
+            ThreadStore::list_recent_threads_for_db(state_db, 20).unwrap_or_default();
+    }
+
+    pub(super) fn refresh_recent_threads_for_resume_picker(&mut self) {
+        self.refresh_recent_threads();
+        self.resume_picker_idx = self
+            .recent_threads
+            .is_empty()
+            .then_some(0)
+            .unwrap_or_else(|| self.resume_picker_idx.min(self.recent_threads.len() - 1));
     }
 
     pub fn attach_state_db(&mut self, state_db: Arc<StateDb>) {
@@ -172,35 +179,22 @@ impl TuiApp {
             return;
         }
 
-        let mut runtime_rollout = Vec::new();
+        let mut structured_rollout = Vec::new();
         if !plan_steps.is_empty() || self.snapshot.plan_explanation.is_some() {
-            runtime_rollout.push(PersistedRuntimeRolloutItem::PlanState {
+            structured_rollout.push(PersistedStructuredRolloutEvent::PlanState {
                 explanation: self.snapshot.plan_explanation.clone(),
                 steps: plan_steps,
             });
         }
-        runtime_rollout.extend(
+        structured_rollout.extend(
             interactions
                 .iter()
                 .cloned()
-                .map(PersistedRuntimeRolloutItem::Interaction),
+                .map(PersistedStructuredRolloutEvent::Interaction),
         );
-        let structured_rollout = runtime_rollout
-            .iter()
-            .cloned()
-            .map(|item| match item {
-                PersistedRuntimeRolloutItem::PlanState { explanation, steps } => {
-                    PersistedStructuredRolloutEvent::PlanState { explanation, steps }
-                }
-                PersistedRuntimeRolloutItem::Interaction(interaction) => {
-                    PersistedStructuredRolloutEvent::Interaction(interaction)
-                }
-            })
-            .collect::<Vec<_>>();
-        if let Err(err) = recorder.replace_runtime_rollout_events(
-            &self.snapshot.session_id,
-            &structured_rollout,
-        ) {
+        if let Err(err) =
+            recorder.replace_runtime_rollout_events(&self.snapshot.session_id, &structured_rollout)
+        {
             self.state_db_status = Some(state_db_status_error(
                 "structured rollout write failed",
                 err.to_string(),
@@ -209,7 +203,6 @@ impl TuiApp {
         }
 
         let state_db_status = state_db.path().display().to_string();
-        self.refresh_recent_threads();
         self.state_db_status = Some(state_db_status);
     }
 

@@ -8,6 +8,11 @@ use ratatui::{
     widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Tabs, Wrap},
 };
 
+use self::overlay_setup::{
+    render_api_key_editor_modal, render_auth_mode_picker_modal, render_base_url_editor_modal,
+    render_model_name_editor_modal, render_model_picker_modal, render_provider_picker_modal,
+    render_reasoning_effort_picker_modal, render_resume_picker_modal, render_setup_modal,
+};
 use super::super::command::{
     current_turn_preview, download_status_text, general_help_text, matching_commands,
     model_help_text, palette_commands, quick_actions_text, recent_transcript_preview,
@@ -18,11 +23,6 @@ use super::super::custom_terminal::Frame;
 use super::super::interaction_text::status_active_pending_interaction_text;
 use super::super::plan_display::status_plan_text;
 use super::super::state::{CommandSpec, HelpTab, Overlay, TuiApp};
-use self::overlay_setup::{
-    render_api_key_editor_modal, render_auth_mode_picker_modal, render_base_url_editor_modal,
-    render_model_name_editor_modal, render_model_picker_modal, render_provider_picker_modal,
-    render_reasoning_effort_picker_modal, render_resume_picker_modal, render_setup_modal,
-};
 
 pub(super) fn render_overlay(
     f: &mut Frame,
@@ -155,10 +155,7 @@ fn render_help_modal(f: &mut Frame, app: &TuiApp, area: Rect, tab: HelpTab) {
                 List::new(items)
                     .highlight_style(command_list_highlight_style())
                     .highlight_symbol("› ")
-                    .block(
-                        Block::default()
-                            .borders(Borders::LEFT | Borders::RIGHT)
-                    ),
+                    .block(Block::default().borders(Borders::LEFT | Borders::RIGHT)),
                 chunks[1],
                 &mut state,
             );
@@ -182,37 +179,28 @@ fn render_help_modal(f: &mut Frame, app: &TuiApp, area: Rect, tab: HelpTab) {
                 .split(inner[1]);
             f.render_widget(
                 Paragraph::new(panel_text("runtime", &status_runtime_text(app)))
-                    .block(
-                        Block::default()
-                            .borders(Borders::LEFT | Borders::RIGHT)
-                    )
+                    .block(Block::default().borders(Borders::LEFT | Borders::RIGHT))
                     .wrap(Wrap { trim: false }),
                 left[0],
             );
             f.render_widget(
                 Paragraph::new(panel_text("workspace", &status_workspace_text(app)))
-                    .block(
-                        Block::default()
-                            .borders(Borders::LEFT | Borders::RIGHT)
-                    )
+                    .block(Block::default().borders(Borders::LEFT | Borders::RIGHT))
                     .wrap(Wrap { trim: false }),
                 left[1],
             );
             f.render_widget(
-                Paragraph::new(panel_text("prompt sources", &status_prompt_sources_text(app)))
-                    .block(
-                        Block::default()
-                            .borders(Borders::LEFT | Borders::RIGHT)
-                    )
-                    .wrap(Wrap { trim: false }),
+                Paragraph::new(panel_text(
+                    "prompt sources",
+                    &status_prompt_sources_text(app),
+                ))
+                .block(Block::default().borders(Borders::LEFT | Borders::RIGHT))
+                .wrap(Wrap { trim: false }),
                 left[2],
             );
             f.render_widget(
                 Paragraph::new(panel_text("resources", &status_resources_text(app)))
-                    .block(
-                        Block::default()
-                            .borders(Borders::RIGHT)
-                    )
+                    .block(Block::default().borders(Borders::RIGHT))
                     .wrap(Wrap { trim: false }),
                 right[0],
             );
@@ -225,20 +213,15 @@ fn render_help_modal(f: &mut Frame, app: &TuiApp, area: Rect, tab: HelpTab) {
                         recent_transcript_preview(app, 4)
                     ),
                 ))
-                .block(
-                    Block::default()
-                        .borders(Borders::RIGHT)
-                )
+                .block(Block::default().borders(Borders::RIGHT))
                 .wrap(Wrap { trim: false }),
                 right[1],
             );
         }
     }
     f.render_widget(
-        Paragraph::new(
-            "Esc close  1 general  2 commands  3 runtime  / open slash menu",
-        )
-        .alignment(Alignment::Center),
+        Paragraph::new("Esc close  1 general  2 commands  3 runtime  / open slash menu")
+            .alignment(Alignment::Center),
         chunks[2],
     );
 }
@@ -263,8 +246,7 @@ fn render_command_palette(f: &mut Frame, app: &TuiApp, area: Rect) {
         &mut state,
     );
     f.render_widget(
-        Paragraph::new(command_palette_footer_text(query))
-        .alignment(Alignment::Left),
+        Paragraph::new(command_palette_footer_text(query)).alignment(Alignment::Left),
         chunks[1],
     );
 }
@@ -335,8 +317,8 @@ fn help_selected_tab_style() -> Style {
 
 #[cfg(test)]
 mod tests {
-    use ratatui::{buffer::Buffer, layout::Rect};
     use ratatui::widgets::StatefulWidget;
+    use ratatui::{buffer::Buffer, layout::Rect};
     use tempfile::tempdir;
 
     use super::*;
@@ -387,7 +369,10 @@ mod tests {
 
     #[test]
     fn panel_text_prefixes_body_with_lightweight_heading() {
-        assert_eq!(panel_text("runtime", "provider=codex"), "runtime\n\nprovider=codex");
+        assert_eq!(
+            panel_text("runtime", "provider=codex"),
+            "runtime\n\nprovider=codex"
+        );
     }
 
     #[test]
@@ -451,9 +436,12 @@ fn render_status_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
         top[2],
     );
     f.render_widget(
-        Paragraph::new(panel_text("prompt sources", &status_prompt_sources_text(app)))
-            .block(Block::default().borders(Borders::LEFT | Borders::RIGHT))
-            .wrap(Wrap { trim: false }),
+        Paragraph::new(panel_text(
+            "prompt sources",
+            &status_prompt_sources_text(app),
+        ))
+        .block(Block::default().borders(Borders::LEFT | Borders::RIGHT))
+        .wrap(Wrap { trim: false }),
         chunks[1],
     );
     let right_panel = download_status_text(app).unwrap_or_else(|| quick_actions_text().to_string());
@@ -495,14 +483,16 @@ fn render_status_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
         lower[1],
     );
     f.render_widget(
-        Paragraph::new(panel_text("recent activity", &recent_transcript_preview(app, 8)))
-            .block(Block::default().borders(Borders::LEFT | Borders::RIGHT))
-            .wrap(Wrap { trim: false }),
+        Paragraph::new(panel_text(
+            "recent activity",
+            &recent_transcript_preview(app, 8),
+        ))
+        .block(Block::default().borders(Borders::LEFT | Borders::RIGHT))
+        .wrap(Wrap { trim: false }),
         chunks[4],
     );
     f.render_widget(
-        Paragraph::new("esc close  enter close  /help  /model")
-            .alignment(Alignment::Center),
+        Paragraph::new("esc close  enter close  /help  /model").alignment(Alignment::Center),
         chunks[5],
     );
 }
@@ -520,12 +510,10 @@ fn render_context_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
         chunks[0],
     );
     f.render_widget(
-        Paragraph::new("esc close  /status")
-            .alignment(Alignment::Center),
+        Paragraph::new("esc close  /status").alignment(Alignment::Center),
         chunks[1],
     );
 }
-
 
 fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
     let vertical = Layout::default()

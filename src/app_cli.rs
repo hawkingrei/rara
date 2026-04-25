@@ -41,6 +41,10 @@ enum Commands {
     Ask {
         prompt: String,
     },
+    Fork {
+        #[arg(value_name = "THREAD_ID")]
+        thread_id: String,
+    },
     Thread {
         #[arg(value_name = "THREAD_ID")]
         thread_id: String,
@@ -76,34 +80,41 @@ pub(crate) async fn run_cli() -> Result<()> {
     match command.unwrap_or(Commands::Tui) {
         Commands::Acp => run_acp_command(&config).await?,
         Commands::Ask { prompt } => run_ask_command(&config, prompt).await?,
+        Commands::Fork { thread_id } => thread_cli::run_fork_command(&thread_id)?,
         Commands::Thread { thread_id } => thread_cli::run_thread_command(&thread_id)?,
         Commands::Threads { limit } => thread_cli::run_threads_command(limit)?,
-        Commands::Resume { thread_id, last } => run_tui_command(
-            &config,
-            oauth_manager,
-            startup_resume_target_for_command(&Commands::Resume { thread_id, last })
-                .expect("resume command should always map to a startup target"),
-        )
-        .await?,
+        Commands::Resume { thread_id, last } => {
+            run_tui_command(
+                &config,
+                oauth_manager,
+                startup_resume_target_for_command(&Commands::Resume { thread_id, last })
+                    .expect("resume command should always map to a startup target"),
+            )
+            .await?
+        }
         Commands::Login {
             device_auth,
             with_api_key,
-        } => run_login_command(
-            &mut config,
-            &config_manager,
-            &oauth_manager,
-            device_auth,
-            with_api_key,
-        )
-        .await?,
+        } => {
+            run_login_command(
+                &mut config,
+                &config_manager,
+                &oauth_manager,
+                device_auth,
+                with_api_key,
+            )
+            .await?
+        }
         Commands::Logout => run_logout_command(&mut config, &config_manager, &oauth_manager)?,
-        Commands::Tui => run_tui_command(
-            &config,
-            oauth_manager,
-            startup_resume_target_for_command(&Commands::Tui)
-                .expect("tui command should always map to a startup target"),
-        )
-        .await?,
+        Commands::Tui => {
+            run_tui_command(
+                &config,
+                oauth_manager,
+                startup_resume_target_for_command(&Commands::Tui)
+                    .expect("tui command should always map to a startup target"),
+            )
+            .await?
+        }
     }
     Ok(())
 }
@@ -177,6 +188,7 @@ fn startup_resume_target_for_command(command: &Commands) -> Option<StartupResume
         Commands::Tui => Some(StartupResumeTarget::Fresh),
         Commands::Acp
         | Commands::Ask { .. }
+        | Commands::Fork { .. }
         | Commands::Thread { .. }
         | Commands::Threads { .. }
         | Commands::Login { .. }
@@ -196,8 +208,8 @@ async fn run_login_command(
     }
     if with_api_key {
         let oauth_reader = oauth_manager.clone();
-        let api_key = tokio::task::spawn_blocking(move || oauth_reader.read_api_key_from_stdin())
-            .await??;
+        let api_key =
+            tokio::task::spawn_blocking(move || oauth_reader.read_api_key_from_stdin()).await??;
         let credential = oauth_manager.save_api_key(api_key.expose_secret())?;
         save_codex_credential(
             config,
@@ -325,6 +337,17 @@ mod tests {
             Commands::Resume { thread_id, last } => {
                 assert_eq!(thread_id, None);
                 assert!(last);
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn clap_parses_fork_command() {
+        let cli = Cli::try_parse_from(["rara", "fork", "thread-123"]).expect("parse fork");
+        match cli.command.expect("command") {
+            Commands::Fork { thread_id } => {
+                assert_eq!(thread_id, "thread-123");
             }
             other => panic!("unexpected command: {other:?}"),
         }

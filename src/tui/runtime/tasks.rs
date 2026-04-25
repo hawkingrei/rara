@@ -43,7 +43,8 @@ fn merge_rebuilt_agent(mut rebuilt: Agent, previous: Agent) -> Agent {
     rebuilt.pending_approval = previous.pending_approval;
     rebuilt.completed_user_input = previous.completed_user_input;
     rebuilt.completed_approval = previous.completed_approval;
-    rebuilt.compact_state.estimated_history_tokens = previous.compact_state.estimated_history_tokens;
+    rebuilt.compact_state.estimated_history_tokens =
+        previous.compact_state.estimated_history_tokens;
     rebuilt.compact_state.compaction_count = previous.compact_state.compaction_count;
     rebuilt.compact_state.last_compaction_before_tokens =
         previous.compact_state.last_compaction_before_tokens;

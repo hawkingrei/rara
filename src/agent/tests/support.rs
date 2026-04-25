@@ -139,9 +139,7 @@ impl LlmBackend for SequencedBackend {
     }
 }
 
-pub(super) fn empty_agent(
-    backend: Arc<dyn LlmBackend>,
-) -> crate::agent::Agent {
+pub(super) fn empty_agent(backend: Arc<dyn LlmBackend>) -> crate::agent::Agent {
     crate::agent::Agent::new(
         ToolManager::new(),
         backend,

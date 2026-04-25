@@ -64,13 +64,13 @@ pub(super) fn restore_thread_by_id(
     }
     apply_compaction_record(agent, &compaction);
     agent.compact_state.last_compaction_boundary = match compaction.boundary_version {
-            Some(version) => Some(CompactBoundaryMetadata {
-                version,
-                before_tokens: compaction.before_tokens.unwrap_or_default(),
-                recent_file_count: compaction.recent_file_count.unwrap_or_default(),
-            }),
-            None => latest_compact_boundary_metadata(&agent.history),
-        };
+        Some(version) => Some(CompactBoundaryMetadata {
+            version,
+            before_tokens: compaction.before_tokens.unwrap_or_default(),
+            recent_file_count: compaction.recent_file_count.unwrap_or_default(),
+        }),
+        None => latest_compact_boundary_metadata(&agent.history),
+    };
     if !plan_steps.is_empty() {
         agent.current_plan = plan_steps
             .into_iter()
@@ -267,7 +267,9 @@ mod tests {
         let mut original_agent = Agent::new(
             ToolManager::new(),
             backend.clone(),
-            Arc::new(VectorDB::new(&rara_dir.join("lancedb").display().to_string())),
+            Arc::new(VectorDB::new(
+                &rara_dir.join("lancedb").display().to_string(),
+            )),
             session_manager.clone(),
             workspace.clone(),
         );
@@ -313,7 +315,9 @@ mod tests {
         let restored_agent = Agent::new(
             ToolManager::new(),
             backend,
-            Arc::new(VectorDB::new(&rara_dir.join("lancedb").display().to_string())),
+            Arc::new(VectorDB::new(
+                &rara_dir.join("lancedb").display().to_string(),
+            )),
             session_manager,
             workspace,
         );
@@ -338,16 +342,31 @@ mod tests {
         assert_eq!(restored_runtime.branch, expected_runtime.branch);
         assert_eq!(restored_runtime.session_id, expected_runtime.session_id);
         assert_eq!(restored_runtime.history_len, expected_runtime.history_len);
-        assert_eq!(restored_runtime.prompt.base_prompt_kind, expected_runtime.prompt.base_prompt_kind);
-        assert_eq!(restored_runtime.prompt.section_keys, expected_runtime.prompt.section_keys);
-        assert_eq!(restored_runtime.prompt.source_entries, expected_runtime.prompt.source_entries);
+        assert_eq!(
+            restored_runtime.prompt.base_prompt_kind,
+            expected_runtime.prompt.base_prompt_kind
+        );
+        assert_eq!(
+            restored_runtime.prompt.section_keys,
+            expected_runtime.prompt.section_keys
+        );
+        assert_eq!(
+            restored_runtime.prompt.source_entries,
+            expected_runtime.prompt.source_entries
+        );
         assert_eq!(
             restored_runtime.prompt.append_system_prompt,
             expected_runtime.prompt.append_system_prompt
         );
-        assert_eq!(restored_runtime.prompt.warnings, expected_runtime.prompt.warnings);
+        assert_eq!(
+            restored_runtime.prompt.warnings,
+            expected_runtime.prompt.warnings
+        );
         assert_eq!(restored_runtime.plan.steps, expected_runtime.plan.steps);
-        assert_eq!(restored_runtime.plan.explanation, expected_runtime.plan.explanation);
+        assert_eq!(
+            restored_runtime.plan.explanation,
+            expected_runtime.plan.explanation
+        );
         assert_eq!(
             restored_runtime.compaction.last_compaction_boundary_version,
             expected_runtime.compaction.last_compaction_boundary_version
@@ -361,7 +380,10 @@ mod tests {
             restored_app.snapshot.prompt_append_system_prompt,
             restored_runtime.prompt.append_system_prompt
         );
-        assert_eq!(restored_app.snapshot.plan_steps, restored_runtime.plan.steps);
+        assert_eq!(
+            restored_app.snapshot.plan_steps,
+            restored_runtime.plan.steps
+        );
         assert_eq!(
             restored_app.snapshot.plan_explanation,
             restored_runtime.plan.explanation
@@ -392,7 +414,9 @@ mod tests {
         let mut original_agent = Agent::new(
             ToolManager::new(),
             backend.clone(),
-            Arc::new(VectorDB::new(&rara_dir.join("lancedb").display().to_string())),
+            Arc::new(VectorDB::new(
+                &rara_dir.join("lancedb").display().to_string(),
+            )),
             session_manager.clone(),
             workspace.clone(),
         );
@@ -420,7 +444,9 @@ mod tests {
         let restored_agent = Agent::new(
             ToolManager::new(),
             backend,
-            Arc::new(VectorDB::new(&rara_dir.join("lancedb").display().to_string())),
+            Arc::new(VectorDB::new(
+                &rara_dir.join("lancedb").display().to_string(),
+            )),
             session_manager,
             workspace,
         );

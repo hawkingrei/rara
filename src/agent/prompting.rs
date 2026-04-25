@@ -3,10 +3,11 @@ use crate::context::{AssembledContext, ContextAssembler, RuntimeContextInputs};
 
 impl Agent {
     pub fn assemble_context(&self) -> AssembledContext {
-        self.context_assembler().assemble(match self.execution_mode {
-            AgentExecutionMode::Execute => PromptMode::Execute,
-            AgentExecutionMode::Plan => PromptMode::Plan,
-        })
+        self.context_assembler()
+            .assemble(match self.execution_mode {
+                AgentExecutionMode::Execute => PromptMode::Execute,
+                AgentExecutionMode::Plan => PromptMode::Plan,
+            })
     }
 
     pub(super) fn context_assembler(&self) -> ContextAssembler<'_> {

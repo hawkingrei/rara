@@ -8,9 +8,7 @@ use tokio::sync::mpsc;
 
 use crate::codex_model_catalog::{CodexModelOption, CodexReasoningOption};
 use crate::config::ConfigManager;
-use crate::config::{
-    DEFAULT_CODEX_BASE_URL, DEFAULT_CODEX_CHATGPT_BASE_URL, DEFAULT_CODEX_MODEL,
-};
+use crate::config::{DEFAULT_CODEX_BASE_URL, DEFAULT_CODEX_CHATGPT_BASE_URL, DEFAULT_CODEX_MODEL};
 
 use super::app_event::AppEvent;
 use super::provider_flow::{

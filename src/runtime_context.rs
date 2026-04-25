@@ -4,9 +4,10 @@ use std::sync::Arc;
 
 use anyhow::{bail, Context, Result};
 
+use self::tooling::{create_full_tool_manager, load_skill_manager, vector_db_uri_for_workspace};
 use crate::agent::Agent;
 use crate::config::{
-    DEFAULT_CODEX_BASE_URL, DEFAULT_CODEX_MODEL, RaraConfig, REASONING_SUMMARY_NONE,
+    RaraConfig, DEFAULT_CODEX_BASE_URL, DEFAULT_CODEX_MODEL, REASONING_SUMMARY_NONE,
 };
 use crate::llm::{
     CodexBackend, GeminiBackend, LlmBackend, MockLlm, OllamaBackend, OpenAiCompatibleBackend,
@@ -18,9 +19,6 @@ use crate::session::SessionManager;
 use crate::tool::ToolManager;
 use crate::vectordb::VectorDB;
 use crate::workspace::WorkspaceMemory;
-use self::tooling::{
-    create_full_tool_manager, load_skill_manager, vector_db_uri_for_workspace,
-};
 
 pub(crate) struct RuntimeBootstrap {
     pub backend: Arc<dyn LlmBackend>,
@@ -205,7 +203,11 @@ mod tests {
 
         assert_eq!(
             vector_db_uri_for_workspace(&workspace),
-            temp.path().join(".rara").join("lancedb").display().to_string()
+            temp.path()
+                .join(".rara")
+                .join("lancedb")
+                .display()
+                .to_string()
         );
     }
 
@@ -221,12 +223,10 @@ mod tests {
             .await
             .expect("bootstrap");
 
-        assert!(
-            bootstrap
-                .warnings
-                .iter()
-                .any(|warning| warning.contains("system prompt"))
-        );
+        assert!(bootstrap
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("system prompt")));
     }
 
     #[tokio::test]
@@ -259,7 +259,9 @@ mod tests {
             Err(err) => err,
         };
 
-        assert!(err.to_string().contains("Model required for Ollama provider"));
+        assert!(err
+            .to_string()
+            .contains("Model required for Ollama provider"));
     }
 
     #[tokio::test]

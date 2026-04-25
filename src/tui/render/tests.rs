@@ -7,13 +7,12 @@ use crate::config::ConfigManager;
 use crate::tui::state::{Overlay, TranscriptEntry, TranscriptTurn, TuiApp};
 
 use super::cells::HistoryCell;
+use super::viewport::TranscriptViewport;
 use super::{
     committed_turn_cell, compact_summary_text, current_turn_exploration_summary_from_entries,
     current_turn_tool_summary, desired_viewport_height, renderable_transcript_lines,
-    transcript_scroll_offset, transcript_viewport,
-    transcript_visual_row_count,
+    transcript_scroll_offset, transcript_viewport, transcript_visual_row_count,
 };
-use super::viewport::TranscriptViewport;
 
 #[test]
 fn committed_turn_does_not_truncate_agent_response() {
@@ -178,7 +177,10 @@ fn transcript_scroll_offset_uses_wrapped_visual_height() {
 
     let visual_rows = transcript_visual_row_count(&lines, 12);
     assert!(visual_rows > lines.len());
-    assert_eq!(transcript_scroll_offset(&app, 3, visual_rows), visual_rows as u16 - 3);
+    assert_eq!(
+        transcript_scroll_offset(&app, 3, visual_rows),
+        visual_rows as u16 - 3
+    );
 }
 
 #[test]
@@ -362,9 +364,8 @@ fn exploration_summary_only_keeps_read_actions() {
     ];
     let refs = entries.iter().collect::<Vec<_>>();
 
-    let rendered =
-        current_turn_exploration_summary_from_entries(refs.as_slice(), false, None)
-            .expect("exploration summary");
+    let rendered = current_turn_exploration_summary_from_entries(refs.as_slice(), false, None)
+        .expect("exploration summary");
     assert!(rendered.contains("Read src/main.rs"));
     assert!(!rendered.contains("List ."));
     assert!(!rendered.contains("Glob src/**/*.rs"));
@@ -382,9 +383,8 @@ fn exploration_summary_compacts_long_read_lists() {
         .collect::<Vec<_>>();
     let refs = entries.iter().collect::<Vec<_>>();
 
-    let rendered =
-        current_turn_exploration_summary_from_entries(refs.as_slice(), false, None)
-            .expect("exploration summary");
+    let rendered = current_turn_exploration_summary_from_entries(refs.as_slice(), false, None)
+        .expect("exploration summary");
     assert!(rendered.contains("... 2 more file(s) inspected"));
     assert!(!rendered.contains("module_1.rs"));
     assert!(!rendered.contains("module_2.rs"));

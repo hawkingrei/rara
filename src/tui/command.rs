@@ -383,11 +383,7 @@ pub fn status_context_text(app: &TuiApp) -> String {
             .map(|entry| {
                 format!(
                     "  {}. {} ({})\n     detail: {}\n     why: {}",
-                    entry.order,
-                    entry.label,
-                    entry.kind,
-                    entry.detail,
-                    entry.inclusion_reason
+                    entry.order, entry.label, entry.kind, entry.detail, entry.inclusion_reason
                 )
             })
             .collect::<Vec<_>>()
@@ -422,11 +418,7 @@ pub fn status_context_text(app: &TuiApp) -> String {
             .map(|entry| {
                 format!(
                     "  {}. {} ({})\n     detail: {}\n     why: {}",
-                    entry.order,
-                    entry.label,
-                    entry.kind,
-                    entry.detail,
-                    entry.inclusion_reason
+                    entry.order, entry.label, entry.kind, entry.detail, entry.inclusion_reason
                 )
             })
             .collect::<Vec<_>>()
@@ -1240,8 +1232,9 @@ mod tests {
         .expect("app");
 
         app.config.set_provider("codex");
-        app.config
-            .set_base_url(Some(rara_config::DEFAULT_CODEX_CHATGPT_BASE_URL.to_string()));
+        app.config.set_base_url(Some(
+            rara_config::DEFAULT_CODEX_CHATGPT_BASE_URL.to_string(),
+        ));
         app.config
             .set_model(Some(rara_config::DEFAULT_CODEX_MODEL.to_string()));
         app.codex_auth_mode = Some(crate::oauth::SavedCodexAuthMode::Chatgpt);

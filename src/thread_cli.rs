@@ -24,6 +24,17 @@ pub(crate) fn run_thread_command(thread_id: &str) -> Result<()> {
     Ok(())
 }
 
+pub(crate) fn run_fork_command(thread_id: &str) -> Result<()> {
+    let session_manager = SessionManager::new()?;
+    let state_db = StateDb::new()?;
+    let store = ThreadStore::new(&session_manager, &state_db);
+    let forked_thread_id = store.fork_thread(thread_id)?;
+    print!(
+        "Forked thread {thread_id} -> {forked_thread_id}\nUse `rara resume {forked_thread_id}` to continue the forked thread.\n"
+    );
+    Ok(())
+}
+
 fn format_recent_threads(threads: &[ThreadSummary], limit: usize) -> String {
     if threads.is_empty() {
         return "No persisted threads found.\n".to_string();
@@ -50,16 +61,18 @@ fn format_thread_summary_lines(thread: &ThreadSummary) -> Vec<String> {
     };
     vec![
         format!(
-            "{}  {} / {}  branch={}  mode={}",
+            "{}  {} / {}  branch={}  mode={}  origin={}",
             thread.metadata.session_id,
             thread.metadata.provider,
             thread.metadata.model,
             thread.metadata.branch,
-            thread.metadata.agent_mode
+            thread.metadata.agent_mode,
+            thread.metadata.origin_kind
         ),
         format!(
-            "  workspace={}  updated_at={}  history={}  transcript={}  compact={}",
+            "  workspace={}  created_at={}  updated_at={}  history={}  transcript={}  compact={}",
             workspace,
+            thread.metadata.created_at,
             thread.metadata.updated_at,
             thread.metadata.history_len,
             thread.metadata.transcript_len,
@@ -94,6 +107,9 @@ fn format_thread_snapshot(thread: &ThreadSnapshot) -> String {
             "workspace={}\n",
             "mode={}\n",
             "approval={}\n",
+            "origin={}\n",
+            "forked_from={}\n",
+            "created_at={}\n",
             "updated_at={}\n",
             "history_messages={}\n",
             "transcript_entries={}\n",
@@ -114,6 +130,13 @@ fn format_thread_snapshot(thread: &ThreadSnapshot) -> String {
         workspace,
         thread.metadata.agent_mode,
         thread.metadata.bash_approval,
+        thread.metadata.origin_kind,
+        thread
+            .metadata
+            .forked_from_thread_id
+            .as_deref()
+            .unwrap_or("-"),
+        thread.metadata.created_at,
         thread.metadata.updated_at,
         thread.history.len(),
         thread.metadata.transcript_len,
@@ -166,6 +189,9 @@ mod tests {
             base_url: Some("https://chatgpt.com/backend-api/codex".to_string()),
             agent_mode: "build".to_string(),
             bash_approval: "on-request".to_string(),
+            created_at: 1_713_955_100,
+            origin_kind: "fresh".to_string(),
+            forked_from_thread_id: None,
             history_len: 7,
             transcript_len: 4,
             updated_at: 1_713_955_200,
@@ -188,6 +214,7 @@ mod tests {
 
         assert!(output.contains("Recent threads"));
         assert!(output.contains("thread-123  codex / gpt-5"));
+        assert!(output.contains("origin=fresh"));
         assert!(output.contains("workspace=rara"));
         assert!(output.contains("Use `rara thread <THREAD_ID>`"));
         assert!(output.contains("Use `rara resume <THREAD_ID>`"));
@@ -228,6 +255,8 @@ mod tests {
 
         assert!(output.contains("Thread thread-123"));
         assert!(output.contains("provider=codex"));
+        assert!(output.contains("origin=fresh"));
+        assert!(output.contains("forked_from=-"));
         assert!(output.contains("workspace=rara"));
         assert!(output.contains("interactions=1"));
         assert!(output.contains("compactions=3"));

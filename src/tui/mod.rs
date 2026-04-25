@@ -172,12 +172,9 @@ pub async fn run_tui(
         .as_ref()
         .map(|agent| agent.session_id.clone())
         .filter(|session_id| !session_id.is_empty())
-        .or_else(|| {
-            (!app.snapshot.session_id.is_empty()).then(|| app.snapshot.session_id.clone())
-        });
+        .or_else(|| (!app.snapshot.session_id.is_empty()).then(|| app.snapshot.session_id.clone()));
     Ok(session_id)
 }
-
 
 async fn dispatch_event(
     event: AppEvent,

@@ -6,12 +6,12 @@ use ratatui::{
 };
 use std::path::Path;
 
+use super::Frame;
 use crate::tui::auth_mode_picker::build_auth_mode_picker_view;
 use crate::tui::command::api_key_status;
 use crate::tui::is_ssh_session;
 use crate::tui::render::bottom_pane::editor_cursor_position;
 use crate::tui::state::{current_model_presets, ProviderFamily, TuiApp, PROVIDER_FAMILIES};
-use super::Frame;
 
 pub(super) fn render_setup_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
     let preset_lines = if app.selected_provider_family() == ProviderFamily::Codex {

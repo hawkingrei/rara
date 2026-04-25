@@ -82,8 +82,7 @@ Priority order for this phase:
 ## Memory / Retrieval / Persistence
 
 - [ ] Extend the new local `ThreadStore` / `ThreadRecorder` boundary from a façade over `SessionManager` + `StateDb` into a true structured thread store with explicit thread metadata and rollout-item ownership.
-- [ ] Complete the thread lifecycle surface around the new thread boundary: stable `threads`/`thread`/`resume --last` flows now exist, but `fork`, richer lineage metadata, and a clearer `latest thread` contract still need to land.
-- [ ] Unify remaining thread/session naming in persistence internals (`latest_session_id`, legacy summaries, fallback files) so thread continuity is not expressed through stale session-shaped APIs.
+- [ ] Complete the thread lifecycle surface around the new thread boundary: stable `threads`/`thread`/`resume --last`/`fork` flows now exist, but richer lineage metadata and a clearer `latest thread` contract still need to land.
 - [ ] Make compaction a first-class runtime event with persisted summaries, token counters, and boundary metadata.
 - [ ] Define thread-scoped and workspace-scoped `MemoryRecord` storage plus promotion rules so durable findings are not mixed with transient turn context.
 - [ ] Replace the current placeholder retrieval path with real vector retrieval over Lance/LanceDB, including metadata-aware ranking for thread and workspace memory selection.

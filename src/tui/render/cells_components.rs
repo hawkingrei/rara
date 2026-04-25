@@ -5,14 +5,16 @@ use ratatui::{
     text::{Line, Span},
 };
 
-use crate::tui::interaction_text::{pending_interaction_card_title, status_planning_suggestion_text};
+use crate::tui::interaction_text::{
+    pending_interaction_card_title, status_planning_suggestion_text,
+};
 use crate::tui::plan_display::updated_plan_lines;
-use crate::tui::state::{ActivePendingInteractionKind, TuiApp};
 use crate::tui::render::{
     display_width, formatted_message_lines, prefixed_message_lines, rendered_markdown_lines,
     section_span, startup_card_inner_width, truncate_for_startup_card, truncate_path_middle,
     with_border,
 };
+use crate::tui::state::{ActivePendingInteractionKind, TuiApp};
 
 use super::{HistoryCell, InteractionCompletionKind};
 
@@ -250,10 +252,7 @@ impl PlanningSuggestionCell {
 
 impl HistoryCell for PlanningSuggestionCell {
     fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
-        let mut lines = vec![Line::from(section_span(
-            "Planning Suggested",
-            Color::Cyan,
-        ))];
+        let mut lines = vec![Line::from(section_span("Planning Suggested", Color::Cyan))];
         lines.extend(
             self.text
                 .lines()
@@ -521,8 +520,7 @@ impl HistoryCell for StartupCardCell {
             .saturating_sub(hint_width)
             .max(1);
         let directory_prefix = format!("{directory_label:<label_width$} ");
-        let directory_max_width =
-            inner_width.saturating_sub(display_width(&directory_prefix));
+        let directory_max_width = inner_width.saturating_sub(display_width(&directory_prefix));
 
         let lines = vec![
             Line::from(vec![Span::from(">_ "), Span::from("RARA")]),
