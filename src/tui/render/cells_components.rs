@@ -324,7 +324,14 @@ pub(super) struct RespondingCell<'a> {
 }
 
 enum RespondingCellContent<'a> {
-    Stream(&'a [Line<'static>]),
+    Stream {
+        lines: &'a [Line<'static>],
+        max_lines: usize,
+    },
+    CompactMessage {
+        message: String,
+        max_lines: usize,
+    },
     Message {
         role: &'static str,
         message: &'a str,
@@ -342,7 +349,19 @@ enum RespondingCellContent<'a> {
 impl<'a> RespondingCell<'a> {
     pub(super) fn from_stream(stream_lines: &'a [Line<'static>]) -> Self {
         Self {
-            content: RespondingCellContent::Stream(stream_lines),
+            content: RespondingCellContent::Stream {
+                lines: stream_lines,
+                max_lines: usize::MAX,
+            },
+        }
+    }
+
+    pub(super) fn from_stream_compact(stream_lines: &'a [Line<'static>], max_lines: usize) -> Self {
+        Self {
+            content: RespondingCellContent::Stream {
+                lines: stream_lines,
+                max_lines,
+            },
         }
     }
 
@@ -359,6 +378,12 @@ impl<'a> RespondingCell<'a> {
                 max_lines,
                 cwd,
             },
+        }
+    }
+
+    pub(super) fn from_compact_message(message: String, max_lines: usize) -> Self {
+        Self {
+            content: RespondingCellContent::CompactMessage { message, max_lines },
         }
     }
 
@@ -382,9 +407,9 @@ impl<'a> RespondingCell<'a> {
 impl HistoryCell for RespondingCell<'_> {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
         match &self.content {
-            RespondingCellContent::Stream(stream_lines) => responding_card_lines(
+            RespondingCellContent::Stream { lines, max_lines } => responding_card_lines(
                 "Responding",
-                markdown_body_lines(stream_lines, usize::MAX),
+                markdown_body_lines(lines, *max_lines),
                 width,
             ),
             RespondingCellContent::Message {
@@ -397,6 +422,9 @@ impl HistoryCell for RespondingCell<'_> {
                 formatted_message_lines("Agent", message, *max_lines, *cwd),
                 width,
             ),
+            RespondingCellContent::CompactMessage { message, max_lines } => {
+                compact_message_lines(message, *max_lines)
+            }
             RespondingCellContent::Message {
                 role,
                 message,
@@ -413,6 +441,34 @@ impl HistoryCell for RespondingCell<'_> {
             }
         }
     }
+}
+
+fn compact_message_lines(message: &str, max_lines: usize) -> Vec<Line<'static>> {
+    let message_lines = message.lines().collect::<Vec<_>>();
+    if message_lines.is_empty() {
+        return vec![Line::from("•")];
+    }
+
+    let capped = if max_lines == usize::MAX {
+        message_lines.len()
+    } else {
+        max_lines.min(message_lines.len())
+    };
+
+    let mut lines = message_lines
+        .iter()
+        .take(capped)
+        .map(|line| Line::from(format!("• {line}")))
+        .collect::<Vec<_>>();
+
+    if message_lines.len() > capped {
+        lines.push(Line::from(Span::styled(
+            format!("  ... {} more line(s)", message_lines.len() - capped),
+            Style::default().fg(Color::DarkGray),
+        )));
+    }
+
+    lines
 }
 
 fn markdown_body_lines(rendered: &[Line<'static>], max_lines: usize) -> Vec<Line<'static>> {
