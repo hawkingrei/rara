@@ -278,9 +278,7 @@ async fn dispatch_event(
                 return Ok(false);
             }
             app.model_picker_idx = idx.min(len - 1);
-            if matches!(app.overlay, Some(Overlay::Setup)) {
-                app.select_local_model(app.model_picker_idx);
-            } else if matches!(app.overlay, Some(Overlay::ModelPicker))
+            if matches!(app.overlay, Some(Overlay::ModelPicker))
                 && app.selected_provider_family() != self::state::ProviderFamily::Codex
                 && !app.is_busy()
             {
@@ -526,13 +524,6 @@ async fn dispatch_event(
                 } else {
                     app.select_local_model(app.model_picker_idx);
                     app.apply_selected_codex_reasoning_effort();
-                    start_rebuild_task(app);
-                }
-            }
-            Some(Overlay::Setup) => {
-                if app.is_busy() {
-                    app.push_notice("A task is already running. Wait for it to finish.");
-                } else {
                     start_rebuild_task(app);
                 }
             }

@@ -154,6 +154,36 @@ fn auth_mode_picker_prefers_selection_navigation() {
 }
 
 #[test]
+fn plain_input_does_not_treat_s_as_setup_shortcut() {
+    let temp = tempdir().expect("tempdir");
+    let mut app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("app");
+    app.input = "先同步ma".into();
+
+    assert!(matches!(
+        map_key_to_event(KeyCode::Char('s'), &app),
+        AppEvent::InputChar('s')
+    ));
+}
+
+#[test]
+fn app_starts_in_api_key_editor_for_hosted_provider_without_api_key() {
+    let temp = tempdir().expect("tempdir");
+    let cm = ConfigManager {
+        path: temp.path().join("config.json"),
+    };
+    let mut config = cm.load().expect("load config");
+    config.set_provider("openai-compatible");
+    config.clear_api_key();
+    cm.save(&config).expect("save config");
+
+    let app = TuiApp::new(cm).expect("app");
+    assert!(matches!(app.overlay, Some(Overlay::ApiKeyEditor)));
+}
+
+#[test]
 fn openai_compatible_model_picker_exposes_connection_edit_shortcuts() {
     let temp = tempdir().expect("tempdir");
     let mut app = TuiApp::new(ConfigManager {

@@ -5,7 +5,7 @@ use super::state::{
     ProviderFamily, TuiApp, PROVIDER_FAMILIES,
 };
 
-pub const COMMAND_SPECS: [CommandSpec; 14] = [
+pub const COMMAND_SPECS: [CommandSpec; 13] = [
     CommandSpec {
         category: "Session",
         name: "help",
@@ -61,13 +61,6 @@ pub const COMMAND_SPECS: [CommandSpec; 14] = [
         usage: "/compact",
         summary: "Compact the current conversation history immediately.",
         detail: "Force one explicit history compaction pass using the current backend summarizer. This keeps the current turn/session but replaces older history with a summary, closer to Codex manual compaction than a silent trim.",
-    },
-    CommandSpec {
-        category: "Setup",
-        name: "setup",
-        usage: "/setup",
-        summary: "Open the fallback setup screen.",
-        detail: "Open the setup overlay for local model presets and OAuth. This is the fallback config surface, not the primary interaction flow.",
     },
     CommandSpec {
         category: "Models",
@@ -126,7 +119,6 @@ pub fn parse_local_command(input: &str) -> Option<LocalCommand> {
         "plan" => LocalCommandKind::Plan,
         "approval" => LocalCommandKind::Approval,
         "compact" => LocalCommandKind::Compact,
-        "setup" => LocalCommandKind::Setup,
         "model" => LocalCommandKind::Model,
         "base-url" => LocalCommandKind::BaseUrl,
         "login" => LocalCommandKind::Login,
@@ -260,7 +252,7 @@ pub fn help_text() -> String {
         .collect::<Vec<_>>()
         .join("\n");
     format!(
-        "Built-in commands:\n{}\n\nCompaction:\n  /compact   summarize older conversation history now\n\nThreads:\n  /resume    reopen a recent local thread\n\nModes:\n  /plan      enter planning mode for the current task\n  RARA may suggest planning mode for non-trivial tasks\n  /approval  toggle bash approval mode\n\nAuth:\n  /login     open the provider auth picker\n  /logout    clear the saved provider credential\n\nEditing:\n  apply_patch  preferred for editing existing files\n  write_file   use for new files or full rewrites\n  replace      simple fallback for unique string replacement\n\nKeyboard:\n  Enter submit\n  Esc close current overlay\n  S open setup\n\nExit:\n  /quit\n  /exit\n\nModel switching:\n  /model\n\nProvider URL:\n  /base-url",
+        "Built-in commands:\n{}\n\nCompaction:\n  /compact   summarize older conversation history now\n\nThreads:\n  /resume    reopen a recent local thread\n\nModes:\n  /plan      enter planning mode for the current task\n  RARA may suggest planning mode for non-trivial tasks\n  /approval  toggle bash approval mode\n\nAuth:\n  /login     open the provider auth picker\n  /logout    clear the saved provider credential\n\nEditing:\n  apply_patch  preferred for editing existing files\n  write_file   use for new files or full rewrites\n  replace      simple fallback for unique string replacement\n\nKeyboard:\n  Enter submit\n  Esc close current overlay\n\nExit:\n  /quit\n  /exit\n\nModel switching:\n  /model\n\nProvider URL:\n  /base-url",
         commands
     )
 }
@@ -610,11 +602,33 @@ pub fn status_resources_text(app: &TuiApp) -> String {
         }
         _ => "-".to_string(),
     };
+    let retrieval_budget = app
+        .snapshot
+        .context_window_tokens
+        .map(|window| {
+            window.saturating_sub(
+                app.snapshot.estimated_history_tokens + app.snapshot.reserved_output_tokens,
+            )
+        })
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "-".to_string());
+    let retrieval_selected = if app.snapshot.retrieval_selected_items.is_empty() {
+        "-".to_string()
+    } else {
+        app.snapshot
+            .retrieval_selected_items
+            .iter()
+            .map(|item| item.kind.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
     format!(
-        "tokens={} in / {} out\ncontext_estimate={}\ncompactions={} (last: {}, ratio: {})\ncompact_boundary={}\nrecent_compact_file_count={}\nrecent_compact_files={}\ncache={}\nstate_db={}",
+        "tokens={} in / {} out\ncontext_estimate={}\nretrieval_budget={}\nretrieval_selected={}\ncompactions={} (last: {}, ratio: {})\ncompact_boundary={}\nrecent_compact_file_count={}\nrecent_compact_files={}\ncache={}\nstate_db={}",
         app.snapshot.total_input_tokens,
         app.snapshot.total_output_tokens,
         context,
+        retrieval_budget,
+        retrieval_selected,
         app.snapshot.compaction_count,
         last_compact,
         last_compact_ratio,
@@ -635,8 +649,20 @@ pub fn status_prompt_sources_text(app: &TuiApp) -> String {
         ),
         String::new(),
     ];
-    let mut sources = app.snapshot.prompt_source_status_lines.clone();
-    lines.append(&mut sources);
+    if app.snapshot.prompt_source_entries.is_empty() {
+        lines.push("no structured prompt sources discovered".to_string());
+    } else {
+        lines.extend(app.snapshot.prompt_source_entries.iter().map(|entry| {
+            format!(
+                "{}. {} [{}] {}\n   why: {}",
+                entry.order,
+                entry.label,
+                entry.kind,
+                entry.display_path,
+                entry.inclusion_reason
+            )
+        }));
+    }
     if !app.snapshot.prompt_warnings.is_empty() {
         if lines.len() > 3 {
             lines.push(String::new());
@@ -649,7 +675,7 @@ pub fn status_prompt_sources_text(app: &TuiApp) -> String {
                 .map(|warning| format!("- {warning}")),
         );
     }
-    if lines.len() == 3 {
+    if app.snapshot.prompt_source_entries.is_empty() && app.snapshot.prompt_warnings.is_empty() {
         "No prompt sources discovered.".to_string()
     } else {
         lines.join("\n")
@@ -744,7 +770,6 @@ pub fn quick_actions_text() -> &'static str {
      /help      browse commands and keyboard hints\n\
      /model     open guided model switching\n\
      /plan      enter planning mode for the current task\n\
-     /setup     open fallback setup\n\
      /status    inspect runtime and workspace\n\
      /quit      leave the TUI"
 }
@@ -891,10 +916,11 @@ pub fn normalize_command_token(value: &str) -> String {
 mod tests {
     use super::{
         help_text, matching_commands, normalize_command_token, palette_commands,
-        parse_local_command, status_context_text, status_resources_text, status_runtime_text,
-        LocalCommandKind,
+        parse_local_command, status_context_text, status_prompt_sources_text,
+        status_resources_text, status_runtime_text, LocalCommandKind,
     };
     use crate::config::ConfigManager;
+    use crate::context::{PromptSourceContextEntry, RetrievalSelectedItemContextEntry};
     use crate::tui::state::{RuntimeSnapshot, TuiApp};
     use tempfile::tempdir;
 
@@ -976,7 +1002,7 @@ mod tests {
             .map(|spec| spec.name)
             .collect::<Vec<_>>();
         assert_eq!(names.first().copied(), Some("status"));
-        assert!(names.contains(&"setup"));
+        assert!(!names.contains(&"setup"));
     }
 
     #[test]
@@ -1049,6 +1075,9 @@ mod tests {
         };
         let mut app = TuiApp::new(cm).expect("app");
         app.snapshot = RuntimeSnapshot {
+            estimated_history_tokens: 12_345,
+            context_window_tokens: Some(22_537),
+            reserved_output_tokens: 2_000,
             compaction_count: 2,
             last_compaction_before_tokens: Some(12_000),
             last_compaction_after_tokens: Some(4_500),
@@ -1059,16 +1088,74 @@ mod tests {
             last_compaction_boundary_version: Some(1),
             last_compaction_boundary_before_tokens: Some(12_000),
             last_compaction_boundary_recent_file_count: Some(2),
+            retrieval_selected_items: vec![
+                RetrievalSelectedItemContextEntry {
+                    order: 1,
+                    kind: "workspace_memory".to_string(),
+                    label: "Workspace Memory".to_string(),
+                    detail: "memory".to_string(),
+                    inclusion_reason: "active".to_string(),
+                },
+                RetrievalSelectedItemContextEntry {
+                    order: 2,
+                    kind: "retrieve_experience".to_string(),
+                    label: "Retrieved Experience".to_string(),
+                    detail: "query=bootstrap".to_string(),
+                    inclusion_reason: "retrieved".to_string(),
+                },
+            ],
             ..RuntimeSnapshot::default()
         };
 
         let rendered = status_resources_text(&app);
+        assert!(rendered.contains("retrieval_budget=8192"));
+        assert!(rendered.contains("retrieval_selected=workspace_memory, retrieve_experience"));
         assert!(rendered.contains("compactions=2 (last: 12000 -> 4500, ratio: 0.38)"));
         assert!(rendered.contains("compact_boundary=v1 (before_tokens=12000, recent_file_count=2)"));
         assert!(rendered.contains("recent_compact_file_count=2"));
         assert!(rendered.contains(
             "recent_compact_files=src/agent/compact.rs, crates/instructions/src/prompt.rs"
         ));
+    }
+
+    #[test]
+    fn status_prompt_sources_text_uses_structured_prompt_source_entries() {
+        let dir = tempdir().expect("tempdir");
+        let cm = ConfigManager {
+            path: dir.path().join("config.json"),
+        };
+        let mut app = TuiApp::new(cm).expect("app");
+        app.snapshot.prompt_base_kind = "default".to_string();
+        app.snapshot.prompt_section_keys =
+            vec!["instructions".to_string(), "runtime_context".to_string()];
+        app.snapshot.prompt_source_entries = vec![PromptSourceContextEntry {
+            order: 1,
+            kind: "project_instruction".to_string(),
+            label: "Project Instruction (AGENTS.md)".to_string(),
+            display_path: "AGENTS.md".to_string(),
+            status_line: "project instruction: AGENTS.md".to_string(),
+            inclusion_reason: "included because workspace instruction discovery found this file in the active workspace ancestry".to_string(),
+        }];
+
+        let rendered = status_prompt_sources_text(&app);
+        assert!(rendered.contains("1. Project Instruction (AGENTS.md) [project_instruction] AGENTS.md"));
+        assert!(rendered.contains("why: included because workspace instruction discovery found this file"));
+    }
+
+    #[test]
+    fn status_runtime_text_reports_effective_provider_surface_sources() {
+        let dir = tempdir().expect("tempdir");
+        let cm = ConfigManager {
+            path: dir.path().join("config.json"),
+        };
+        let mut app = TuiApp::new(cm).expect("app");
+        app.config.set_provider("codex");
+
+        let rendered = status_runtime_text(&app);
+        assert!(rendered.contains("model_source="));
+        assert!(rendered.contains("base_url_source="));
+        assert!(rendered.contains("revision_source="));
+        assert!(rendered.contains("reasoning_summary_source=legacy_global"));
     }
 
     #[test]
@@ -1121,7 +1208,7 @@ mod tests {
                 },
             ],
             retrieval_selected_items: vec![
-                crate::context::RetrievalSelectedItemContextEntry {
+                RetrievalSelectedItemContextEntry {
                     order: 1,
                     kind: "workspace_memory".into(),
                     label: "Workspace Memory".into(),
@@ -1130,7 +1217,7 @@ mod tests {
                     inclusion_reason:
                         "selected because the current effective prompt includes the workspace memory file as an active input".into(),
                 },
-                crate::context::RetrievalSelectedItemContextEntry {
+                RetrievalSelectedItemContextEntry {
                     order: 2,
                     kind: "compacted_summary".into(),
                     label: "Compacted Thread Summary".into(),
@@ -1138,7 +1225,7 @@ mod tests {
                     inclusion_reason:
                         "included because older thread history was compacted into a structured summary instead of being replayed verbatim".into(),
                 },
-                crate::context::RetrievalSelectedItemContextEntry {
+                RetrievalSelectedItemContextEntry {
                     order: 3,
                     kind: "retrieved_workspace_memory".into(),
                     label: "Retrieved Experience".into(),

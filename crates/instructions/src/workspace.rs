@@ -245,10 +245,19 @@ impl WorkspaceMemory {
     }
 
     fn focus_dir(&self) -> PathBuf {
-        std::env::current_dir()
-            .ok()
-            .filter(|cwd| cwd.starts_with(&self.root))
-            .unwrap_or_else(|| self.root.clone())
+        let Ok(cwd) = std::env::current_dir() else {
+            return self.root.clone();
+        };
+        if cwd.starts_with(&self.root) {
+            return cwd;
+        }
+
+        let canonical_root = fs::canonicalize(&self.root).unwrap_or_else(|_| self.root.clone());
+        let canonical_cwd = fs::canonicalize(&cwd).unwrap_or_else(|_| cwd.clone());
+        canonical_cwd
+            .strip_prefix(&canonical_root)
+            .map(|relative| self.root.join(relative))
+            .unwrap_or_else(|_| self.root.clone())
     }
 }
 
@@ -257,7 +266,33 @@ mod tests {
     use super::WorkspaceMemory;
     use crate::prompt::PromptSourceKind;
     use std::fs;
+    use std::path::{Path, PathBuf};
+    use std::sync::{Mutex, OnceLock};
+    use std::time::Duration;
     use tempfile::tempdir;
+
+    fn cwd_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    struct CurrentDirGuard {
+        previous: PathBuf,
+    }
+
+    impl CurrentDirGuard {
+        fn set(path: &Path) -> Self {
+            let previous = std::env::current_dir().expect("current dir");
+            std::env::set_current_dir(path).expect("set current dir");
+            Self { previous }
+        }
+    }
+
+    impl Drop for CurrentDirGuard {
+        fn drop(&mut self) {
+            let _ = std::env::set_current_dir(&self.previous);
+        }
+    }
 
     #[test]
     fn discover_prompt_sources_includes_nested_agents_files() {
@@ -323,6 +358,73 @@ mod tests {
 
         let workspace = WorkspaceMemory::from_paths(root, rara_dir);
         assert_eq!(workspace.read_git_branch(), "feature/fix-issue");
+    }
+
+    #[test]
+    fn discover_prompt_sources_tracks_cwd_changes_inside_workspace() {
+        let _lock = cwd_lock().lock().expect("cwd lock");
+        let dir = tempdir().expect("tempdir");
+        let root = dir.path().join("repo");
+        let rara_dir = root.join(".rara");
+        let nested = root.join("src/tools");
+        fs::create_dir_all(&nested).expect("mkdir nested");
+        fs::create_dir_all(&rara_dir).expect("mkdir rara");
+        fs::write(root.join("AGENTS.md"), "root rules").expect("write root agents");
+        fs::write(root.join("src").join("AGENTS.md"), "src rules").expect("write src agents");
+        let workspace = WorkspaceMemory::from_paths(root.clone(), rara_dir);
+
+        let _guard = CurrentDirGuard::set(&nested);
+        let nested_sources = workspace.discover_prompt_sources();
+        let nested_project_sources = nested_sources
+            .into_iter()
+            .filter(|source| matches!(source.kind, PromptSourceKind::ProjectInstruction))
+            .map(|source| source.display_path)
+            .collect::<Vec<_>>();
+        assert_eq!(nested_project_sources, vec!["AGENTS.md", "src/AGENTS.md"]);
+    }
+
+    #[test]
+    fn discover_prompt_sources_falls_back_to_root_for_outside_cwd() {
+        let _lock = cwd_lock().lock().expect("cwd lock");
+        let dir = tempdir().expect("tempdir");
+        let root = dir.path().join("repo");
+        let rara_dir = root.join(".rara");
+        let outside = dir.path().join("outside");
+        fs::create_dir_all(&rara_dir).expect("mkdir rara");
+        fs::create_dir_all(&outside).expect("mkdir outside");
+        fs::write(root.join("AGENTS.md"), "root rules").expect("write root agents");
+        let workspace = WorkspaceMemory::from_paths(root, rara_dir);
+
+        let _guard = CurrentDirGuard::set(&outside);
+        let sources = workspace.discover_prompt_sources();
+        let project_sources = sources
+            .into_iter()
+            .filter(|source| matches!(source.kind, PromptSourceKind::ProjectInstruction))
+            .map(|source| source.display_path)
+            .collect::<Vec<_>>();
+        assert_eq!(project_sources, vec!["AGENTS.md"]);
+    }
+
+    #[test]
+    fn get_env_info_invalidates_cached_branch_after_head_change() {
+        let dir = tempdir().expect("tempdir");
+        let root = dir.path().join("repo");
+        let rara_dir = root.join(".rara");
+        let git_dir = root.join(".git");
+        fs::create_dir_all(&rara_dir).expect("mkdir rara");
+        fs::create_dir_all(&git_dir).expect("mkdir git");
+        let head = git_dir.join("HEAD");
+        fs::write(&head, "ref: refs/heads/main\n").expect("write head");
+
+        let workspace = WorkspaceMemory::from_paths(root, rara_dir);
+        let (_, branch) = workspace.get_env_info();
+        assert_eq!(branch, "main");
+
+        std::thread::sleep(Duration::from_millis(20));
+        fs::write(&head, "ref: refs/heads/feature/runtime\n").expect("rewrite head");
+
+        let (_, branch) = workspace.get_env_info();
+        assert_eq!(branch, "feature/runtime");
     }
 
     #[test]

@@ -25,7 +25,6 @@ pub(super) async fn execute_local_command(
         LocalCommandKind::Plan => "plan",
         LocalCommandKind::Quit => "quit",
         LocalCommandKind::Resume => "resume",
-        LocalCommandKind::Setup => "setup",
         LocalCommandKind::Status => "status",
     });
     match command.kind {
@@ -122,10 +121,6 @@ pub(super) async fn execute_local_command(
                 Some("opening resume picker".into()),
             );
             app.open_overlay(Overlay::ResumePicker);
-        }
-        LocalCommandKind::Setup => {
-            app.set_runtime_phase(RuntimePhase::LocalCommand, Some("opening setup".into()));
-            app.open_overlay(Overlay::Setup);
         }
         LocalCommandKind::Status => {
             app.set_runtime_phase(RuntimePhase::LocalCommand, Some("opening status".into()));
