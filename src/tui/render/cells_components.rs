@@ -405,21 +405,17 @@ impl<'a> RespondingCell<'a> {
 }
 
 impl HistoryCell for RespondingCell<'_> {
-    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+    fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
         match &self.content {
             RespondingCellContent::Stream { lines, max_lines } => {
-                responding_card_lines("Responding", markdown_body_lines(lines, *max_lines), width)
+                lightweight_stream_lines(lines, *max_lines)
             }
             RespondingCellContent::Message {
                 role,
                 message,
                 max_lines,
                 cwd,
-            } if *role == "Responding" => responding_card_lines(
-                "Responding",
-                formatted_message_lines("Agent", message, *max_lines, *cwd),
-                width,
-            ),
+            } if *role == "Responding" => compact_message_lines(message, *max_lines),
             RespondingCellContent::CompactMessage { message, max_lines } => {
                 compact_message_lines(message, *max_lines)
             }
@@ -434,11 +430,26 @@ impl HistoryCell for RespondingCell<'_> {
                 message,
                 max_lines,
             } => prefixed_message_lines(role, message, *max_lines),
-            RespondingCellContent::Working(detail) => {
-                responding_card_lines("Responding", vec![Line::from((*detail).to_string())], width)
-            }
+            RespondingCellContent::Working(detail) => compact_message_lines(detail, 1),
         }
     }
+}
+
+fn lightweight_stream_lines(rendered: &[Line<'static>], max_lines: usize) -> Vec<Line<'static>> {
+    let mut lines = markdown_body_lines(rendered, max_lines);
+    if lines.is_empty() {
+        return vec![Line::from("•")];
+    }
+
+    if let Some(first) = lines.first_mut() {
+        first.spans.insert(0, Span::raw("• "));
+    }
+
+    for line in lines.iter_mut().skip(1) {
+        line.spans.insert(0, Span::raw("  "));
+    }
+
+    lines
 }
 
 fn compact_message_lines(message: &str, max_lines: usize) -> Vec<Line<'static>> {

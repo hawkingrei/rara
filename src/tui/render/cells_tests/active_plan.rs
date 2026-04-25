@@ -223,7 +223,7 @@ fn active_turn_cell_renders_completed_plan_decision() {
 }
 
 #[test]
-fn active_turn_cell_keeps_responding_section_while_agent_stream_exists() {
+fn active_turn_cell_keeps_streaming_response_without_responding_card() {
     let temp = tempdir().unwrap();
     let mut app = TuiApp::new(ConfigManager {
         path: temp.path().join("config.json"),
@@ -254,7 +254,10 @@ fn active_turn_cell_keeps_responding_section_while_agent_stream_exists() {
         .collect::<Vec<_>>()
         .join("\n");
 
-    assert!(rendered.contains("Responding"));
+    assert!(rendered.contains("你好"));
+    assert!(!rendered.contains("Responding"));
+    assert!(!rendered.contains("╭"));
+    assert!(!rendered.contains("╰"));
     assert!(!rendered.contains("Working"));
 }
 

@@ -16,6 +16,8 @@ pub struct BashTool {
     pub sandbox: Arc<SandboxManager>,
 }
 
+const SANDBOX_HOME: &str = "/tmp/rara-home";
+
 #[derive(Clone, Copy, Debug)]
 enum BashStreamKind {
     Stdout,
@@ -106,6 +108,30 @@ impl BashCommandInput {
     }
 }
 
+fn sandbox_command_env(overrides: &HashMap<String, String>) -> HashMap<String, String> {
+    let mut env_map = HashMap::from([
+        ("HOME".to_string(), SANDBOX_HOME.to_string()),
+        (
+            "XDG_CONFIG_HOME".to_string(),
+            format!("{SANDBOX_HOME}/.config"),
+        ),
+        (
+            "XDG_CACHE_HOME".to_string(),
+            format!("{SANDBOX_HOME}/.cache"),
+        ),
+        (
+            "XDG_STATE_HOME".to_string(),
+            format!("{SANDBOX_HOME}/.local/state"),
+        ),
+        (
+            "XDG_DATA_HOME".to_string(),
+            format!("{SANDBOX_HOME}/.local/share"),
+        ),
+    ]);
+    env_map.extend(overrides.clone());
+    env_map
+}
+
 #[async_trait]
 impl Tool for BashTool {
     fn name(&self) -> &str {
@@ -159,6 +185,7 @@ impl Tool for BashTool {
     ) -> Result<Value, ToolError> {
         let request = BashCommandInput::from_value(i)?;
         let cwd = request.working_dir()?;
+        let command_env = sandbox_command_env(&request.env);
         let wrapped = if let Some(command) = request.command.as_deref() {
             self.sandbox
                 .wrap_shell_command(command, &cwd, request.allow_net)
@@ -174,11 +201,13 @@ impl Tool for BashTool {
                 .map_err(|e| ToolError::ExecutionFailed(e.to_string()))?
         };
 
+        ensure_sandbox_home_dirs().await?;
+
         let mut command = Command::new(&wrapped.program);
         command
             .args(&wrapped.args)
             .current_dir(&cwd)
-            .envs(&request.env)
+            .envs(&command_env)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         let mut child = command.spawn()?;
@@ -258,12 +287,33 @@ where
     Ok(())
 }
 
+async fn ensure_sandbox_home_dirs() -> Result<(), ToolError> {
+    let config_dir = format!("{SANDBOX_HOME}/.config");
+    let cache_dir = format!("{SANDBOX_HOME}/.cache");
+    let local_dir = format!("{SANDBOX_HOME}/.local");
+    let state_dir = format!("{SANDBOX_HOME}/.local/state");
+    let share_dir = format!("{SANDBOX_HOME}/.local/share");
+
+    for dir in [
+        SANDBOX_HOME,
+        config_dir.as_str(),
+        cache_dir.as_str(),
+        local_dir.as_str(),
+        state_dir.as_str(),
+        share_dir.as_str(),
+    ] {
+        fs::create_dir_all(dir).await?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{BashCommandInput, BashTool};
+    use super::{sandbox_command_env, BashCommandInput, BashTool, SANDBOX_HOME};
     use crate::sandbox::SandboxManager;
     use crate::tool::{Tool, ToolOutputStream, ToolProgressEvent};
     use serde_json::{json, Value};
+    use std::collections::HashMap;
     use std::env;
     use std::path::Path;
     use std::sync::Arc;
@@ -301,6 +351,42 @@ mod tests {
         assert_eq!(input.cwd.as_deref(), Some("/tmp/workspace"));
         assert_eq!(input.env.get("RUST_LOG").map(String::as_str), Some("debug"));
         assert_eq!(input.summary(), "cargo check --workspace");
+    }
+
+    #[test]
+    fn sandbox_command_env_defaults_home_and_xdg_roots() {
+        let env_map = sandbox_command_env(&HashMap::new());
+
+        assert_eq!(env_map.get("HOME").map(String::as_str), Some(SANDBOX_HOME));
+        assert_eq!(
+            env_map.get("XDG_CONFIG_HOME").map(String::as_str),
+            Some("/tmp/rara-home/.config")
+        );
+        assert_eq!(
+            env_map.get("XDG_CACHE_HOME").map(String::as_str),
+            Some("/tmp/rara-home/.cache")
+        );
+    }
+
+    #[test]
+    fn sandbox_command_env_keeps_explicit_overrides() {
+        let env_map = sandbox_command_env(&HashMap::from([
+            ("HOME".to_string(), "/custom/home".to_string()),
+            (
+                "XDG_CACHE_HOME".to_string(),
+                "/custom/home/.cache".to_string(),
+            ),
+        ]));
+
+        assert_eq!(env_map.get("HOME").map(String::as_str), Some("/custom/home"));
+        assert_eq!(
+            env_map.get("XDG_CACHE_HOME").map(String::as_str),
+            Some("/custom/home/.cache")
+        );
+        assert_eq!(
+            env_map.get("XDG_CONFIG_HOME").map(String::as_str),
+            Some("/tmp/rara-home/.config")
+        );
     }
 
     #[tokio::test]

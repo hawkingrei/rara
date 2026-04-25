@@ -22,13 +22,14 @@ pub(super) fn narrative_entries<'a>(
     is_renderable_system_message: impl Fn(&str) -> bool,
 ) -> Vec<&'a TranscriptEntry> {
     if has_tool_activity {
+        if let Some(agent) = entries.iter().rev().find(|entry| entry.role == "Agent") {
+            return vec![agent];
+        }
         entries
             .iter()
             .rev()
             .find(|entry| {
-                entry.role == "Agent"
-                    || (entry.role == "System"
-                        && is_renderable_system_message(entry.message.as_str()))
+                entry.role == "System" && is_renderable_system_message(entry.message.as_str())
             })
             .into_iter()
             .collect()
