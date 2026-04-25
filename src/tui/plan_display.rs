@@ -31,10 +31,10 @@ impl PlanStepKind {
 
     fn style(self) -> Style {
         match self {
-            Self::Completed => {
-                Style::default().add_modifier(Modifier::CROSSED_OUT | Modifier::DIM)
-            }
-            Self::InProgress => Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            Self::Completed => Style::default().add_modifier(Modifier::CROSSED_OUT | Modifier::DIM),
+            Self::InProgress => Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
             Self::Pending => Style::default().add_modifier(Modifier::DIM),
         }
     }
@@ -90,7 +90,10 @@ pub(crate) fn updated_plan_lines(
 
     let mut lines = vec![Line::from(vec![
         Span::styled("• ", Style::default().add_modifier(Modifier::DIM)),
-        Span::styled("Updated Plan", Style::default().add_modifier(Modifier::BOLD)),
+        Span::styled(
+            "Updated Plan",
+            Style::default().add_modifier(Modifier::BOLD),
+        ),
     ])];
 
     let mut detail_lines = Vec::new();

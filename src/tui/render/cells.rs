@@ -15,14 +15,13 @@ mod components;
 
 pub(crate) use self::components::StartupCardCell;
 use self::components::{
-    CommittedInteractionCell, ExploredCell, ExploringCell, MessageCell, PendingInteractionCell,
-    PlanModeCell, PlanSummaryCell, PlanningCell, PlanningSuggestionCell, RanCell, RespondingCell,
-    RunningCell, UserCell, planning_suggestion_text,
+    planning_suggestion_text, CommittedInteractionCell, ExploredCell, ExploringCell, MessageCell,
+    PendingInteractionCell, PlanModeCell, PlanSummaryCell, PlanningCell, PlanningSuggestionCell,
+    RanCell, RespondingCell, RunningCell, UserCell,
 };
 use super::{
     compact_summary_lines, compact_summary_text, current_turn_exploration_summary,
-    current_turn_exploration_summary_from_entries,
-    current_turn_tool_summary,
+    current_turn_exploration_summary_from_entries, current_turn_tool_summary,
     history_pipeline::{narrative_entries, ordered_completion_entries},
     wrapped_history_line_count,
 };
@@ -39,9 +38,80 @@ pub(crate) trait ActiveCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>>;
 }
 
+enum OrderedActiveSegment<'a> {
+    Exploration(Vec<String>),
+    Agent(&'a str),
+}
+
 fn trim_trailing_empty_lines(lines: &mut Vec<Line<'static>>) {
     while matches!(lines.last(), Some(line) if line.spans.iter().all(|span| span.content == "")) {
         lines.pop();
+    }
+}
+
+fn ordered_exploration_agent_segments<'a>(
+    current_turn: &[&'a TranscriptEntry],
+) -> Option<Vec<OrderedActiveSegment<'a>>> {
+    let mut segments = Vec::new();
+    let mut exploration_items = Vec::new();
+    let mut saw_interleaving = false;
+
+    let flush_exploration = |segments: &mut Vec<OrderedActiveSegment<'a>>,
+                             items: &mut Vec<String>| {
+        if !items.is_empty() {
+            segments.push(OrderedActiveSegment::Exploration(std::mem::take(items)));
+        }
+    };
+
+    for entry in current_turn {
+        match entry.role.as_str() {
+            "Tool" => {
+                if let Some(action) = super::exploration_action_label(&entry.message) {
+                    if !exploration_items.iter().any(|existing| existing == &action) {
+                        exploration_items.push(action);
+                    }
+                }
+            }
+            "Exploring" => {
+                for item in entry
+                    .message
+                    .lines()
+                    .map(str::trim)
+                    .filter(|line| !line.is_empty())
+                    .map(|line| {
+                        line.trim_start_matches("└")
+                            .trim_start_matches("•")
+                            .trim()
+                            .to_string()
+                    })
+                    .filter(|line| !line.is_empty())
+                {
+                    if !exploration_items.iter().any(|existing| existing == &item) {
+                        exploration_items.push(item);
+                    }
+                }
+            }
+            "Agent" => {
+                if !exploration_items.is_empty() {
+                    saw_interleaving = true;
+                    flush_exploration(&mut segments, &mut exploration_items);
+                }
+                segments.push(OrderedActiveSegment::Agent(entry.message.as_str()));
+            }
+            _ => {}
+        }
+    }
+
+    flush_exploration(&mut segments, &mut exploration_items);
+
+    let simple_exploration_then_agent = segments.len() == 2
+        && matches!(segments.first(), Some(OrderedActiveSegment::Exploration(_)))
+        && matches!(segments.last(), Some(OrderedActiveSegment::Agent(_)));
+
+    if saw_interleaving || (segments.len() > 1 && !simple_exploration_then_agent) {
+        Some(segments)
+    } else {
+        None
     }
 }
 
@@ -133,9 +203,12 @@ impl HistoryCell for CommittedTurnCell<'_> {
             .iter()
             .find(|entry| entry.role == "Running")
             .map(|entry| entry.message.clone());
-        let has_tool_activity = entry_refs
-            .iter()
-            .any(|entry| matches!(entry.role.as_str(), "Tool" | "Tool Result" | "Tool Error" | "Tool Progress"));
+        let has_tool_activity = entry_refs.iter().any(|entry| {
+            matches!(
+                entry.role.as_str(),
+                "Tool" | "Tool Result" | "Tool Error" | "Tool Progress"
+            )
+        });
         if let Some(summary) = explicit_exploration
             .map(|summary| compact_summary_text(&summary, 4, "more exploration step(s)"))
             .or_else(|| {
@@ -234,9 +307,9 @@ impl ActiveCell for ActiveTurnCell<'_> {
             if let Some(prompt) = self.app.pending_planning_suggestion.as_deref() {
                 let cells: Vec<Box<dyn HistoryCell + '_>> = vec![
                     Box::new(UserCell::new(prompt)),
-                    Box::new(PlanningSuggestionCell::new(
-                        planning_suggestion_text(self.app),
-                    )),
+                    Box::new(PlanningSuggestionCell::new(planning_suggestion_text(
+                        self.app,
+                    ))),
                 ];
                 let mut lines = Vec::new();
                 for (idx, cell) in cells.into_iter().enumerate() {
@@ -250,9 +323,12 @@ impl ActiveCell for ActiveTurnCell<'_> {
             }
             return Vec::new();
         }
-        let has_tool_activity = current_turn
-            .iter()
-            .any(|entry| matches!(entry.role.as_str(), "Tool" | "Tool Result" | "Tool Error" | "Tool Progress"));
+        let has_tool_activity = current_turn.iter().any(|entry| {
+            matches!(
+                entry.role.as_str(),
+                "Tool" | "Tool Result" | "Tool Error" | "Tool Progress"
+            )
+        });
         let user_message = current_turn
             .iter()
             .find(|entry| entry.role == "You")
@@ -302,12 +378,42 @@ impl ActiveCell for ActiveTurnCell<'_> {
             cells.push(Box::new(PlanModeCell));
         }
 
+        let ordered_exploration_agent_segments =
+            if !has_live_exploration && !has_live_planning && !has_live_running {
+                ordered_exploration_agent_segments(current_turn.as_slice())
+            } else {
+                None
+            };
+        let uses_ordered_exploration_agent_segments = ordered_exploration_agent_segments.is_some();
+
+        if let Some(segments) = ordered_exploration_agent_segments.as_ref() {
+            for segment in segments {
+                match segment {
+                    OrderedActiveSegment::Exploration(items) => {
+                        let summary =
+                            compact_summary_lines(items.as_slice(), 4, "more exploration step(s)");
+                        cells.push(Box::new(ExploringCell::new(summary, turn_live)));
+                    }
+                    OrderedActiveSegment::Agent(message) => {
+                        cells.push(Box::new(MessageCell::new(
+                            "Agent",
+                            message,
+                            usize::MAX,
+                            self.cwd,
+                        )));
+                    }
+                }
+            }
+        }
+
         let explicit_exploration = current_turn
             .iter()
             .find(|entry| entry.role == "Exploring")
             .map(|entry| entry.message.clone());
 
-        let exploration_summary = if has_live_exploration {
+        let exploration_summary = if uses_ordered_exploration_agent_segments {
+            None
+        } else if has_live_exploration {
             let mut items = self
                 .app
                 .active_live
@@ -315,13 +421,7 @@ impl ActiveCell for ActiveTurnCell<'_> {
                 .iter()
                 .cloned()
                 .collect::<Vec<_>>();
-            items.extend(
-                self.app
-                    .active_live
-                    .exploration_notes
-                    .iter()
-                    .cloned(),
-            );
+            items.extend(self.app.active_live.exploration_notes.iter().cloned());
             Some(compact_summary_lines(
                 items.as_slice(),
                 4,
@@ -355,13 +455,7 @@ impl ActiveCell for ActiveTurnCell<'_> {
                 .iter()
                 .cloned()
                 .collect::<Vec<_>>();
-            items.extend(
-                self.app
-                    .active_live
-                    .planning_notes
-                    .iter()
-                    .cloned(),
-            );
+            items.extend(self.app.active_live.planning_notes.iter().cloned());
             Some(compact_summary_lines(
                 items.as_slice(),
                 4,
@@ -398,12 +492,12 @@ impl ActiveCell for ActiveTurnCell<'_> {
             explicit_running
                 .map(|summary| compact_summary_text(&summary, 4, "more running step(s)"))
                 .or_else(|| {
-                current_turn_tool_summary(
-                    current_turn.as_slice(),
-                    turn_live,
-                    self.app.runtime_phase_detail.as_deref(),
-                )
-            })
+                    current_turn_tool_summary(
+                        current_turn.as_slice(),
+                        turn_live,
+                        self.app.runtime_phase_detail.as_deref(),
+                    )
+                })
         };
         let has_running_summary = running_summary.is_some();
         let running_active = turn_live && has_running_summary;
@@ -479,7 +573,10 @@ impl ActiveCell for ActiveTurnCell<'_> {
             && self.app.pending_command_approval().is_none()
             && self.app.pending_planning_suggestion.is_none();
 
-        if has_agent_stream
+        if uses_ordered_exploration_agent_segments {
+            // Preserve chronological "explore -> agent -> explore" segments without
+            // reintroducing the latest agent/tool fallback below.
+        } else if has_agent_stream
             && !suppress_intermediate_agent
             && !suppress_planning_chatter
             && !suppress_structured_plan_response
@@ -502,10 +599,10 @@ impl ActiveCell for ActiveTurnCell<'_> {
                 )));
             }
         } else if let Some(agent_message) = latest_agent.filter(|_| {
-                !suppress_intermediate_agent
-                    && !suppress_planning_chatter
-                    && !suppress_structured_plan_response
-            }) {
+            !suppress_intermediate_agent
+                && !suppress_planning_chatter
+                && !suppress_structured_plan_response
+        }) {
             cells.push(Box::new(RespondingCell::from_message(
                 responding_role,
                 agent_message,

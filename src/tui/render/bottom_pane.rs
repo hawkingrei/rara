@@ -101,9 +101,7 @@ fn activity_status_line(app: &TuiApp) -> (&'static str, Color, String) {
         let (label, color) = match pending.kind {
             ActivePendingInteractionKind::PlanApproval => ("Plan Approval", Color::Cyan),
             ActivePendingInteractionKind::ShellApproval => ("Shell Approval", Color::Yellow),
-            ActivePendingInteractionKind::PlanningQuestion => {
-                ("Planning Question", Color::Cyan)
-            }
+            ActivePendingInteractionKind::PlanningQuestion => ("Planning Question", Color::Cyan),
             ActivePendingInteractionKind::ExplorationQuestion => {
                 ("Exploration Question", Color::Yellow)
             }
@@ -241,11 +239,7 @@ fn render_composer(f: &mut Frame, app: &TuiApp, area: Rect) -> Option<(u16, u16)
         chunks[0],
     );
     let hint = composer_hint_line(app);
-    f.render_widget(
-        Paragraph::new(hint)
-            .alignment(Alignment::Left),
-        chunks[1],
-    );
+    f.render_widget(Paragraph::new(hint).alignment(Alignment::Left), chunks[1]);
     Some(composer_cursor_position(app.input.as_str(), chunks[0]))
 }
 
@@ -258,10 +252,21 @@ fn queued_follow_up_preview_lines(app: &TuiApp) -> Vec<Line<'static>> {
         .filter(|value| !value.is_empty())
     {
         lines.push(Line::from(vec![
-            Span::styled("› ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-            Span::styled(pending_follow_up_heading(), Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                "› ",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                pending_follow_up_heading(),
+                Style::default().fg(Color::DarkGray),
+            ),
         ]));
-        lines.push(Line::from(vec![Span::raw("  "), Span::raw(preview.to_string())]));
+        lines.push(Line::from(vec![
+            Span::raw("  "),
+            Span::raw(preview.to_string()),
+        ]));
         let remaining = app.pending_follow_up_count().saturating_sub(1);
         if remaining > 0 {
             lines.push(Line::from(vec![
@@ -283,10 +288,21 @@ fn queued_follow_up_preview_lines(app: &TuiApp) -> Vec<Line<'static>> {
             lines.push(Line::from(""));
         }
         lines.push(Line::from(vec![
-            Span::styled("› ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-            Span::styled(queued_follow_up_heading(), Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                "› ",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                queued_follow_up_heading(),
+                Style::default().fg(Color::DarkGray),
+            ),
         ]));
-        lines.push(Line::from(vec![Span::raw("  "), Span::raw(preview.to_string())]));
+        lines.push(Line::from(vec![
+            Span::raw("  "),
+            Span::raw(preview.to_string()),
+        ]));
         let remaining = app.queued_follow_up_messages.len().saturating_sub(1);
         if remaining > 0 {
             lines.push(Line::from(vec![
@@ -303,7 +319,12 @@ fn queued_follow_up_preview_lines(app: &TuiApp) -> Vec<Line<'static>> {
 }
 
 fn composer_hint(app: &TuiApp) -> &'static str {
-    if app.input.trim_start().starts_with('/') {
+    if matches!(
+        app.overlay,
+        Some(super::super::state::Overlay::CommandPalette)
+    ) {
+        ""
+    } else if app.input.trim_start().starts_with('/') {
         "slash command  Enter run  Esc close"
     } else if app.has_pending_follow_up_messages() {
         pending_follow_up_hint()
@@ -323,10 +344,19 @@ fn composer_hint(app: &TuiApp) -> &'static str {
 }
 
 fn composer_hint_line(app: &TuiApp) -> Line<'static> {
-    let mut spans = vec![Span::styled(composer_hint(app), Style::default().fg(Color::Gray))];
+    let hint = composer_hint(app);
+    let mut spans = Vec::new();
+    if !hint.is_empty() {
+        spans.push(Span::styled(hint, Style::default().fg(Color::Gray)));
+    }
     if let Some(repo_context) = app.repo_context_hint() {
-        spans.push(Span::raw("  "));
-        spans.push(Span::styled(repo_context, Style::default().fg(Color::DarkGray)));
+        if !spans.is_empty() {
+            spans.push(Span::raw("  "));
+        }
+        spans.push(Span::styled(
+            repo_context,
+            Style::default().fg(Color::DarkGray),
+        ));
     }
     Line::from(spans)
 }
@@ -590,5 +620,23 @@ mod tests {
         assert!(rendered.contains("repo: hawkingrei/rara"));
         assert!(rendered.contains("branch: feat/test"));
         assert!(rendered.contains("PR: https://github.com/hawkingrei/rara/pull/46"));
+    }
+
+    #[test]
+    fn composer_hint_line_hides_slash_hint_while_palette_is_open() {
+        let temp = tempdir().unwrap();
+        let mut app = TuiApp::new(ConfigManager {
+            path: temp.path().join("config.json"),
+        })
+        .expect("build tui app");
+        app.input = "/".into();
+        app.overlay = Some(crate::tui::state::Overlay::CommandPalette);
+        app.repo_slug = Some("hawkingrei/rara".into());
+        app.snapshot.branch = "main".into();
+
+        let rendered = composer_hint_line(&app).to_string();
+        assert!(!rendered.contains("slash command"));
+        assert!(rendered.contains("repo: hawkingrei/rara"));
+        assert!(rendered.contains("branch: main"));
     }
 }

@@ -66,6 +66,29 @@ The effective prompt is assembled in this order:
   - whether the base prompt is default or custom;
   - which prompt sections are active;
   - which prompt sources participated in assembly.
+- The prompt inspection surface must preserve assembly order and explain for each injected source:
+  - what kind of source it was;
+  - the display path or source label;
+  - why it was included.
+- The same source-aware inspection surface should also describe any active compacted-history inputs
+  that still contribute to the current turn, including:
+  - compaction boundary metadata;
+  - structured compacted summaries;
+  - recent-file carry-over;
+  - recent-file excerpt carry-over.
+- The same inspection surface should expose memory/retrieval readiness separately from active
+  prompt injection so the runtime can distinguish:
+  - sources that are active now;
+  - sources that are available for recall;
+  - sources that are not currently available.
+- The same inspection surface should also show which memory-like items are actually active in the
+  current turn, starting with:
+  - active workspace memory files that were injected into the effective prompt;
+  - compacted thread-memory carry-over such as structured summaries and recent-file carry-over.
+  - selected retrieval results reconstructed from retrieval-tool outputs when the current turn has
+    already performed explicit recall.
+- Session restore must rebuild the same prompt/runtime surface that a direct run would produce for
+  persisted session-scoped state such as execution mode, append prompt text, and prompt warnings.
 
 ### 2) Workspace Prompt Sources
 
@@ -100,8 +123,11 @@ The effective prompt is assembled in this order:
 
 - The current runtime is closer to Claude-style prompt management than Codex-style instruction and
   state layering.
-- Prompt observability exists in `/status` but there is not yet a dedicated prompt inspection UI.
+- Prompt observability now exists in both `/status` and `/context`, including active selected
+  workspace/thread memory items, but deeper memory inspection still needs to cover real recalled
+  vector/thread selection instead of only prompt-injected or compacted carry-over.
 
 ## Source Journals
 
 - [2026-04-17-prompt-runtime](../journal/2026-04-17-prompt-runtime.md)
+- [2026-04-24-context-observability-and-restore](../journal/2026-04-24-context-observability-and-restore.md)

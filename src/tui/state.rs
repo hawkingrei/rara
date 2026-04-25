@@ -11,21 +11,20 @@ use std::process::Command;
 pub use self::state_presets::{
     current_model_presets, selected_preset_idx_for_config, selected_provider_family_idx_for_config,
 };
+use self::types::CommittedTranscriptRenderCache;
 pub use self::types::{
     ActiveLiveSections, ActivePendingInteraction, ActivePendingInteractionKind,
     AgentMarkdownStreamState, CommandSpec, CompletedInteractionSnapshot, HelpTab, InteractionKind,
-    LocalCommand, LocalCommandKind, OAuthLoginMode, Overlay,
-    PendingApprovalSnapshot, PendingInteractionSnapshot, PromptSourceSnapshot, ProviderFamily,
-    RetrievalSelectedItemSnapshot, RunningTask, RebuildSuccess, RuntimePhase, RuntimeSnapshot,
-    TaskCompletion, TaskKind, TranscriptEntry, TranscriptTurn, TuiApp, TuiEvent,
+    LocalCommand, LocalCommandKind, OAuthLoginMode, Overlay, PendingApprovalSnapshot,
+    PendingInteractionSnapshot, ProviderFamily, RebuildSuccess, RunningTask, RuntimePhase,
+    RuntimeSnapshot, TaskCompletion, TaskKind, TranscriptEntry, TranscriptTurn, TuiApp, TuiEvent,
     PROVIDER_FAMILIES,
 };
-use self::types::CommittedTranscriptRenderCache;
 use super::queued_input::PendingFollowUpMessage;
 use crate::agent::{Agent, AgentExecutionMode, BashApprovalMode};
 use crate::codex_model_catalog::{CodexModelOption, CodexReasoningOption};
-use crate::config::DEFAULT_CODEX_BASE_URL;
 use crate::config::ConfigManager;
+use crate::config::DEFAULT_CODEX_BASE_URL;
 use crate::redaction::redact_secrets;
 use crate::state_db::StateDb;
 use crate::tui::is_ssh_session;
@@ -148,7 +147,7 @@ impl TuiApp {
             model_name_input: String::new(),
             codex_model_options: Vec::new(),
             recent_commands: Vec::new(),
-            recent_sessions: Vec::new(),
+            recent_threads: Vec::new(),
             resume_picker_idx: 0,
             committed_render_generation: 0,
             committed_render_cache: RefCell::new(CommittedTranscriptRenderCache::default()),
@@ -166,6 +165,7 @@ impl TuiApp {
             repo_context_task: None,
             repo_slug: None,
             current_pr_url: None,
+            codex_auth_mode: None,
         })
     }
 
@@ -534,10 +534,10 @@ impl TuiApp {
             history_len: runtime_context.history_len,
             total_input_tokens: runtime_context.total_input_tokens,
             total_output_tokens: runtime_context.total_output_tokens,
+            context_window_tokens: runtime_context.budget.context_window_tokens,
+            compact_threshold_tokens: runtime_context.budget.compact_threshold_tokens,
+            reserved_output_tokens: runtime_context.budget.reserved_output_tokens,
             estimated_history_tokens: runtime_context.compaction.estimated_history_tokens,
-            context_window_tokens: runtime_context.compaction.context_window_tokens,
-            compact_threshold_tokens: runtime_context.compaction.compact_threshold_tokens,
-            reserved_output_tokens: runtime_context.compaction.reserved_output_tokens,
             compaction_count: runtime_context.compaction.compaction_count,
             last_compaction_before_tokens: runtime_context.compaction.last_compaction_before_tokens,
             last_compaction_after_tokens: runtime_context.compaction.last_compaction_after_tokens,
@@ -551,47 +551,24 @@ impl TuiApp {
             last_compaction_boundary_recent_file_count: runtime_context
                 .compaction
                 .last_compaction_boundary_recent_file_count,
+            compaction_source_entries: runtime_context.compaction.source_entries,
             plan_steps: runtime_context.plan.steps,
             plan_explanation: runtime_context.plan.explanation,
             pending_interactions,
             completed_interactions,
             prompt_base_kind: runtime_context.prompt.base_prompt_kind,
             prompt_section_keys: runtime_context.prompt.section_keys,
+            prompt_source_entries: runtime_context.prompt.source_entries,
             prompt_source_status_lines: runtime_context.prompt.source_status_lines,
-            prompt_source_entries: runtime_context
-                .prompt
-                .source_entries
-                .into_iter()
-                .map(|entry| PromptSourceSnapshot {
-                    order: entry.order,
-                    kind: entry.kind,
-                    label: entry.label,
-                    display_path: entry.display_path,
-                    inclusion_reason: entry.inclusion_reason,
-                })
-                .collect(),
+            prompt_append_system_prompt: runtime_context.prompt.append_system_prompt,
             prompt_warnings: runtime_context.prompt.warnings,
-            retrieval_remaining_input_budget_tokens: runtime_context
-                .retrieval
-                .remaining_input_budget_tokens,
-            retrieval_selected_items: runtime_context
-                .retrieval
-                .selected_items
-                .into_iter()
-                .map(|entry| RetrievalSelectedItemSnapshot {
-                    order: entry.order,
-                    kind: entry.kind,
-                    label: entry.label,
-                    detail: entry.detail,
-                    inclusion_reason: entry.inclusion_reason,
-                })
-                .collect(),
+            retrieval_source_entries: runtime_context.retrieval.entries,
+            retrieval_selected_items: runtime_context.retrieval.selected_items,
         };
         self.agent_execution_mode = agent.execution_mode;
         self.bash_approval_mode = agent.bash_approval_mode;
         self.persist_runtime_state();
     }
-
 
     pub fn open_overlay(&mut self, overlay: Overlay) {
         if matches!(overlay, Overlay::CommandPalette) {
@@ -601,7 +578,7 @@ impl TuiApp {
             self.provider_picker_idx = selected_provider_family_idx_for_config(&self.config);
         }
         if matches!(overlay, Overlay::ResumePicker) {
-            self.resume_picker_idx = 0;
+            self.refresh_recent_threads_for_resume_picker();
         }
         if matches!(overlay, Overlay::ModelPicker) {
             if let Some(provider) = self.single_provider_for_selected_family() {
@@ -830,7 +807,6 @@ impl TuiApp {
             _ => None,
         };
     }
-
 }
 
 fn command_stdout(program: &str, args: &[&str]) -> Option<String> {

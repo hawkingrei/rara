@@ -5,14 +5,16 @@ use ratatui::{
     text::{Line, Span},
 };
 
-use crate::tui::interaction_text::{pending_interaction_card_title, status_planning_suggestion_text};
+use crate::tui::interaction_text::{
+    pending_interaction_card_title, status_planning_suggestion_text,
+};
 use crate::tui::plan_display::updated_plan_lines;
-use crate::tui::state::{ActivePendingInteractionKind, TuiApp};
 use crate::tui::render::{
     display_width, formatted_message_lines, prefixed_message_lines, rendered_markdown_lines,
     section_span, startup_card_inner_width, truncate_for_startup_card, truncate_path_middle,
     with_border,
 };
+use crate::tui::state::{ActivePendingInteractionKind, TuiApp};
 
 use super::{HistoryCell, InteractionCompletionKind};
 
@@ -250,10 +252,7 @@ impl PlanningSuggestionCell {
 
 impl HistoryCell for PlanningSuggestionCell {
     fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
-        let mut lines = vec![Line::from(section_span(
-            "Planning Suggested",
-            Color::Cyan,
-        ))];
+        let mut lines = vec![Line::from(section_span("Planning Suggested", Color::Cyan))];
         lines.extend(
             self.text
                 .lines()
@@ -381,11 +380,23 @@ impl<'a> RespondingCell<'a> {
 }
 
 impl HistoryCell for RespondingCell<'_> {
-    fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
         match &self.content {
-            RespondingCellContent::Stream(stream_lines) => {
-                rendered_markdown_lines("Responding", stream_lines, usize::MAX)
-            }
+            RespondingCellContent::Stream(stream_lines) => responding_card_lines(
+                "Responding",
+                markdown_body_lines(stream_lines, usize::MAX),
+                width,
+            ),
+            RespondingCellContent::Message {
+                role,
+                message,
+                max_lines,
+                cwd,
+            } if *role == "Responding" => responding_card_lines(
+                "Responding",
+                formatted_message_lines("Agent", message, *max_lines, *cwd),
+                width,
+            ),
             RespondingCellContent::Message {
                 role,
                 message,
@@ -398,10 +409,47 @@ impl HistoryCell for RespondingCell<'_> {
                 max_lines,
             } => prefixed_message_lines(role, message, *max_lines),
             RespondingCellContent::Working(detail) => {
-                vec![Line::from("Responding"), Line::from(format!("  {detail}"))]
+                responding_card_lines("Responding", vec![Line::from((*detail).to_string())], width)
             }
         }
     }
+}
+
+fn markdown_body_lines(rendered: &[Line<'static>], max_lines: usize) -> Vec<Line<'static>> {
+    let mut lines = rendered_markdown_lines("Responding", rendered, max_lines);
+    if !lines.is_empty() {
+        lines.remove(0);
+    }
+    if lines.is_empty() {
+        lines.push(Line::from(String::new()));
+    }
+    lines
+}
+
+fn responding_card_lines(
+    title: &'static str,
+    mut body_lines: Vec<Line<'static>>,
+    width: u16,
+) -> Vec<Line<'static>> {
+    if body_lines.is_empty() {
+        body_lines.push(Line::from(String::new()));
+    }
+
+    let available_inner_width = usize::from(width.saturating_sub(4).max(1));
+    let inner_width = body_lines
+        .iter()
+        .map(|line| {
+            line.iter()
+                .map(|span| display_width(span.content.as_ref()))
+                .sum::<usize>()
+        })
+        .max()
+        .unwrap_or(1)
+        .clamp(1, available_inner_width.max(1));
+
+    let mut lines = vec![Line::from(section_span(title, Color::Cyan))];
+    lines.extend(with_border(body_lines, inner_width));
+    lines
 }
 
 pub(super) struct MessageCell<'a> {
@@ -472,8 +520,7 @@ impl HistoryCell for StartupCardCell {
             .saturating_sub(hint_width)
             .max(1);
         let directory_prefix = format!("{directory_label:<label_width$} ");
-        let directory_max_width =
-            inner_width.saturating_sub(display_width(&directory_prefix));
+        let directory_max_width = inner_width.saturating_sub(display_width(&directory_prefix));
 
         let lines = vec![
             Line::from(vec![Span::from(">_ "), Span::from("RARA")]),

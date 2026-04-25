@@ -6,8 +6,9 @@
 mod assembler;
 mod runtime;
 
-pub use self::assembler::{AssembledContext, ContextAssembler};
+pub use self::assembler::{AssembledContext, ContextAssembler, RuntimeContextInputs};
 pub use self::runtime::{
-    CompactionContextView, PlanContextView, PromptContextView, RetrievalContextView,
-    RetrievalSelectedItemContextEntry, SharedRuntimeContext,
+    CompactionContextView, CompactionSourceContextEntry, ContextBudgetView, PlanContextView,
+    PromptContextView, PromptSourceContextEntry, RetrievalContextView,
+    RetrievalSelectedItemContextEntry, RetrievalSourceContextEntry, SharedRuntimeContext,
 };

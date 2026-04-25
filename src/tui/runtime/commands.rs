@@ -13,57 +13,22 @@ pub(super) async fn execute_local_command(
     oauth_manager: &Arc<OAuthManager>,
 ) -> anyhow::Result<bool> {
     app.remember_command(match command.kind {
-        LocalCommandKind::Help => "help",
-        LocalCommandKind::Status => "status",
-        LocalCommandKind::Clear => "clear",
-        LocalCommandKind::Resume => "resume",
-        LocalCommandKind::Plan => "plan",
         LocalCommandKind::Approval => "approval",
-        LocalCommandKind::Compact => "compact",
-        LocalCommandKind::Setup => "setup",
-        LocalCommandKind::Model => "model",
         LocalCommandKind::BaseUrl => "base-url",
+        LocalCommandKind::Clear => "clear",
+        LocalCommandKind::Compact => "compact",
+        LocalCommandKind::Context => "context",
+        LocalCommandKind::Help => "help",
         LocalCommandKind::Login => "login",
         LocalCommandKind::Logout => "logout",
+        LocalCommandKind::Model => "model",
+        LocalCommandKind::Plan => "plan",
         LocalCommandKind::Quit => "quit",
+        LocalCommandKind::Resume => "resume",
+        LocalCommandKind::Setup => "setup",
+        LocalCommandKind::Status => "status",
     });
     match command.kind {
-        LocalCommandKind::Help => {
-            app.set_runtime_phase(RuntimePhase::LocalCommand, Some("opening help".into()));
-            app.open_overlay(Overlay::Help(HelpTab::General));
-        }
-        LocalCommandKind::Status => {
-            app.set_runtime_phase(RuntimePhase::LocalCommand, Some("opening status".into()));
-            app.open_overlay(Overlay::Status);
-        }
-        LocalCommandKind::Clear => {
-            app.set_runtime_phase(
-                RuntimePhase::LocalCommand,
-                Some("clearing transcript".into()),
-            );
-            app.reset_transcript();
-        }
-        LocalCommandKind::Resume => {
-            app.set_runtime_phase(
-                RuntimePhase::LocalCommand,
-                Some("opening resume picker".into()),
-            );
-            app.open_overlay(Overlay::ResumePicker);
-        }
-        LocalCommandKind::Plan => {
-            app.set_runtime_phase(
-                RuntimePhase::LocalCommand,
-                Some("entering planning mode".into()),
-            );
-            app.set_pending_plan_approval(false);
-            app.set_agent_execution_mode(AgentExecutionMode::Plan);
-            if let Some(agent) = agent_slot.as_mut() {
-                agent.set_execution_mode(AgentExecutionMode::Plan);
-            }
-            app.push_notice(
-                "Planning mode enabled. Use the next prompt to analyze, refine, or finalize a plan.",
-            );
-        }
         LocalCommandKind::Approval => {
             let next_mode = match app.bash_approval_mode {
                 BashApprovalMode::Suggestion => BashApprovalMode::Always,
@@ -85,6 +50,18 @@ pub(super) async fn execute_local_command(
             );
             app.push_notice(notice);
         }
+        LocalCommandKind::BaseUrl => handle_base_url_command(command.arg.as_deref(), app)?,
+        LocalCommandKind::Help => {
+            app.set_runtime_phase(RuntimePhase::LocalCommand, Some("opening help".into()));
+            app.open_overlay(Overlay::Help(HelpTab::General));
+        }
+        LocalCommandKind::Clear => {
+            app.set_runtime_phase(
+                RuntimePhase::LocalCommand,
+                Some("clearing transcript".into()),
+            );
+            app.reset_transcript();
+        }
         LocalCommandKind::Compact => {
             if let Some(agent) = agent_slot.take() {
                 start_compact_task(app, agent);
@@ -92,12 +69,10 @@ pub(super) async fn execute_local_command(
                 app.push_notice("No active agent available for compaction.");
             }
         }
-        LocalCommandKind::Setup => {
-            app.set_runtime_phase(RuntimePhase::LocalCommand, Some("opening setup".into()));
-            app.open_overlay(Overlay::Setup);
+        LocalCommandKind::Context => {
+            app.set_runtime_phase(RuntimePhase::LocalCommand, Some("opening context".into()));
+            app.open_overlay(Overlay::Context);
         }
-        LocalCommandKind::Model => handle_model_command(command.arg.as_deref(), app)?,
-        LocalCommandKind::BaseUrl => handle_base_url_command(command.arg.as_deref(), app)?,
         LocalCommandKind::Login => {
             if app.is_busy() {
                 app.push_notice("A task is already running. Wait for it to finish.");
@@ -122,9 +97,39 @@ pub(super) async fn execute_local_command(
                 }
             }
         }
+        LocalCommandKind::Model => handle_model_command(command.arg.as_deref(), app)?,
+        LocalCommandKind::Plan => {
+            app.set_runtime_phase(
+                RuntimePhase::LocalCommand,
+                Some("entering planning mode".into()),
+            );
+            app.set_pending_plan_approval(false);
+            app.set_agent_execution_mode(AgentExecutionMode::Plan);
+            if let Some(agent) = agent_slot.as_mut() {
+                agent.set_execution_mode(AgentExecutionMode::Plan);
+            }
+            app.push_notice(
+                "Planning mode enabled. Use the next prompt to analyze, refine, or finalize a plan.",
+            );
+        }
         LocalCommandKind::Quit => {
             app.set_runtime_phase(RuntimePhase::LocalCommand, Some("quitting".into()));
             return Ok(true);
+        }
+        LocalCommandKind::Resume => {
+            app.set_runtime_phase(
+                RuntimePhase::LocalCommand,
+                Some("opening resume picker".into()),
+            );
+            app.open_overlay(Overlay::ResumePicker);
+        }
+        LocalCommandKind::Setup => {
+            app.set_runtime_phase(RuntimePhase::LocalCommand, Some("opening setup".into()));
+            app.open_overlay(Overlay::Setup);
+        }
+        LocalCommandKind::Status => {
+            app.set_runtime_phase(RuntimePhase::LocalCommand, Some("opening status".into()));
+            app.open_overlay(Overlay::Status);
         }
     }
     if let Some(agent) = agent_slot.as_ref() {

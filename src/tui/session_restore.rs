@@ -3,27 +3,33 @@ use std::sync::Arc;
 use anyhow::Result;
 
 use crate::agent::{
-    latest_compact_boundary_metadata, Agent, CompactBoundaryMetadata, CompletedInteraction,
-    PendingApproval, PendingUserInput, PlanStep, PlanStepStatus,
+    latest_compact_boundary_metadata, Agent, AgentExecutionMode, BashApprovalMode,
+    CompactBoundaryMetadata, CompletedInteraction, PendingApproval, PendingUserInput, PlanStep,
+    PlanStepStatus,
 };
 use crate::state_db::StateDb;
+use crate::thread_store::{CompactionRecord, RolloutItem, ThreadStore};
 use crate::tools::bash::BashCommandInput;
 
 use super::state::{TranscriptEntry, TranscriptTurn, TuiApp};
 
-pub(super) fn restore_latest_session(
+pub(super) fn restore_latest_thread(
     state_db: &Arc<StateDb>,
     app: &mut TuiApp,
     agent_slot: &mut Option<Agent>,
 ) -> Result<()> {
-    let Some(session_id) = state_db.latest_session_id()? else {
+    let Some(agent) = agent_slot.as_ref() else {
         return Ok(());
     };
-    restore_session_by_id(session_id.as_str(), app, agent_slot)
+    let store = ThreadStore::new(agent.session_manager.as_ref(), state_db.as_ref());
+    let Some(thread_id) = store.latest_thread_id()? else {
+        return Ok(());
+    };
+    restore_thread_by_id(thread_id.as_str(), app, agent_slot)
 }
 
-pub(super) fn restore_session_by_id(
-    session_id: &str,
+pub(super) fn restore_thread_by_id(
+    thread_id: &str,
     app: &mut TuiApp,
     agent_slot: &mut Option<Agent>,
 ) -> Result<()> {
@@ -33,32 +39,40 @@ pub(super) fn restore_session_by_id(
     let Some(state_db) = app.state_db.as_ref() else {
         return Ok(());
     };
-    if let Ok(history) = agent.session_manager.load_session(session_id) {
-        agent.history = history;
-        agent.session_id = session_id.to_string();
+    let thread_store = ThreadStore::new(agent.session_manager.as_ref(), state_db.as_ref());
+    let thread = thread_store.load_thread(thread_id)?;
+    let crate::thread_store::ThreadSnapshot {
+        metadata,
+        history,
+        compaction,
+        plan_explanation,
+        plan_steps,
+        interactions,
+        rollout_items,
+    } = thread;
+    agent.history = history;
+    agent.session_id = metadata.session_id;
+    if let Some(runtime_state) = state_db.load_session_runtime_state(thread_id)? {
+        agent.set_execution_mode(parse_agent_mode(runtime_state.agent_mode.as_str()));
+        agent.set_bash_approval_mode(parse_bash_approval_mode(
+            runtime_state.bash_approval.as_str(),
+        ));
+        let mut prompt_config = agent.prompt_config().clone();
+        prompt_config.append_system_prompt = runtime_state.prompt_runtime.append_system_prompt;
+        prompt_config.warnings = runtime_state.prompt_runtime.warnings;
+        agent.set_prompt_config(prompt_config);
     }
-    let persisted_compact_state = state_db.load_session_compact_state(session_id)?;
-    agent.compact_state.compaction_count = persisted_compact_state.compaction_count;
-    agent.compact_state.last_compaction_before_tokens =
-        persisted_compact_state.last_compaction_before_tokens;
-    agent.compact_state.last_compaction_after_tokens =
-        persisted_compact_state.last_compaction_after_tokens;
-    agent.compact_state.last_compaction_boundary =
-        match persisted_compact_state.last_compaction_boundary_version {
-            Some(version) => Some(CompactBoundaryMetadata {
-                version,
-                before_tokens: persisted_compact_state
-                    .last_compaction_before_tokens
-                    .unwrap_or_default(),
-                recent_file_count: persisted_compact_state
-                    .last_compaction_recent_file_count
-                    .unwrap_or_default(),
-            }),
-            None => latest_compact_boundary_metadata(&agent.history),
-        };
-    let persisted_steps = state_db.load_plan_steps(session_id)?;
-    if !persisted_steps.is_empty() {
-        agent.current_plan = persisted_steps
+    apply_compaction_record(agent, &compaction);
+    agent.compact_state.last_compaction_boundary = match compaction.boundary_version {
+        Some(version) => Some(CompactBoundaryMetadata {
+            version,
+            before_tokens: compaction.before_tokens.unwrap_or_default(),
+            recent_file_count: compaction.recent_file_count.unwrap_or_default(),
+        }),
+        None => latest_compact_boundary_metadata(&agent.history),
+    };
+    if !plan_steps.is_empty() {
+        agent.current_plan = plan_steps
             .into_iter()
             .map(|step| PlanStep {
                 step: step.step,
@@ -72,12 +86,11 @@ pub(super) fn restore_session_by_id(
     } else {
         agent.current_plan.clear();
     }
-    agent.plan_explanation = state_db.load_session_plan_explanation(session_id)?;
+    agent.plan_explanation = plan_explanation;
     agent.pending_user_input = None;
     agent.pending_approval = None;
     agent.completed_user_input = None;
     agent.completed_approval = None;
-    let interactions = state_db.load_interactions(session_id)?;
     for interaction in interactions {
         match (interaction.kind.as_str(), interaction.status.as_str()) {
             ("request_input", "pending") => {
@@ -159,19 +172,24 @@ pub(super) fn restore_session_by_id(
             _ => {}
         }
     }
-    let summaries = state_db.load_turn_summaries(session_id)?;
-    let mut turns = Vec::with_capacity(summaries.len());
-    for summary in summaries {
-        let entries = state_db
-            .load_turn_entries(session_id, summary.ordinal)?
-            .into_iter()
-            .map(|entry| TranscriptEntry {
-                role: entry.role,
-                message: entry.message,
-            })
-            .collect::<Vec<_>>();
-        if !entries.is_empty() {
-            turns.push(TranscriptTurn { entries });
+    let mut turns = Vec::new();
+    for item in rollout_items {
+        match item {
+            RolloutItem::Turn(turn) if !turn.entries.is_empty() => {
+                let entries = turn
+                    .entries
+                    .into_iter()
+                    .map(|entry| TranscriptEntry {
+                        role: entry.role,
+                        message: entry.message,
+                    })
+                    .collect::<Vec<_>>();
+                turns.push(TranscriptTurn { entries });
+            }
+            RolloutItem::Turn(_)
+            | RolloutItem::Compaction(_)
+            | RolloutItem::PlanState { .. }
+            | RolloutItem::Interaction(_) => {}
         }
     }
     if !turns.is_empty() {
@@ -180,8 +198,29 @@ pub(super) fn restore_session_by_id(
         app.reset_transcript();
     }
     app.sync_snapshot(agent);
-    app.notice = Some(format!("Resumed session {session_id}."));
+    app.notice = Some(format!("Resumed thread {thread_id}."));
     Ok(())
+}
+
+fn apply_compaction_record(agent: &mut Agent, compaction: &CompactionRecord) {
+    agent.compact_state.compaction_count = compaction.compaction_count;
+    agent.compact_state.last_compaction_before_tokens = compaction.before_tokens;
+    agent.compact_state.last_compaction_after_tokens = compaction.after_tokens;
+}
+
+fn parse_agent_mode(mode: &str) -> AgentExecutionMode {
+    match mode {
+        "plan" => AgentExecutionMode::Plan,
+        _ => AgentExecutionMode::Execute,
+    }
+}
+
+fn parse_bash_approval_mode(mode: &str) -> BashApprovalMode {
+    match mode {
+        "once" => BashApprovalMode::Once,
+        "suggestion" => BashApprovalMode::Suggestion,
+        _ => BashApprovalMode::Always,
+    }
 }
 
 pub(crate) fn provider_requires_api_key(provider: &str) -> bool {
@@ -189,4 +228,244 @@ pub(crate) fn provider_requires_api_key(provider: &str) -> bool {
         provider,
         "mock" | "local" | "local-candle" | "gemma4" | "qwen3" | "qwn3" | "ollama"
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agent::{AgentExecutionMode, Message};
+    use crate::config::ConfigManager;
+    use crate::llm::MockLlm;
+    use crate::prompt::PromptRuntimeConfig;
+    use crate::state_db::StateDb;
+    use crate::tool::ToolManager;
+    use crate::tui::state::TuiApp;
+    use crate::vectordb::VectorDB;
+    use crate::workspace::WorkspaceMemory;
+    use serde_json::json;
+    use std::fs;
+    use tempfile::tempdir;
+
+    #[test]
+    fn restore_session_keeps_runtime_context_and_snapshot_aligned() {
+        let temp = tempdir().expect("tempdir");
+        let root = temp.path().join("repo");
+        let rara_dir = root.join(".rara");
+        fs::create_dir_all(rara_dir.join("rollouts")).expect("rollouts");
+        fs::create_dir_all(rara_dir.join("sessions")).expect("sessions");
+        fs::create_dir_all(rara_dir.join("tool-results")).expect("tool results");
+        fs::write(root.join("AGENTS.md"), "repo rules").expect("agents");
+        fs::write(rara_dir.join("instructions.md"), "local instructions").expect("instructions");
+
+        let session_manager = Arc::new(crate::session::SessionManager {
+            storage_dir: rara_dir.join("rollouts"),
+            legacy_storage_dir: rara_dir.join("sessions"),
+        });
+        let workspace = Arc::new(WorkspaceMemory::from_paths(root.clone(), rara_dir.clone()));
+        let backend = Arc::new(MockLlm);
+
+        let mut original_agent = Agent::new(
+            ToolManager::new(),
+            backend.clone(),
+            Arc::new(VectorDB::new(
+                &rara_dir.join("lancedb").display().to_string(),
+            )),
+            session_manager.clone(),
+            workspace.clone(),
+        );
+        original_agent.session_id = "session-restore-1".to_string();
+        original_agent.execution_mode = AgentExecutionMode::Plan;
+        original_agent.set_prompt_config(PromptRuntimeConfig {
+            append_system_prompt: Some("appendix".to_string()),
+            warnings: vec!["missing custom prompt file".to_string()],
+            ..PromptRuntimeConfig::default()
+        });
+        original_agent.current_plan = vec![PlanStep {
+            step: "Align runtime restore with shared context".to_string(),
+            status: PlanStepStatus::Pending,
+        }];
+        original_agent.plan_explanation =
+            Some("Restore should rebuild the same context surface.".to_string());
+        original_agent.compact_state.compaction_count = 1;
+        original_agent.compact_state.last_compaction_before_tokens = Some(2400);
+        original_agent.compact_state.last_compaction_after_tokens = Some(900);
+        original_agent.compact_state.last_compaction_boundary = Some(CompactBoundaryMetadata {
+            version: 2,
+            before_tokens: 2400,
+            recent_file_count: 3,
+        });
+        original_agent.history.push(Message {
+            role: "user".to_string(),
+            content: json!([{"type":"text","text":"resume me"}]),
+        });
+        session_manager
+            .save_session(&original_agent.session_id, &original_agent.history)
+            .expect("save session");
+
+        let state_db = Arc::new(StateDb::new_for_root_dir(rara_dir.clone()).expect("state db"));
+        let mut original_app = TuiApp::new(ConfigManager {
+            path: temp.path().join("config.json"),
+        })
+        .expect("app");
+        original_app.attach_state_db(state_db.clone());
+        original_app.sync_snapshot(&original_agent);
+
+        let expected_runtime = original_agent.shared_runtime_context();
+
+        let restored_agent = Agent::new(
+            ToolManager::new(),
+            backend,
+            Arc::new(VectorDB::new(
+                &rara_dir.join("lancedb").display().to_string(),
+            )),
+            session_manager,
+            workspace,
+        );
+        let mut restored_slot = Some(restored_agent);
+        let mut restored_app = TuiApp::new(ConfigManager {
+            path: temp.path().join("config-restored.json"),
+        })
+        .expect("restored app");
+        restored_app.attach_state_db(state_db);
+
+        restore_thread_by_id(
+            expected_runtime.session_id.as_str(),
+            &mut restored_app,
+            &mut restored_slot,
+        )
+        .expect("restore thread");
+
+        let restored_agent = restored_slot.expect("restored agent");
+        let restored_runtime = restored_agent.shared_runtime_context();
+
+        assert_eq!(restored_runtime.cwd, expected_runtime.cwd);
+        assert_eq!(restored_runtime.branch, expected_runtime.branch);
+        assert_eq!(restored_runtime.session_id, expected_runtime.session_id);
+        assert_eq!(restored_runtime.history_len, expected_runtime.history_len);
+        assert_eq!(
+            restored_runtime.prompt.base_prompt_kind,
+            expected_runtime.prompt.base_prompt_kind
+        );
+        assert_eq!(
+            restored_runtime.prompt.section_keys,
+            expected_runtime.prompt.section_keys
+        );
+        assert_eq!(
+            restored_runtime.prompt.source_entries,
+            expected_runtime.prompt.source_entries
+        );
+        assert_eq!(
+            restored_runtime.prompt.append_system_prompt,
+            expected_runtime.prompt.append_system_prompt
+        );
+        assert_eq!(
+            restored_runtime.prompt.warnings,
+            expected_runtime.prompt.warnings
+        );
+        assert_eq!(restored_runtime.plan.steps, expected_runtime.plan.steps);
+        assert_eq!(
+            restored_runtime.plan.explanation,
+            expected_runtime.plan.explanation
+        );
+        assert_eq!(
+            restored_runtime.compaction.last_compaction_boundary_version,
+            expected_runtime.compaction.last_compaction_boundary_version
+        );
+
+        assert_eq!(
+            restored_app.snapshot.prompt_source_entries,
+            restored_runtime.prompt.source_entries
+        );
+        assert_eq!(
+            restored_app.snapshot.prompt_append_system_prompt,
+            restored_runtime.prompt.append_system_prompt
+        );
+        assert_eq!(
+            restored_app.snapshot.plan_steps,
+            restored_runtime.plan.steps
+        );
+        assert_eq!(
+            restored_app.snapshot.plan_explanation,
+            restored_runtime.plan.explanation
+        );
+        assert_eq!(
+            restored_app.snapshot.last_compaction_boundary_version,
+            restored_runtime.compaction.last_compaction_boundary_version
+        );
+    }
+
+    #[test]
+    fn restore_session_keeps_target_session_id_even_without_history_file() {
+        let temp = tempdir().expect("tempdir");
+        let root = temp.path().join("repo");
+        let rara_dir = root.join(".rara");
+        fs::create_dir_all(rara_dir.join("rollouts")).expect("rollouts");
+        fs::create_dir_all(rara_dir.join("sessions")).expect("sessions");
+        fs::create_dir_all(rara_dir.join("tool-results")).expect("tool results");
+        fs::write(root.join("AGENTS.md"), "repo rules").expect("agents");
+
+        let session_manager = Arc::new(crate::session::SessionManager {
+            storage_dir: rara_dir.join("rollouts"),
+            legacy_storage_dir: rara_dir.join("sessions"),
+        });
+        let workspace = Arc::new(WorkspaceMemory::from_paths(root.clone(), rara_dir.clone()));
+        let backend = Arc::new(MockLlm);
+
+        let mut original_agent = Agent::new(
+            ToolManager::new(),
+            backend.clone(),
+            Arc::new(VectorDB::new(
+                &rara_dir.join("lancedb").display().to_string(),
+            )),
+            session_manager.clone(),
+            workspace.clone(),
+        );
+        original_agent.session_id = "session-without-history".to_string();
+        original_agent.history.push(Message {
+            role: "user".to_string(),
+            content: json!([{"type":"text","text":"restore this exact session"}]),
+        });
+
+        let state_db = Arc::new(StateDb::new_for_root_dir(rara_dir.clone()).expect("state db"));
+        let mut original_app = TuiApp::new(ConfigManager {
+            path: temp.path().join("config.json"),
+        })
+        .expect("app");
+        original_app.attach_state_db(state_db.clone());
+        original_app.sync_snapshot(&original_agent);
+
+        let rollout_dir = rara_dir
+            .join("rollouts")
+            .join(original_agent.session_id.as_str());
+        if rollout_dir.exists() {
+            fs::remove_dir_all(&rollout_dir).expect("remove rollout history");
+        }
+
+        let restored_agent = Agent::new(
+            ToolManager::new(),
+            backend,
+            Arc::new(VectorDB::new(
+                &rara_dir.join("lancedb").display().to_string(),
+            )),
+            session_manager,
+            workspace,
+        );
+        let mut restored_slot = Some(restored_agent);
+        let mut restored_app = TuiApp::new(ConfigManager {
+            path: temp.path().join("config-restored.json"),
+        })
+        .expect("restored app");
+        restored_app.attach_state_db(state_db);
+
+        restore_thread_by_id(
+            original_agent.session_id.as_str(),
+            &mut restored_app,
+            &mut restored_slot,
+        )
+        .expect("restore thread");
+
+        let restored_agent = restored_slot.expect("restored agent");
+        assert_eq!(restored_agent.session_id, "session-without-history");
+        assert_eq!(restored_app.snapshot.session_id, "session-without-history");
+    }
 }

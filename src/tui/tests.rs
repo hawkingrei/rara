@@ -8,9 +8,7 @@ use tokio::sync::mpsc;
 
 use crate::codex_model_catalog::{CodexModelOption, CodexReasoningOption};
 use crate::config::ConfigManager;
-use crate::config::{
-    DEFAULT_CODEX_BASE_URL, DEFAULT_CODEX_CHATGPT_BASE_URL, DEFAULT_CODEX_MODEL,
-};
+use crate::config::{DEFAULT_CODEX_BASE_URL, DEFAULT_CODEX_CHATGPT_BASE_URL, DEFAULT_CODEX_MODEL};
 
 use super::app_event::AppEvent;
 use super::provider_flow::{
@@ -152,6 +150,21 @@ fn auth_mode_picker_prefers_selection_navigation() {
     assert!(matches!(
         map_key_to_event(KeyCode::Char('3'), &app),
         AppEvent::SetAuthModeSelection(2)
+    ));
+}
+
+#[test]
+fn plain_input_does_not_treat_s_as_setup_shortcut() {
+    let temp = tempdir().expect("tempdir");
+    let mut app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("app");
+    app.input = "先同步ma".into();
+
+    assert!(matches!(
+        map_key_to_event(KeyCode::Char('s'), &app),
+        AppEvent::InputChar('s')
     ));
 }
 
@@ -505,4 +518,8 @@ async fn save_api_key_input_sets_codex_defaults_before_rebuild() {
     assert!(!should_quit);
     assert_eq!(app.config.model.as_deref(), Some(DEFAULT_CODEX_MODEL));
     assert_eq!(app.config.base_url.as_deref(), Some(DEFAULT_CODEX_BASE_URL));
+    assert_eq!(
+        app.codex_auth_mode,
+        Some(crate::oauth::SavedCodexAuthMode::ApiKey)
+    );
 }

@@ -15,6 +15,11 @@ entrypoint in `src/runtime_context.rs` instead of duplicating backend/tool/works
   for `ask`, `tui`, and ACP startup.
 - Updated the TUI rebuild path to reuse the same bootstrap entrypoint and surface bootstrap
   warnings back into the UI.
+- Split CLI parsing and command dispatch out of `src/main.rs` into `src/app_cli.rs`, leaving the
+  binary entrypoint as a thin startup wrapper.
+- Moved tool-manager/skill-loading/vector-path bootstrap helpers into
+  `src/runtime_context/tooling.rs` so runtime dependency wiring sits beside the shared bootstrap
+  contract instead of drifting back toward the entrypoint.
 - Switched vector-memory bootstrap wiring from a hard-coded `data/lancedb` path to the workspace
   data dir (`<workspace>/.rara/lancedb`).
 - Stopped silently swallowing `SkillManager::load_all()` failures during bootstrap; warnings are
@@ -27,7 +32,5 @@ entrypoint in `src/runtime_context.rs` instead of duplicating backend/tool/works
 
 ## Follow-Up
 
-- Keep shrinking `src/main.rs` until it is mostly CLI/config dispatch and no longer owns auth-flow
-  branching inline.
 - Continue toward a richer runtime context contract that can also carry stable instructions,
   compacted history, and context observability for `/context`.

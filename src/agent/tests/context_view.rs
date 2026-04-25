@@ -10,6 +10,11 @@ use std::sync::Arc;
 #[test]
 fn shared_runtime_context_collects_prompt_plan_and_compaction_state() {
     let (_temp, session_manager, workspace, rara_dir) = test_runtime_storage();
+    std::fs::write(
+        rara_dir.join("memory.md"),
+        "# Team Notes\n\nPrefer the shared bootstrap path.\n",
+    )
+    .expect("write workspace memory");
     let backend = Arc::new(SequencedBackend::new(vec![LlmResponse {
         content: vec![ContentBlock::Text {
             text: "ok".to_string(),
@@ -21,7 +26,9 @@ fn shared_runtime_context_collects_prompt_plan_and_compaction_state() {
     let mut agent = Agent::new(
         ToolManager::new(),
         backend,
-        Arc::new(VectorDB::new(&rara_dir.join("lancedb").display().to_string())),
+        Arc::new(VectorDB::new(
+            &rara_dir.join("lancedb").display().to_string(),
+        )),
         session_manager,
         workspace,
     );
@@ -51,18 +58,15 @@ fn shared_runtime_context_collects_prompt_plan_and_compaction_state() {
     agent.compact_state.compaction_count = 2;
     agent.compact_state.last_compaction_before_tokens = Some(5000);
     agent.compact_state.last_compaction_after_tokens = Some(2100);
-    agent.compact_state.last_compaction_recent_files =
-        vec!["src/main.rs".to_string(), "src/runtime_context.rs".to_string()];
+    agent.compact_state.last_compaction_recent_files = vec![
+        "src/main.rs".to_string(),
+        "src/runtime_context.rs".to_string(),
+    ];
     agent.compact_state.last_compaction_boundary = Some(crate::agent::CompactBoundaryMetadata {
         version: 3,
         before_tokens: 5000,
         recent_file_count: 2,
     });
-    std::fs::write(
-        rara_dir.join("memory.md"),
-        "# Team Notes\n\nPrefer the shared bootstrap path.\n",
-    )
-    .expect("write memory");
     agent.history.push(Message {
         role: "user".to_string(),
         content: json!([{"type":"text","text":"hello"}]),
@@ -107,46 +111,40 @@ fn shared_runtime_context_collects_prompt_plan_and_compaction_state() {
     });
     agent.history.push(Message {
         role: "assistant".to_string(),
-        content: json!([{
-            "type": "tool_use",
-            "id": "toolu_1",
-            "name": "retrieve_experience",
-            "input": {
-                "query": "bootstrap contract"
+        content: json!([
+            {
+                "type": "tool_use",
+                "id": "tool-retrieve-1",
+                "name": "retrieve_experience",
+                "input": { "query": "bootstrap contract" }
+            },
+            {
+                "type": "tool_use",
+                "id": "tool-retrieve-2",
+                "name": "retrieve_session_context",
+                "input": { "query": "previous auth flow" }
             }
-        }]),
+        ]),
     });
     agent.history.push(Message {
         role: "user".to_string(),
-        content: json!([{
-            "type": "tool_result",
-            "tool_use_id": "toolu_1",
-            "content": "experience result"
-        }]),
-    });
-    agent.history.push(Message {
-        role: "assistant".to_string(),
-        content: json!([{
-            "type": "tool_use",
-            "id": "toolu_2",
-            "name": "retrieve_session_context",
-            "input": {
-                "query": "previous auth flow"
+        content: json!([
+            {
+                "type": "tool_result",
+                "tool_use_id": "tool-retrieve-1",
+                "content": "Tool retrieve_experience completed with relevant_experiences.\nPayload:\n{\n  \"relevant_experiences\": [\n    \"Prefer one shared bootstrap path.\",\n    \"Keep session restore aligned with direct execution.\"\n  ]\n}"
+            },
+            {
+                "type": "tool_result",
+                "tool_use_id": "tool-retrieve-2",
+                "content": "Tool retrieve_session_context completed with status, summary.\nPayload:\n{\n  \"status\": \"ok\",\n  \"summary\": \"Auth picker already moved behind the shared runtime bootstrap.\"\n}"
             }
-        }]),
-    });
-    agent.history.push(Message {
-        role: "user".to_string(),
-        content: json!([{
-            "type": "tool_result",
-            "tool_use_id": "toolu_2",
-            "content": "thread context result"
-        }]),
+        ]),
     });
 
     let runtime = agent.shared_runtime_context();
 
-    assert_eq!(runtime.history_len, agent.history.len());
+    assert_eq!(runtime.history_len, 7);
     assert_eq!(runtime.total_input_tokens, 11);
     assert_eq!(runtime.total_output_tokens, 7);
     assert_eq!(runtime.prompt.base_prompt_kind, "default");
@@ -186,7 +184,27 @@ fn shared_runtime_context_collects_prompt_plan_and_compaction_state() {
             "src/runtime_context.rs".to_string()
         ]
     );
-    assert_eq!(runtime.retrieval.remaining_input_budget_tokens, Some(5934));
+    assert_eq!(runtime.compaction.source_entries.len(), 4);
+    assert_eq!(
+        runtime.compaction.source_entries[0].kind,
+        "compact_boundary"
+    );
+    assert_eq!(
+        runtime.compaction.source_entries[1].kind,
+        "compacted_summary"
+    );
+    assert_eq!(runtime.compaction.source_entries[2].kind, "recent_files");
+    assert_eq!(
+        runtime.compaction.source_entries[3].kind,
+        "recent_file_excerpts"
+    );
+    assert_eq!(runtime.retrieval.entries.len(), 3);
+    assert_eq!(runtime.retrieval.entries[0].kind, "workspace_memory");
+    assert_eq!(runtime.retrieval.entries[0].status, "active");
+    assert_eq!(runtime.retrieval.entries[1].kind, "thread_history");
+    assert_eq!(runtime.retrieval.entries[1].status, "available");
+    assert_eq!(runtime.retrieval.entries[2].kind, "vector_memory");
+    assert_eq!(runtime.retrieval.entries[2].status, "available");
     assert_eq!(runtime.retrieval.selected_items.len(), 6);
     assert_eq!(runtime.retrieval.selected_items[0].kind, "workspace_memory");
     assert!(runtime.retrieval.selected_items[0]
@@ -195,9 +213,15 @@ fn shared_runtime_context_collects_prompt_plan_and_compaction_state() {
     assert!(runtime.retrieval.selected_items[0]
         .detail
         .contains("2 non-empty lines"));
-    assert_eq!(runtime.retrieval.selected_items[1].kind, "compacted_summary");
+    assert_eq!(
+        runtime.retrieval.selected_items[1].kind,
+        "compacted_summary"
+    );
     assert_eq!(runtime.retrieval.selected_items[2].kind, "recent_files");
-    assert_eq!(runtime.retrieval.selected_items[3].kind, "recent_file_excerpts");
+    assert_eq!(
+        runtime.retrieval.selected_items[3].kind,
+        "recent_file_excerpts"
+    );
     assert_eq!(runtime.retrieval.selected_items[4].kind, "retrieve_experience");
     assert!(runtime.retrieval.selected_items[4]
         .detail
@@ -208,5 +232,5 @@ fn shared_runtime_context_collects_prompt_plan_and_compaction_state() {
     );
     assert!(runtime.retrieval.selected_items[5]
         .detail
-        .contains("query=previous auth flow"));
+        .contains("previous auth flow"));
 }

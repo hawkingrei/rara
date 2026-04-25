@@ -120,7 +120,7 @@ fn active_turn_cell_keeps_exploration_notes_inside_exploring_block() {
         "rendered_exploration_notes=\n{rendered}"
     );
     assert!(rendered.contains("Read src/main.rs"));
-    assert!(!rendered.contains(
+    assert!(rendered.contains(
         "I have inspected the repository structure and will now inspect the core modules."
     ));
     assert!(!rendered.contains("waiting for model response · 12s elapsed"));
@@ -284,8 +284,14 @@ fn active_turn_cell_updated_plan_snapshot() {
     app.snapshot = RuntimeSnapshot {
         plan_steps: vec![
             ("completed".into(), "Inspect the current auth bridge".into()),
-            ("in_progress".into(), "Replace the bespoke OAuth flow".into()),
-            ("pending".into(), "Add snapshot tests for the auth picker".into()),
+            (
+                "in_progress".into(),
+                "Replace the bespoke OAuth flow".into(),
+            ),
+            (
+                "pending".into(),
+                "Add snapshot tests for the auth picker".into(),
+            ),
         ],
         plan_explanation: Some(
             "Prefer direct Codex auth reuse before extending more TUI flows.".into(),
@@ -399,8 +405,7 @@ fn active_turn_cell_uses_planning_sidecar_for_non_structured_plan_output() {
             },
             TranscriptEntry {
                 role: "Planning".into(),
-                message: "The current discovery is hardcoded to root-level markdown files."
-                    .into(),
+                message: "The current discovery is hardcoded to root-level markdown files.".into(),
             },
         ],
     };
@@ -462,6 +467,99 @@ fn active_turn_cell_uses_explicit_sidecar_entries_when_live_state_is_empty() {
 }
 
 #[test]
+fn active_turn_cell_preserves_exploration_agent_exploration_order() {
+    let temp = tempdir().unwrap();
+    let mut app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("build tui app");
+    app.runtime_phase = RuntimePhase::RunningTool;
+    app.active_turn = TranscriptTurn {
+        entries: vec![
+            TranscriptEntry {
+                role: "You".into(),
+                message: "Inspect the repository".into(),
+            },
+            TranscriptEntry {
+                role: "Tool".into(),
+                message: "read_file src/main.rs".into(),
+            },
+            TranscriptEntry {
+                role: "Agent".into(),
+                message: "The main entrypoint is thin; I will inspect the runtime bootstrap next."
+                    .into(),
+            },
+            TranscriptEntry {
+                role: "Tool".into(),
+                message: "read_file src/runtime_context.rs".into(),
+            },
+        ],
+    };
+
+    let rendered = ActiveTurnCell::new(&app, Some(Path::new(".")))
+        .display_lines(100)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let first_exploring = rendered.find(" Exploring ").unwrap();
+    let agent = rendered
+        .find("• The main entrypoint is thin; I will inspect the runtime bootstrap next.")
+        .unwrap();
+    let second_exploring = rendered[first_exploring + 1..]
+        .find(" Exploring ")
+        .map(|idx| first_exploring + 1 + idx)
+        .unwrap();
+
+    assert!(rendered.contains("Read src/main.rs"));
+    assert!(rendered.contains("Read src/runtime_context.rs"));
+    assert!(first_exploring < agent);
+    assert!(agent < second_exploring);
+}
+
+#[test]
+fn active_turn_cell_preserves_agent_then_exploration_order() {
+    let temp = tempdir().unwrap();
+    let mut app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("build tui app");
+    app.runtime_phase = RuntimePhase::RunningTool;
+    app.active_turn = TranscriptTurn {
+        entries: vec![
+            TranscriptEntry {
+                role: "You".into(),
+                message: "Inspect the bootstrap path".into(),
+            },
+            TranscriptEntry {
+                role: "Agent".into(),
+                message: "I have narrowed this down to the runtime bootstrap path.".into(),
+            },
+            TranscriptEntry {
+                role: "Tool".into(),
+                message: "read_file src/runtime_context.rs".into(),
+            },
+        ],
+    };
+
+    let rendered = ActiveTurnCell::new(&app, Some(Path::new(".")))
+        .display_lines(100)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let agent = rendered
+        .find("• I have narrowed this down to the runtime bootstrap path.")
+        .unwrap();
+    let exploring = rendered.find(" Exploring ").unwrap();
+
+    assert!(rendered.contains("Read src/runtime_context.rs"));
+    assert!(agent < exploring);
+}
+
+#[test]
 fn active_turn_cell_uses_responding_label_while_busy() {
     let temp = tempdir().unwrap();
     let mut app = TuiApp::new(ConfigManager {
@@ -478,9 +576,8 @@ fn active_turn_cell_uses_responding_label_while_busy() {
             },
             TranscriptEntry {
                 role: "Agent".into(),
-                message:
-                    "I have inspected the main module and will continue with the tool layer."
-                        .into(),
+                message: "I have inspected the main module and will continue with the tool layer."
+                    .into(),
             },
         ],
     };
@@ -493,7 +590,46 @@ fn active_turn_cell_uses_responding_label_while_busy() {
         .join("\n");
 
     assert!(rendered.contains("Responding"));
-    assert!(!rendered.contains("• I have inspected"));
+    assert!(rendered.contains("╭"));
+    assert!(rendered.contains("╰"));
+    assert!(rendered.contains("• I have inspected"));
+    assert!(!rendered.contains("Agent:"));
+}
+
+#[test]
+fn active_turn_cell_renders_live_response_as_card() {
+    let temp = tempdir().unwrap();
+    let mut app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("build tui app");
+    app.runtime_phase = RuntimePhase::ProcessingResponse;
+    app.runtime_phase_detail = Some("waiting for model response".into());
+    app.active_turn = TranscriptTurn {
+        entries: vec![
+            TranscriptEntry {
+                role: "You".into(),
+                message: "Review this repository".into(),
+            },
+            TranscriptEntry {
+                role: "Agent".into(),
+                message: "I have inspected the main module and will continue with the tool layer."
+                    .into(),
+            },
+        ],
+    };
+
+    let rendered = ActiveTurnCell::new(&app, Some(Path::new(".")))
+        .display_lines(100)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(rendered.contains(" Responding ") || rendered.contains("Responding"));
+    assert!(rendered.contains("╭"));
+    assert!(rendered.contains("╰"));
+    assert!(rendered.contains("• I have inspected the main module"));
 }
 
 #[test]

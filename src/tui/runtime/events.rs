@@ -2,15 +2,14 @@ mod helpers;
 #[cfg(test)]
 mod tests;
 
-use crate::agent::AgentEvent;
-use super::super::state::{contains_structured_planning_output, RuntimePhase, TuiApp, TuiEvent};
 use self::helpers::{
     append_tool_progress, exploration_action_label, exploration_note_lines,
     exploration_result_note, format_tool_result, format_tool_use, is_exploration_tool_name,
-    is_oauth_prompt_message, planning_action_label, planning_note_lines,
-    planning_result_note, scrub_internal_control_tokens, subagent_request_input,
-    tool_action_label,
+    is_oauth_prompt_message, planning_action_label, planning_note_lines, planning_result_note,
+    scrub_internal_control_tokens, subagent_request_input, tool_action_label,
 };
+use super::super::state::{contains_structured_planning_output, RuntimePhase, TuiApp, TuiEvent};
+use crate::agent::AgentEvent;
 
 const TOOL_PROGRESS_LINE_LIMIT: usize = 16;
 
@@ -108,7 +107,8 @@ pub(super) fn apply_tui_event(app: &mut TuiApp, event: TuiEvent) {
                         app.runtime_phase,
                         RuntimePhase::RunningTool | RuntimePhase::SendingPrompt
                     )
-                    && (!planning_mode || (planning_notes.is_empty() && !structured_planning_output))
+                    && (!planning_mode
+                        || (planning_notes.is_empty() && !structured_planning_output))
                 {
                     for note in exploration_note_lines(&message, planning_mode) {
                         app.record_exploration_note(note);

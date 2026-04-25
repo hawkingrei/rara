@@ -1,21 +1,21 @@
 use std::sync::Arc;
-use std::time::Instant;
 
 use tempfile::tempdir;
-use tokio::sync::mpsc;
 
-use crate::agent::{Agent, AgentExecutionMode, PlanStep, PlanStepStatus};
+use crate::agent::{
+    Agent, AgentExecutionMode, BashApprovalMode, Message, PlanStep, PlanStepStatus,
+};
 use crate::config::ConfigManager;
-use crate::llm::MockLlm;
 use crate::oauth::OAuthManager;
+use crate::prompt::PromptRuntimeConfig;
 use crate::session::SessionManager;
 use crate::tool::ToolManager;
 use crate::tui::state::{OAuthLoginMode, TuiApp};
-use crate::tui::state::{RunningTask, TaskCompletion, TaskKind};
 use crate::vectordb::VectorDB;
 use crate::workspace::WorkspaceMemory;
+use serde_json::json;
 
-use super::{finish_running_task_if_ready, should_suggest_planning_mode, start_oauth_task};
+use super::{merge_rebuilt_agent, should_suggest_planning_mode, start_oauth_task};
 
 #[test]
 fn suggests_planning_for_repo_review_requests() {
@@ -41,8 +41,14 @@ fn skips_planning_for_simple_requests() {
         path: temp.path().join("config.json"),
     })
     .expect("build tui app");
-    assert!(!should_suggest_planning_mode(&app, "Fix the typo in README."));
-    assert!(!should_suggest_planning_mode(&app, "What does this function do?"));
+    assert!(!should_suggest_planning_mode(
+        &app,
+        "Fix the typo in README."
+    ));
+    assert!(!should_suggest_planning_mode(
+        &app,
+        "What does this function do?"
+    ));
 }
 
 #[test]
@@ -74,71 +80,112 @@ fn browser_oauth_is_rejected_before_task_start_in_ssh() {
     }
 }
 
-fn test_agent(root: &std::path::Path, rara_dir: &std::path::Path) -> Agent {
-    Agent::new(
+#[test]
+fn merge_rebuilt_agent_preserves_session_and_turn_state() {
+    let temp = tempdir().unwrap();
+    let workspace_root = temp.path().join("workspace");
+    let rara_dir = workspace_root.join(".rara");
+    std::fs::create_dir_all(rara_dir.join("rollouts")).expect("rollouts");
+    std::fs::create_dir_all(rara_dir.join("sessions")).expect("sessions");
+    std::fs::create_dir_all(rara_dir.join("tool-results")).expect("tool results");
+
+    let workspace = Arc::new(WorkspaceMemory::from_paths(
+        workspace_root.clone(),
+        rara_dir.clone(),
+    ));
+    let session_manager = Arc::new(SessionManager {
+        storage_dir: rara_dir.join("rollouts"),
+        legacy_storage_dir: rara_dir.join("sessions"),
+    });
+    let backend = Arc::new(crate::llm::MockLlm);
+
+    let mut previous = Agent::new(
         ToolManager::new(),
-        Arc::new(MockLlm),
-        Arc::new(VectorDB::new(&rara_dir.join("lancedb").display().to_string())),
-        Arc::new(SessionManager::new_for_rara_dir(rara_dir.to_path_buf()).expect("session manager")),
-        Arc::new(WorkspaceMemory::from_paths(root.to_path_buf(), rara_dir.to_path_buf())),
-    )
-}
-
-#[tokio::test]
-async fn rebuild_keeps_transcript_and_session_continuity() {
-    let temp = tempdir().expect("tempdir");
-    let root = temp.path().join("repo");
-    let rara_dir = root.join(".rara");
-    std::fs::create_dir_all(&rara_dir).expect("mkdir rara");
-
-    let mut app = TuiApp::new(ConfigManager {
-        path: temp.path().join("config.json"),
-    })
-    .expect("app");
-    app.agent_execution_mode = AgentExecutionMode::Plan;
-    app.push_entry("You", "keep this transcript");
-    app.finalize_active_turn();
-
-    let mut previous = test_agent(&root, &rara_dir);
-    previous.session_id = "thread-123".to_string();
+        backend.clone(),
+        Arc::new(VectorDB::new(
+            &rara_dir.join("lancedb").display().to_string(),
+        )),
+        session_manager.clone(),
+        workspace.clone(),
+    );
+    previous.session_id = "session-keep".to_string();
+    previous.history.push(Message {
+        role: "user".into(),
+        content: json!([{"type":"text","text":"keep history"}]),
+    });
+    previous.total_input_tokens = 123;
+    previous.total_output_tokens = 45;
+    previous.execution_mode = AgentExecutionMode::Plan;
+    previous.bash_approval_mode = BashApprovalMode::Suggestion;
     previous.current_plan = vec![PlanStep {
-        step: "keep continuity".to_string(),
+        step: "Keep session continuity".into(),
         status: PlanStepStatus::InProgress,
     }];
-    previous.plan_explanation = Some("Preserve session continuity.".to_string());
-    previous.compact_state.estimated_history_tokens = 4321;
-    app.sync_snapshot(&previous);
-
-    let rebuilt = test_agent(&root, &rara_dir);
-    let (_sender, receiver) = mpsc::unbounded_channel();
-    app.running_task = Some(RunningTask {
-        kind: TaskKind::Rebuild,
-        receiver,
-        handle: tokio::spawn(async move {
-            TaskCompletion::Rebuild {
-                result: Ok(crate::tui::state::RebuildSuccess {
-                    agent: rebuilt,
-                    warnings: Vec::new(),
-                }),
-            }
-        }),
-        started_at: Instant::now(),
-        next_heartbeat_after_secs: 2,
+    previous.plan_explanation = Some("Do not reset the session during model switch.".into());
+    previous.compact_state.estimated_history_tokens = 1_200;
+    previous.compact_state.context_window_tokens = Some(8_192);
+    previous.compact_state.compact_threshold_tokens = 7_000;
+    previous.compact_state.reserved_output_tokens = 1_024;
+    previous.compact_state.compaction_count = 2;
+    previous.compact_state.last_compaction_before_tokens = Some(5_000);
+    previous.compact_state.last_compaction_after_tokens = Some(2_100);
+    previous.compact_state.last_compaction_recent_files = vec!["src/main.rs".into()];
+    previous.compact_state.last_compaction_boundary = Some(crate::agent::CompactBoundaryMetadata {
+        version: 1,
+        before_tokens: 5_000,
+        recent_file_count: 1,
+    });
+    previous.set_prompt_config(PromptRuntimeConfig {
+        append_system_prompt: Some("keep appendix".to_string()),
+        warnings: vec!["missing custom prompt".to_string()],
+        ..PromptRuntimeConfig::default()
     });
 
-    let mut agent_slot = Some(previous);
-    finish_running_task_if_ready(&mut app, &mut agent_slot)
-        .await
-        .expect("finish rebuild");
+    let mut rebuilt = Agent::new(
+        ToolManager::new(),
+        backend,
+        Arc::new(VectorDB::new(
+            &rara_dir.join("other-lancedb").display().to_string(),
+        )),
+        session_manager,
+        workspace,
+    );
+    rebuilt.compact_state.context_window_tokens = Some(200_000);
+    rebuilt.compact_state.compact_threshold_tokens = 180_000;
+    rebuilt.compact_state.reserved_output_tokens = 8_192;
 
-    assert_eq!(app.committed_turns.len(), 1);
-    assert_eq!(app.committed_turns[0].entries[0].message, "keep this transcript");
-    assert_eq!(app.snapshot.session_id, "thread-123");
-    assert_eq!(app.snapshot.plan_steps.len(), 1);
-    assert_eq!(app.snapshot.plan_steps[0].1, "keep continuity");
-    assert_eq!(app.snapshot.estimated_history_tokens, 4321);
+    let merged = merge_rebuilt_agent(rebuilt, previous);
+
+    assert_eq!(merged.session_id, "session-keep");
+    assert_eq!(merged.history.len(), 1);
+    assert_eq!(merged.total_input_tokens, 123);
+    assert_eq!(merged.total_output_tokens, 45);
+    assert_eq!(merged.execution_mode, AgentExecutionMode::Plan);
+    assert_eq!(merged.bash_approval_mode, BashApprovalMode::Suggestion);
+    assert_eq!(merged.current_plan.len(), 1);
+    assert_eq!(merged.compact_state.estimated_history_tokens, 1_200);
+    assert_eq!(merged.compact_state.compaction_count, 2);
     assert_eq!(
-        agent_slot.as_ref().expect("agent").session_id,
-        "thread-123"
+        merged.compact_state.last_compaction_before_tokens,
+        Some(5_000)
+    );
+    assert_eq!(
+        merged.compact_state.last_compaction_after_tokens,
+        Some(2_100)
+    );
+    assert_eq!(
+        merged.compact_state.last_compaction_recent_files,
+        vec!["src/main.rs".to_string()]
+    );
+    assert_eq!(merged.compact_state.context_window_tokens, Some(200_000));
+    assert_eq!(merged.compact_state.compact_threshold_tokens, 180_000);
+    assert_eq!(merged.compact_state.reserved_output_tokens, 8_192);
+    assert_eq!(
+        merged.prompt_config().append_system_prompt.as_deref(),
+        Some("keep appendix")
+    );
+    assert_eq!(
+        merged.prompt_config().warnings,
+        vec!["missing custom prompt".to_string()]
     );
 }

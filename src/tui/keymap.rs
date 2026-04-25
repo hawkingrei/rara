@@ -25,6 +25,10 @@ pub(super) fn map_key_to_event(key: KeyCode, app: &TuiApp) -> AppEvent {
             KeyCode::Esc | KeyCode::Enter => AppEvent::CloseOverlay,
             _ => AppEvent::Noop,
         },
+        Some(Overlay::Context) => match key {
+            KeyCode::Esc | KeyCode::Enter => AppEvent::CloseOverlay,
+            _ => AppEvent::Noop,
+        },
         Some(Overlay::Setup) => match key {
             KeyCode::Esc => AppEvent::CloseOverlay,
             KeyCode::Char('1') => AppEvent::SetModelSelection(0),
@@ -37,7 +41,9 @@ pub(super) fn map_key_to_event(key: KeyCode, app: &TuiApp) -> AppEvent {
             KeyCode::Char('8') => AppEvent::SetModelSelection(7),
             KeyCode::Char('9') => AppEvent::SetModelSelection(8),
             KeyCode::Char('m') => AppEvent::CycleModelSelection,
-            KeyCode::Char('l') if matches!(app.selected_provider_family(), ProviderFamily::Codex) => {
+            KeyCode::Char('l')
+                if matches!(app.selected_provider_family(), ProviderFamily::Codex) =>
+            {
                 AppEvent::OpenOverlay(Overlay::AuthModePicker)
             }
             KeyCode::Enter => AppEvent::ApplyOverlaySelection,
@@ -86,12 +92,18 @@ pub(super) fn map_key_to_event(key: KeyCode, app: &TuiApp) -> AppEvent {
                 AppEvent::OpenOverlay(Overlay::BaseUrlEditor)
             }
             KeyCode::Char('a')
-                if matches!(app.selected_provider_family(), ProviderFamily::OpenAiCompatible) =>
+                if matches!(
+                    app.selected_provider_family(),
+                    ProviderFamily::OpenAiCompatible
+                ) =>
             {
                 AppEvent::OpenOverlay(Overlay::ApiKeyEditor)
             }
             KeyCode::Char('n')
-                if matches!(app.selected_provider_family(), ProviderFamily::OpenAiCompatible) =>
+                if matches!(
+                    app.selected_provider_family(),
+                    ProviderFamily::OpenAiCompatible
+                ) =>
             {
                 AppEvent::OpenOverlay(Overlay::ModelNameEditor)
             }
@@ -145,8 +157,12 @@ pub(super) fn map_key_to_event(key: KeyCode, app: &TuiApp) -> AppEvent {
         None => match key {
             KeyCode::Esc => AppEvent::Noop,
             KeyCode::Enter => AppEvent::SubmitComposer,
-            KeyCode::Up | KeyCode::Char('k') if app.input.is_empty() => AppEvent::ScrollTranscript(-1),
-            KeyCode::Down | KeyCode::Char('j') if app.input.is_empty() => AppEvent::ScrollTranscript(1),
+            KeyCode::Up | KeyCode::Char('k') if app.input.is_empty() => {
+                AppEvent::ScrollTranscript(-1)
+            }
+            KeyCode::Down | KeyCode::Char('j') if app.input.is_empty() => {
+                AppEvent::ScrollTranscript(1)
+            }
             KeyCode::PageUp if app.input.is_empty() => AppEvent::ScrollTranscript(-8),
             KeyCode::PageDown if app.input.is_empty() => AppEvent::ScrollTranscript(8),
             KeyCode::Char('1')
@@ -171,7 +187,7 @@ pub(super) fn map_key_to_event(key: KeyCode, app: &TuiApp) -> AppEvent {
             {
                 AppEvent::SelectPendingOption(2)
             }
-            KeyCode::Char('s') => AppEvent::OpenOverlay(Overlay::Setup),
+            KeyCode::Char('s') if app.input.is_empty() => AppEvent::OpenOverlay(Overlay::Setup),
             KeyCode::Backspace => AppEvent::Backspace,
             KeyCode::Char(c) => AppEvent::InputChar(c),
             _ => AppEvent::Noop,

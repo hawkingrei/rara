@@ -53,6 +53,12 @@ Switching between providers must preserve and restore provider-local settings in
 
 This allows the user to switch between Codex, Ollama, local models, and generic OpenAI-compatible endpoints without losing per-provider connection details.
 
+Provider/model switching is a backend hot-swap, not a session reset:
+
+- switching provider/model should not reset the active TUI transcript;
+- switching provider/model should not mint a new session id;
+- current plan state, pending interactions, and compacted history should survive the backend rebuild.
+
 ## TUI Behavior
 
 In the model picker:
@@ -65,6 +71,21 @@ In the model picker:
 The base URL editor and API key editor must use generic OpenAI-compatible wording when the active provider is `openai-compatible`, not Codex-specific auth wording.
 
 The model-name editor is a separate overlay so the user can update the remote model identifier without editing config files.
+
+`/status` should explain the effective model/config surface, including at least:
+
+- the current `model`;
+- the current `base_url`;
+- the current `reasoning_summary`;
+- whether each value came from built-in defaults, provider-scoped state, or legacy global config.
+
+For `codex`, `/status` should also surface the current auth/endpoint shape for the running
+provider surface:
+
+- `codex_auth_mode = chatgpt | api_key | -`
+- `codex_endpoint_kind = chatgpt_codex | openai_api | unknown | -`
+
+This auth surface is session-stable UI state, not a trigger to reset the current session.
 
 ## Non-Goals
 

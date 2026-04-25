@@ -1,7 +1,26 @@
 use crate::agent::Message;
+use crate::state_db::PersistedStructuredRolloutEvent;
+use crate::thread_rollout_log;
 use anyhow::{anyhow, Result};
+use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PersistedCompactionEvent {
+    pub event_index: usize,
+    pub before_tokens: usize,
+    pub after_tokens: usize,
+    pub boundary_version: u32,
+    pub recent_files: Vec<String>,
+    pub summary: String,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct PersistedThreadHistoryMigration {
+    pub history: Vec<Message>,
+}
 
 pub struct SessionManager {
     pub storage_dir: PathBuf,
@@ -9,6 +28,10 @@ pub struct SessionManager {
 }
 
 impl SessionManager {
+    pub fn is_missing_thread_history_error(err: &anyhow::Error) -> bool {
+        err.to_string().contains("Thread not found locally")
+    }
+
     pub fn new() -> Result<Self> {
         let root = std::env::current_dir()?;
         let rara_dir = rara_config::workspace_data_dir_for(&root)?;
@@ -40,19 +63,95 @@ impl SessionManager {
         Ok(())
     }
 
-    pub fn load_session(&self, session_id: &str) -> Result<Vec<Message>> {
-        let path = self.session_history_path(session_id);
-        let content = if path.exists() {
-            fs::read_to_string(path)?
+    pub fn load_thread_history(&self, thread_id: &str) -> Result<Vec<Message>> {
+        Ok(self.load_thread_history_migration(thread_id)?.history)
+    }
+
+    pub fn load_thread_history_migration(
+        &self,
+        thread_id: &str,
+    ) -> Result<PersistedThreadHistoryMigration> {
+        let path = self.session_history_path(thread_id);
+        let history = if path.exists() {
+            let content = fs::read_to_string(path)?;
+            serde_json::from_str(&content)?
         } else {
-            let legacy = self.legacy_storage_dir.join(format!("{}.json", session_id));
+            let legacy = self.legacy_session_history_path(thread_id);
             if !legacy.exists() {
-                return Err(anyhow!("Session not found locally"));
+                return Err(anyhow!("Thread not found locally"));
             }
-            fs::read_to_string(legacy)?
+            let content = fs::read_to_string(&legacy)?;
+            let history: Vec<Message> = serde_json::from_str(&content)?;
+            self.backfill_legacy_thread_history(thread_id, &history)?;
+            history
         };
-        let history: Vec<Message> = serde_json::from_str(&content)?;
-        Ok(history)
+        Ok(PersistedThreadHistoryMigration { history })
+    }
+
+    pub fn load_session(&self, session_id: &str) -> Result<Vec<Message>> {
+        self.load_thread_history(session_id)
+    }
+
+    pub fn save_compaction_event(
+        &self,
+        session_id: &str,
+        event: &PersistedCompactionEvent,
+    ) -> Result<()> {
+        self.append_rollout_event(
+            session_id,
+            PersistedStructuredRolloutEvent::Compaction {
+                recorded_at: Some(epoch_seconds()),
+                event_index: event.event_index,
+                before_tokens: event.before_tokens,
+                after_tokens: event.after_tokens,
+                boundary_version: event.boundary_version,
+                recent_files: event.recent_files.clone(),
+                summary: event.summary.clone(),
+            },
+        )?;
+        Ok(())
+    }
+
+    pub fn load_compaction_events(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<PersistedCompactionEvent>> {
+        let events = self.load_structured_rollout_events(session_id)?;
+        let compactions = events
+            .into_iter()
+            .filter_map(|event| match event {
+                PersistedStructuredRolloutEvent::Compaction {
+                    recorded_at: _,
+                    event_index,
+                    before_tokens,
+                    after_tokens,
+                    boundary_version,
+                    recent_files,
+                    summary,
+                } => Some(PersistedCompactionEvent {
+                    event_index,
+                    before_tokens,
+                    after_tokens,
+                    boundary_version,
+                    recent_files,
+                    summary,
+                }),
+                PersistedStructuredRolloutEvent::RuntimeState { .. }
+                | PersistedStructuredRolloutEvent::PlanState { .. }
+                | PersistedStructuredRolloutEvent::Interaction { .. } => None,
+            })
+            .collect::<Vec<_>>();
+        if !compactions.is_empty() {
+            return Ok(compactions);
+        }
+        let path = self.session_compaction_events_path(session_id);
+        if !path.exists() {
+            return Ok(Vec::new());
+        }
+        let content = fs::read_to_string(path)?;
+        let compactions: Vec<PersistedCompactionEvent> = serde_json::from_str(&content)?;
+        self.backfill_legacy_compaction_events(session_id, &compactions)?;
+        Ok(compactions)
     }
 
     pub fn get_context(
@@ -61,7 +160,7 @@ impl SessionManager {
         turn_index: usize,
         window: usize,
     ) -> Result<Vec<Message>> {
-        let history = self.load_session(session_id)?;
+        let history = self.load_thread_history(session_id)?;
         let start = turn_index.saturating_sub(window);
         let end = (turn_index + window + 1).min(history.len());
         Ok(history[start..end].to_vec())
@@ -69,5 +168,221 @@ impl SessionManager {
 
     fn session_history_path(&self, session_id: &str) -> PathBuf {
         self.storage_dir.join(session_id).join("history.json")
+    }
+
+    fn legacy_session_history_path(&self, session_id: &str) -> PathBuf {
+        self.legacy_storage_dir.join(format!("{}.json", session_id))
+    }
+
+    fn session_compaction_events_path(&self, session_id: &str) -> PathBuf {
+        self.storage_dir.join(session_id).join("compactions.json")
+    }
+
+    fn append_rollout_event(
+        &self,
+        session_id: &str,
+        event: PersistedStructuredRolloutEvent,
+    ) -> Result<()> {
+        thread_rollout_log::append_rollout_event_line(&self.storage_dir, session_id, &event)
+    }
+
+    fn backfill_legacy_thread_history(&self, thread_id: &str, history: &[Message]) -> Result<()> {
+        if history.is_empty() {
+            return Ok(());
+        }
+        let path = self.session_history_path(thread_id);
+        if path.exists() {
+            return Ok(());
+        }
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let temp_path = path.with_extension("json.tmp");
+        fs::write(&temp_path, serde_json::to_string(history)?)?;
+        fs::rename(temp_path, path)?;
+        Ok(())
+    }
+
+    fn backfill_legacy_compaction_events(
+        &self,
+        session_id: &str,
+        compactions: &[PersistedCompactionEvent],
+    ) -> Result<()> {
+        if compactions.is_empty() {
+            return Ok(());
+        }
+        let rollout_path =
+            thread_rollout_log::rollout_events_log_path(&self.storage_dir, session_id);
+        let existing_compaction_count = if rollout_path.exists() {
+            self.load_structured_rollout_events(session_id)?
+                .into_iter()
+                .filter(|event| matches!(event, PersistedStructuredRolloutEvent::Compaction { .. }))
+                .count()
+        } else {
+            0
+        };
+        if existing_compaction_count >= compactions.len() {
+            return Ok(());
+        }
+
+        for compaction in compactions.iter().skip(existing_compaction_count) {
+            self.append_rollout_event(
+                session_id,
+                PersistedStructuredRolloutEvent::Compaction {
+                    recorded_at: None,
+                    event_index: compaction.event_index,
+                    before_tokens: compaction.before_tokens,
+                    after_tokens: compaction.after_tokens,
+                    boundary_version: compaction.boundary_version,
+                    recent_files: compaction.recent_files.clone(),
+                    summary: compaction.summary.clone(),
+                },
+            )?;
+        }
+        Ok(())
+    }
+
+    fn load_structured_rollout_events(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<PersistedStructuredRolloutEvent>> {
+        thread_rollout_log::load_rollout_events(&self.storage_dir, session_id)
+    }
+}
+
+fn epoch_seconds() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn save_compaction_event_appends_jsonl_lines() -> Result<()> {
+        let temp = tempdir()?;
+        let session_manager = SessionManager::new_for_rara_dir(temp.path().join(".rara"))?;
+
+        session_manager.save_compaction_event(
+            "thread-1",
+            &PersistedCompactionEvent {
+                event_index: 1,
+                before_tokens: 100,
+                after_tokens: 40,
+                boundary_version: 1,
+                recent_files: vec!["src/main.rs".to_string()],
+                summary: "first".to_string(),
+            },
+        )?;
+        session_manager.save_compaction_event(
+            "thread-1",
+            &PersistedCompactionEvent {
+                event_index: 2,
+                before_tokens: 200,
+                after_tokens: 80,
+                boundary_version: 2,
+                recent_files: vec!["src/thread_store.rs".to_string()],
+                summary: "second".to_string(),
+            },
+        )?;
+
+        let path =
+            thread_rollout_log::rollout_events_log_path(&session_manager.storage_dir, "thread-1");
+        let content = fs::read_to_string(path)?;
+        assert_eq!(content.lines().count(), 2);
+
+        let events = session_manager.load_compaction_events("thread-1")?;
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].summary, "first");
+        assert_eq!(events[1].summary, "second");
+        Ok(())
+    }
+
+    #[test]
+    fn load_thread_history_backfills_legacy_session_file_into_rollout_root() -> Result<()> {
+        let temp = tempdir()?;
+        let session_manager = SessionManager::new_for_rara_dir(temp.path().join(".rara"))?;
+        let legacy_path = session_manager.legacy_session_history_path("thread-legacy-history");
+        fs::write(
+            &legacy_path,
+            serde_json::to_string(&vec![Message {
+                role: "user".to_string(),
+                content: serde_json::json!("hello from legacy history"),
+            }])?,
+        )?;
+
+        let migration = session_manager.load_thread_history_migration("thread-legacy-history")?;
+        assert_eq!(migration.history.len(), 1);
+
+        let canonical_history =
+            fs::read_to_string(session_manager.session_history_path("thread-legacy-history"))?;
+        let canonical_messages: Vec<Message> = serde_json::from_str(&canonical_history)?;
+        assert_eq!(canonical_messages.len(), 1);
+        assert_eq!(canonical_messages[0].role, "user");
+        Ok(())
+    }
+
+    #[test]
+    fn load_compaction_events_backfills_legacy_compactions_json_into_rollout_log() -> Result<()> {
+        let temp = tempdir()?;
+        let session_manager = SessionManager::new_for_rara_dir(temp.path().join(".rara"))?;
+        let legacy_path = session_manager.session_compaction_events_path("thread-legacy");
+        fs::create_dir_all(legacy_path.parent().expect("legacy compaction dir"))?;
+        fs::write(
+            &legacy_path,
+            serde_json::to_string_pretty(&vec![
+                PersistedCompactionEvent {
+                    event_index: 1,
+                    before_tokens: 100,
+                    after_tokens: 40,
+                    boundary_version: 1,
+                    recent_files: vec!["src/main.rs".to_string()],
+                    summary: "first".to_string(),
+                },
+                PersistedCompactionEvent {
+                    event_index: 2,
+                    before_tokens: 220,
+                    after_tokens: 80,
+                    boundary_version: 2,
+                    recent_files: vec!["src/thread_store.rs".to_string()],
+                    summary: "second".to_string(),
+                },
+            ])?,
+        )?;
+
+        let events = session_manager.load_compaction_events("thread-legacy")?;
+        assert_eq!(events.len(), 2);
+
+        let rollout_content = fs::read_to_string(thread_rollout_log::rollout_events_log_path(
+            &session_manager.storage_dir,
+            "thread-legacy",
+        ))?;
+        let rollout_events = rollout_content
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .map(serde_json::from_str::<PersistedStructuredRolloutEvent>)
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        assert_eq!(rollout_events.len(), 2);
+        assert!(matches!(
+            &rollout_events[0],
+            PersistedStructuredRolloutEvent::Compaction {
+                event_index,
+                summary,
+                ..
+            } if *event_index == 1 && summary == "first"
+        ));
+        assert!(matches!(
+            &rollout_events[1],
+            PersistedStructuredRolloutEvent::Compaction {
+                event_index,
+                summary,
+                ..
+            } if *event_index == 2 && summary == "second"
+        ));
+        Ok(())
     }
 }

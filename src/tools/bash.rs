@@ -193,8 +193,11 @@ impl Tool for BashTool {
             .ok_or_else(|| ToolError::ExecutionFailed("stderr pipe unavailable".into()))?;
 
         let (tx, mut rx) = mpsc::unbounded_channel();
-        let stdout_task =
-            tokio::spawn(read_stream_chunks(stdout, BashStreamKind::Stdout, tx.clone()));
+        let stdout_task = tokio::spawn(read_stream_chunks(
+            stdout,
+            BashStreamKind::Stdout,
+            tx.clone(),
+        ));
         let stderr_task = tokio::spawn(read_stream_chunks(stderr, BashStreamKind::Stderr, tx));
 
         let mut stdout_text = String::new();
@@ -260,7 +263,7 @@ mod tests {
     use super::{BashCommandInput, BashTool};
     use crate::sandbox::SandboxManager;
     use crate::tool::{Tool, ToolOutputStream, ToolProgressEvent};
-    use serde_json::{Value, json};
+    use serde_json::{json, Value};
     use std::env;
     use std::path::Path;
     use std::sync::Arc;
@@ -303,12 +306,14 @@ mod tests {
     #[tokio::test]
     async fn streaming_call_reports_stdout_and_stderr_chunks() {
         let temp = tempdir().expect("tempdir");
-        let sandbox =
-            SandboxManager::new_for_rara_dir(temp.path().join(".rara")).expect("sandbox");
+        let sandbox = SandboxManager::new_for_rara_dir(temp.path().join(".rara")).expect("sandbox");
         let wrapped = sandbox
             .wrap_exec_command(
                 "sh",
-                &["-c".to_string(), "printf 'out\\n'; printf 'err\\n' >&2".to_string()],
+                &[
+                    "-c".to_string(),
+                    "printf 'out\\n'; printf 'err\\n' >&2".to_string(),
+                ],
                 temp.path().to_string_lossy().as_ref(),
                 false,
             )
@@ -339,7 +344,10 @@ mod tests {
                 ..
             }
         )));
-        assert_eq!(result.get("live_streamed").and_then(Value::as_bool), Some(true));
+        assert_eq!(
+            result.get("live_streamed").and_then(Value::as_bool),
+            Some(true)
+        );
     }
 
     fn binary_exists(program: &str) -> bool {

@@ -18,62 +18,6 @@ use super::super::state::{
 use super::events::{apply_tui_event, convert_agent_event, format_error_chain};
 use builder::rebuild_agent_with_progress;
 
-fn merge_rebuilt_agent(previous: Option<Agent>, mut rebuilt: Agent) -> Agent {
-    let Some(previous) = previous else {
-        return rebuilt;
-    };
-
-    let previous_append_system_prompt = previous.prompt_config().append_system_prompt.clone();
-    let previous_prompt_warnings = previous.prompt_config().warnings.clone();
-    let Agent {
-        session_id,
-        history,
-        total_input_tokens,
-        total_output_tokens,
-        current_plan,
-        plan_explanation,
-        pending_user_input,
-        pending_approval,
-        completed_user_input,
-        completed_approval,
-        compact_state: previous_compact_state,
-        ..
-    } = previous;
-
-    rebuilt.session_id = session_id;
-    rebuilt.history = history;
-    rebuilt.total_input_tokens = total_input_tokens;
-    rebuilt.total_output_tokens = total_output_tokens;
-    rebuilt.current_plan = current_plan;
-    rebuilt.plan_explanation = plan_explanation;
-    rebuilt.pending_user_input = pending_user_input;
-    rebuilt.pending_approval = pending_approval;
-    rebuilt.completed_user_input = completed_user_input;
-    rebuilt.completed_approval = completed_approval;
-    rebuilt.compact_state.estimated_history_tokens = previous_compact_state.estimated_history_tokens;
-    rebuilt.compact_state.compaction_count = previous_compact_state.compaction_count;
-    rebuilt.compact_state.last_compaction_before_tokens =
-        previous_compact_state.last_compaction_before_tokens;
-    rebuilt.compact_state.last_compaction_after_tokens =
-        previous_compact_state.last_compaction_after_tokens;
-    rebuilt.compact_state.last_compaction_recent_files =
-        previous_compact_state.last_compaction_recent_files;
-    rebuilt.compact_state.last_compaction_boundary =
-        previous_compact_state.last_compaction_boundary;
-
-    if rebuilt.prompt_config().append_system_prompt.is_none() && previous_append_system_prompt.is_some()
-    {
-        let mut prompt_config = rebuilt.prompt_config().clone();
-        prompt_config.append_system_prompt = previous_append_system_prompt;
-        if prompt_config.warnings.is_empty() {
-            prompt_config.warnings = previous_prompt_warnings;
-        }
-        rebuilt.set_prompt_config(prompt_config);
-    }
-
-    rebuilt
-}
-
 fn restore_execute_mode_after_plan_turn(app: &mut TuiApp, agent: &mut Agent) {
     if matches!(
         app.agent_execution_mode,
@@ -82,6 +26,39 @@ fn restore_execute_mode_after_plan_turn(app: &mut TuiApp, agent: &mut Agent) {
         app.set_agent_execution_mode(crate::agent::AgentExecutionMode::Execute);
         agent.set_execution_mode(crate::agent::AgentExecutionMode::Execute);
     }
+}
+
+fn merge_rebuilt_agent(mut rebuilt: Agent, previous: Agent) -> Agent {
+    let previous_prompt_config = previous.prompt_config().clone();
+    rebuilt.session_id = previous.session_id;
+    rebuilt.history = previous.history;
+    rebuilt.total_input_tokens = previous.total_input_tokens;
+    rebuilt.total_output_tokens = previous.total_output_tokens;
+    rebuilt.tool_result_store = previous.tool_result_store;
+    rebuilt.execution_mode = previous.execution_mode;
+    rebuilt.bash_approval_mode = previous.bash_approval_mode;
+    rebuilt.current_plan = previous.current_plan;
+    rebuilt.plan_explanation = previous.plan_explanation;
+    rebuilt.pending_user_input = previous.pending_user_input;
+    rebuilt.pending_approval = previous.pending_approval;
+    rebuilt.completed_user_input = previous.completed_user_input;
+    rebuilt.completed_approval = previous.completed_approval;
+    rebuilt.compact_state.estimated_history_tokens =
+        previous.compact_state.estimated_history_tokens;
+    rebuilt.compact_state.compaction_count = previous.compact_state.compaction_count;
+    rebuilt.compact_state.last_compaction_before_tokens =
+        previous.compact_state.last_compaction_before_tokens;
+    rebuilt.compact_state.last_compaction_after_tokens =
+        previous.compact_state.last_compaction_after_tokens;
+    rebuilt.compact_state.last_compaction_recent_files =
+        previous.compact_state.last_compaction_recent_files;
+    rebuilt.compact_state.last_compaction_boundary =
+        previous.compact_state.last_compaction_boundary;
+    let mut prompt_config = rebuilt.prompt_config().clone();
+    prompt_config.append_system_prompt = previous_prompt_config.append_system_prompt;
+    prompt_config.warnings = previous_prompt_config.warnings;
+    rebuilt.set_prompt_config(prompt_config);
+    rebuilt
 }
 
 fn try_start_queued_follow_up(app: &mut TuiApp, agent_slot: &mut Option<Agent>) {
@@ -529,7 +506,10 @@ pub(super) async fn finish_running_task_if_ready(
         }
         TaskCompletion::Rebuild { result } => match result {
             Ok(rebuilt) => {
-                let mut agent = merge_rebuilt_agent(agent_slot.take(), rebuilt.agent);
+                let mut agent = rebuilt.agent;
+                if let Some(previous) = agent_slot.take() {
+                    agent = merge_rebuilt_agent(agent, previous);
+                }
                 agent.set_execution_mode(app.agent_execution_mode);
                 agent.set_bash_approval_mode(app.bash_approval_mode);
                 app.config_manager.save(&app.config)?;
@@ -564,6 +544,7 @@ pub(super) async fn finish_running_task_if_ready(
                 app.config.set_provider("codex");
                 app.config
                     .set_api_key(credential.expose_secret().to_string());
+                app.codex_auth_mode = Some(crate::oauth::SavedCodexAuthMode::Chatgpt);
                 let base_url = match mode {
                     OAuthLoginMode::Browser | OAuthLoginMode::DeviceCode => {
                         crate::config::DEFAULT_CODEX_CHATGPT_BASE_URL
