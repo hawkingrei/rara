@@ -131,7 +131,11 @@ pub fn status_command_approval_text(app: &TuiApp) -> String {
         "command:\n{}\n\ncwd:\n{}\n\nnetwork:\n{}\n\nenv:\n{} override(s)\n\n1. yes\n2. on\n3. no",
         approval.command,
         cwd,
-        if approval.allow_net { "allowed" } else { "disabled" },
+        if approval.allow_net {
+            "allowed"
+        } else {
+            "disabled"
+        },
         env_count,
     )
 }
@@ -162,11 +166,15 @@ mod tests {
     #[test]
     fn pending_interaction_hint_text_is_compact_for_plan_and_shell_approval() {
         assert_eq!(
-            pending_interaction_hint_text(crate::tui::state::ActivePendingInteractionKind::PlanApproval),
+            pending_interaction_hint_text(
+                crate::tui::state::ActivePendingInteractionKind::PlanApproval
+            ),
             "type reply  1 yes  2 plan"
         );
         assert_eq!(
-            pending_interaction_hint_text(crate::tui::state::ActivePendingInteractionKind::ShellApproval),
+            pending_interaction_hint_text(
+                crate::tui::state::ActivePendingInteractionKind::ShellApproval
+            ),
             "type reply  1 yes  2 on  3 no"
         );
     }

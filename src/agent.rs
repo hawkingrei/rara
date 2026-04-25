@@ -442,7 +442,9 @@ impl Agent {
                     RuntimeContinuationPhase::FinalAnswerRequired,
                     *tool_rounds,
                 ));
-                let final_turn = self.run_model_turn_with_tools(output_mode, report, &[]).await?;
+                let final_turn = self
+                    .run_model_turn_with_tools(output_mode, report, &[])
+                    .await?;
                 self.last_query_plan_updated = final_turn.plan_updated;
                 self.push_history_message(final_turn.assistant_message);
                 if !final_turn.tool_calls.is_empty() || !final_turn.had_text_response {

@@ -4,7 +4,7 @@ use super::{
     ProviderFamily, RuntimeSnapshot, TranscriptEntry, TranscriptTurn, TuiApp,
 };
 use crate::codex_model_catalog::{CodexModelOption, CodexReasoningOption};
-use crate::config::{ConfigManager, RaraConfig};
+use crate::config::{ConfigManager, OpenAiEndpointKind, RaraConfig};
 use crate::config::{DEFAULT_CODEX_BASE_URL, DEFAULT_CODEX_MODEL};
 use crate::state_db::{PersistedCompactState, PersistedPromptRuntimeState, StateDb};
 use tempfile::tempdir;
@@ -209,6 +209,10 @@ fn openai_compatible_preset_sets_default_connection_fields() {
     app.select_local_model(0);
 
     assert_eq!(app.config.provider, "openai-compatible");
+    assert_eq!(
+        app.config.active_openai_profile_kind(),
+        Some(OpenAiEndpointKind::Custom)
+    );
     assert_eq!(app.config.model.as_deref(), Some("gpt-4o-mini"));
     assert_eq!(
         app.config.base_url.as_deref(),
@@ -233,6 +237,37 @@ fn openai_compatible_preset_preserves_custom_model_name() {
 
     assert_eq!(app.config.provider, "openai-compatible");
     assert_eq!(app.config.model.as_deref(), Some("custom-model"));
+}
+
+#[test]
+fn openai_compatible_presets_switch_active_endpoint_kind() {
+    let dir = tempdir().expect("tempdir");
+    let cm = ConfigManager {
+        path: dir.path().join("config.json"),
+    };
+    let mut app = TuiApp::new(cm).expect("app");
+
+    app.provider_picker_idx = 1;
+    app.select_local_model(1);
+    assert_eq!(
+        app.config.active_openai_profile_kind(),
+        Some(OpenAiEndpointKind::Deepseek)
+    );
+    assert_eq!(
+        app.config.base_url.as_deref(),
+        Some("https://api.deepseek.com/v1")
+    );
+    assert_eq!(app.config.model.as_deref(), Some("deepseek-chat"));
+
+    app.select_local_model(3);
+    assert_eq!(
+        app.config.active_openai_profile_kind(),
+        Some(OpenAiEndpointKind::Openrouter)
+    );
+    assert_eq!(
+        app.config.base_url.as_deref(),
+        Some("https://openrouter.ai/api/v1")
+    );
 }
 
 #[test]
@@ -289,6 +324,80 @@ fn opening_openai_compatible_model_picker_restores_provider_scoped_state() {
         Some("http://proxy.local/v1")
     );
     assert_eq!(app.config.model.as_deref(), Some("custom-model"));
+}
+
+#[test]
+fn opening_openai_compatible_model_picker_keeps_active_profile_kind() {
+    let dir = tempdir().expect("tempdir");
+    let cm = ConfigManager {
+        path: dir.path().join("config.json"),
+    };
+    let mut app = TuiApp::new(cm).expect("app");
+
+    app.config
+        .select_openai_profile("deepseek-default", "DeepSeek", OpenAiEndpointKind::Deepseek);
+    app.config.set_model(Some("deepseek-reasoner".to_string()));
+    app.provider_picker_idx = 1;
+
+    app.open_overlay(Overlay::ModelPicker);
+
+    assert_eq!(
+        app.config.active_openai_profile_kind(),
+        Some(OpenAiEndpointKind::Deepseek)
+    );
+    assert_eq!(app.config.model.as_deref(), Some("deepseek-reasoner"));
+}
+
+#[test]
+fn opening_openai_profile_picker_prefers_active_profile_of_selected_kind() {
+    let dir = tempdir().expect("tempdir");
+    let cm = ConfigManager {
+        path: dir.path().join("config.json"),
+    };
+    let mut app = TuiApp::new(cm).expect("app");
+
+    app.config.select_openai_profile(
+        "openrouter-main",
+        "OpenRouter Main",
+        OpenAiEndpointKind::Openrouter,
+    );
+    app.provider_picker_idx = 1;
+    app.model_picker_idx = 3;
+
+    app.open_overlay(Overlay::OpenAiProfilePicker);
+
+    assert_eq!(
+        app.selected_openai_profile_kind(),
+        Some(OpenAiEndpointKind::Openrouter)
+    );
+    assert_eq!(app.openai_profile_picker_idx, 1);
+}
+
+#[test]
+fn openai_model_selection_keeps_non_default_profile_for_same_kind() {
+    let dir = tempdir().expect("tempdir");
+    let cm = ConfigManager {
+        path: dir.path().join("config.json"),
+    };
+    let mut app = TuiApp::new(cm).expect("app");
+
+    app.provider_picker_idx = 1;
+    app.config.select_openai_profile(
+        "openrouter-main",
+        "OpenRouter Main",
+        OpenAiEndpointKind::Openrouter,
+    );
+
+    app.select_local_model(3);
+
+    assert_eq!(
+        app.config.active_openai_profile_id(),
+        Some("openrouter-main")
+    );
+    assert_eq!(
+        app.config.active_openai_profile_label(),
+        Some("OpenRouter Main")
+    );
 }
 
 #[test]

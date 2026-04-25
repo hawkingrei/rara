@@ -112,8 +112,7 @@ impl SandboxManager {
 (allow sysctl-read)
 {}
 "#,
-            file_rules,
-            net_rules
+            file_rules, net_rules
         );
         let profile_path = self
             .profile_dir

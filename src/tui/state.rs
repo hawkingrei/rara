@@ -9,7 +9,8 @@ use std::cell::RefCell;
 use std::process::Command;
 
 pub use self::state_presets::{
-    current_model_presets, selected_preset_idx_for_config, selected_provider_family_idx_for_config,
+    current_model_presets, openai_compatible_preset_kind, selected_preset_idx_for_config,
+    selected_provider_family_idx_for_config,
 };
 use self::types::CommittedTranscriptRenderCache;
 pub use self::types::{
@@ -23,8 +24,7 @@ pub use self::types::{
 use super::queued_input::PendingFollowUpMessage;
 use crate::agent::{Agent, AgentExecutionMode, BashApprovalMode};
 use crate::codex_model_catalog::{CodexModelOption, CodexReasoningOption};
-use crate::config::ConfigManager;
-use crate::config::DEFAULT_CODEX_BASE_URL;
+use crate::config::{ConfigManager, OpenAiEndpointKind, DEFAULT_CODEX_BASE_URL};
 use crate::redaction::redact_secrets;
 use crate::state_db::StateDb;
 use crate::tui::is_ssh_session;
@@ -139,12 +139,14 @@ impl TuiApp {
             bash_approval_mode: BashApprovalMode::Suggestion,
             provider_picker_idx,
             model_picker_idx,
+            openai_profile_picker_idx: 0,
             reasoning_effort_picker_idx: 0,
             auth_mode_idx: 0,
             command_palette_idx: 0,
             base_url_input: String::new(),
             api_key_input: String::new(),
             model_name_input: String::new(),
+            openai_profile_label_input: String::new(),
             codex_model_options: Vec::new(),
             recent_commands: Vec::new(),
             recent_threads: Vec::new(),
@@ -325,9 +327,87 @@ impl TuiApp {
         presets[self.model_picker_idx.min(presets.len().saturating_sub(1))]
     }
 
+    pub fn selected_openai_profile_kind(&self) -> Option<OpenAiEndpointKind> {
+        if self.selected_provider_family() != ProviderFamily::OpenAiCompatible {
+            return None;
+        }
+        Some(openai_compatible_preset_kind(self.model_picker_idx))
+    }
+
+    pub fn selected_openai_profiles(&self) -> Vec<(String, String)> {
+        let Some(kind) = self.selected_openai_profile_kind() else {
+            return Vec::new();
+        };
+        let mut profiles = self
+            .config
+            .openai_profiles
+            .values()
+            .filter(|profile| profile.kind == kind)
+            .map(|profile| (profile.id.clone(), profile.label.clone()))
+            .collect::<Vec<_>>();
+        profiles.sort_by(|left, right| {
+            left.1
+                .to_ascii_lowercase()
+                .cmp(&right.1.to_ascii_lowercase())
+                .then_with(|| left.0.cmp(&right.0))
+        });
+        profiles
+    }
+
+    fn sync_openai_profile_picker(&mut self) {
+        let profiles = self.selected_openai_profiles();
+        self.openai_profile_picker_idx = self
+            .config
+            .active_openai_profile_id()
+            .and_then(|active_id| profiles.iter().position(|(id, _)| id == active_id))
+            .map(|idx| idx + 1)
+            .unwrap_or(0);
+    }
+
+    pub(crate) fn next_openai_profile_id(&self, kind: OpenAiEndpointKind, label: &str) -> String {
+        let mut slug = label
+            .chars()
+            .map(|ch| {
+                if ch.is_ascii_alphanumeric() {
+                    ch.to_ascii_lowercase()
+                } else {
+                    '-'
+                }
+            })
+            .collect::<String>();
+        while slug.contains("--") {
+            slug = slug.replace("--", "-");
+        }
+        slug = slug.trim_matches('-').to_string();
+        if slug.is_empty() {
+            slug = "profile".to_string();
+        }
+        let prefix = match kind {
+            OpenAiEndpointKind::Custom => "custom",
+            OpenAiEndpointKind::Deepseek => "deepseek",
+            OpenAiEndpointKind::Kimi => "kimi",
+            OpenAiEndpointKind::Openrouter => "openrouter",
+        };
+        let base = format!("{prefix}-{slug}");
+        if !self.config.openai_profiles.contains_key(base.as_str()) {
+            return base;
+        }
+        let mut suffix = 2;
+        loop {
+            let candidate = format!("{base}-{suffix}");
+            if !self.config.openai_profiles.contains_key(candidate.as_str()) {
+                return candidate;
+            }
+            suffix += 1;
+        }
+    }
+
     fn single_provider_for_selected_family(&self) -> Option<&'static str> {
         if self.selected_provider_family() == ProviderFamily::Codex {
             return Some("codex");
+        }
+        if self.selected_provider_family() == ProviderFamily::OpenAiCompatible {
+            return None;
         }
         let presets = current_model_presets(self.provider_picker_idx);
         let provider = presets.first()?.1;
@@ -360,6 +440,23 @@ impl TuiApp {
 
         let presets = current_model_presets(self.provider_picker_idx);
         let (_, provider, model) = presets[idx];
+        if self.selected_provider_family() == ProviderFamily::OpenAiCompatible {
+            let kind = openai_compatible_preset_kind(idx);
+            let (profile_id, label) = self
+                .config
+                .active_openai_profile()
+                .filter(|profile| profile.kind == kind)
+                .map(|profile| (profile.id.clone(), profile.label.clone()))
+                .unwrap_or_else(|| {
+                    (
+                        kind.default_profile_id().to_string(),
+                        kind.label().to_string(),
+                    )
+                });
+            self.config.select_openai_profile(profile_id, label, kind);
+            self.config.set_revision(None);
+            return;
+        }
         self.config.set_provider(provider.to_string());
         if provider == "ollama" {
             self.config.set_model(Some(model.to_string()));
@@ -588,17 +685,29 @@ impl TuiApp {
             self.refresh_recent_threads_for_resume_picker();
         }
         if matches!(overlay, Overlay::ModelPicker) {
-            if let Some(provider) = self.single_provider_for_selected_family() {
+            let selected_family = self.selected_provider_family();
+            if matches!(selected_family, ProviderFamily::OpenAiCompatible) {
+                if !matches!(selected_provider_family_idx_for_config(&self.config), 1) {
+                    self.config.set_provider("openai-compatible");
+                }
+            } else if let Some(provider) = self.single_provider_for_selected_family() {
                 self.config.set_provider(provider.to_string());
             }
             self.model_picker_idx = self.selected_preset_idx();
             self.sync_reasoning_effort_picker();
         }
+        if matches!(overlay, Overlay::OpenAiProfilePicker) {
+            self.sync_openai_profile_picker();
+        }
         if matches!(overlay, Overlay::BaseUrlEditor) {
             let provider_family = self.selected_provider_family();
             self.base_url_input = self.config.base_url.clone().unwrap_or_else(|| {
                 if matches!(provider_family, ProviderFamily::OpenAiCompatible) {
-                    "https://api.openai.com/v1".to_string()
+                    self.config
+                        .active_openai_profile_kind()
+                        .unwrap_or(OpenAiEndpointKind::Custom)
+                        .default_base_url()
+                        .to_string()
                 } else {
                     "http://localhost:11434".to_string()
                 }
@@ -614,6 +723,12 @@ impl TuiApp {
                 .model
                 .clone()
                 .unwrap_or_else(|| default_model.to_string());
+        }
+        if matches!(overlay, Overlay::OpenAiProfileLabelEditor) {
+            let kind = self
+                .selected_openai_profile_kind()
+                .unwrap_or(OpenAiEndpointKind::Custom);
+            self.openai_profile_label_input = format!("{} profile", kind.label());
         }
         if matches!(overlay, Overlay::AuthModePicker) {
             self.auth_mode_idx = if is_ssh_session() { 1 } else { 0 };
@@ -801,6 +916,7 @@ impl TuiApp {
 
     pub fn close_overlay(&mut self) {
         self.overlay = match self.overlay {
+            Some(Overlay::OpenAiProfilePicker) => Some(Overlay::ModelPicker),
             Some(Overlay::BaseUrlEditor) => Some(Overlay::ModelPicker),
             Some(Overlay::ApiKeyEditor) => {
                 if self.config.provider == "codex" {
@@ -810,6 +926,7 @@ impl TuiApp {
                 }
             }
             Some(Overlay::ModelNameEditor) => Some(Overlay::ModelPicker),
+            Some(Overlay::OpenAiProfileLabelEditor) => Some(Overlay::OpenAiProfilePicker),
             Some(Overlay::AuthModePicker) => Some(Overlay::ModelPicker),
             _ => None,
         };

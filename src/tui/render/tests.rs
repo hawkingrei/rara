@@ -559,14 +559,7 @@ fn prefixed_message_lines_show_truncation_when_max_lines_is_one() {
 fn formatted_agent_markdown_keeps_first_and_latest_lines() {
     let rendered = formatted_message_lines(
         "Agent",
-        &[
-            "first line",
-            "middle 1",
-            "middle 2",
-            "latest 1",
-            "latest 2",
-        ]
-        .join("\n"),
+        &["first line", "middle 1", "middle 2", "latest 1", "latest 2"].join("\n"),
         3,
         Some(Path::new(".")),
     )
@@ -575,7 +568,9 @@ fn formatted_agent_markdown_keeps_first_and_latest_lines() {
     .collect::<Vec<_>>();
 
     assert!(rendered.iter().any(|line| line.contains("first line")));
-    assert!(rendered.iter().any(|line| line.contains("... 2 more line(s)")));
+    assert!(rendered
+        .iter()
+        .any(|line| line.contains("... 2 more line(s)")));
     assert!(rendered.iter().any(|line| line.contains("latest 1")));
     assert!(rendered.iter().any(|line| line.contains("latest 2")));
     assert!(!rendered.iter().any(|line| line.contains("middle 1")));

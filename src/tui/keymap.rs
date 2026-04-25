@@ -100,6 +100,30 @@ pub(super) fn map_key_to_event(key: KeyEvent, app: &TuiApp) -> AppEvent {
             {
                 AppEvent::OpenOverlay(Overlay::ModelNameEditor)
             }
+            KeyCode::Char('p')
+                if matches!(
+                    app.selected_provider_family(),
+                    ProviderFamily::OpenAiCompatible
+                ) =>
+            {
+                AppEvent::OpenOverlay(Overlay::OpenAiProfilePicker)
+            }
+            KeyCode::Enter => AppEvent::ApplyOverlaySelection,
+            _ => AppEvent::Noop,
+        },
+        Some(Overlay::OpenAiProfilePicker) => match code {
+            KeyCode::Esc => AppEvent::CloseOverlay,
+            KeyCode::Up | KeyCode::Char('k') => AppEvent::MoveOpenAiProfileSelection(-1),
+            KeyCode::Down | KeyCode::Char('j') => AppEvent::MoveOpenAiProfileSelection(1),
+            KeyCode::Char('1') => AppEvent::SetOpenAiProfileSelection(0),
+            KeyCode::Char('2') => AppEvent::SetOpenAiProfileSelection(1),
+            KeyCode::Char('3') => AppEvent::SetOpenAiProfileSelection(2),
+            KeyCode::Char('4') => AppEvent::SetOpenAiProfileSelection(3),
+            KeyCode::Char('5') => AppEvent::SetOpenAiProfileSelection(4),
+            KeyCode::Char('6') => AppEvent::SetOpenAiProfileSelection(5),
+            KeyCode::Char('7') => AppEvent::SetOpenAiProfileSelection(6),
+            KeyCode::Char('8') => AppEvent::SetOpenAiProfileSelection(7),
+            KeyCode::Char('9') => AppEvent::SetOpenAiProfileSelection(8),
             KeyCode::Enter => AppEvent::ApplyOverlaySelection,
             _ => AppEvent::Noop,
         },
@@ -131,6 +155,13 @@ pub(super) fn map_key_to_event(key: KeyEvent, app: &TuiApp) -> AppEvent {
         Some(Overlay::ModelNameEditor) => match code {
             KeyCode::Esc => AppEvent::CloseOverlay,
             KeyCode::Enter => AppEvent::SaveModelNameInput,
+            KeyCode::Backspace => AppEvent::Backspace,
+            KeyCode::Char(c) => AppEvent::InputChar(c),
+            _ => AppEvent::Noop,
+        },
+        Some(Overlay::OpenAiProfileLabelEditor) => match code {
+            KeyCode::Esc => AppEvent::CloseOverlay,
+            KeyCode::Enter => AppEvent::SaveOpenAiProfileLabelInput,
             KeyCode::Backspace => AppEvent::Backspace,
             KeyCode::Char(c) => AppEvent::InputChar(c),
             _ => AppEvent::Noop,
