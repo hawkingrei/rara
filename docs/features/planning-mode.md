@@ -17,7 +17,9 @@ RARA planning mode is a read-only collaboration mode for non-trivial tasks.
   - `<request_user_input>` when a key decision still needs user input;
   - `<continue_inspection/>` when more repository inspection is still required.
 - planning-mode prose should stay in inspected findings and concise progress updates;
+- planning-mode progress updates should stay short and grounded in inspected code instead of narrating each next file-by-file action;
 - planning mode must not describe file edits, patches, or implementation steps as if they are already happening.
+- plan approval must not be requested in ordinary prose; the model must use `<plan>` when the plan is ready, or `<request_user_input>` when a key decision still blocks it.
 
 Plain narration or status updates are not valid terminal planning artifacts.
 If the model ends a planning turn with narration alone, runtime must continue the same planning turn instead of treating it as a successful completion.

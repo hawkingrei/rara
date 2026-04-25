@@ -152,8 +152,8 @@ async fn does_not_append_continuation_without_tools() {
 }
 
 #[tokio::test]
-async fn errors_when_tool_loop_exceeds_limit() {
-    let responses = (0..=super::super::MAX_TOOL_ROUNDS_PER_TURN)
+async fn forces_final_answer_when_tool_loop_exceeds_limit() {
+    let mut responses = (0..=super::super::MAX_TOOL_ROUNDS_PER_TURN)
         .map(|idx| LlmResponse {
             content: vec![ContentBlock::ToolUse {
                 id: format!("tool-{idx}"),
@@ -164,23 +164,39 @@ async fn errors_when_tool_loop_exceeds_limit() {
             usage: Some(TokenUsage::default()),
         })
         .collect::<Vec<_>>();
+    responses.push(LlmResponse {
+        content: vec![ContentBlock::Text {
+            text: "Final answer after reviewing the tool results.".to_string(),
+        }],
+        stop_reason: Some("end_turn".to_string()),
+        usage: Some(TokenUsage::default()),
+    });
     let backend = Arc::new(SequencedBackend::new(responses));
 
     let mut tool_manager = ToolManager::new();
     tool_manager.register(Box::new(StubTool));
     let mut agent = Agent::new(
         tool_manager,
-        backend,
+        backend.clone(),
         Arc::new(VectorDB::new("data/lancedb")),
         Arc::new(SessionManager::new().expect("session manager")),
         Arc::new(WorkspaceMemory::new().expect("workspace memory")),
     );
 
-    let error = agent
+    agent
         .query_with_mode("loop".to_string(), super::super::AgentOutputMode::Silent)
         .await
-        .expect_err("query should fail");
-    assert!(error.to_string().contains("Tool loop exceeded"));
+        .expect("query should finish with a forced final answer");
+
+    let observed_tools = backend.observed_tools();
+    assert_eq!(observed_tools.len(), super::super::MAX_TOOL_ROUNDS_PER_TURN + 2);
+    assert!(observed_tools
+        .last()
+        .is_some_and(|tools| tools.is_empty()));
+    assert!(agent
+        .history
+        .last()
+        .is_some_and(|message| message.content.to_string().contains("Final answer after reviewing the tool results.")));
 }
 
 #[test]

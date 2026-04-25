@@ -318,7 +318,10 @@ fn assemble_turn_context_matches_prompt_and_runtime_views() {
 
     let assembled = agent.assemble_turn_context();
 
-    assert_eq!(assembled.prompt.system_prompt(), agent.build_system_prompt());
+    assert_eq!(
+        assembled.prompt.system_prompt(),
+        agent.build_system_prompt()
+    );
     assert_eq!(assembled.runtime, agent.shared_runtime_context());
     assert_eq!(
         assembled.runtime.prompt.append_system_prompt.as_deref(),

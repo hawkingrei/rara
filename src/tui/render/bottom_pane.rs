@@ -4,8 +4,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Paragraph, Wrap},
 };
-use textwrap::{wrap, Options};
-use unicode_width::UnicodeWidthStr;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use super::super::custom_terminal::Frame;
 use super::super::interaction_text::pending_interaction_hint_text;
@@ -15,6 +14,8 @@ use super::super::queued_input::{
 };
 use super::super::state::{ActivePendingInteractionKind, TaskKind, TuiApp};
 use super::badge;
+
+const COMPOSER_TAB_WIDTH: usize = 4;
 
 pub(crate) fn desired_viewport_height(app: &TuiApp, width: u16, rows: u16) -> u16 {
     if app.transcript_scroll > 0 {
@@ -225,18 +226,28 @@ fn render_composer(f: &mut Frame, app: &TuiApp, area: Rect) -> Option<(u16, u16)
             Span::styled(" to browse commands.", Style::default().fg(Color::DarkGray)),
         ])]
     } else {
-        app.input
-            .split('\n')
-            .map(|line| {
-                Line::from(vec![
-                    Span::styled(
-                        "› ",
+        wrapped_text_rows(app.input.as_str(), chunks[0].width, Some("› "), Some("  "))
+            .into_iter()
+            .map(|row| {
+                let mut spans = Vec::new();
+                let (prefix, remainder) = if let Some(rest) = row.strip_prefix("› ") {
+                    ("› ", rest)
+                } else if let Some(rest) = row.strip_prefix("  ") {
+                    ("  ", rest)
+                } else {
+                    ("", row.as_str())
+                };
+
+                if !prefix.is_empty() {
+                    spans.push(Span::styled(
+                        prefix.to_string(),
                         Style::default()
                             .fg(Color::Cyan)
                             .add_modifier(Modifier::BOLD),
-                    ),
-                    Span::raw(line.to_string()),
-                ])
+                    ));
+                }
+                spans.push(Span::raw(remainder.to_string()));
+                Line::from(spans)
             })
             .collect::<Vec<_>>()
     };
@@ -410,7 +421,7 @@ fn shows_live_task_stats(app: &TuiApp) -> bool {
 }
 
 fn composer_cursor_position(input: &str, area: Rect) -> (u16, u16) {
-    wrapped_text_cursor_position(input, area, Some("› "), None)
+    wrapped_text_cursor_position(input, area, Some("› "), Some("  "))
 }
 
 fn desired_composer_height(app: &TuiApp, width: u16, rows: u16) -> u16 {
@@ -512,24 +523,65 @@ fn wrapped_text_rows(
     }
 
     for logical_line in input.split('\n') {
-        let options = Options::new(width as usize)
-            .initial_indent(initial_indent)
-            .subsequent_indent(subsequent_indent)
-            .break_words(false);
-        let wraps = wrap(logical_line, options);
-        if wraps.is_empty() {
-            wrapped_rows.push(initial_indent.to_string());
-        } else {
-            wrapped_rows.extend(wraps.into_iter().map(|line| line.into_owned()));
-        }
+        wrapped_rows.extend(wrap_logical_line_preserving_whitespace(
+            logical_line,
+            width,
+            initial_indent,
+            subsequent_indent,
+        ));
     }
 
     wrapped_rows
 }
 
+fn wrap_logical_line_preserving_whitespace(
+    logical_line: &str,
+    width: u16,
+    initial_indent: &str,
+    subsequent_indent: &str,
+) -> Vec<String> {
+    let max_width = width.max(1) as usize;
+    let initial_width = UnicodeWidthStr::width(initial_indent);
+    let subsequent_width = UnicodeWidthStr::width(subsequent_indent);
+    let mut rows = Vec::new();
+    let mut current = initial_indent.to_string();
+    let mut current_width = initial_width.min(max_width);
+    let mut current_prefix_width = initial_width.min(max_width);
+
+    if logical_line.is_empty() {
+        rows.push(current);
+        return rows;
+    }
+
+    for ch in logical_line.chars() {
+        let char_width = display_char_width(ch);
+        let next_width = current_width.saturating_add(char_width);
+        let can_wrap = current_width > current_prefix_width;
+        if next_width > max_width && can_wrap {
+            rows.push(current);
+            current = subsequent_indent.to_string();
+            current_prefix_width = subsequent_width.min(max_width);
+            current_width = current_prefix_width;
+        }
+        current.push(ch);
+        current_width = current_width.saturating_add(char_width);
+    }
+
+    rows.push(current);
+    rows
+}
+
+fn display_char_width(ch: char) -> usize {
+    match ch {
+        '\t' => COMPOSER_TAB_WIDTH,
+        _ => UnicodeWidthChar::width(ch).unwrap_or(0),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use insta::assert_snapshot;
+    use ratatui::layout::Rect;
     use tempfile::tempdir;
 
     use crate::config::ConfigManager;
@@ -539,7 +591,7 @@ mod tests {
 
     use super::{
         activity_status_line, composer_hint, composer_hint_line, footer_summary_text,
-        queued_follow_up_preview_lines,
+        queued_follow_up_preview_lines, wrapped_text_cursor_position, wrapped_text_rows,
     };
 
     #[test]
@@ -702,5 +754,32 @@ mod tests {
         assert!(!rendered.contains("slash command"));
         assert!(rendered.contains("repo: hawkingrei/rara"));
         assert!(rendered.contains("branch: main"));
+    }
+
+    #[test]
+    fn wrapped_text_rows_preserve_space_only_and_blank_lines() {
+        let rows = wrapped_text_rows(" \n\n  ", 12, Some("› "), Some("  "));
+
+        assert_eq!(rows, vec!["›  ", "› ", "›   "]);
+    }
+
+    #[test]
+    fn wrapped_text_cursor_tracks_trailing_blank_composer_line() {
+        let area = Rect {
+            x: 4,
+            y: 2,
+            width: 12,
+            height: 6,
+        };
+
+        let cursor = wrapped_text_cursor_position("line one\n", area, Some("› "), Some("  "));
+        assert_eq!(cursor, (6, 3));
+    }
+
+    #[test]
+    fn wrapped_text_rows_treat_tabs_as_fixed_width_columns() {
+        let rows = wrapped_text_rows("\t12345", 8, Some("› "), Some("  "));
+
+        assert_eq!(rows, vec!["› \t12", "  345"]);
     }
 }

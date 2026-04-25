@@ -1,5 +1,6 @@
 ---
 source: src/tui/render/cells_tests/active_plan.rs
+assertion_line: 35
 expression: rendered
 ---
 › Review the codebase and propose changes
@@ -10,8 +11,8 @@ expression: rendered
     □ Preserve cache and path resolution behavior
 
  Awaiting Approval 
-  Would you like to start implementation with this plan?
+  Start implementation with this plan?
   
-  1. Start implementation now
-  2. Continue planning
-  Press 1 to start implementation or 2 to continue planning.
+  1. yes
+  2. keep planning
+  1 yes  2 plan

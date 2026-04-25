@@ -24,40 +24,28 @@ pub fn pending_interaction_card_title(kind: ActivePendingInteractionKind) -> &'s
 
 pub fn pending_interaction_hint_text(kind: ActivePendingInteractionKind) -> &'static str {
     match kind {
-        ActivePendingInteractionKind::PlanApproval => {
-            "plan approval pending  1 start implementation  2 continue planning"
-        }
-        ActivePendingInteractionKind::ShellApproval => {
-            "shell approval pending  1 once  2 session  3 suggestion"
-        }
+        ActivePendingInteractionKind::PlanApproval => "type reply  1 yes  2 plan",
+        ActivePendingInteractionKind::ShellApproval => "type reply  1 yes  2 on  3 no",
         ActivePendingInteractionKind::PlanningQuestion
         | ActivePendingInteractionKind::ExplorationQuestion
         | ActivePendingInteractionKind::SubAgentQuestion
-        | ActivePendingInteractionKind::RequestInput => {
-            "question pending  press 1/2/3 or type a reply"
-        }
+        | ActivePendingInteractionKind::RequestInput => "type reply  1/2/3 shortcut",
     }
 }
 
 pub fn status_plan_approval_text(app: &TuiApp) -> String {
     let _ = app;
-    "Would you like to start implementation with this plan?\n\n1. Start implementation now\n2. Continue planning".to_string()
+    "Start implementation with this plan?\n\n1. yes\n2. keep planning".to_string()
 }
 
 pub fn pending_interaction_shortcut_text(kind: ActivePendingInteractionKind) -> &'static str {
     match kind {
-        ActivePendingInteractionKind::PlanApproval => {
-            "Press 1 to start implementation or 2 to continue planning."
-        }
-        ActivePendingInteractionKind::ShellApproval => {
-            "shortcuts: press 1 to approve once, 2 to approve for session, 3 to keep as suggestion"
-        }
+        ActivePendingInteractionKind::PlanApproval => "1 yes  2 plan",
+        ActivePendingInteractionKind::ShellApproval => "1 yes  2 on  3 no",
         ActivePendingInteractionKind::PlanningQuestion
         | ActivePendingInteractionKind::ExplorationQuestion
         | ActivePendingInteractionKind::SubAgentQuestion
-        | ActivePendingInteractionKind::RequestInput => {
-            "shortcuts: press 1/2/3 to answer immediately"
-        }
+        | ActivePendingInteractionKind::RequestInput => "1/2/3 shortcut",
     }
 }
 
@@ -110,19 +98,16 @@ pub fn status_request_user_input_text(app: &TuiApp) -> String {
     let source_block = interaction
         .source
         .as_deref()
-        .map(|source| format!("source:\n{source}\n\n"))
+        .map(|source| format!("from: {source}\n\n"))
         .unwrap_or_default();
 
     if let Some(note) = interaction.note.as_deref() {
         format!(
-            "{}question:\n{}\n\noptions:\n{}\n\nnote:\n{}",
+            "{}{}\n\n{}\n\nnote: {}",
             source_block, interaction.title, options_text, note
         )
     } else {
-        format!(
-            "{}question:\n{}\n\noptions:\n{}",
-            source_block, interaction.title, options_text
-        )
+        format!("{}{}\n\n{}", source_block, interaction.title, options_text)
     }
 }
 
@@ -143,10 +128,46 @@ pub fn status_command_approval_text(app: &TuiApp) -> String {
     let env_count = approval.payload.env.len();
 
     format!(
-        "command:\n{}\n\ncwd:\n{}\n\nnetwork:\n{}\n\nenv:\n{} override(s)\n\noptions:\n1. Approve once\n2. Approve for session\n3. Keep as suggestion",
+        "command:\n{}\n\ncwd:\n{}\n\nnetwork:\n{}\n\nenv:\n{} override(s)\n\n1. yes\n2. on\n3. no",
         approval.command,
         cwd,
         if approval.allow_net { "allowed" } else { "disabled" },
         env_count,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use tempfile::tempdir;
+
+    use crate::config::ConfigManager;
+    use crate::tui::state::TuiApp;
+
+    use super::{pending_interaction_hint_text, status_plan_approval_text};
+
+    #[test]
+    fn plan_approval_text_uses_compact_choice_labels() {
+        let temp = tempdir().unwrap();
+        let app = TuiApp::new(ConfigManager {
+            path: temp.path().join("config.json"),
+        })
+        .expect("app");
+
+        let rendered = status_plan_approval_text(&app);
+        assert!(rendered.contains("1. yes"));
+        assert!(rendered.contains("2. keep planning"));
+        assert!(!rendered.contains("Start implementation now"));
+    }
+
+    #[test]
+    fn pending_interaction_hint_text_is_compact_for_plan_and_shell_approval() {
+        assert_eq!(
+            pending_interaction_hint_text(crate::tui::state::ActivePendingInteractionKind::PlanApproval),
+            "type reply  1 yes  2 plan"
+        );
+        assert_eq!(
+            pending_interaction_hint_text(crate::tui::state::ActivePendingInteractionKind::ShellApproval),
+            "type reply  1 yes  2 on  3 no"
+        );
+    }
 }
