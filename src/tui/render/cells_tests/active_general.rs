@@ -59,6 +59,41 @@ fn active_turn_cell_keeps_sections_in_stable_order() {
 }
 
 #[test]
+fn active_turn_cell_renders_progress_sections_as_compact_stack() {
+    let temp = tempdir().unwrap();
+    let mut app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("build tui app");
+    app.agent_execution_mode = crate::agent::AgentExecutionMode::Plan;
+    app.runtime_phase = RuntimePhase::RunningTool;
+    app.active_turn = TranscriptTurn {
+        entries: vec![TranscriptEntry {
+            role: "You".into(),
+            message: "Inspect the codebase".into(),
+        }],
+    };
+    app.record_exploration_note("Inspect the auth bridge.");
+    app.record_planning_note("Reuse the shared auth flow.");
+    app.record_running_action("Run cargo check");
+
+    let rendered_lines = ActiveTurnCell::new(&app, Some(Path::new(".")))
+        .display_lines(100)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>();
+
+    let plan_mode_idx = rendered_lines.iter().position(|line| line.contains(" Plan Mode ")).unwrap();
+    let exploring_idx = rendered_lines.iter().position(|line| line.contains(" Exploring ")).unwrap();
+    let planning_idx = rendered_lines.iter().position(|line| line.contains(" Planning ")).unwrap();
+    let running_idx = rendered_lines.iter().position(|line| line.contains(" Running ")).unwrap();
+
+    assert_eq!(exploring_idx, plan_mode_idx + 1);
+    assert_eq!(planning_idx, exploring_idx + 2);
+    assert_eq!(running_idx, planning_idx + 2);
+}
+
+#[test]
 fn active_turn_cell_renders_planning_suggestion_without_active_turn_entries() {
     let temp = tempdir().unwrap();
     let mut app = TuiApp::new(ConfigManager {
@@ -161,6 +196,45 @@ fn active_turn_cell_uses_stateful_live_exploration_sections() {
 }
 
 #[test]
+fn active_turn_cell_compacts_live_response_when_process_sections_exist() {
+    let temp = tempdir().unwrap();
+    let mut app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("build tui app");
+    app.runtime_phase = RuntimePhase::RunningTool;
+    app.runtime_phase_detail = Some("waiting for model response".into());
+    app.active_turn = TranscriptTurn {
+        entries: vec![
+            TranscriptEntry {
+                role: "You".into(),
+                message: "Inspect the repository".into(),
+            },
+            TranscriptEntry {
+                role: "Agent".into(),
+                message: "I have inspected the repository structure.\nI checked the runtime boundary.\nI checked the prompt assembly path.\nNext I will inspect the persistence layer.\nThen I will verify the restore contract."
+                    .into(),
+            },
+        ],
+    };
+    app.record_exploration_action("Read src/runtime_context.rs");
+
+    let rendered = ActiveTurnCell::new(&app, Some(Path::new(".")))
+        .display_lines(100)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(rendered.contains(" Exploring "));
+    assert!(rendered.contains("Read src/runtime_context.rs"));
+    assert!(rendered.contains("• I have inspected the repository structure."));
+    assert!(rendered.contains("• Next I will inspect the persistence layer."));
+    assert!(!rendered.contains(" Responding "));
+    assert!(!rendered.contains("Then I will verify the restore contract."));
+}
+
+#[test]
 fn active_turn_cell_compacts_long_live_exploration_sections() {
     let temp = tempdir().unwrap();
     let mut app = TuiApp::new(ConfigManager {
@@ -187,12 +261,13 @@ fn active_turn_cell_compacts_long_live_exploration_sections() {
         .join("\n");
 
     assert!(rendered.contains(" Exploring "));
-    assert!(rendered.contains("... 2 more exploration step(s)"));
+    assert!(rendered.contains("Cross-check the auth entrypoint."));
+    assert!(rendered.contains("... 1 more exploration step(s)"));
     assert!(!rendered.contains("module_1.rs"));
-    assert!(!rendered.contains("module_2.rs"));
+    assert!(rendered.contains("module_2.rs"));
     assert!(rendered.contains("module_3.rs"));
     assert!(rendered.contains("module_5.rs"));
-    assert!(rendered.contains("Cross-check the auth entrypoint."));
+    assert!(rendered.find("Cross-check the auth entrypoint.") < rendered.find("... 1 more exploration step(s)"));
 }
 
 #[test]
@@ -222,12 +297,13 @@ fn active_turn_cell_compacts_long_live_planning_sections() {
         .join("\n");
 
     assert!(rendered.contains(" Planning "));
-    assert!(rendered.contains("... 2 more planning step(s)"));
+    assert!(rendered.contains("Reuse the shared auth bridge."));
+    assert!(rendered.contains("... 1 more planning step(s)"));
     assert!(!rendered.contains("planning module 1"));
-    assert!(!rendered.contains("planning module 2"));
+    assert!(rendered.contains("planning module 2"));
+    assert!(rendered.find("Reuse the shared auth bridge.") < rendered.find("... 1 more planning step(s)"));
     assert!(rendered.contains("planning module 3"));
     assert!(rendered.contains("planning module 5"));
-    assert!(rendered.contains("Reuse the shared auth bridge."));
 }
 
 #[test]
@@ -256,11 +332,12 @@ fn active_turn_cell_compacts_long_live_running_sections() {
         .join("\n");
 
     assert!(rendered.contains(" Running "));
+    assert!(rendered.contains("Run task 6"));
     assert!(rendered.contains("... 2 more running step(s)"));
     assert!(!rendered.contains("Run task 1"));
     assert!(!rendered.contains("Run task 2"));
     assert!(rendered.contains("Run task 3"));
-    assert!(rendered.contains("Run task 6"));
+    assert!(rendered.find("Run task 6") < rendered.find("... 2 more running step(s)"));
 }
 
 #[test]

@@ -9,9 +9,11 @@ use crate::tui::state::{Overlay, TranscriptEntry, TranscriptTurn, TuiApp};
 use super::cells::HistoryCell;
 use super::viewport::TranscriptViewport;
 use super::{
-    committed_turn_cell, compact_summary_text, current_turn_exploration_summary_from_entries,
-    current_turn_tool_summary, desired_viewport_height, renderable_transcript_lines,
-    transcript_scroll_offset, transcript_viewport, transcript_visual_row_count,
+    committed_turn_cell, compact_progress_summary_lines, compact_recent_first_summary_lines,
+    compact_summary_text,
+    current_turn_exploration_summary_from_entries, current_turn_tool_summary,
+    desired_viewport_height, renderable_transcript_lines, transcript_scroll_offset,
+    transcript_viewport, transcript_visual_row_count,
 };
 
 #[test]
@@ -371,6 +373,53 @@ fn exploration_summary_only_keeps_read_actions() {
     assert!(!rendered.contains("Glob src/**/*.rs"));
     assert!(!rendered.contains("Search planning mode src"));
     assert!(!rendered.contains("listing files"));
+}
+
+#[test]
+fn compact_progress_summary_lines_prioritizes_latest_note_and_recent_actions() {
+    let actions = vec![
+        "Read src/module_1.rs".to_string(),
+        "Read src/module_2.rs".to_string(),
+        "Read src/module_3.rs".to_string(),
+    ];
+    let notes = vec![
+        "Initial inspection complete.".to_string(),
+        "Next I will verify the persistence path.".to_string(),
+    ];
+
+    let rendered = compact_progress_summary_lines(
+        actions.as_slice(),
+        notes.as_slice(),
+        2,
+        "more exploration step(s)",
+    );
+
+    assert!(rendered.contains("Next I will verify the persistence path."));
+    assert!(!rendered.contains("Initial inspection complete."));
+    assert!(rendered.contains("... 1 more exploration step(s)"));
+    assert!(rendered.contains("Read src/module_2.rs"));
+    assert!(rendered.contains("Read src/module_3.rs"));
+}
+
+#[test]
+fn compact_recent_first_summary_lines_puts_current_running_step_first() {
+    let items = vec![
+        "Run task 1".to_string(),
+        "Run task 2".to_string(),
+        "Run task 3".to_string(),
+        "Run task 4".to_string(),
+        "Run task 5".to_string(),
+    ];
+
+    let rendered =
+        compact_recent_first_summary_lines(items.as_slice(), 4, "more running step(s)");
+
+    let lines = rendered.lines().collect::<Vec<_>>();
+    assert_eq!(lines[0], "└ Run task 5");
+    assert_eq!(lines[1], "└ ... 1 more running step(s)");
+    assert!(rendered.contains("Run task 4"));
+    assert!(rendered.contains("Run task 2"));
+    assert!(!rendered.contains("Run task 1"));
 }
 
 #[test]

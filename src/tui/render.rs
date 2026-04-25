@@ -284,6 +284,69 @@ pub(crate) fn compact_summary_lines(
     lines.join("\n")
 }
 
+pub(crate) fn compact_progress_summary_lines(
+    actions: &[String],
+    notes: &[String],
+    max_visible: usize,
+    more_label: &str,
+) -> String {
+    let mut lines = Vec::new();
+
+    if let Some(note) = notes
+        .iter()
+        .rev()
+        .map(|note| note.trim())
+        .find(|note| !note.is_empty())
+        .map(ToString::to_string)
+    {
+        lines.push(format!("└ {note}"));
+    }
+
+    if actions.is_empty() {
+        return lines.join("\n");
+    }
+
+    let visible_count = actions.len().min(max_visible);
+    let hidden_count = actions.len().saturating_sub(visible_count);
+    let start = actions.len().saturating_sub(visible_count);
+
+    if hidden_count > 0 {
+        lines.push(format!("└ ... {hidden_count} {more_label}"));
+    }
+
+    lines.extend(actions[start..].iter().map(|action| format!("└ {action}")));
+    lines.join("\n")
+}
+
+pub(crate) fn compact_recent_first_summary_lines(
+    items: &[String],
+    max_visible: usize,
+    more_label: &str,
+) -> String {
+    if items.is_empty() {
+        return String::new();
+    }
+
+    let visible_count = items.len().min(max_visible);
+    let hidden_count = items.len().saturating_sub(visible_count);
+    let visible = items
+        .iter()
+        .rev()
+        .take(visible_count)
+        .cloned()
+        .collect::<Vec<_>>();
+
+    let mut lines = Vec::new();
+    if let Some(current) = visible.first() {
+        lines.push(format!("└ {current}"));
+    }
+    if hidden_count > 0 {
+        lines.push(format!("└ ... {hidden_count} {more_label}"));
+    }
+    lines.extend(visible.iter().skip(1).map(|item| format!("└ {item}")));
+    lines.join("\n")
+}
+
 pub(crate) fn compact_summary_text(summary: &str, max_visible: usize, more_label: &str) -> String {
     let items = summary
         .lines()

@@ -20,7 +20,9 @@ use self::components::{
     RanCell, RespondingCell, RunningCell, UserCell,
 };
 use super::{
-    compact_summary_lines, compact_summary_text, current_turn_exploration_summary,
+    compact_progress_summary_lines, compact_recent_first_summary_lines, compact_summary_lines,
+    compact_summary_text,
+    current_turn_exploration_summary,
     current_turn_exploration_summary_from_entries, current_turn_tool_summary,
     history_pipeline::{narrative_entries, ordered_completion_entries},
     wrapped_history_line_count,
@@ -47,6 +49,95 @@ fn trim_trailing_empty_lines(lines: &mut Vec<Line<'static>>) {
     while matches!(lines.last(), Some(line) if line.spans.iter().all(|span| span.content == "")) {
         lines.pop();
     }
+}
+
+fn line_plain_text(line: &Line<'static>) -> String {
+    line.spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect::<String>()
+}
+
+fn is_progress_stack_title(line: &Line<'static>) -> bool {
+    matches!(
+        line_plain_text(line).trim(),
+        "Plan Mode" | "Exploring" | "Planning" | "Running"
+    )
+}
+
+fn should_compact_active_cell_gap(previous: &[Line<'static>], next: &[Line<'static>]) -> bool {
+    previous
+        .first()
+        .is_some_and(is_progress_stack_title)
+        && next.first().is_some_and(is_progress_stack_title)
+}
+
+fn split_progress_sentences(message: &str) -> Vec<String> {
+    let mut sentences = Vec::new();
+    let mut current = String::new();
+
+    for ch in message.chars() {
+        current.push(ch);
+        if matches!(ch, '.' | '!' | '?') {
+            let trimmed = current.trim();
+            if !trimmed.is_empty() {
+                sentences.push(trimmed.to_string());
+            }
+            current.clear();
+        }
+    }
+
+    let tail = current.trim();
+    if !tail.is_empty() {
+        sentences.push(tail.to_string());
+    }
+
+    sentences
+}
+
+fn compact_live_response_message(message: &str) -> String {
+    let sentences = split_progress_sentences(message);
+    if sentences.len() <= 3 {
+        return sentences.join("\n");
+    }
+
+    let next_markers = [
+        "Next ",
+        "I will ",
+        "I'll ",
+        "Then I will ",
+        "Then I'll ",
+        "I am going to ",
+    ];
+
+    let mut selected = Vec::new();
+    let mut next_step = None;
+
+    for sentence in &sentences {
+        if next_step.is_none()
+            && next_markers
+                .iter()
+                .any(|marker| sentence.starts_with(marker))
+        {
+            next_step = Some(sentence.clone());
+            continue;
+        }
+
+        if selected.len() < 2 {
+            selected.push(sentence.clone());
+        }
+    }
+
+    if let Some(next_step) = next_step {
+        if !selected.iter().any(|line| line == &next_step) {
+            selected.push(next_step);
+        }
+    } else if let Some(sentence) = sentences.get(selected.len()) {
+        selected.push(sentence.clone());
+    }
+
+    selected.truncate(3);
+    selected.join("\n")
 }
 
 fn ordered_exploration_agent_segments<'a>(
@@ -270,11 +361,18 @@ impl HistoryCell for CommittedTurnCell<'_> {
         }
 
         let mut lines = Vec::new();
+        let mut previous_cell_lines: Option<Vec<Line<'static>>> = None;
         for (idx, cell) in cells.into_iter().enumerate() {
-            if idx > 0 {
+            let cell_lines = cell.display_lines(width);
+            if idx > 0
+                && !previous_cell_lines
+                    .as_deref()
+                    .is_some_and(|previous| should_compact_active_cell_gap(previous, cell_lines.as_slice()))
+            {
                 lines.push(Line::from(""));
             }
-            lines.extend(cell.display_lines(width));
+            lines.extend(cell_lines.iter().cloned());
+            previous_cell_lines = Some(cell_lines);
         }
 
         trim_trailing_empty_lines(&mut lines);
@@ -414,16 +512,16 @@ impl ActiveCell for ActiveTurnCell<'_> {
         let exploration_summary = if uses_ordered_exploration_agent_segments {
             None
         } else if has_live_exploration {
-            let mut items = self
+            let items = self
                 .app
                 .active_live
                 .exploration_actions
                 .iter()
                 .cloned()
                 .collect::<Vec<_>>();
-            items.extend(self.app.active_live.exploration_notes.iter().cloned());
-            Some(compact_summary_lines(
+            Some(compact_progress_summary_lines(
                 items.as_slice(),
+                self.app.active_live.exploration_notes.as_slice(),
                 4,
                 "more exploration step(s)",
             ))
@@ -448,16 +546,16 @@ impl ActiveCell for ActiveTurnCell<'_> {
             .map(|entry| entry.message.clone());
 
         let planning_summary = if has_live_planning {
-            let mut items = self
+            let items = self
                 .app
                 .active_live
                 .planning_actions
                 .iter()
                 .cloned()
                 .collect::<Vec<_>>();
-            items.extend(self.app.active_live.planning_notes.iter().cloned());
-            Some(compact_summary_lines(
+            Some(compact_progress_summary_lines(
                 items.as_slice(),
+                self.app.active_live.planning_notes.as_slice(),
                 4,
                 "more planning step(s)",
             ))
@@ -483,7 +581,7 @@ impl ActiveCell for ActiveTurnCell<'_> {
                 .iter()
                 .cloned()
                 .collect::<Vec<_>>();
-            Some(compact_summary_lines(
+            Some(compact_recent_first_summary_lines(
                 items.as_slice(),
                 4,
                 "more running step(s)",
@@ -504,6 +602,8 @@ impl ActiveCell for ActiveTurnCell<'_> {
         if let Some(summary) = running_summary {
             cells.push(Box::new(RunningCell::new(summary, running_active)));
         }
+        let compact_live_response =
+            turn_live && (has_exploration_summary || has_planning_summary || has_running_summary);
 
         if should_show_updated_plan(self.app) {
             cells.push(Box::new(PlanSummaryCell::new(
@@ -582,14 +682,27 @@ impl ActiveCell for ActiveTurnCell<'_> {
             && !suppress_structured_plan_response
         {
             if let Some(stream_lines) = streaming_agent_lines {
-                cells.push(Box::new(RespondingCell::from_stream(stream_lines)));
+                if compact_live_response {
+                    cells.push(Box::new(RespondingCell::from_stream_compact(
+                        stream_lines, 4,
+                    )));
+                } else {
+                    cells.push(Box::new(RespondingCell::from_stream(stream_lines)));
+                }
             } else if let Some(agent_message) = latest_agent {
-                cells.push(Box::new(RespondingCell::from_message(
-                    responding_role,
-                    agent_message,
-                    usize::MAX,
-                    self.cwd,
-                )));
+                if compact_live_response {
+                    cells.push(Box::new(RespondingCell::from_compact_message(
+                        compact_live_response_message(agent_message),
+                        usize::MAX,
+                    )));
+                } else {
+                    cells.push(Box::new(RespondingCell::from_message(
+                        responding_role,
+                        agent_message,
+                        usize::MAX,
+                        self.cwd,
+                    )));
+                }
             } else {
                 cells.push(Box::new(RespondingCell::working(
                     self.app
@@ -603,12 +716,19 @@ impl ActiveCell for ActiveTurnCell<'_> {
                 && !suppress_planning_chatter
                 && !suppress_structured_plan_response
         }) {
-            cells.push(Box::new(RespondingCell::from_message(
-                responding_role,
-                agent_message,
-                usize::MAX,
-                self.cwd,
-            )));
+            if compact_live_response {
+                cells.push(Box::new(RespondingCell::from_compact_message(
+                    compact_live_response_message(agent_message),
+                    usize::MAX,
+                )));
+            } else {
+                cells.push(Box::new(RespondingCell::from_message(
+                    responding_role,
+                    agent_message,
+                    usize::MAX,
+                    self.cwd,
+                )));
+            }
         } else if prefer_responding_chrome {
             cells.push(Box::new(RespondingCell::working(
                 self.app
@@ -648,11 +768,18 @@ impl ActiveCell for ActiveTurnCell<'_> {
         }
 
         let mut lines = Vec::new();
+        let mut previous_cell_lines: Option<Vec<Line<'static>>> = None;
         for (idx, cell) in cells.into_iter().enumerate() {
-            if idx > 0 {
+            let cell_lines = cell.display_lines(width);
+            if idx > 0
+                && !previous_cell_lines
+                    .as_deref()
+                    .is_some_and(|previous| should_compact_active_cell_gap(previous, cell_lines.as_slice()))
+            {
                 lines.push(Line::from(""));
             }
-            lines.extend(cell.display_lines(width));
+            lines.extend(cell_lines.iter().cloned());
+            previous_cell_lines = Some(cell_lines);
         }
 
         trim_trailing_empty_lines(&mut lines);
