@@ -127,7 +127,28 @@ pub struct RuntimeSnapshot {
     pub prompt_base_kind: String,
     pub prompt_section_keys: Vec<String>,
     pub prompt_source_status_lines: Vec<String>,
+    pub prompt_source_entries: Vec<PromptSourceSnapshot>,
     pub prompt_warnings: Vec<String>,
+    pub retrieval_remaining_input_budget_tokens: Option<usize>,
+    pub retrieval_selected_items: Vec<RetrievalSelectedItemSnapshot>,
+}
+
+#[derive(Default, Clone)]
+pub struct PromptSourceSnapshot {
+    pub order: usize,
+    pub kind: String,
+    pub label: String,
+    pub display_path: String,
+    pub inclusion_reason: String,
+}
+
+#[derive(Default, Clone)]
+pub struct RetrievalSelectedItemSnapshot {
+    pub order: usize,
+    pub kind: String,
+    pub label: String,
+    pub detail: String,
+    pub inclusion_reason: String,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

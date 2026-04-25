@@ -18,6 +18,43 @@ pub const LEGACY_CODEX_MODEL: &str = "codex";
 pub const LEGACY_CODEX_MODEL_V1: &str = "gpt-5-codex";
 pub const LEGACY_CODEX_MODEL_V1_MINI: &str = "gpt-5-codex-mini";
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConfigValueSource {
+    Default,
+    Provider,
+}
+
+impl ConfigValueSource {
+    pub fn label(self) -> &'static str {
+        match self {
+            ConfigValueSource::Default => "default",
+            ConfigValueSource::Provider => "provider",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedProviderValue {
+    pub value: Option<String>,
+    pub source: ConfigValueSource,
+}
+
+impl ResolvedProviderValue {
+    pub fn display_or<'a>(&'a self, fallback: &'a str) -> &'a str {
+        self.value.as_deref().unwrap_or(fallback)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EffectiveProviderSurface {
+    pub model: ResolvedProviderValue,
+    pub base_url: ResolvedProviderValue,
+    pub revision: ResolvedProviderValue,
+    pub reasoning_effort: ResolvedProviderValue,
+    pub reasoning_summary: ResolvedProviderValue,
+    pub api_key: ResolvedProviderValue,
+}
+
 pub fn should_reset_codex_base_url(url: Option<&str>) -> bool {
     url.map(str::trim).map_or(true, |value| {
         value.is_empty() || value == LEGACY_CODEX_BASE_URL
@@ -222,6 +259,79 @@ impl RaraConfig {
         self.revision = None;
         self.thinking = None;
         self.num_ctx = None;
+    }
+
+    pub fn effective_provider_surface(&self) -> EffectiveProviderSurface {
+        EffectiveProviderSurface {
+            model: resolved_provider_value(
+                self.model.clone(),
+                provider_default_model(self.provider.as_str()),
+            ),
+            base_url: resolved_provider_value(
+                self.base_url.clone(),
+                provider_default_base_url(self.provider.as_str()),
+            ),
+            revision: resolved_provider_value(
+                self.revision.clone(),
+                provider_default_revision(self.provider.as_str()),
+            ),
+            reasoning_effort: resolved_provider_value(self.reasoning_effort.clone(), None),
+            reasoning_summary: resolved_provider_value(
+                self.reasoning_summary.clone(),
+                Some(DEFAULT_REASONING_SUMMARY.to_string()),
+            ),
+            api_key: ResolvedProviderValue {
+                value: self.api_key().map(str::to_string),
+                source: if self.has_api_key() {
+                    ConfigValueSource::Provider
+                } else {
+                    ConfigValueSource::Default
+                },
+            },
+        }
+    }
+}
+
+fn resolved_provider_value(current: Option<String>, default: Option<String>) -> ResolvedProviderValue {
+    if let Some(value) = normalize_optional_string(current) {
+        ResolvedProviderValue {
+            value: Some(value),
+            source: ConfigValueSource::Provider,
+        }
+    } else {
+        ResolvedProviderValue {
+            value: default.and_then(|value| normalize_optional_string(Some(value))),
+            source: ConfigValueSource::Default,
+        }
+    }
+}
+
+fn provider_default_model(provider: &str) -> Option<String> {
+    match provider {
+        "codex" => Some(DEFAULT_CODEX_MODEL.to_string()),
+        "openai-compatible" => Some("gpt-4o-mini".to_string()),
+        "kimi" => Some("moonshot-v1-8k".to_string()),
+        "gemini" => Some("gemini-1.5-pro".to_string()),
+        _ => None,
+    }
+}
+
+fn provider_default_base_url(provider: &str) -> Option<String> {
+    match provider {
+        "codex" => Some(DEFAULT_CODEX_BASE_URL.to_string()),
+        "openai-compatible" => Some("https://api.openai.com/v1".to_string()),
+        "kimi" => Some("https://api.moonshot.cn/v1".to_string()),
+        "ollama" | "ollama-native" | "ollama-openai" => {
+            Some("http://localhost:11434".to_string())
+        }
+        _ => None,
+    }
+}
+
+fn provider_default_revision(provider: &str) -> Option<String> {
+    match provider {
+        "codex" => Some("main".to_string()),
+        _ => None,
     }
 }
 
@@ -563,5 +673,27 @@ mod tests {
 
         let err = manager.load().expect_err("invalid config should fail");
         assert!(err.to_string().contains("failed to parse"));
+    }
+
+    #[test]
+    fn effective_provider_surface_reports_values_and_sources() {
+        let mut config = RaraConfig {
+            provider: "codex".to_string(),
+            ..Default::default()
+        };
+        config.set_model(Some("gpt-5.4-mini".to_string()));
+
+        let surface = config.effective_provider_surface();
+        assert_eq!(surface.model.value.as_deref(), Some("gpt-5.4-mini"));
+        assert_eq!(surface.model.source, super::ConfigValueSource::Provider);
+        assert_eq!(
+            surface.base_url.value.as_deref(),
+            Some(super::DEFAULT_CODEX_BASE_URL)
+        );
+        assert_eq!(surface.base_url.source, super::ConfigValueSource::Default);
+        assert_eq!(
+            surface.reasoning_summary.value.as_deref(),
+            Some(super::DEFAULT_REASONING_SUMMARY)
+        );
     }
 }

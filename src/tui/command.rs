@@ -256,6 +256,7 @@ pub fn help_text() -> String {
 }
 
 pub fn status_runtime_text(app: &TuiApp) -> String {
+    let surface = app.config.effective_provider_surface();
     let mode = if super::provider_requires_api_key(&app.config.provider) {
         "hosted"
     } else {
@@ -272,11 +273,7 @@ pub fn status_runtime_text(app: &TuiApp) -> String {
     } else {
         "-"
     };
-    let reasoning_summary = app
-        .config
-        .reasoning_summary
-        .as_deref()
-        .unwrap_or(rara_config::DEFAULT_REASONING_SUMMARY);
+    let reasoning_summary = surface.reasoning_summary.display_or("-");
     let (device, dtype) = if is_local_provider(&app.config.provider) {
         crate::local_backend::local_runtime_target()
             .unwrap_or_else(|_| ("unavailable".to_string(), "unavailable".to_string()))
@@ -284,18 +281,24 @@ pub fn status_runtime_text(app: &TuiApp) -> String {
         ("remote".to_string(), "-".to_string())
     };
     format!(
-        "provider={}\nmodel={}\nbase_url={}\nrevision={}\nagent_mode={}\nbash_approval={}\nmode={}\napi_key={}\nthinking={}\nreasoning_summary={}\nreasoning_effort={}\ndevice={}\ndtype={}\nfocused={}\nphase={}\ndetail={}",
+        "provider={}\nmodel={}\nmodel_source={}\nbase_url={}\nbase_url_source={}\nrevision={}\nrevision_source={}\nagent_mode={}\nbash_approval={}\nmode={}\napi_key={}\napi_key_source={}\nthinking={}\nreasoning_summary={}\nreasoning_summary_source={}\nreasoning_effort={}\nreasoning_effort_source={}\ndevice={}\ndtype={}\nfocused={}\nphase={}\ndetail={}",
         app.config.provider,
-        app.current_model_label(),
-        app.config.base_url.as_deref().unwrap_or("-"),
-        app.config.revision.as_deref().unwrap_or("main"),
+        surface.model.display_or("-"),
+        surface.model.source.label(),
+        surface.base_url.display_or("-"),
+        surface.base_url.source.label(),
+        surface.revision.display_or("-"),
+        surface.revision.source.label(),
         app.agent_execution_mode_label(),
         app.bash_approval_mode_label(),
         mode,
         api_key_status(&app.config),
+        surface.api_key.source.label(),
         thinking,
         reasoning_summary,
-        app.current_reasoning_effort_label(),
+        surface.reasoning_summary.source.label(),
+        surface.reasoning_effort.display_or("-"),
+        surface.reasoning_effort.source.label(),
         device,
         dtype,
         app.terminal_focused,
@@ -367,11 +370,28 @@ pub fn status_resources_text(app: &TuiApp) -> String {
         }
         _ => "-".to_string(),
     };
+    let retrieval_budget = app
+        .snapshot
+        .retrieval_remaining_input_budget_tokens
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "-".to_string());
+    let retrieval_selected = if app.snapshot.retrieval_selected_items.is_empty() {
+        "-".to_string()
+    } else {
+        app.snapshot
+            .retrieval_selected_items
+            .iter()
+            .map(|item| item.kind.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
     format!(
-        "tokens={} in / {} out\ncontext_estimate={}\ncompactions={} (last: {}, ratio: {})\ncompact_boundary={}\nrecent_compact_file_count={}\nrecent_compact_files={}\ncache={}\nstate_db={}",
+        "tokens={} in / {} out\ncontext_estimate={}\nretrieval_budget={}\nretrieval_selected={}\ncompactions={} (last: {}, ratio: {})\ncompact_boundary={}\nrecent_compact_file_count={}\nrecent_compact_files={}\ncache={}\nstate_db={}",
         app.snapshot.total_input_tokens,
         app.snapshot.total_output_tokens,
         context,
+        retrieval_budget,
+        retrieval_selected,
         app.snapshot.compaction_count,
         last_compact,
         last_compact_ratio,
@@ -392,8 +412,20 @@ pub fn status_prompt_sources_text(app: &TuiApp) -> String {
         ),
         String::new(),
     ];
-    let mut sources = app.snapshot.prompt_source_status_lines.clone();
-    lines.append(&mut sources);
+    if app.snapshot.prompt_source_entries.is_empty() {
+        lines.push("no structured prompt sources discovered".to_string());
+    } else {
+        lines.extend(app.snapshot.prompt_source_entries.iter().map(|entry| {
+            format!(
+                "{}. {} [{}] {}\n   why: {}",
+                entry.order,
+                entry.label,
+                entry.kind,
+                entry.display_path,
+                entry.inclusion_reason
+            )
+        }));
+    }
     if !app.snapshot.prompt_warnings.is_empty() {
         if lines.len() > 3 {
             lines.push(String::new());
@@ -406,7 +438,7 @@ pub fn status_prompt_sources_text(app: &TuiApp) -> String {
                 .map(|warning| format!("- {warning}")),
         );
     }
-    if lines.len() == 3 {
+    if app.snapshot.prompt_source_entries.is_empty() && app.snapshot.prompt_warnings.is_empty() {
         "No prompt sources discovered.".to_string()
     } else {
         lines.join("\n")
@@ -646,11 +678,13 @@ pub fn normalize_command_token(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        matching_commands, normalize_command_token, parse_local_command, status_resources_text,
-        LocalCommandKind,
+        matching_commands, normalize_command_token, parse_local_command, status_prompt_sources_text,
+        status_resources_text, status_runtime_text, LocalCommandKind,
     };
     use crate::config::ConfigManager;
-    use crate::tui::state::{RuntimeSnapshot, TuiApp};
+    use crate::tui::state::{
+        PromptSourceSnapshot, RetrievalSelectedItemSnapshot, RuntimeSnapshot, TuiApp,
+    };
     use tempfile::tempdir;
 
     #[test]
@@ -760,15 +794,72 @@ mod tests {
             last_compaction_boundary_version: Some(1),
             last_compaction_boundary_before_tokens: Some(12_000),
             last_compaction_boundary_recent_file_count: Some(2),
+            retrieval_remaining_input_budget_tokens: Some(8_192),
+            retrieval_selected_items: vec![
+                RetrievalSelectedItemSnapshot {
+                    order: 1,
+                    kind: "workspace_memory".to_string(),
+                    label: "Workspace Memory".to_string(),
+                    detail: "memory".to_string(),
+                    inclusion_reason: "active".to_string(),
+                },
+                RetrievalSelectedItemSnapshot {
+                    order: 2,
+                    kind: "retrieve_experience".to_string(),
+                    label: "Retrieved Experience".to_string(),
+                    detail: "query=bootstrap".to_string(),
+                    inclusion_reason: "retrieved".to_string(),
+                },
+            ],
             ..RuntimeSnapshot::default()
         };
 
         let rendered = status_resources_text(&app);
+        assert!(rendered.contains("retrieval_budget=8192"));
+        assert!(rendered.contains("retrieval_selected=workspace_memory, retrieve_experience"));
         assert!(rendered.contains("compactions=2 (last: 12000 -> 4500, ratio: 0.38)"));
         assert!(rendered.contains("compact_boundary=v1 (before_tokens=12000, recent_file_count=2)"));
         assert!(rendered.contains("recent_compact_file_count=2"));
         assert!(rendered.contains(
             "recent_compact_files=src/agent/compact.rs, crates/instructions/src/prompt.rs"
         ));
+    }
+
+    #[test]
+    fn status_prompt_sources_text_uses_structured_prompt_source_entries() {
+        let dir = tempdir().expect("tempdir");
+        let cm = ConfigManager {
+            path: dir.path().join("config.json"),
+        };
+        let mut app = TuiApp::new(cm).expect("app");
+        app.snapshot.prompt_base_kind = "default".to_string();
+        app.snapshot.prompt_section_keys = vec!["instructions".to_string(), "runtime_context".to_string()];
+        app.snapshot.prompt_source_entries = vec![PromptSourceSnapshot {
+            order: 1,
+            kind: "project_instruction".to_string(),
+            label: "Project Instruction (AGENTS.md)".to_string(),
+            display_path: "AGENTS.md".to_string(),
+            inclusion_reason: "included because workspace instruction discovery found this file in the active workspace ancestry".to_string(),
+        }];
+
+        let rendered = status_prompt_sources_text(&app);
+        assert!(rendered.contains("1. Project Instruction (AGENTS.md) [project_instruction] AGENTS.md"));
+        assert!(rendered.contains("why: included because workspace instruction discovery found this file"));
+    }
+
+    #[test]
+    fn status_runtime_text_reports_effective_provider_surface_sources() {
+        let dir = tempdir().expect("tempdir");
+        let cm = ConfigManager {
+            path: dir.path().join("config.json"),
+        };
+        let mut app = TuiApp::new(cm).expect("app");
+        app.config.set_provider("codex");
+
+        let rendered = status_runtime_text(&app);
+        assert!(rendered.contains("model_source=default"));
+        assert!(rendered.contains("base_url_source=default"));
+        assert!(rendered.contains("revision_source=default"));
+        assert!(rendered.contains("reasoning_summary_source=provider"));
     }
 }

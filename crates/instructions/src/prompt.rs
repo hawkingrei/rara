@@ -28,6 +28,40 @@ pub struct PromptSource {
 }
 
 impl PromptSource {
+    pub fn kind_label(&self) -> &'static str {
+        match self.kind {
+            PromptSourceKind::ProjectInstruction => "project_instruction",
+            PromptSourceKind::LocalInstruction => "local_instruction",
+            PromptSourceKind::LocalMemory => "local_memory",
+            PromptSourceKind::CustomSystemPrompt => "custom_system_prompt",
+            PromptSourceKind::AppendSystemPrompt => "append_system_prompt",
+            PromptSourceKind::CompactPrompt => "compact_prompt",
+        }
+    }
+
+    pub fn inclusion_reason(&self) -> &'static str {
+        match self.kind {
+            PromptSourceKind::ProjectInstruction => {
+                "included because workspace instruction discovery found this file in the active workspace ancestry"
+            }
+            PromptSourceKind::LocalInstruction => {
+                "included because the workspace-local RARA instruction file is active for this workspace"
+            }
+            PromptSourceKind::LocalMemory => {
+                "included because workspace memory is currently injected into the effective prompt"
+            }
+            PromptSourceKind::CustomSystemPrompt => {
+                "included because config provided a custom system prompt override"
+            }
+            PromptSourceKind::AppendSystemPrompt => {
+                "included because config provided an appended system prompt"
+            }
+            PromptSourceKind::CompactPrompt => {
+                "included because config provided a custom compact instruction"
+            }
+        }
+    }
+
     pub fn status_line(&self) -> String {
         match self.kind {
             PromptSourceKind::ProjectInstruction => {

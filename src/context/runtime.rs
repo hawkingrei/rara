@@ -1,11 +1,21 @@
 use crate::agent::PlanStepStatus;
-use crate::prompt::EffectivePrompt;
+use crate::prompt::{EffectivePrompt, PromptSource};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PromptSourceContextEntry {
+    pub order: usize,
+    pub kind: String,
+    pub label: String,
+    pub display_path: String,
+    pub inclusion_reason: String,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PromptContextView {
     pub base_prompt_kind: String,
     pub section_keys: Vec<String>,
     pub source_status_lines: Vec<String>,
+    pub source_entries: Vec<PromptSourceContextEntry>,
     pub warnings: Vec<String>,
 }
 
@@ -26,9 +36,24 @@ impl PromptContextView {
                 .iter()
                 .map(|source| source.status_line())
                 .collect(),
+            source_entries: prompt_source_entries(&effective_prompt.sources),
             warnings,
         }
     }
+}
+
+fn prompt_source_entries(sources: &[PromptSource]) -> Vec<PromptSourceContextEntry> {
+    sources
+        .iter()
+        .enumerate()
+        .map(|(idx, source)| PromptSourceContextEntry {
+            order: idx + 1,
+            kind: source.kind_label().to_string(),
+            label: source.label.clone(),
+            display_path: source.display_path.clone(),
+            inclusion_reason: source.inclusion_reason().to_string(),
+        })
+        .collect()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -77,6 +102,21 @@ pub struct CompactionContextView {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RetrievalSelectedItemContextEntry {
+    pub order: usize,
+    pub kind: String,
+    pub label: String,
+    pub detail: String,
+    pub inclusion_reason: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RetrievalContextView {
+    pub remaining_input_budget_tokens: Option<usize>,
+    pub selected_items: Vec<RetrievalSelectedItemContextEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SharedRuntimeContext {
     pub cwd: String,
     pub branch: String,
@@ -87,4 +127,5 @@ pub struct SharedRuntimeContext {
     pub prompt: PromptContextView,
     pub plan: PlanContextView,
     pub compaction: CompactionContextView,
+    pub retrieval: RetrievalContextView,
 }

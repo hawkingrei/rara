@@ -18,6 +18,59 @@ use super::super::state::{
 use super::events::{apply_tui_event, convert_agent_event, format_error_chain};
 use builder::rebuild_agent_with_progress;
 
+fn merge_rebuilt_agent(previous: Option<Agent>, mut rebuilt: Agent) -> Agent {
+    let Some(previous) = previous else {
+        return rebuilt;
+    };
+
+    let previous_append_system_prompt = previous.prompt_config().append_system_prompt.clone();
+    let previous_prompt_warnings = previous.prompt_config().warnings.clone();
+    let previous_compact_state = previous.compact_state.clone();
+    let previous_session_id = previous.session_id.clone();
+    let previous_history = previous.history.clone();
+    let previous_total_input_tokens = previous.total_input_tokens;
+    let previous_total_output_tokens = previous.total_output_tokens;
+    let previous_current_plan = previous.current_plan.clone();
+    let previous_plan_explanation = previous.plan_explanation.clone();
+    let previous_pending_user_input = previous.pending_user_input.clone();
+    let previous_pending_approval = previous.pending_approval.clone();
+    let previous_completed_user_input = previous.completed_user_input.clone();
+    let previous_completed_approval = previous.completed_approval.clone();
+
+    rebuilt.session_id = previous_session_id;
+    rebuilt.history = previous_history;
+    rebuilt.total_input_tokens = previous_total_input_tokens;
+    rebuilt.total_output_tokens = previous_total_output_tokens;
+    rebuilt.current_plan = previous_current_plan;
+    rebuilt.plan_explanation = previous_plan_explanation;
+    rebuilt.pending_user_input = previous_pending_user_input;
+    rebuilt.pending_approval = previous_pending_approval;
+    rebuilt.completed_user_input = previous_completed_user_input;
+    rebuilt.completed_approval = previous_completed_approval;
+    rebuilt.compact_state.estimated_history_tokens = previous_compact_state.estimated_history_tokens;
+    rebuilt.compact_state.compaction_count = previous_compact_state.compaction_count;
+    rebuilt.compact_state.last_compaction_before_tokens =
+        previous_compact_state.last_compaction_before_tokens;
+    rebuilt.compact_state.last_compaction_after_tokens =
+        previous_compact_state.last_compaction_after_tokens;
+    rebuilt.compact_state.last_compaction_recent_files =
+        previous_compact_state.last_compaction_recent_files;
+    rebuilt.compact_state.last_compaction_boundary =
+        previous_compact_state.last_compaction_boundary;
+
+    if rebuilt.prompt_config().append_system_prompt.is_none() && previous_append_system_prompt.is_some()
+    {
+        let mut prompt_config = rebuilt.prompt_config().clone();
+        prompt_config.append_system_prompt = previous_append_system_prompt;
+        if prompt_config.warnings.is_empty() {
+            prompt_config.warnings = previous_prompt_warnings;
+        }
+        rebuilt.set_prompt_config(prompt_config);
+    }
+
+    rebuilt
+}
+
 fn restore_execute_mode_after_plan_turn(app: &mut TuiApp, agent: &mut Agent) {
     if matches!(
         app.agent_execution_mode,
@@ -473,7 +526,7 @@ pub(super) async fn finish_running_task_if_ready(
         }
         TaskCompletion::Rebuild { result } => match result {
             Ok(rebuilt) => {
-                let mut agent = rebuilt.agent;
+                let mut agent = merge_rebuilt_agent(agent_slot.take(), rebuilt.agent);
                 agent.set_execution_mode(app.agent_execution_mode);
                 agent.set_bash_approval_mode(app.bash_approval_mode);
                 app.config_manager.save(&app.config)?;
@@ -483,12 +536,6 @@ pub(super) async fn finish_running_task_if_ready(
                     app.current_model_label()
                 ));
                 app.notice = app.setup_status.clone();
-                let queued_follow_up_messages = std::mem::take(&mut app.queued_follow_up_messages);
-                let pending_follow_up_messages =
-                    std::mem::take(&mut app.pending_follow_up_messages);
-                app.reset_transcript();
-                app.pending_follow_up_messages = pending_follow_up_messages;
-                app.queued_follow_up_messages = queued_follow_up_messages;
                 *agent_slot = Some(agent);
                 if let Some(agent) = agent_slot.as_ref() {
                     app.sync_snapshot(agent);

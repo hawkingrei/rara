@@ -8,5 +8,6 @@ mod runtime;
 
 pub use self::assembler::{AssembledContext, ContextAssembler};
 pub use self::runtime::{
-    CompactionContextView, PlanContextView, PromptContextView, SharedRuntimeContext,
+    CompactionContextView, PlanContextView, PromptContextView, RetrievalContextView,
+    RetrievalSelectedItemContextEntry, SharedRuntimeContext,
 };

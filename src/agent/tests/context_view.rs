@@ -58,14 +58,95 @@ fn shared_runtime_context_collects_prompt_plan_and_compaction_state() {
         before_tokens: 5000,
         recent_file_count: 2,
     });
+    std::fs::write(
+        rara_dir.join("memory.md"),
+        "# Team Notes\n\nPrefer the shared bootstrap path.\n",
+    )
+    .expect("write memory");
     agent.history.push(Message {
         role: "user".to_string(),
         content: json!([{"type":"text","text":"hello"}]),
     });
+    agent.history.push(Message {
+        role: "system".to_string(),
+        content: json!([{
+            "type": "compact_boundary",
+            "version": 3,
+            "before_tokens": 5000,
+            "recent_file_count": 2
+        }]),
+    });
+    agent.history.push(Message {
+        role: "system".to_string(),
+        content: json!([{
+            "type": "compacted_summary",
+            "text": "User Intent\n- finish the refactor"
+        }]),
+    });
+    agent.history.push(Message {
+        role: "system".to_string(),
+        content: json!([{
+            "type": "recent_files",
+            "files": [
+                "src/main.rs",
+                "src/runtime_context.rs"
+            ]
+        }]),
+    });
+    agent.history.push(Message {
+        role: "system".to_string(),
+        content: json!([{
+            "type": "recent_file_excerpts",
+            "files": [{
+                "path": "src/main.rs",
+                "line_start": 1,
+                "line_end": 3,
+                "snippet": "code"
+            }]
+        }]),
+    });
+    agent.history.push(Message {
+        role: "assistant".to_string(),
+        content: json!([{
+            "type": "tool_use",
+            "id": "toolu_1",
+            "name": "retrieve_experience",
+            "input": {
+                "query": "bootstrap contract"
+            }
+        }]),
+    });
+    agent.history.push(Message {
+        role: "user".to_string(),
+        content: json!([{
+            "type": "tool_result",
+            "tool_use_id": "toolu_1",
+            "content": "experience result"
+        }]),
+    });
+    agent.history.push(Message {
+        role: "assistant".to_string(),
+        content: json!([{
+            "type": "tool_use",
+            "id": "toolu_2",
+            "name": "retrieve_session_context",
+            "input": {
+                "query": "previous auth flow"
+            }
+        }]),
+    });
+    agent.history.push(Message {
+        role: "user".to_string(),
+        content: json!([{
+            "type": "tool_result",
+            "tool_use_id": "toolu_2",
+            "content": "thread context result"
+        }]),
+    });
 
     let runtime = agent.shared_runtime_context();
 
-    assert_eq!(runtime.history_len, 1);
+    assert_eq!(runtime.history_len, agent.history.len());
     assert_eq!(runtime.total_input_tokens, 11);
     assert_eq!(runtime.total_output_tokens, 7);
     assert_eq!(runtime.prompt.base_prompt_kind, "default");
@@ -73,6 +154,12 @@ fn shared_runtime_context_collects_prompt_plan_and_compaction_state() {
         .prompt
         .section_keys
         .contains(&"append_system_prompt".to_string()));
+    assert_eq!(
+        runtime.prompt.source_entries.len(),
+        runtime.prompt.source_status_lines.len()
+    );
+    assert_eq!(runtime.prompt.source_entries[0].order, 1);
+    assert!(!runtime.prompt.source_entries[0].inclusion_reason.is_empty());
     assert!(runtime
         .prompt
         .warnings
@@ -99,4 +186,27 @@ fn shared_runtime_context_collects_prompt_plan_and_compaction_state() {
             "src/runtime_context.rs".to_string()
         ]
     );
+    assert_eq!(runtime.retrieval.remaining_input_budget_tokens, Some(5934));
+    assert_eq!(runtime.retrieval.selected_items.len(), 6);
+    assert_eq!(runtime.retrieval.selected_items[0].kind, "workspace_memory");
+    assert!(runtime.retrieval.selected_items[0]
+        .detail
+        .contains(".rara/memory.md"));
+    assert!(runtime.retrieval.selected_items[0]
+        .detail
+        .contains("2 non-empty lines"));
+    assert_eq!(runtime.retrieval.selected_items[1].kind, "compacted_summary");
+    assert_eq!(runtime.retrieval.selected_items[2].kind, "recent_files");
+    assert_eq!(runtime.retrieval.selected_items[3].kind, "recent_file_excerpts");
+    assert_eq!(runtime.retrieval.selected_items[4].kind, "retrieve_experience");
+    assert!(runtime.retrieval.selected_items[4]
+        .detail
+        .contains("query=bootstrap contract"));
+    assert_eq!(
+        runtime.retrieval.selected_items[5].kind,
+        "retrieve_session_context"
+    );
+    assert!(runtime.retrieval.selected_items[5]
+        .detail
+        .contains("query=previous auth flow"));
 }

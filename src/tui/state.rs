@@ -15,9 +15,10 @@ pub use self::types::{
     ActiveLiveSections, ActivePendingInteraction, ActivePendingInteractionKind,
     AgentMarkdownStreamState, CommandSpec, CompletedInteractionSnapshot, HelpTab, InteractionKind,
     LocalCommand, LocalCommandKind, OAuthLoginMode, Overlay,
-    PendingApprovalSnapshot, PendingInteractionSnapshot, ProviderFamily, RunningTask,
-    RebuildSuccess, RuntimePhase, RuntimeSnapshot, TaskCompletion, TaskKind, TranscriptEntry,
-    TranscriptTurn, TuiApp, TuiEvent, PROVIDER_FAMILIES,
+    PendingApprovalSnapshot, PendingInteractionSnapshot, PromptSourceSnapshot, ProviderFamily,
+    RetrievalSelectedItemSnapshot, RunningTask, RebuildSuccess, RuntimePhase, RuntimeSnapshot,
+    TaskCompletion, TaskKind, TranscriptEntry, TranscriptTurn, TuiApp, TuiEvent,
+    PROVIDER_FAMILIES,
 };
 use self::types::CommittedTranscriptRenderCache;
 use super::queued_input::PendingFollowUpMessage;
@@ -557,7 +558,34 @@ impl TuiApp {
             prompt_base_kind: runtime_context.prompt.base_prompt_kind,
             prompt_section_keys: runtime_context.prompt.section_keys,
             prompt_source_status_lines: runtime_context.prompt.source_status_lines,
+            prompt_source_entries: runtime_context
+                .prompt
+                .source_entries
+                .into_iter()
+                .map(|entry| PromptSourceSnapshot {
+                    order: entry.order,
+                    kind: entry.kind,
+                    label: entry.label,
+                    display_path: entry.display_path,
+                    inclusion_reason: entry.inclusion_reason,
+                })
+                .collect(),
             prompt_warnings: runtime_context.prompt.warnings,
+            retrieval_remaining_input_budget_tokens: runtime_context
+                .retrieval
+                .remaining_input_budget_tokens,
+            retrieval_selected_items: runtime_context
+                .retrieval
+                .selected_items
+                .into_iter()
+                .map(|entry| RetrievalSelectedItemSnapshot {
+                    order: entry.order,
+                    kind: entry.kind,
+                    label: entry.label,
+                    detail: entry.detail,
+                    inclusion_reason: entry.inclusion_reason,
+                })
+                .collect(),
         };
         self.agent_execution_mode = agent.execution_mode;
         self.bash_approval_mode = agent.bash_approval_mode;
