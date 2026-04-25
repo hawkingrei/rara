@@ -113,13 +113,24 @@ fn is_structured_progress_list_line(line: &str) -> bool {
 fn compact_live_response_source(message: &str) -> Option<String> {
     let mut retained = Vec::new();
     let mut saw_prose = false;
+    let mut in_structured_block = false;
 
     for line in message.lines() {
-        if is_structured_response_marker(line) {
-            break;
+        let trimmed = line.trim();
+        if is_structured_response_marker(trimmed) {
+            if trimmed.starts_with("</") {
+                in_structured_block = false;
+            } else if trimmed.starts_with('<') && trimmed.ends_with('>') && !trimmed.ends_with("/>")
+            {
+                in_structured_block = true;
+            }
+            continue;
         }
 
-        let trimmed = line.trim();
+        if in_structured_block {
+            continue;
+        }
+
         if trimmed.is_empty() {
             if saw_prose {
                 retained.push(String::new());
@@ -128,7 +139,7 @@ fn compact_live_response_source(message: &str) -> Option<String> {
         }
 
         if is_structured_progress_list_line(trimmed) && saw_prose {
-            break;
+            continue;
         }
 
         retained.push(trimmed.to_string());
@@ -893,6 +904,19 @@ mod helper_tests {
         assert_eq!(
             rendered,
             "I inspected the current context path.\nI will reuse the existing assembler output."
+        );
+    }
+
+    #[test]
+    fn compact_live_response_source_keeps_prose_after_structured_plan_block() {
+        let rendered = compact_live_response_source(
+            "I inspected the current context path.\n<plan>\n- [completed] Review context/runtime.rs\n- [pending] Add a focused test\n</plan>\nI am starting the focused patch now.",
+        )
+        .unwrap();
+
+        assert_eq!(
+            rendered,
+            "I inspected the current context path.\nI am starting the focused patch now."
         );
     }
 }

@@ -492,7 +492,9 @@ fn estimate_text_tokens(text: &str) -> usize {
     if trimmed.is_empty() {
         0
     } else {
-        trimmed.len().div_ceil(4)
+        // Use a conservative text-to-token estimate so local/smaller-context
+        // models do not silently overrun the remaining input budget.
+        trimmed.len().div_ceil(3)
     }
 }
 
@@ -1058,7 +1060,11 @@ fn extract_json_string_field(content: &str, key: &str) -> Option<String> {
 }
 
 fn extract_tool_result_payload(content: &str) -> Option<Value> {
-    let payload = content.split_once("Payload:\n")?.1;
+    let payload = content
+        .split_once("Payload:\n")
+        .map(|(_, payload)| payload)
+        .unwrap_or(content)
+        .trim();
     serde_json::from_str(payload).ok()
 }
 
@@ -1382,6 +1388,23 @@ mod tests {
                     .as_deref()
                     .is_some_and(|reason| reason.contains("memory-selection budget"))
             }));
+    }
+
+    #[test]
+    fn extract_tool_result_payload_falls_back_to_plain_json_content() {
+        let payload = extract_tool_result_payload(
+            r#"{
+                "status": "ok",
+                "summary": "plain json payload without wrapper"
+            }"#,
+        )
+        .expect("payload should parse from raw json");
+
+        assert_eq!(payload.get("status").and_then(Value::as_str), Some("ok"));
+        assert_eq!(
+            payload.get("summary").and_then(Value::as_str),
+            Some("plain json payload without wrapper")
+        );
     }
 
     #[test]
