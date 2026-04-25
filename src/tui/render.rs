@@ -369,6 +369,22 @@ pub(crate) fn compact_summary_text(summary: &str, max_visible: usize, more_label
     compact_summary_lines(items.as_slice(), max_visible, more_label)
 }
 
+fn truncated_line_count(total: usize, max_lines: usize) -> usize {
+    total.saturating_sub(max_lines)
+}
+
+fn head_tail_line_window<T>(items: &[T], max_lines: usize) -> (&[T], &[T]) {
+    if max_lines == usize::MAX || items.len() <= max_lines {
+        return (items, &[]);
+    }
+    if max_lines <= 1 {
+        return (&items[..1], &[]);
+    }
+
+    let tail_len = max_lines - 1;
+    (&items[..1], &items[items.len() - tail_len..])
+}
+
 pub(crate) fn prefixed_message_lines(
     role: &str,
     message: &str,
@@ -383,25 +399,22 @@ pub(crate) fn prefixed_message_lines(
         return vec![Line::from(format!("{role}:"))];
     }
 
-    let capped = if max_lines == usize::MAX {
-        message_lines.len()
-    } else {
-        max_lines
-    };
-
     let mut lines = Vec::new();
-    if let Some(first) = message_lines.first() {
+    let hidden_count = truncated_line_count(message_lines.len(), max_lines);
+    let (head, tail) = head_tail_line_window(message_lines.as_slice(), max_lines);
+    if let Some(first) = head.first() {
         lines.push(Line::from(format!("{role}: {first}")));
     }
-    for line in message_lines.iter().skip(1).take(capped.saturating_sub(1)) {
-        lines.push(Line::from(format!("  {line}")));
-    }
-    if message_lines.len() > capped {
+    if hidden_count > 0 {
         lines.push(Line::from(Span::styled(
-            format!("  ... {} more line(s)", message_lines.len() - capped),
+            format!("  ... {} more line(s)", hidden_count),
             Style::default().fg(Color::DarkGray),
         )));
     }
+    lines.extend(
+        tail.iter()
+            .map(|line| Line::from(format!("  {line}"))),
+    );
     lines
 }
 
@@ -411,25 +424,22 @@ fn user_message_lines(message: &str, max_lines: usize) -> Vec<Line<'static>> {
         return vec![Line::from("›")];
     }
 
-    let capped = if max_lines == usize::MAX {
-        message_lines.len()
-    } else {
-        max_lines
-    };
-
     let mut lines = Vec::new();
-    if let Some(first) = message_lines.first() {
+    let hidden_count = truncated_line_count(message_lines.len(), max_lines);
+    let (head, tail) = head_tail_line_window(message_lines.as_slice(), max_lines);
+    if let Some(first) = head.first() {
         lines.push(Line::from(format!("› {first}")));
     }
-    for line in message_lines.iter().skip(1).take(capped.saturating_sub(1)) {
-        lines.push(Line::from(format!("  {line}")));
-    }
-    if message_lines.len() > capped {
+    if hidden_count > 0 {
         lines.push(Line::from(Span::styled(
-            format!("  ... {} more line(s)", message_lines.len() - capped),
+            format!("  ... {} more line(s)", hidden_count),
             Style::default().fg(Color::DarkGray),
         )));
     }
+    lines.extend(
+        tail.iter()
+            .map(|line| Line::from(format!("  {line}"))),
+    );
     lines
 }
 
@@ -461,23 +471,25 @@ fn bulleted_markdown_message_lines(
         return vec![Line::from("•")];
     }
 
-    let capped = if max_lines == usize::MAX {
-        rendered.len()
-    } else {
-        max_lines.min(rendered.len())
-    };
+    let hidden_count = truncated_line_count(rendered_len, max_lines);
+    let (head, tail) = head_tail_line_window(rendered.as_slice(), max_lines);
 
     let mut lines = prefix_lines(
-        rendered.into_iter().take(capped).collect(),
+        head.iter().cloned().collect(),
         Span::styled("• ", Style::default().add_modifier(Modifier::DIM)),
         Span::raw("  "),
     );
-    if capped < rendered_len {
+    if hidden_count > 0 {
         lines.push(Line::from(Span::styled(
-            format!("  ... {} more line(s)", rendered_len - capped),
+            format!("  ... {} more line(s)", hidden_count),
             Style::default().fg(Color::DarkGray),
         )));
     }
+    lines.extend(prefix_lines(
+        tail.iter().cloned().collect(),
+        Span::raw("  "),
+        Span::raw("  "),
+    ));
     lines
 }
 
@@ -495,25 +507,26 @@ fn markdown_message_lines(
         return vec![Line::from(role.to_string())];
     }
 
-    let capped = if max_lines == usize::MAX {
-        rendered.len()
-    } else {
-        max_lines.min(rendered.len())
-    };
-
     let mut lines = vec![Line::from(role.to_string())];
+    let hidden_count = truncated_line_count(rendered_len, max_lines);
+    let (head, tail) = head_tail_line_window(rendered.as_slice(), max_lines);
     let prefixed = prefix_lines(
-        rendered.into_iter().take(capped).collect(),
+        head.iter().cloned().collect(),
         Span::raw("  "),
         Span::raw("  "),
     );
     lines.extend(prefixed);
-    if capped < rendered_len {
+    if hidden_count > 0 {
         lines.push(Line::from(Span::styled(
-            format!("  ... {} more line(s)", rendered_len - capped),
+            format!("  ... {} more line(s)", hidden_count),
             Style::default().fg(Color::DarkGray),
         )));
     }
+    lines.extend(prefix_lines(
+        tail.iter().cloned().collect(),
+        Span::raw("  "),
+        Span::raw("  "),
+    ));
     lines
 }
 

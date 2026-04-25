@@ -11,8 +11,9 @@ use super::viewport::TranscriptViewport;
 use super::{
     committed_turn_cell, compact_progress_summary_lines, compact_recent_first_summary_lines,
     compact_summary_text, current_turn_exploration_summary_from_entries, current_turn_tool_summary,
-    desired_bottom_pane_height, desired_viewport_height, renderable_transcript_lines,
-    transcript_scroll_offset, transcript_viewport, transcript_visual_row_count,
+    desired_bottom_pane_height, desired_viewport_height, formatted_message_lines,
+    prefixed_message_lines, renderable_transcript_lines, transcript_scroll_offset,
+    transcript_viewport, transcript_visual_row_count,
 };
 
 #[test]
@@ -518,4 +519,64 @@ fn compact_summary_text_keeps_tail_of_long_explicit_blocks() {
     assert!(!rendered.contains("src/a.rs"));
     assert!(rendered.contains("src/b.rs"));
     assert!(rendered.contains("src/e.rs"));
+}
+
+#[test]
+fn prefixed_message_lines_keep_first_and_latest_lines() {
+    let rendered = prefixed_message_lines(
+        "Agent",
+        &["intro", "middle 1", "middle 2", "latest 1", "latest 2"].join("\n"),
+        3,
+    )
+    .into_iter()
+    .map(|line| line.to_string())
+    .collect::<Vec<_>>();
+
+    assert_eq!(rendered[0], "Agent: intro");
+    assert_eq!(rendered[1], "  ... 2 more line(s)");
+    assert_eq!(rendered[2], "  latest 1");
+    assert_eq!(rendered[3], "  latest 2");
+}
+
+#[test]
+fn prefixed_message_lines_show_truncation_when_max_lines_is_one() {
+    let agent_rendered = prefixed_message_lines("Agent", &["intro", "latest 1"].join("\n"), 1)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>();
+    assert_eq!(agent_rendered[0], "Agent: intro");
+    assert_eq!(agent_rendered[1], "  ... 1 more line(s)");
+
+    let user_rendered = prefixed_message_lines("You", &["intro", "latest 1"].join("\n"), 1)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>();
+    assert_eq!(user_rendered[0], "› intro");
+    assert_eq!(user_rendered[1], "  ... 1 more line(s)");
+}
+
+#[test]
+fn formatted_agent_markdown_keeps_first_and_latest_lines() {
+    let rendered = formatted_message_lines(
+        "Agent",
+        &[
+            "first line",
+            "middle 1",
+            "middle 2",
+            "latest 1",
+            "latest 2",
+        ]
+        .join("\n"),
+        3,
+        Some(Path::new(".")),
+    )
+    .into_iter()
+    .map(|line| line.to_string())
+    .collect::<Vec<_>>();
+
+    assert!(rendered.iter().any(|line| line.contains("first line")));
+    assert!(rendered.iter().any(|line| line.contains("... 2 more line(s)")));
+    assert!(rendered.iter().any(|line| line.contains("latest 1")));
+    assert!(rendered.iter().any(|line| line.contains("latest 2")));
+    assert!(!rendered.iter().any(|line| line.contains("middle 1")));
 }
