@@ -537,6 +537,12 @@ impl TuiApp {
             context_window_tokens: runtime_context.budget.context_window_tokens,
             compact_threshold_tokens: runtime_context.budget.compact_threshold_tokens,
             reserved_output_tokens: runtime_context.budget.reserved_output_tokens,
+            stable_instructions_budget: runtime_context.budget.stable_instructions_budget,
+            workspace_prompt_budget: runtime_context.budget.workspace_prompt_budget,
+            active_turn_budget: runtime_context.budget.active_turn_budget,
+            compacted_history_budget: runtime_context.budget.compacted_history_budget,
+            retrieved_memory_budget: runtime_context.budget.retrieved_memory_budget,
+            remaining_input_budget: runtime_context.budget.remaining_input_budget,
             estimated_history_tokens: runtime_context.compaction.estimated_history_tokens,
             compaction_count: runtime_context.compaction.compaction_count,
             last_compaction_before_tokens: runtime_context.compaction.last_compaction_before_tokens,
@@ -563,7 +569,8 @@ impl TuiApp {
             prompt_append_system_prompt: runtime_context.prompt.append_system_prompt,
             prompt_warnings: runtime_context.prompt.warnings,
             retrieval_source_entries: runtime_context.retrieval.entries,
-            retrieval_selected_items: runtime_context.retrieval.selected_items,
+            memory_selection: runtime_context.retrieval.memory_selection,
+            assembly_entries: runtime_context.assembly.entries,
         };
         self.agent_execution_mode = agent.execution_mode;
         self.bash_approval_mode = agent.bash_approval_mode;

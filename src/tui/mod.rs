@@ -191,6 +191,10 @@ async fn dispatch_event(
                 return Ok(true);
             }
         }
+        AppEvent::InsertNewline => {
+            app.input.push('\n');
+            app.sync_command_palette_with_input();
+        }
         AppEvent::InputChar(c) => {
             if matches!(app.overlay, Some(Overlay::BaseUrlEditor)) {
                 app.base_url_input.push(c);

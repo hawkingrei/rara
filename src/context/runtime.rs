@@ -2,6 +2,24 @@ use crate::agent::{CompactState, PlanStepStatus};
 use crate::prompt::{EffectivePrompt, PromptSource};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContextAssemblyEntry {
+    pub order: usize,
+    pub layer: String,
+    pub kind: String,
+    pub label: String,
+    pub source_path: Option<String>,
+    pub injected: bool,
+    pub inclusion_reason: String,
+    pub budget_impact_tokens: Option<usize>,
+    pub dropped_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ContextAssemblyView {
+    pub entries: Vec<ContextAssemblyEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PromptSourceContextEntry {
     pub order: usize,
     pub kind: String,
@@ -99,14 +117,42 @@ pub struct ContextBudgetView {
     pub context_window_tokens: Option<usize>,
     pub compact_threshold_tokens: usize,
     pub reserved_output_tokens: usize,
+    pub stable_instructions_budget: usize,
+    pub workspace_prompt_budget: usize,
+    pub active_turn_budget: usize,
+    pub compacted_history_budget: usize,
+    pub retrieved_memory_budget: usize,
+    pub remaining_input_budget: Option<usize>,
 }
 
 impl ContextBudgetView {
-    pub fn from_compact_state(state: &CompactState) -> Self {
+    pub fn from_compact_state(
+        state: &CompactState,
+        stable_instructions_budget: usize,
+        workspace_prompt_budget: usize,
+        active_turn_budget: usize,
+        compacted_history_budget: usize,
+        retrieved_memory_budget: usize,
+    ) -> Self {
+        let remaining_input_budget = state.context_window_tokens.map(|window| {
+            window
+                .saturating_sub(state.reserved_output_tokens)
+                .saturating_sub(stable_instructions_budget)
+                .saturating_sub(workspace_prompt_budget)
+                .saturating_sub(active_turn_budget)
+                .saturating_sub(compacted_history_budget)
+                .saturating_sub(retrieved_memory_budget)
+        });
         Self {
             context_window_tokens: state.context_window_tokens,
             compact_threshold_tokens: state.compact_threshold_tokens,
             reserved_output_tokens: state.reserved_output_tokens,
+            stable_instructions_budget,
+            workspace_prompt_budget,
+            active_turn_budget,
+            compacted_history_budget,
+            retrieved_memory_budget,
+            remaining_input_budget,
         }
     }
 }
@@ -170,6 +216,7 @@ pub struct SharedRuntimeContext {
     pub total_input_tokens: u32,
     pub total_output_tokens: u32,
     pub budget: ContextBudgetView,
+    pub assembly: ContextAssemblyView,
     pub prompt: PromptContextView,
     pub plan: PlanContextView,
     pub compaction: CompactionContextView,
@@ -179,7 +226,7 @@ pub struct SharedRuntimeContext {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RetrievalContextView {
     pub entries: Vec<RetrievalSourceContextEntry>,
-    pub selected_items: Vec<RetrievalSelectedItemContextEntry>,
+    pub memory_selection: MemorySelectionContextView,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -192,11 +239,20 @@ pub struct RetrievalSourceContextEntry {
     pub inclusion_reason: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct MemorySelectionContextView {
+    pub selection_budget_tokens: Option<usize>,
+    pub selected_items: Vec<MemorySelectionItemContextEntry>,
+    pub dropped_items: Vec<MemorySelectionItemContextEntry>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RetrievalSelectedItemContextEntry {
+pub struct MemorySelectionItemContextEntry {
     pub order: usize,
     pub kind: String,
     pub label: String,
     pub detail: String,
-    pub inclusion_reason: String,
+    pub selection_reason: String,
+    pub budget_impact_tokens: Option<usize>,
+    pub dropped_reason: Option<String>,
 }

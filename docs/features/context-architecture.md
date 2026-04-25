@@ -180,6 +180,42 @@ In other words:
 - memory is a source;
 - context is an assembled view.
 
+### Stage 1.5 Memory Selection
+
+Before full vector-backed retrieval lands, RARA should still treat memory
+selection as an explicit runtime object instead of letting the assembler make
+ad hoc inclusion decisions inline.
+
+The first cut of `MemorySelection` should:
+
+- collect the currently selected memory-like inputs;
+- collect considered-but-dropped inputs;
+- preserve human-readable selection and drop reasons;
+- expose a bounded selection budget for the current turn.
+
+The next step on top of that first cut is to split the selection surface into:
+
+- fixed memory inputs that are already injected by ownership elsewhere
+  (for example workspace memory or compacted carry-over);
+- discretionary retrieval candidates that still compete for the current
+  selection budget.
+
+That keeps already-injected context from being re-ranked after the fact while
+still letting `/context` explain:
+
+- which retrieval candidates were considered;
+- which candidates won the current budget;
+- which candidates were dropped because a more focused source already covered
+  the same need;
+- which candidates were dropped because the selection budget was exhausted.
+
+This lets `/context` explain:
+
+- what won the current memory budget;
+- what remained available but not injected;
+- which parts of the thread/workspace surface are still placeholder or
+  readiness-only paths.
+
 RARA should therefore avoid:
 
 - replaying the full memory store as prompt text;
@@ -599,6 +635,12 @@ Suggested fields:
 - `context_window_tokens`;
 - `reserved_output_tokens`;
 - `compact_threshold_tokens`;
+- `stable_instructions_budget`;
+- `workspace_prompt_budget`;
+- `active_turn_budget`;
+- `compacted_history_budget`;
+- `retrieved_memory_budget`;
+- `remaining_input_budget`;
 - optional backend-specific margins.
 
 ## Persistence Boundary
@@ -678,6 +720,39 @@ Recommended order:
 - workspace memory must not be confused with thread history;
 - backend-specific rendering should happen after context selection, not during
   context discovery.
+- the assembly pass must emit an ordered, explainable source list that can be
+  consumed unchanged by agent debugging surfaces such as `/status` and
+  `/context`;
+- dropped or retrieval-ready items must remain attributable with an explicit
+  non-injection reason instead of disappearing silently.
+
+### Stage 1 Checkpoint
+
+The first Stage 1 landing does not replace the entire prompt-send path with a
+new message renderer. Instead, it centralizes ownership of the effective
+context explanation and budget accounting around one assembly boundary.
+
+Stage 1 now requires:
+
+- one `ContextAssembler` entrypoint that produces:
+  - the effective prompt/runtime view;
+  - a `ContextBudget`-shaped breakdown;
+  - ordered assembly entries with inclusion reasons and dropped-item reasons;
+- one assembler-owned turn result object so agent/runtime callers can read the
+  prompt view and the runtime/debug view from the same turn contract instead of
+  rebuilding them through separate helper paths;
+- `SharedRuntimeContext` and TUI runtime snapshots to carry that structured
+  assembled view directly;
+- `/status` and `/context` to consume the same assembly result instead of
+  rebuilding their own prompt/context explanation in parallel;
+- session restore to rebuild the same assembled-context view from persisted
+  thread/runtime state, including:
+  - plan state;
+  - pending interactions;
+  - compacted history inputs.
+
+This keeps retrieval behavior and the current model-send path intact while
+moving final context ownership behind an explicit assembly object.
 
 ## Compaction Model
 

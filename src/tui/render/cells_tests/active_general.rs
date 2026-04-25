@@ -83,10 +83,22 @@ fn active_turn_cell_renders_progress_sections_as_compact_stack() {
         .map(|line| line.to_string())
         .collect::<Vec<_>>();
 
-    let plan_mode_idx = rendered_lines.iter().position(|line| line.contains(" Plan Mode ")).unwrap();
-    let exploring_idx = rendered_lines.iter().position(|line| line.contains(" Exploring ")).unwrap();
-    let planning_idx = rendered_lines.iter().position(|line| line.contains(" Planning ")).unwrap();
-    let running_idx = rendered_lines.iter().position(|line| line.contains(" Running ")).unwrap();
+    let plan_mode_idx = rendered_lines
+        .iter()
+        .position(|line| line.contains(" Plan Mode "))
+        .unwrap();
+    let exploring_idx = rendered_lines
+        .iter()
+        .position(|line| line.contains(" Exploring "))
+        .unwrap();
+    let planning_idx = rendered_lines
+        .iter()
+        .position(|line| line.contains(" Planning "))
+        .unwrap();
+    let running_idx = rendered_lines
+        .iter()
+        .position(|line| line.contains(" Running "))
+        .unwrap();
 
     assert_eq!(exploring_idx, plan_mode_idx + 1);
     assert_eq!(planning_idx, exploring_idx + 2);
@@ -267,7 +279,10 @@ fn active_turn_cell_compacts_long_live_exploration_sections() {
     assert!(rendered.contains("module_2.rs"));
     assert!(rendered.contains("module_3.rs"));
     assert!(rendered.contains("module_5.rs"));
-    assert!(rendered.find("Cross-check the auth entrypoint.") < rendered.find("... 1 more exploration step(s)"));
+    assert!(
+        rendered.find("Cross-check the auth entrypoint.")
+            < rendered.find("... 1 more exploration step(s)")
+    );
 }
 
 #[test]
@@ -301,7 +316,10 @@ fn active_turn_cell_compacts_long_live_planning_sections() {
     assert!(rendered.contains("... 1 more planning step(s)"));
     assert!(!rendered.contains("planning module 1"));
     assert!(rendered.contains("planning module 2"));
-    assert!(rendered.find("Reuse the shared auth bridge.") < rendered.find("... 1 more planning step(s)"));
+    assert!(
+        rendered.find("Reuse the shared auth bridge.")
+            < rendered.find("... 1 more planning step(s)")
+    );
     assert!(rendered.contains("planning module 3"));
     assert!(rendered.contains("planning module 5"));
 }

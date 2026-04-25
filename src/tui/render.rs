@@ -16,7 +16,7 @@ use std::path::Path;
 use unicode_width::UnicodeWidthStr;
 
 pub(crate) use self::bottom_pane::desired_viewport_height;
-use self::bottom_pane::render_bottom_pane;
+use self::bottom_pane::{desired_bottom_pane_height, render_bottom_pane};
 pub(crate) use self::cells::{ActiveCell, HistoryCell};
 use self::cells::{ActiveTurnCell, CommittedTurnCell, StartupCardCell};
 use self::overlay::render_overlay;
@@ -26,9 +26,10 @@ use super::line_utils::prefix_lines;
 use super::state::{TranscriptEntry, TuiApp};
 
 pub fn render(f: &mut Frame, app: &TuiApp) {
+    let bottom_pane_height = desired_bottom_pane_height(app, f.area().width, f.area().height);
     let layout = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Fill(1), Constraint::Length(5)])
+        .constraints([Constraint::Fill(1), Constraint::Length(bottom_pane_height)])
         .split(f.area());
 
     render_transcript(f, app, layout[0]);

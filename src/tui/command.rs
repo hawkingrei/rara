@@ -204,7 +204,7 @@ pub fn command_detail_text(spec: &CommandSpec) -> String {
 }
 
 pub fn general_help_text() -> &'static str {
-    "RARA uses a single composer as the control surface.\n\nNormal input goes to the current agent.\nSlash commands stay local and open overlays or update runtime state.\n\nCompaction:\n  /compact forces one history compaction pass\n\nContext:\n  /context shows the effective runtime context for the current turn\n\nModes:\n  /plan enters planning mode for the current task\n  RARA may suggest planning mode first for non-trivial repository work\n  /approval toggles bash approval between suggestion and always\n\nAuth:\n  /login opens the provider auth picker\n  /logout clears the saved provider credential\n\nEditing:\n  apply_patch is the default tool for updating existing files\n  write_file is for new files or full rewrites\n  replace is only a simple fallback for unique string swaps\n\nKeyboard:\n  Enter submit current composer input\n  Esc close the current overlay only\n  Up/Down or j/k move inside lists\n  1/2/3 switch help tabs or choose guided model options\n\nExit:\n  /quit or /exit leave the TUI."
+    "RARA uses a single composer as the control surface.\n\nNormal input goes to the current agent.\nSlash commands stay local and open overlays or update runtime state.\n\nCompaction:\n  /compact forces one history compaction pass\n\nContext:\n  /context shows the effective runtime context for the current turn\n\nModes:\n  /plan enters planning mode for the current task\n  RARA may suggest planning mode first for non-trivial repository work\n  /approval toggles bash approval between suggestion and always\n\nAuth:\n  /login opens the provider auth picker\n  /logout clears the saved provider credential\n\nEditing:\n  apply_patch is the default tool for updating existing files\n  write_file is for new files or full rewrites\n  replace is only a simple fallback for unique string swaps\n\nKeyboard:\n  Enter submit current composer input\n  Shift+Enter insert a newline in the composer\n  Esc close the current overlay only\n  Up/Down or j/k move inside lists\n  1/2/3 switch help tabs or choose guided model options\n\nExit:\n  /quit or /exit leave the TUI."
 }
 
 fn command_score(spec: &CommandSpec, query: &str) -> Option<u8> {
@@ -252,7 +252,7 @@ pub fn help_text() -> String {
         .collect::<Vec<_>>()
         .join("\n");
     format!(
-        "Built-in commands:\n{}\n\nCompaction:\n  /compact   summarize older conversation history now\n\nThreads:\n  /resume    reopen a recent local thread\n\nModes:\n  /plan      enter planning mode for the current task\n  RARA may suggest planning mode for non-trivial tasks\n  /approval  toggle bash approval mode\n\nAuth:\n  /login     open the provider auth picker\n  /logout    clear the saved provider credential\n\nEditing:\n  apply_patch  preferred for editing existing files\n  write_file   use for new files or full rewrites\n  replace      simple fallback for unique string replacement\n\nKeyboard:\n  Enter submit\n  Esc close current overlay\n\nExit:\n  /quit\n  /exit\n\nModel switching:\n  /model\n\nProvider URL:\n  /base-url",
+        "Built-in commands:\n{}\n\nCompaction:\n  /compact   summarize older conversation history now\n\nThreads:\n  /resume    reopen a recent local thread\n\nModes:\n  /plan      enter planning mode for the current task\n  RARA may suggest planning mode for non-trivial tasks\n  /approval  toggle bash approval mode\n\nAuth:\n  /login     open the provider auth picker\n  /logout    clear the saved provider credential\n\nEditing:\n  apply_patch  preferred for editing existing files\n  write_file   use for new files or full rewrites\n  replace      simple fallback for unique string replacement\n\nKeyboard:\n  Enter submit\n  Shift+Enter insert newline\n  Esc close current overlay\n\nExit:\n  /quit\n  /exit\n\nModel switching:\n  /model\n\nProvider URL:\n  /base-url",
         commands
     )
 }
@@ -284,38 +284,105 @@ fn format_pending_interaction(snapshot: &PendingInteractionSnapshot) -> String {
     lines.join("\n")
 }
 
-pub fn status_context_text(app: &TuiApp) -> String {
-    let active_sections = if app.snapshot.prompt_section_keys.is_empty() {
-        "-".to_string()
+fn render_context_assembly_entries(app: &TuiApp, layer: &str, title: &str) -> String {
+    let entries = app
+        .snapshot
+        .assembly_entries
+        .iter()
+        .filter(|entry| entry.layer == layer)
+        .collect::<Vec<_>>();
+    if entries.is_empty() {
+        return format!("{title}\n  - None.");
+    }
+
+    let body = entries
+        .into_iter()
+        .map(|entry| {
+            let path = entry
+                .source_path
+                .as_deref()
+                .filter(|value| !value.is_empty())
+                .unwrap_or("-");
+            let injected = if entry.injected { "yes" } else { "no" };
+            let budget = entry
+                .budget_impact_tokens
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "-".to_string());
+            let dropped = entry.dropped_reason.as_deref().unwrap_or("-");
+            format!(
+                "  {}. {} ({})\n     path: {}\n     injected: {}\n     budget impact: {}\n     why: {}\n     dropped: {}",
+                entry.order,
+                entry.label,
+                entry.kind,
+                path,
+                injected,
+                budget,
+                entry.inclusion_reason,
+                dropped,
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    format!("{title}\n{body}")
+}
+
+fn render_memory_selection(app: &TuiApp) -> String {
+    let budget = app
+        .snapshot
+        .memory_selection
+        .selection_budget_tokens
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "-".to_string());
+    let selected = if app.snapshot.memory_selection.selected_items.is_empty() {
+        "  - None.".to_string()
     } else {
-        app.snapshot.prompt_section_keys.join(", ")
-    };
-    let prompt_sources = if !app.snapshot.prompt_source_entries.is_empty() {
         app.snapshot
-            .prompt_source_entries
+            .memory_selection
+            .selected_items
             .iter()
-            .map(|entry| {
+            .map(|item| {
+                let budget = item
+                    .budget_impact_tokens
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "-".to_string());
                 format!(
-                    "  {}. {} ({})\n     path: {}\n     why: {}",
-                    entry.order,
-                    entry.label,
-                    entry.kind,
-                    entry.display_path,
-                    entry.inclusion_reason
+                    "  {}. {} ({})\n     detail: {}\n     budget impact: {}\n     why selected: {}",
+                    item.order, item.label, item.kind, item.detail, budget, item.selection_reason
                 )
             })
             .collect::<Vec<_>>()
             .join("\n")
-    } else if app.snapshot.prompt_source_status_lines.is_empty() {
-        "  - No prompt sources discovered.".to_string()
+    };
+    let dropped = if app.snapshot.memory_selection.dropped_items.is_empty() {
+        "  - None.".to_string()
     } else {
         app.snapshot
-            .prompt_source_status_lines
+            .memory_selection
+            .dropped_items
             .iter()
-            .map(|line| format!("  - {line}"))
+            .map(|item| {
+                format!(
+                    "  {}. {} ({})\n     detail: {}\n     why considered: {}\n     dropped: {}",
+                    item.order,
+                    item.label,
+                    item.kind,
+                    item.detail,
+                    item.selection_reason,
+                    item.dropped_reason.as_deref().unwrap_or("-")
+                )
+            })
             .collect::<Vec<_>>()
             .join("\n")
     };
+
+    format!(
+        "Memory Selection\n  selection budget: {}\n  selected now:\n{}\n  dropped now:\n{}",
+        budget, selected, dropped
+    )
+}
+
+pub fn status_context_text(app: &TuiApp) -> String {
     let prompt_warnings = if app.snapshot.prompt_warnings.is_empty() {
         None
     } else {
@@ -366,57 +433,6 @@ pub fn status_context_text(app: &TuiApp) -> String {
     } else {
         "-".to_string()
     };
-    let compaction_sources = if app.snapshot.compaction_source_entries.is_empty() {
-        "  - No compacted-history inputs are active.".to_string()
-    } else {
-        app.snapshot
-            .compaction_source_entries
-            .iter()
-            .map(|entry| {
-                format!(
-                    "  {}. {} ({})\n     detail: {}\n     why: {}",
-                    entry.order, entry.label, entry.kind, entry.detail, entry.inclusion_reason
-                )
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
-    };
-    let retrieval_sources = if app.snapshot.retrieval_source_entries.is_empty() {
-        "  - No retrieval or memory sources are registered.".to_string()
-    } else {
-        app.snapshot
-            .retrieval_source_entries
-            .iter()
-            .map(|entry| {
-                format!(
-                    "  {}. {} ({}) [{}]\n     detail: {}\n     why: {}",
-                    entry.order,
-                    entry.label,
-                    entry.kind,
-                    entry.status,
-                    entry.detail,
-                    entry.inclusion_reason
-                )
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
-    };
-    let retrieval_selected_items = if app.snapshot.retrieval_selected_items.is_empty() {
-        "  - No recalled memory items are active in the current turn.".to_string()
-    } else {
-        app.snapshot
-            .retrieval_selected_items
-            .iter()
-            .map(|entry| {
-                format!(
-                    "  {}. {} ({})\n     detail: {}\n     why: {}",
-                    entry.order, entry.label, entry.kind, entry.detail, entry.inclusion_reason
-                )
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
-    };
-
     let mut sections = vec![
         format!(
             "Current Session\n  cwd: {}\n  branch: {}\n  session: {}\n  history messages: {}\n  transcript entries: {}",
@@ -427,8 +443,32 @@ pub fn status_context_text(app: &TuiApp) -> String {
             app.transcript_entry_count(),
         ),
         format!(
-            "Included Now\n  base prompt: {}\n  active sections: {}\n  sources (in assembly order):\n{}",
-            app.snapshot.prompt_base_kind, active_sections, prompt_sources
+            "Context Budget\n  context window: {}\n  reserved output: {}\n  stable instructions: {}\n  workspace prompt sources: {}\n  active turn: {}\n  compacted history: {}\n  retrieved memory: {}\n  remaining input budget: {}",
+            app.snapshot
+                .context_window_tokens
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "-".to_string()),
+            app.snapshot.reserved_output_tokens,
+            app.snapshot.stable_instructions_budget,
+            app.snapshot.workspace_prompt_budget,
+            app.snapshot.active_turn_budget,
+            app.snapshot.compacted_history_budget,
+            app.snapshot.retrieved_memory_budget,
+            app.snapshot
+                .remaining_input_budget
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "-".to_string()),
+        ),
+        render_context_assembly_entries(app, "stable_instructions", "Stable Instructions"),
+        render_context_assembly_entries(app, "workspace_prompt_sources", "Workspace Prompt Sources"),
+        render_context_assembly_entries(app, "active_memory_inputs", "Active Memory Inputs"),
+        render_memory_selection(app),
+        render_context_assembly_entries(app, "compacted_history", "Compacted History"),
+        render_context_assembly_entries(app, "active_turn_state", "Active Turn State"),
+        render_context_assembly_entries(
+            app,
+            "retrieval_ready",
+            "Retrieval-ready but not injected items",
         ),
         format!(
             "Plan State\n  explanation: {}\n{}",
@@ -436,7 +476,7 @@ pub fn status_context_text(app: &TuiApp) -> String {
             plan_lines
         ),
         format!(
-            "Compaction State\n  estimated history tokens: {}\n  context window: {}\n  threshold: {}\n  reserved output: {}\n  compactions: {}\n  last compaction: {} -> {}\n  last boundary: {}\n  compacted inputs:\n{}",
+            "Compaction State\n  estimated history tokens: {}\n  context window: {}\n  threshold: {}\n  reserved output: {}\n  compactions: {}\n  last compaction: {} -> {}\n  last boundary: {}",
             app.snapshot.estimated_history_tokens,
             app.snapshot
                 .context_window_tokens
@@ -453,12 +493,7 @@ pub fn status_context_text(app: &TuiApp) -> String {
                 .last_compaction_after_tokens
                 .map(|value| value.to_string())
                 .unwrap_or_else(|| "-".to_string()),
-            last_boundary,
-            compaction_sources
-        ),
-        format!(
-            "Retrieval / Memory State\nsources:\n{}\nselected now:\n{}",
-            retrieval_sources, retrieval_selected_items
+            last_boundary
         ),
         format!("Pending Interaction\n{}", pending_interactions),
     ];
@@ -604,19 +639,16 @@ pub fn status_resources_text(app: &TuiApp) -> String {
     };
     let retrieval_budget = app
         .snapshot
-        .context_window_tokens
-        .map(|window| {
-            window.saturating_sub(
-                app.snapshot.estimated_history_tokens + app.snapshot.reserved_output_tokens,
-            )
-        })
+        .memory_selection
+        .selection_budget_tokens
         .map(|value| value.to_string())
         .unwrap_or_else(|| "-".to_string());
-    let retrieval_selected = if app.snapshot.retrieval_selected_items.is_empty() {
+    let retrieval_selected = if app.snapshot.memory_selection.selected_items.is_empty() {
         "-".to_string()
     } else {
         app.snapshot
-            .retrieval_selected_items
+            .memory_selection
+            .selected_items
             .iter()
             .map(|item| item.kind.as_str())
             .collect::<Vec<_>>()
@@ -655,11 +687,7 @@ pub fn status_prompt_sources_text(app: &TuiApp) -> String {
         lines.extend(app.snapshot.prompt_source_entries.iter().map(|entry| {
             format!(
                 "{}. {} [{}] {}\n   why: {}",
-                entry.order,
-                entry.label,
-                entry.kind,
-                entry.display_path,
-                entry.inclusion_reason
+                entry.order, entry.label, entry.kind, entry.display_path, entry.inclusion_reason
             )
         }));
     }
@@ -920,7 +948,7 @@ mod tests {
         status_resources_text, status_runtime_text, LocalCommandKind,
     };
     use crate::config::ConfigManager;
-    use crate::context::{PromptSourceContextEntry, RetrievalSelectedItemContextEntry};
+    use crate::context::PromptSourceContextEntry;
     use crate::tui::state::{RuntimeSnapshot, TuiApp};
     use tempfile::tempdir;
 
@@ -1078,6 +1106,30 @@ mod tests {
             estimated_history_tokens: 12_345,
             context_window_tokens: Some(22_537),
             reserved_output_tokens: 2_000,
+            memory_selection: crate::context::MemorySelectionContextView {
+                selection_budget_tokens: Some(8_192),
+                selected_items: vec![
+                    crate::context::MemorySelectionItemContextEntry {
+                        order: 1,
+                        kind: "workspace_memory".to_string(),
+                        label: "Workspace Memory".to_string(),
+                        detail: "memory".to_string(),
+                        selection_reason: "active".to_string(),
+                        budget_impact_tokens: Some(24),
+                        dropped_reason: None,
+                    },
+                    crate::context::MemorySelectionItemContextEntry {
+                        order: 2,
+                        kind: "retrieved_workspace_memory".to_string(),
+                        label: "Retrieved Experience".to_string(),
+                        detail: "query=bootstrap".to_string(),
+                        selection_reason: "retrieved".to_string(),
+                        budget_impact_tokens: Some(18),
+                        dropped_reason: None,
+                    },
+                ],
+                dropped_items: Vec::new(),
+            },
             compaction_count: 2,
             last_compaction_before_tokens: Some(12_000),
             last_compaction_after_tokens: Some(4_500),
@@ -1088,28 +1140,14 @@ mod tests {
             last_compaction_boundary_version: Some(1),
             last_compaction_boundary_before_tokens: Some(12_000),
             last_compaction_boundary_recent_file_count: Some(2),
-            retrieval_selected_items: vec![
-                RetrievalSelectedItemContextEntry {
-                    order: 1,
-                    kind: "workspace_memory".to_string(),
-                    label: "Workspace Memory".to_string(),
-                    detail: "memory".to_string(),
-                    inclusion_reason: "active".to_string(),
-                },
-                RetrievalSelectedItemContextEntry {
-                    order: 2,
-                    kind: "retrieve_experience".to_string(),
-                    label: "Retrieved Experience".to_string(),
-                    detail: "query=bootstrap".to_string(),
-                    inclusion_reason: "retrieved".to_string(),
-                },
-            ],
             ..RuntimeSnapshot::default()
         };
 
         let rendered = status_resources_text(&app);
         assert!(rendered.contains("retrieval_budget=8192"));
-        assert!(rendered.contains("retrieval_selected=workspace_memory, retrieve_experience"));
+        assert!(
+            rendered.contains("retrieval_selected=workspace_memory, retrieved_workspace_memory")
+        );
         assert!(rendered.contains("compactions=2 (last: 12000 -> 4500, ratio: 0.38)"));
         assert!(rendered.contains("compact_boundary=v1 (before_tokens=12000, recent_file_count=2)"));
         assert!(rendered.contains("recent_compact_file_count=2"));
@@ -1138,8 +1176,11 @@ mod tests {
         }];
 
         let rendered = status_prompt_sources_text(&app);
-        assert!(rendered.contains("1. Project Instruction (AGENTS.md) [project_instruction] AGENTS.md"));
-        assert!(rendered.contains("why: included because workspace instruction discovery found this file"));
+        assert!(
+            rendered.contains("1. Project Instruction (AGENTS.md) [project_instruction] AGENTS.md")
+        );
+        assert!(rendered
+            .contains("why: included because workspace instruction discovery found this file"));
     }
 
     #[test]
@@ -1173,6 +1214,12 @@ mod tests {
             context_window_tokens: Some(200_000),
             compact_threshold_tokens: 180_000,
             reserved_output_tokens: 8_192,
+            stable_instructions_budget: 1_200,
+            workspace_prompt_budget: 320,
+            active_turn_budget: 280,
+            compacted_history_budget: 140,
+            retrieved_memory_budget: 96,
+            remaining_input_budget: Some(189_772),
             compaction_count: 1,
             last_compaction_before_tokens: Some(12_000),
             last_compaction_after_tokens: Some(4_500),
@@ -1207,33 +1254,54 @@ mod tests {
                         "available as the session-local history source for restore and future recall surfaces".into(),
                 },
             ],
-            retrieval_selected_items: vec![
-                RetrievalSelectedItemContextEntry {
+            memory_selection: crate::context::MemorySelectionContextView {
+                selection_budget_tokens: Some(1_024),
+                selected_items: vec![
+                    crate::context::MemorySelectionItemContextEntry {
+                        order: 1,
+                        kind: "workspace_memory".into(),
+                        label: "Workspace Memory".into(),
+                        detail: "/workspace/rara/.rara/memory.md; 3 line(s); first line: # Team Notes"
+                            .into(),
+                        selection_reason:
+                            "selected because the current effective prompt includes the workspace memory file as an active input".into(),
+                        budget_impact_tokens: Some(64),
+                        dropped_reason: None,
+                    },
+                    crate::context::MemorySelectionItemContextEntry {
+                        order: 2,
+                        kind: "compacted_summary".into(),
+                        label: "Compacted Thread Summary".into(),
+                        detail: "User Intent".into(),
+                        selection_reason:
+                            "included because older thread history was compacted into a structured summary instead of being replayed verbatim".into(),
+                        budget_impact_tokens: Some(48),
+                        dropped_reason: None,
+                    },
+                    crate::context::MemorySelectionItemContextEntry {
+                        order: 3,
+                        kind: "retrieved_workspace_memory".into(),
+                        label: "Retrieved Experience".into(),
+                        detail: "query=bootstrap contract; recalled=2 item(s); preview: Prefer one shared bootstrap path. | Keep session restore aligned with direct execution.".into(),
+                        selection_reason:
+                            "selected because the retrieval tool returned relevant durable memory candidates for the current task".into(),
+                        budget_impact_tokens: Some(32),
+                        dropped_reason: None,
+                    },
+                ],
+                dropped_items: vec![crate::context::MemorySelectionItemContextEntry {
                     order: 1,
-                    kind: "workspace_memory".into(),
-                    label: "Workspace Memory".into(),
-                    detail: "/workspace/rara/.rara/memory.md; 3 line(s); first line: # Team Notes"
-                        .into(),
-                    inclusion_reason:
-                        "selected because the current effective prompt includes the workspace memory file as an active input".into(),
-                },
-                RetrievalSelectedItemContextEntry {
-                    order: 2,
-                    kind: "compacted_summary".into(),
-                    label: "Compacted Thread Summary".into(),
-                    detail: "User Intent".into(),
-                    inclusion_reason:
-                        "included because older thread history was compacted into a structured summary instead of being replayed verbatim".into(),
-                },
-                RetrievalSelectedItemContextEntry {
-                    order: 3,
-                    kind: "retrieved_workspace_memory".into(),
-                    label: "Retrieved Experience".into(),
-                    detail: "query=bootstrap contract; recalled=2 item(s); preview: Prefer one shared bootstrap path. | Keep session restore aligned with direct execution.".into(),
-                    inclusion_reason:
-                        "selected because the retrieval tool returned relevant durable memory candidates for the current task".into(),
-                },
-            ],
+                    kind: "thread_history".into(),
+                    label: "Thread History".into(),
+                    detail: "session=session-123 messages=4".into(),
+                    selection_reason:
+                        "thread history remains available as a recall source even when only active-turn state is currently injected".into(),
+                    budget_impact_tokens: None,
+                    dropped_reason: Some(
+                        "raw thread history was not selected directly because the current turn already has sufficient active-turn and compacted-history context".into(),
+                    ),
+                }],
+            },
             prompt_base_kind: "codex".into(),
             prompt_section_keys: vec!["stable_instructions".into(), "workspace".into()],
             prompt_source_entries: vec![
@@ -1260,27 +1328,106 @@ mod tests {
                 "AGENTS.md from workspace root".into(),
                 "workspace instruction file".into(),
             ],
+            assembly_entries: vec![
+                crate::context::ContextAssemblyEntry {
+                    order: 1,
+                    layer: "stable_instructions".into(),
+                    kind: "project_instruction".into(),
+                    label: "Project Instruction (AGENTS.md)".into(),
+                    source_path: Some("AGENTS.md".into()),
+                    injected: true,
+                    inclusion_reason:
+                        "included as a repository instruction discovered while walking from the workspace root toward the current focus directory".into(),
+                    budget_impact_tokens: Some(120),
+                    dropped_reason: None,
+                },
+                crate::context::ContextAssemblyEntry {
+                    order: 2,
+                    layer: "workspace_prompt_sources".into(),
+                    kind: "local_memory".into(),
+                    label: "Workspace Memory".into(),
+                    source_path: Some("/workspace/rara/.rara/memory.md".into()),
+                    injected: true,
+                    inclusion_reason:
+                        "selected because the current effective prompt includes the workspace memory file as an active input".into(),
+                    budget_impact_tokens: Some(64),
+                    dropped_reason: None,
+                },
+                crate::context::ContextAssemblyEntry {
+                    order: 3,
+                    layer: "active_memory_inputs".into(),
+                    kind: "retrieved_workspace_memory".into(),
+                    label: "Retrieved Experience".into(),
+                    source_path: None,
+                    injected: true,
+                    inclusion_reason:
+                        "selected because the retrieval tool returned relevant durable memory candidates for the current task".into(),
+                    budget_impact_tokens: Some(32),
+                    dropped_reason: None,
+                },
+                crate::context::ContextAssemblyEntry {
+                    order: 4,
+                    layer: "compacted_history".into(),
+                    kind: "compacted_summary".into(),
+                    label: "Compacted Thread Summary".into(),
+                    source_path: None,
+                    injected: true,
+                    inclusion_reason:
+                        "included because older thread history was compacted into a structured summary instead of being replayed verbatim".into(),
+                    budget_impact_tokens: Some(48),
+                    dropped_reason: None,
+                },
+                crate::context::ContextAssemblyEntry {
+                    order: 5,
+                    layer: "active_turn_state".into(),
+                    kind: "plan_steps".into(),
+                    label: "Plan Steps".into(),
+                    source_path: None,
+                    injected: true,
+                    inclusion_reason:
+                        "included because structured plan steps are part of the current active thread state".into(),
+                    budget_impact_tokens: Some(80),
+                    dropped_reason: None,
+                },
+                crate::context::ContextAssemblyEntry {
+                    order: 6,
+                    layer: "retrieval_ready".into(),
+                    kind: "thread_history".into(),
+                    label: "Thread History".into(),
+                    source_path: None,
+                    injected: false,
+                    inclusion_reason:
+                        "available as the session-local history source for restore and future recall surfaces".into(),
+                    budget_impact_tokens: None,
+                    dropped_reason:
+                        Some("available for recall, but not selected into the current assembled context".into()),
+                },
+            ],
             plan_steps: vec![("pending".into(), "Implement /context".into())],
             ..RuntimeSnapshot::default()
         };
 
         let rendered = status_context_text(&app);
         assert!(rendered.contains("Current Session"));
-        assert!(rendered.contains("Included Now"));
-        assert!(rendered.contains("sources (in assembly order):"));
+        assert!(rendered.contains("Context Budget"));
+        assert!(rendered.contains("stable instructions: 1200"));
+        assert!(rendered.contains("Stable Instructions"));
+        assert!(rendered.contains("Workspace Prompt Sources"));
+        assert!(rendered.contains("Active Memory Inputs"));
+        assert!(rendered.contains("Memory Selection"));
+        assert!(rendered.contains("selection budget: 1024"));
+        assert!(rendered.contains("Compacted History"));
+        assert!(rendered.contains("Active Turn State"));
+        assert!(rendered.contains("Retrieval-ready but not injected items"));
         assert!(rendered.contains("1. Project Instruction (AGENTS.md) (project_instruction)"));
         assert!(rendered.contains("path: AGENTS.md"));
-        assert!(rendered.contains("why: included as a repository instruction"));
-        assert!(rendered.contains("compacted inputs:"));
-        assert!(rendered.contains("1. Compacted Thread Summary (compacted_summary)"));
-        assert!(rendered.contains("Retrieval / Memory State"));
-        assert!(rendered.contains("sources:"));
-        assert!(rendered.contains("1. Workspace Memory (workspace_memory) [active]"));
-        assert!(rendered.contains("2. Thread History (thread_history) [available]"));
-        assert!(rendered.contains("selected now:"));
-        assert!(rendered.contains("1. Workspace Memory (workspace_memory)"));
-        assert!(rendered.contains("2. Compacted Thread Summary (compacted_summary)"));
-        assert!(rendered.contains("3. Retrieved Experience (retrieved_workspace_memory)"));
+        assert!(rendered.contains("injected: yes"));
+        assert!(rendered.contains("budget impact: 120"));
+        assert!(rendered.contains("dropped: -"));
+        assert!(rendered.contains("6. Thread History (thread_history)"));
+        assert!(rendered.contains("injected: no"));
+        assert!(rendered.contains("dropped: raw thread history was not selected directly"));
+        assert!(rendered.contains("why selected: selected because the current effective prompt includes the workspace memory file as an active input"));
         assert!(rendered.contains("[pending] Implement /context"));
     }
 

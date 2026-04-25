@@ -166,7 +166,7 @@ async fn run_tui_command(
     let agent = bootstrap.into_agent();
     let resumed_thread_id = crate::tui::run_tui(agent, oauth_manager, startup_resume).await?;
     if let Some(thread_id) = resumed_thread_id {
-        println!("{}", resume_hint(&thread_id));
+        print!("{}", rendered_resume_hint(&thread_id));
     }
     Ok(())
 }
@@ -278,6 +278,10 @@ fn resume_hint(thread_id: &str) -> String {
     format!("Resume this thread with: rara resume {thread_id}")
 }
 
+fn rendered_resume_hint(thread_id: &str) -> String {
+    format!("\n{}\n", resume_hint(thread_id))
+}
+
 fn emit_bootstrap_warnings(warnings: &[String]) {
     for warning in warnings {
         eprintln!("{}", redact_secrets(format!("Warning: {warning}")));
@@ -309,6 +313,14 @@ mod tests {
         assert_eq!(
             resume_hint("thread-123"),
             "Resume this thread with: rara resume thread-123"
+        );
+    }
+
+    #[test]
+    fn rendered_resume_hint_starts_on_a_new_line() {
+        assert_eq!(
+            rendered_resume_hint("thread-123"),
+            "\nResume this thread with: rara resume thread-123\n"
         );
     }
 

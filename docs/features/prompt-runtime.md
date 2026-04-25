@@ -87,6 +87,11 @@ The effective prompt is assembled in this order:
   - compacted thread-memory carry-over such as structured summaries and recent-file carry-over.
   - selected retrieval results reconstructed from retrieval-tool outputs when the current turn has
     already performed explicit recall.
+- The same inspection surface should expose the Stage 1 context-assembly result through one shared
+  runtime object so `/status`, `/context`, and restore-time runtime snapshots read the same:
+  - ordered assembly entries;
+  - inclusion and dropped reasons;
+  - budget-impact breakdown per layer.
 - Session restore must rebuild the same prompt/runtime surface that a direct run would produce for
   persisted session-scoped state such as execution mode, append prompt text, and prompt warnings.
 
@@ -131,3 +136,4 @@ The effective prompt is assembled in this order:
 
 - [2026-04-17-prompt-runtime](../journal/2026-04-17-prompt-runtime.md)
 - [2026-04-24-context-observability-and-restore](../journal/2026-04-24-context-observability-and-restore.md)
+- [2026-04-25-context-assembly-stage1](../journal/2026-04-25-context-assembly-stage1.md)

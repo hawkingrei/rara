@@ -1,18 +1,31 @@
-use crossterm::event::KeyCode;
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::app_event::AppEvent;
 use super::state::{HelpTab, Overlay, ProviderFamily, TuiApp};
 
-pub(super) fn map_key_to_event(key: KeyCode, app: &TuiApp) -> AppEvent {
+pub(super) fn map_key_to_event(key: KeyEvent, app: &TuiApp) -> AppEvent {
+    let code = key.code;
+    let modifiers = key.modifiers;
     match app.overlay {
         Some(Overlay::Help(_)) => match key {
-            KeyCode::Esc => AppEvent::CloseOverlay,
-            KeyCode::Char('1') => AppEvent::SelectHelpTab(HelpTab::General),
-            KeyCode::Char('2') => AppEvent::SelectHelpTab(HelpTab::Commands),
-            KeyCode::Char('3') => AppEvent::SelectHelpTab(HelpTab::Runtime),
+            KeyEvent {
+                code: KeyCode::Esc, ..
+            } => AppEvent::CloseOverlay,
+            KeyEvent {
+                code: KeyCode::Char('1'),
+                ..
+            } => AppEvent::SelectHelpTab(HelpTab::General),
+            KeyEvent {
+                code: KeyCode::Char('2'),
+                ..
+            } => AppEvent::SelectHelpTab(HelpTab::Commands),
+            KeyEvent {
+                code: KeyCode::Char('3'),
+                ..
+            } => AppEvent::SelectHelpTab(HelpTab::Runtime),
             _ => AppEvent::Noop,
         },
-        Some(Overlay::CommandPalette) => match key {
+        Some(Overlay::CommandPalette) => match code {
             KeyCode::Esc => AppEvent::CloseOverlay,
             KeyCode::Up | KeyCode::Char('k') => AppEvent::MoveCommandSelection(-1),
             KeyCode::Down | KeyCode::Char('j') => AppEvent::MoveCommandSelection(1),
@@ -21,15 +34,15 @@ pub(super) fn map_key_to_event(key: KeyCode, app: &TuiApp) -> AppEvent {
             KeyCode::Char(c) => AppEvent::InputChar(c),
             _ => AppEvent::Noop,
         },
-        Some(Overlay::Status) => match key {
+        Some(Overlay::Status) => match code {
             KeyCode::Esc | KeyCode::Enter => AppEvent::CloseOverlay,
             _ => AppEvent::Noop,
         },
-        Some(Overlay::Context) => match key {
+        Some(Overlay::Context) => match code {
             KeyCode::Esc | KeyCode::Enter => AppEvent::CloseOverlay,
             _ => AppEvent::Noop,
         },
-        Some(Overlay::ProviderPicker) => match key {
+        Some(Overlay::ProviderPicker) => match code {
             KeyCode::Esc => AppEvent::CloseOverlay,
             KeyCode::Up | KeyCode::Char('k') => AppEvent::MoveProviderSelection(-1),
             KeyCode::Down | KeyCode::Char('j') => AppEvent::MoveProviderSelection(1),
@@ -40,7 +53,7 @@ pub(super) fn map_key_to_event(key: KeyCode, app: &TuiApp) -> AppEvent {
             KeyCode::Enter => AppEvent::ApplyOverlaySelection,
             _ => AppEvent::Noop,
         },
-        Some(Overlay::ResumePicker) => match key {
+        Some(Overlay::ResumePicker) => match code {
             KeyCode::Esc => AppEvent::CloseOverlay,
             KeyCode::Up | KeyCode::Char('k') => AppEvent::MoveResumeSelection(-1),
             KeyCode::Down | KeyCode::Char('j') => AppEvent::MoveResumeSelection(1),
@@ -50,7 +63,7 @@ pub(super) fn map_key_to_event(key: KeyCode, app: &TuiApp) -> AppEvent {
             KeyCode::Enter => AppEvent::ApplyOverlaySelection,
             _ => AppEvent::Noop,
         },
-        Some(Overlay::ModelPicker) => match key {
+        Some(Overlay::ModelPicker) => match code {
             KeyCode::Esc => AppEvent::CloseOverlay,
             KeyCode::Up | KeyCode::Char('k') => AppEvent::MoveModelSelection(-1),
             KeyCode::Down | KeyCode::Char('j') => AppEvent::MoveModelSelection(1),
@@ -90,7 +103,7 @@ pub(super) fn map_key_to_event(key: KeyCode, app: &TuiApp) -> AppEvent {
             KeyCode::Enter => AppEvent::ApplyOverlaySelection,
             _ => AppEvent::Noop,
         },
-        Some(Overlay::AuthModePicker) => match key {
+        Some(Overlay::AuthModePicker) => match code {
             KeyCode::Esc => AppEvent::CloseOverlay,
             KeyCode::Up | KeyCode::Char('k') => AppEvent::MoveAuthModeSelection(-1),
             KeyCode::Down | KeyCode::Char('j') => AppEvent::MoveAuthModeSelection(1),
@@ -101,28 +114,28 @@ pub(super) fn map_key_to_event(key: KeyCode, app: &TuiApp) -> AppEvent {
             KeyCode::Enter => AppEvent::ApplyOverlaySelection,
             _ => AppEvent::Noop,
         },
-        Some(Overlay::BaseUrlEditor) => match key {
+        Some(Overlay::BaseUrlEditor) => match code {
             KeyCode::Esc => AppEvent::CloseOverlay,
             KeyCode::Enter => AppEvent::SaveBaseUrlInput,
             KeyCode::Backspace => AppEvent::Backspace,
             KeyCode::Char(c) => AppEvent::InputChar(c),
             _ => AppEvent::Noop,
         },
-        Some(Overlay::ApiKeyEditor) => match key {
+        Some(Overlay::ApiKeyEditor) => match code {
             KeyCode::Esc => AppEvent::CloseOverlay,
             KeyCode::Enter => AppEvent::SaveApiKeyInput,
             KeyCode::Backspace => AppEvent::Backspace,
             KeyCode::Char(c) => AppEvent::InputChar(c),
             _ => AppEvent::Noop,
         },
-        Some(Overlay::ModelNameEditor) => match key {
+        Some(Overlay::ModelNameEditor) => match code {
             KeyCode::Esc => AppEvent::CloseOverlay,
             KeyCode::Enter => AppEvent::SaveModelNameInput,
             KeyCode::Backspace => AppEvent::Backspace,
             KeyCode::Char(c) => AppEvent::InputChar(c),
             _ => AppEvent::Noop,
         },
-        Some(Overlay::ReasoningEffortPicker) => match key {
+        Some(Overlay::ReasoningEffortPicker) => match code {
             KeyCode::Esc => AppEvent::CloseOverlay,
             KeyCode::Up | KeyCode::Char('k') => AppEvent::MoveReasoningEffortSelection(-1),
             KeyCode::Down | KeyCode::Char('j') => AppEvent::MoveReasoningEffortSelection(1),
@@ -134,32 +147,35 @@ pub(super) fn map_key_to_event(key: KeyCode, app: &TuiApp) -> AppEvent {
             KeyCode::Enter => AppEvent::ApplyOverlaySelection,
             _ => AppEvent::Noop,
         },
-        None => match key {
-            KeyCode::Esc => AppEvent::Noop,
-            KeyCode::Enter => AppEvent::SubmitComposer,
-            KeyCode::Up | KeyCode::Char('k') if app.input.is_empty() => {
+        None => match (code, modifiers) {
+            (KeyCode::Esc, _) => AppEvent::Noop,
+            (KeyCode::Enter, KeyModifiers::SHIFT) | (KeyCode::Char('j'), KeyModifiers::CONTROL) => {
+                AppEvent::InsertNewline
+            }
+            (KeyCode::Enter, _) => AppEvent::SubmitComposer,
+            (KeyCode::Up | KeyCode::Char('k'), _) if app.input.is_empty() => {
                 AppEvent::ScrollTranscript(-1)
             }
-            KeyCode::Down | KeyCode::Char('j') if app.input.is_empty() => {
+            (KeyCode::Down | KeyCode::Char('j'), _) if app.input.is_empty() => {
                 AppEvent::ScrollTranscript(1)
             }
-            KeyCode::PageUp if app.input.is_empty() => AppEvent::ScrollTranscript(-8),
-            KeyCode::PageDown if app.input.is_empty() => AppEvent::ScrollTranscript(8),
-            KeyCode::Char('1')
+            (KeyCode::PageUp, _) if app.input.is_empty() => AppEvent::ScrollTranscript(-8),
+            (KeyCode::PageDown, _) if app.input.is_empty() => AppEvent::ScrollTranscript(8),
+            (KeyCode::Char('1'), _)
                 if app.input.is_empty()
                     && (app.active_pending_interaction().is_some()
                         || app.has_pending_planning_suggestion()) =>
             {
                 AppEvent::SelectPendingOption(0)
             }
-            KeyCode::Char('2')
+            (KeyCode::Char('2'), _)
                 if app.input.is_empty()
                     && (app.active_pending_interaction().is_some()
                         || app.has_pending_planning_suggestion()) =>
             {
                 AppEvent::SelectPendingOption(1)
             }
-            KeyCode::Char('3')
+            (KeyCode::Char('3'), _)
                 if app.input.is_empty()
                     && app.active_pending_interaction().is_some_and(|pending| {
                         pending.kind != super::state::ActivePendingInteractionKind::PlanApproval
@@ -167,8 +183,8 @@ pub(super) fn map_key_to_event(key: KeyCode, app: &TuiApp) -> AppEvent {
             {
                 AppEvent::SelectPendingOption(2)
             }
-            KeyCode::Backspace => AppEvent::Backspace,
-            KeyCode::Char(c) => AppEvent::InputChar(c),
+            (KeyCode::Backspace, _) => AppEvent::Backspace,
+            (KeyCode::Char(c), _) => AppEvent::InputChar(c),
             _ => AppEvent::Noop,
         },
     }

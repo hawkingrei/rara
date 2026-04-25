@@ -1,7 +1,7 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ToolError {
@@ -43,13 +43,13 @@ pub trait Tool: Send + Sync {
 }
 
 pub struct ToolManager {
-    tools: HashMap<String, Box<dyn Tool>>,
+    tools: BTreeMap<String, Box<dyn Tool>>,
 }
 
 impl ToolManager {
     pub fn new() -> Self {
         Self {
-            tools: HashMap::new(),
+            tools: BTreeMap::new(),
         }
     }
     pub fn register(&mut self, tool: Box<dyn Tool>) {
@@ -66,17 +66,80 @@ impl ToolManager {
         F: FnMut(&str) -> bool,
     {
         self.tools
-            .values()
-            .filter_map(|t| {
-                if !include(t.name()) {
+            .iter()
+            .filter_map(|(name, tool)| {
+                if !include(name.as_str()) {
                     return None;
                 }
                 Some(serde_json::json!({
-                    "name": t.name(),
-                    "description": t.description(),
-                    "input_schema": t.input_schema(),
+                    "name": tool.name(),
+                    "description": tool.description(),
+                    "input_schema": tool.input_schema(),
                 }))
             })
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct TestTool {
+        name: &'static str,
+    }
+
+    #[async_trait]
+    impl Tool for TestTool {
+        fn name(&self) -> &str {
+            self.name
+        }
+
+        fn description(&self) -> &str {
+            "test tool"
+        }
+
+        fn input_schema(&self) -> Value {
+            serde_json::json!({
+                "type": "object",
+                "properties": {},
+            })
+        }
+
+        async fn call(&self, _input: Value) -> Result<Value, ToolError> {
+            Ok(Value::Null)
+        }
+    }
+
+    #[test]
+    fn schemas_are_returned_in_stable_name_order() {
+        let mut manager = ToolManager::new();
+        manager.register(Box::new(TestTool { name: "zeta_tool" }));
+        manager.register(Box::new(TestTool { name: "alpha_tool" }));
+        manager.register(Box::new(TestTool { name: "mid_tool" }));
+
+        let schemas = manager.get_schemas();
+        let names = schemas
+            .iter()
+            .map(|schema| schema["name"].as_str().unwrap_or_default())
+            .collect::<Vec<_>>();
+
+        assert_eq!(names, vec!["alpha_tool", "mid_tool", "zeta_tool"]);
+    }
+
+    #[test]
+    fn filtered_schemas_preserve_stable_name_order() {
+        let mut manager = ToolManager::new();
+        manager.register(Box::new(TestTool { name: "zeta_tool" }));
+        manager.register(Box::new(TestTool { name: "alpha_tool" }));
+        manager.register(Box::new(TestTool { name: "mid_tool" }));
+
+        let schemas = manager.get_schemas_filtered(|name| name != "mid_tool");
+        let names = schemas
+            .iter()
+            .map(|schema| schema["name"].as_str().unwrap_or_default())
+            .collect::<Vec<_>>();
+
+        assert_eq!(names, vec!["alpha_tool", "zeta_tool"]);
     }
 }

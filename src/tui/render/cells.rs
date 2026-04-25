@@ -21,8 +21,7 @@ use self::components::{
 };
 use super::{
     compact_progress_summary_lines, compact_recent_first_summary_lines, compact_summary_lines,
-    compact_summary_text,
-    current_turn_exploration_summary,
+    compact_summary_text, current_turn_exploration_summary,
     current_turn_exploration_summary_from_entries, current_turn_tool_summary,
     history_pipeline::{narrative_entries, ordered_completion_entries},
     wrapped_history_line_count,
@@ -75,9 +74,9 @@ fn split_progress_sentences(message: &str) -> Vec<String> {
 
         let next = chars.peek().copied();
         let previous = current.chars().rev().nth(1);
-        let is_decimal_separator =
-            ch == '.' && previous.is_some_and(|prev| prev.is_ascii_digit())
-                && next.is_some_and(|peek| peek.is_ascii_digit());
+        let is_decimal_separator = ch == '.'
+            && previous.is_some_and(|prev| prev.is_ascii_digit())
+            && next.is_some_and(|peek| peek.is_ascii_digit());
         let continues_punctuation = next.is_some_and(|peek| matches!(peek, '.' | '!' | '?'));
 
         if matches!(ch, '.' | '!' | '?') && !is_decimal_separator && !continues_punctuation {
@@ -97,10 +96,65 @@ fn split_progress_sentences(message: &str) -> Vec<String> {
     sentences
 }
 
-fn compact_live_response_message(message: &str) -> String {
-    let sentences = split_progress_sentences(message);
+fn is_structured_response_marker(line: &str) -> bool {
+    let trimmed = line.trim();
+    trimmed.starts_with("<plan>")
+        || trimmed.starts_with("</plan>")
+        || trimmed.starts_with("<request_user_input>")
+        || trimmed.starts_with("</request_user_input>")
+        || trimmed.starts_with("<continue_inspection")
+}
+
+fn is_structured_progress_list_line(line: &str) -> bool {
+    let trimmed = line.trim_start();
+    trimmed.starts_with("- [") || trimmed.starts_with("* [") || trimmed.starts_with("• [")
+}
+
+fn compact_live_response_source(message: &str) -> Option<String> {
+    let mut retained = Vec::new();
+    let mut saw_prose = false;
+
+    for line in message.lines() {
+        if is_structured_response_marker(line) {
+            break;
+        }
+
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            if saw_prose {
+                retained.push(String::new());
+            }
+            continue;
+        }
+
+        if is_structured_progress_list_line(trimmed) && saw_prose {
+            break;
+        }
+
+        retained.push(trimmed.to_string());
+        saw_prose = true;
+    }
+
+    let compact = retained
+        .into_iter()
+        .skip_while(|line| line.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim()
+        .to_string();
+
+    if compact.is_empty() {
+        None
+    } else {
+        Some(compact)
+    }
+}
+
+fn compact_live_response_message(message: &str) -> Option<String> {
+    let source = compact_live_response_source(message)?;
+    let sentences = split_progress_sentences(&source);
     if sentences.len() <= 3 {
-        return sentences.join("\n");
+        return Some(sentences.join("\n"));
     }
 
     let next_markers = [
@@ -140,11 +194,13 @@ fn compact_live_response_message(message: &str) -> String {
     }
 
     selected_indices.sort_unstable();
-    selected_indices
-        .into_iter()
-        .map(|idx| sentences[idx].clone())
-        .collect::<Vec<_>>()
-        .join("\n")
+    Some(
+        selected_indices
+            .into_iter()
+            .map(|idx| sentences[idx].clone())
+            .collect::<Vec<_>>()
+            .join("\n"),
+    )
 }
 
 fn ordered_exploration_agent_segments<'a>(
@@ -668,17 +724,20 @@ impl ActiveCell for ActiveTurnCell<'_> {
             if let Some(stream_lines) = streaming_agent_lines {
                 if compact_live_response {
                     cells.push(Box::new(RespondingCell::from_stream_compact(
-                        stream_lines, 4,
+                        stream_lines,
+                        4,
                     )));
                 } else {
                     cells.push(Box::new(RespondingCell::from_stream(stream_lines)));
                 }
             } else if let Some(agent_message) = latest_agent {
                 if compact_live_response {
-                    cells.push(Box::new(RespondingCell::from_compact_message(
-                        compact_live_response_message(agent_message),
-                        usize::MAX,
-                    )));
+                    if let Some(message) = compact_live_response_message(agent_message) {
+                        cells.push(Box::new(RespondingCell::from_compact_message(
+                            message,
+                            usize::MAX,
+                        )));
+                    }
                 } else {
                     cells.push(Box::new(RespondingCell::from_message(
                         responding_role,
@@ -701,10 +760,12 @@ impl ActiveCell for ActiveTurnCell<'_> {
                 && !suppress_structured_plan_response
         }) {
             if compact_live_response {
-                cells.push(Box::new(RespondingCell::from_compact_message(
-                    compact_live_response_message(agent_message),
-                    usize::MAX,
-                )));
+                if let Some(message) = compact_live_response_message(agent_message) {
+                    cells.push(Box::new(RespondingCell::from_compact_message(
+                        message,
+                        usize::MAX,
+                    )));
+                }
             } else {
                 cells.push(Box::new(RespondingCell::from_message(
                     responding_role,
@@ -771,12 +832,15 @@ impl ActiveCell for ActiveTurnCell<'_> {
 
 #[cfg(test)]
 mod helper_tests {
-    use super::{compact_live_response_message, split_progress_sentences};
+    use super::{
+        compact_live_response_message, compact_live_response_source, split_progress_sentences,
+    };
 
     #[test]
     fn split_progress_sentences_keeps_ellipses_and_decimal_versions() {
-        let sentences =
-            split_progress_sentences("Wait... I checked v1.0 parsing. Next I will inspect restore.");
+        let sentences = split_progress_sentences(
+            "Wait... I checked v1.0 parsing. Next I will inspect restore.",
+        );
 
         assert_eq!(
             sentences,
@@ -792,7 +856,8 @@ mod helper_tests {
     fn compact_live_response_message_preserves_selected_sentence_order() {
         let rendered = compact_live_response_message(
             "Next I will inspect restore. I checked the auth path. I checked the persistence path. Then I will verify chronology.",
-        );
+        )
+        .unwrap();
 
         assert_eq!(
             rendered,
@@ -802,6 +867,32 @@ mod helper_tests {
                 "Then I will verify chronology.",
             ]
             .join("\n")
+        );
+    }
+
+    #[test]
+    fn compact_live_response_source_strips_structured_plan_block() {
+        let rendered = compact_live_response_source(
+            "我先对比代码结构和现有 todo，找出未记录但值得改进的点。\n我再补两处证据，尽量把建议落到具体代码位置。\n<plan>\n- [completed] Inspect runtime entrypoint\n- [pending] Tighten render path\n</plan>",
+        )
+        .unwrap();
+
+        assert_eq!(
+            rendered,
+            "我先对比代码结构和现有 todo，找出未记录但值得改进的点。\n我再补两处证据，尽量把建议落到具体代码位置。"
+        );
+    }
+
+    #[test]
+    fn compact_live_response_source_drops_checklist_tail_after_prose() {
+        let rendered = compact_live_response_source(
+            "I inspected the current context path.\nI will reuse the existing assembler output.\n- [completed] Review context/runtime.rs\n- [pending] Add a focused test",
+        )
+        .unwrap();
+
+        assert_eq!(
+            rendered,
+            "I inspected the current context path.\nI will reuse the existing assembler output."
         );
     }
 }

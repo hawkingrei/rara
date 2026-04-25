@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crossterm::event::KeyCode;
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use secrecy::ExposeSecret;
 use tempfile::tempdir;
 use tokio::sync::mpsc;
@@ -14,6 +14,14 @@ use super::app_event::AppEvent;
 use super::provider_flow::{
     codex_auth_is_available, open_provider_family_overlay, sync_codex_credential_from_auth_store,
 };
+
+fn key(code: KeyCode) -> KeyEvent {
+    KeyEvent::new(code, KeyModifiers::NONE)
+}
+
+fn shifted_key(code: KeyCode) -> KeyEvent {
+    KeyEvent::new(code, KeyModifiers::SHIFT)
+}
 use super::state::{Overlay, ProviderFamily, RunningTask, TaskKind, TuiApp};
 use super::{
     classify_pending_plan_approval_input, dispatch_event, map_key_to_event,
@@ -140,15 +148,15 @@ fn auth_mode_picker_prefers_selection_navigation() {
     app.open_overlay(Overlay::AuthModePicker);
 
     assert!(matches!(
-        map_key_to_event(KeyCode::Down, &app),
+        map_key_to_event(key(KeyCode::Down), &app),
         AppEvent::MoveAuthModeSelection(1)
     ));
     assert!(matches!(
-        map_key_to_event(KeyCode::Enter, &app),
+        map_key_to_event(key(KeyCode::Enter), &app),
         AppEvent::ApplyOverlaySelection
     ));
     assert!(matches!(
-        map_key_to_event(KeyCode::Char('3'), &app),
+        map_key_to_event(key(KeyCode::Char('3')), &app),
         AppEvent::SetAuthModeSelection(2)
     ));
 }
@@ -163,8 +171,26 @@ fn plain_input_does_not_treat_s_as_setup_shortcut() {
     app.input = "先同步ma".into();
 
     assert!(matches!(
-        map_key_to_event(KeyCode::Char('s'), &app),
+        map_key_to_event(key(KeyCode::Char('s')), &app),
         AppEvent::InputChar('s')
+    ));
+}
+
+#[test]
+fn shift_enter_inserts_newline_in_main_composer() {
+    let temp = tempdir().expect("tempdir");
+    let app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("app");
+
+    assert!(matches!(
+        map_key_to_event(shifted_key(KeyCode::Enter), &app),
+        AppEvent::InsertNewline
+    ));
+    assert!(matches!(
+        map_key_to_event(key(KeyCode::Enter), &app),
+        AppEvent::SubmitComposer
     ));
 }
 
@@ -195,15 +221,15 @@ fn openai_compatible_model_picker_exposes_connection_edit_shortcuts() {
     app.open_overlay(Overlay::ModelPicker);
 
     assert!(matches!(
-        map_key_to_event(KeyCode::Char('b'), &app),
+        map_key_to_event(key(KeyCode::Char('b')), &app),
         AppEvent::OpenOverlay(Overlay::BaseUrlEditor)
     ));
     assert!(matches!(
-        map_key_to_event(KeyCode::Char('a'), &app),
+        map_key_to_event(key(KeyCode::Char('a')), &app),
         AppEvent::OpenOverlay(Overlay::ApiKeyEditor)
     ));
     assert!(matches!(
-        map_key_to_event(KeyCode::Char('n'), &app),
+        map_key_to_event(key(KeyCode::Char('n')), &app),
         AppEvent::OpenOverlay(Overlay::ModelNameEditor)
     ));
 }
