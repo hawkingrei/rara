@@ -303,6 +303,7 @@ fn load_thread_prefers_structured_runtime_rollout_items() -> Result<()> {
         "session-runtime-rollout",
         &[
             crate::state_db::PersistedStructuredRolloutEvent::PlanState {
+                recorded_at: None,
                 explanation: Some("Structured rollout plan".to_string()),
                 steps: vec![PersistedPlanStep {
                     step_index: 0,
@@ -310,13 +311,16 @@ fn load_thread_prefers_structured_runtime_rollout_items() -> Result<()> {
                     step: "Structured rollout plan step".to_string(),
                 }],
             },
-            crate::state_db::PersistedStructuredRolloutEvent::Interaction(PersistedInteraction {
-                kind: "request_input".to_string(),
-                status: "completed".to_string(),
-                title: "Structured Question".to_string(),
-                summary: "answered".to_string(),
-                payload: None,
-            }),
+            crate::state_db::PersistedStructuredRolloutEvent::Interaction {
+                recorded_at: None,
+                interaction: PersistedInteraction {
+                    kind: "request_input".to_string(),
+                    status: "completed".to_string(),
+                    title: "Structured Question".to_string(),
+                    summary: "answered".to_string(),
+                    payload: None,
+                },
+            },
         ],
     )?;
 
@@ -500,12 +504,19 @@ fn load_thread_backfills_legacy_non_turn_rollout_files_into_event_log() -> Resul
         .collect::<std::result::Result<Vec<_>, _>>()?;
     assert!(rollout_events.iter().any(|event| matches!(
         event,
-        PersistedStructuredRolloutEvent::PlanState { explanation, .. }
+        PersistedStructuredRolloutEvent::PlanState {
+            recorded_at: _,
+            explanation,
+            ..
+        }
             if explanation.as_deref() == Some("Legacy runtime rollout plan")
     )));
     assert!(rollout_events.iter().any(|event| matches!(
         event,
-        PersistedStructuredRolloutEvent::Interaction(interaction)
+        PersistedStructuredRolloutEvent::Interaction {
+            recorded_at: _,
+            interaction,
+        }
             if interaction.title == "Legacy Runtime Question"
     )));
     assert!(rollout_events.iter().any(|event| matches!(
@@ -555,6 +566,7 @@ fn load_thread_preserves_structured_rollout_event_order() -> Result<()> {
         "session-ordered-events",
         &[
             crate::state_db::PersistedStructuredRolloutEvent::PlanState {
+                recorded_at: None,
                 explanation: Some("Plan after first compaction".to_string()),
                 steps: vec![PersistedPlanStep {
                     step_index: 0,
@@ -562,13 +574,16 @@ fn load_thread_preserves_structured_rollout_event_order() -> Result<()> {
                     step: "Inspect runtime events".to_string(),
                 }],
             },
-            crate::state_db::PersistedStructuredRolloutEvent::Interaction(PersistedInteraction {
-                kind: "request_input".to_string(),
-                status: "pending".to_string(),
-                title: "Question".to_string(),
-                summary: "Need confirmation".to_string(),
-                payload: None,
-            }),
+            crate::state_db::PersistedStructuredRolloutEvent::Interaction {
+                recorded_at: None,
+                interaction: PersistedInteraction {
+                    kind: "request_input".to_string(),
+                    status: "pending".to_string(),
+                    title: "Question".to_string(),
+                    summary: "Need confirmation".to_string(),
+                    payload: None,
+                },
+            },
         ],
     )?;
     session_manager.save_compaction_event(
@@ -819,7 +834,12 @@ fn fork_thread_preserves_materialized_state_and_sets_lineage() -> Result<()> {
     )));
     assert!(rollout_events.iter().any(|event| matches!(
         event,
-        PersistedStructuredRolloutEvent::RuntimeState { explanation, steps, interactions }
+        PersistedStructuredRolloutEvent::RuntimeState {
+            recorded_at: _,
+            explanation,
+            steps,
+            interactions,
+        }
             if explanation.as_deref() == Some("Preserve thread continuity.")
                 && steps.len() == 1
                 && interactions.len() == 1

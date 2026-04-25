@@ -8,6 +8,8 @@ use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::thread_rollout_log;
+
 #[cfg(test)]
 mod tests;
 
@@ -39,6 +41,7 @@ pub struct PersistedTurnSummary {
     pub event_count: usize,
     pub artifact_path: String,
     pub preview: String,
+    pub updated_at: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -55,6 +58,8 @@ pub enum PersistedRuntimeRolloutItem {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum PersistedStructuredRolloutEvent {
     Compaction {
+        #[serde(default)]
+        recorded_at: Option<i64>,
         event_index: usize,
         before_tokens: usize,
         after_tokens: usize,
@@ -63,15 +68,24 @@ pub enum PersistedStructuredRolloutEvent {
         summary: String,
     },
     RuntimeState {
+        #[serde(default)]
+        recorded_at: Option<i64>,
         explanation: Option<String>,
         steps: Vec<PersistedPlanStep>,
         interactions: Vec<PersistedInteraction>,
     },
     PlanState {
+        #[serde(default)]
+        recorded_at: Option<i64>,
         explanation: Option<String>,
         steps: Vec<PersistedPlanStep>,
     },
-    Interaction(PersistedInteraction),
+    Interaction {
+        #[serde(default)]
+        recorded_at: Option<i64>,
+        #[serde(flatten)]
+        interaction: PersistedInteraction,
+    },
 }
 
 #[derive(Debug, Clone, Default)]
@@ -467,6 +481,7 @@ impl StateDb {
                 .display()
                 .to_string(),
             preview: turn_preview(entries),
+            updated_at: now,
         })
     }
 
@@ -488,7 +503,7 @@ impl StateDb {
     pub fn load_turn_summaries(&self, session_id: &str) -> Result<Vec<PersistedTurnSummary>> {
         let conn = self.conn.lock().expect("state db mutex poisoned");
         let mut stmt = conn.prepare(
-            "SELECT ordinal, event_count, artifact_path, preview
+            "SELECT ordinal, event_count, artifact_path, preview, updated_at
              FROM turns
              WHERE session_id = ?
              ORDER BY ordinal ASC",
@@ -499,6 +514,7 @@ impl StateDb {
                 event_count: row.get::<_, i64>(1)? as usize,
                 artifact_path: row.get(2)?,
                 preview: row.get(3)?,
+                updated_at: row.get(4)?,
             })
         })?;
         let mut summaries = Vec::new();
@@ -524,28 +540,7 @@ impl StateDb {
         &self,
         session_id: &str,
     ) -> Result<Vec<PersistedStructuredRolloutEvent>> {
-        let mut events = Vec::new();
-
-        let append_only_path = self.rollout_events_log_path(session_id);
-        if append_only_path.exists() {
-            let content = fs::read_to_string(append_only_path)?;
-            let append_only_events = content
-                .lines()
-                .filter(|line| !line.trim().is_empty())
-                .map(serde_json::from_str)
-                .collect::<std::result::Result<Vec<_>, _>>()?;
-            events.extend(append_only_events);
-        }
-
-        let snapshot_path = self.rollout_events_snapshot_path(session_id);
-        if snapshot_path.exists() {
-            let content = fs::read_to_string(snapshot_path)?;
-            let snapshot_events =
-                serde_json::from_str::<Vec<PersistedStructuredRolloutEvent>>(&content)?;
-            events.extend(snapshot_events);
-        }
-
-        Ok(events)
+        thread_rollout_log::load_rollout_events(&self.rollout_root(), session_id)
     }
 
     pub fn load_legacy_rollout_migration(
@@ -573,6 +568,7 @@ impl StateDb {
         self.append_rollout_event_line(
             session_id,
             &PersistedStructuredRolloutEvent::Compaction {
+                recorded_at: Some(epoch_seconds()),
                 event_index,
                 before_tokens,
                 after_tokens,
@@ -594,6 +590,7 @@ impl StateDb {
         for item in items {
             match item {
                 PersistedStructuredRolloutEvent::RuntimeState {
+                    recorded_at: _,
                     explanation: item_explanation,
                     steps: item_steps,
                     interactions: item_interactions,
@@ -603,13 +600,17 @@ impl StateDb {
                     interactions = item_interactions.clone();
                 }
                 PersistedStructuredRolloutEvent::PlanState {
+                    recorded_at: _,
                     explanation: item_explanation,
                     steps: item_steps,
                 } => {
                     explanation = item_explanation.clone();
                     steps = item_steps.clone();
                 }
-                PersistedStructuredRolloutEvent::Interaction(interaction) => {
+                PersistedStructuredRolloutEvent::Interaction {
+                    recorded_at: _,
+                    interaction,
+                } => {
                     interactions.push(interaction.clone());
                 }
                 PersistedStructuredRolloutEvent::Compaction { .. } => {}
@@ -619,6 +620,7 @@ impl StateDb {
         self.append_rollout_event_line(
             session_id,
             &PersistedStructuredRolloutEvent::RuntimeState {
+                recorded_at: Some(epoch_seconds()),
                 explanation,
                 steps,
                 interactions,
@@ -917,20 +919,13 @@ impl StateDb {
         self.rollout_root().join(session_id).join("runtime.json")
     }
 
-    fn rollout_events_snapshot_path(&self, session_id: &str) -> PathBuf {
-        self.rollout_root().join(session_id).join("events.json")
-    }
-
-    fn rollout_events_log_path(&self, session_id: &str) -> PathBuf {
-        self.rollout_root().join(session_id).join("events.jsonl")
-    }
-
     fn backfill_rollout_log_from_legacy(
         &self,
         session_id: &str,
         migration: &PersistedLegacyRolloutMigration,
     ) -> Result<()> {
-        let path = self.rollout_events_log_path(session_id);
+        let path =
+            thread_rollout_log::rollout_events_log_path(&self.rollout_root(), session_id);
         if path.exists() {
             return Ok(());
         }
@@ -958,23 +953,12 @@ impl StateDb {
         Ok(())
     }
 
-    fn append_rollout_event_line(
+    pub(crate) fn append_rollout_event_line(
         &self,
         session_id: &str,
         item: &PersistedStructuredRolloutEvent,
     ) -> Result<()> {
-        let path = self.rollout_events_log_path(session_id);
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        let mut file = fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(path)?;
-        serde_json::to_writer(&mut file, item)?;
-        use std::io::Write;
-        file.write_all(b"\n")?;
-        Ok(())
+        thread_rollout_log::append_rollout_event_line(&self.rollout_root(), session_id, item)
     }
 
     fn init_schema(&self) -> Result<()> {
@@ -1107,18 +1091,25 @@ fn canonical_rollout_events_for_legacy_migration(
         .any(|event| matches!(event, PersistedStructuredRolloutEvent::PlanState { .. }));
     let saw_interaction = events
         .iter()
-        .any(|event| matches!(event, PersistedStructuredRolloutEvent::Interaction(_)));
+        .any(|event| matches!(event, PersistedStructuredRolloutEvent::Interaction { .. }));
 
     if !saw_plan_state {
         if let Some((explanation, steps)) = legacy_runtime_plan_state(&migration.runtime_rollout) {
-            events.push(PersistedStructuredRolloutEvent::PlanState { explanation, steps });
+            events.push(PersistedStructuredRolloutEvent::PlanState {
+                recorded_at: None,
+                explanation,
+                steps,
+            });
         }
     }
     if !saw_interaction {
         events.extend(
             legacy_runtime_interactions(&migration.runtime_rollout)
                 .into_iter()
-                .map(PersistedStructuredRolloutEvent::Interaction),
+                .map(|interaction| PersistedStructuredRolloutEvent::Interaction {
+                    recorded_at: None,
+                    interaction,
+                }),
         );
     }
 

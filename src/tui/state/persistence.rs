@@ -182,16 +182,17 @@ impl TuiApp {
         let mut structured_rollout = Vec::new();
         if !plan_steps.is_empty() || self.snapshot.plan_explanation.is_some() {
             structured_rollout.push(PersistedStructuredRolloutEvent::PlanState {
+                recorded_at: None,
                 explanation: self.snapshot.plan_explanation.clone(),
                 steps: plan_steps,
             });
         }
-        structured_rollout.extend(
-            interactions
-                .iter()
-                .cloned()
-                .map(PersistedStructuredRolloutEvent::Interaction),
-        );
+        structured_rollout.extend(interactions.iter().cloned().map(|interaction| {
+            PersistedStructuredRolloutEvent::Interaction {
+                recorded_at: None,
+                interaction,
+            }
+        }));
         if let Err(err) =
             recorder.replace_runtime_rollout_events(&self.snapshot.session_id, &structured_rollout)
         {

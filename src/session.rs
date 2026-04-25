@@ -1,10 +1,11 @@
 use crate::agent::Message;
 use crate::state_db::PersistedStructuredRolloutEvent;
+use crate::thread_rollout_log;
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::io::Write;
 use std::path::PathBuf;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PersistedCompactionEvent {
@@ -99,6 +100,7 @@ impl SessionManager {
         self.append_rollout_event(
             session_id,
             PersistedStructuredRolloutEvent::Compaction {
+                recorded_at: Some(epoch_seconds()),
                 event_index: event.event_index,
                 before_tokens: event.before_tokens,
                 after_tokens: event.after_tokens,
@@ -119,6 +121,7 @@ impl SessionManager {
             .into_iter()
             .filter_map(|event| match event {
                 PersistedStructuredRolloutEvent::Compaction {
+                    recorded_at: _,
                     event_index,
                     before_tokens,
                     after_tokens,
@@ -135,7 +138,7 @@ impl SessionManager {
                 }),
                 PersistedStructuredRolloutEvent::RuntimeState { .. }
                 | PersistedStructuredRolloutEvent::PlanState { .. }
-                | PersistedStructuredRolloutEvent::Interaction(_) => None,
+                | PersistedStructuredRolloutEvent::Interaction { .. } => None,
             })
             .collect::<Vec<_>>();
         if !compactions.is_empty() {
@@ -175,30 +178,12 @@ impl SessionManager {
         self.storage_dir.join(session_id).join("compactions.json")
     }
 
-    fn session_rollout_events_path(&self, session_id: &str) -> PathBuf {
-        self.storage_dir.join(session_id).join("events.jsonl")
-    }
-
-    fn legacy_session_rollout_events_path(&self, session_id: &str) -> PathBuf {
-        self.storage_dir.join(session_id).join("events.json")
-    }
-
     fn append_rollout_event(
         &self,
         session_id: &str,
         event: PersistedStructuredRolloutEvent,
     ) -> Result<()> {
-        let path = self.session_rollout_events_path(session_id);
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        let mut file = fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(path)?;
-        serde_json::to_writer(&mut file, &event)?;
-        file.write_all(b"\n")?;
-        Ok(())
+        thread_rollout_log::append_rollout_event_line(&self.storage_dir, session_id, &event)
     }
 
     fn backfill_legacy_thread_history(&self, thread_id: &str, history: &[Message]) -> Result<()> {
@@ -226,7 +211,8 @@ impl SessionManager {
         if compactions.is_empty() {
             return Ok(());
         }
-        let rollout_path = self.session_rollout_events_path(session_id);
+        let rollout_path =
+            thread_rollout_log::rollout_events_log_path(&self.storage_dir, session_id);
         let existing_compaction_count = if rollout_path.exists() {
             self.load_structured_rollout_events(session_id)?
                 .into_iter()
@@ -243,6 +229,7 @@ impl SessionManager {
             self.append_rollout_event(
                 session_id,
                 PersistedStructuredRolloutEvent::Compaction {
+                    recorded_at: None,
                     event_index: compaction.event_index,
                     before_tokens: compaction.before_tokens,
                     after_tokens: compaction.after_tokens,
@@ -259,24 +246,15 @@ impl SessionManager {
         &self,
         session_id: &str,
     ) -> Result<Vec<PersistedStructuredRolloutEvent>> {
-        let path = self.session_rollout_events_path(session_id);
-        if path.exists() {
-            return fs::read_to_string(path)?
-                .lines()
-                .filter(|line| !line.trim().is_empty())
-                .map(serde_json::from_str)
-                .collect::<std::result::Result<Vec<_>, _>>()
-                .map_err(Into::into);
-        }
-
-        let legacy_path = self.legacy_session_rollout_events_path(session_id);
-        if legacy_path.exists() {
-            let content = fs::read_to_string(legacy_path)?;
-            return Ok(serde_json::from_str(&content)?);
-        }
-
-        Ok(Vec::new())
+        thread_rollout_log::load_rollout_events(&self.storage_dir, session_id)
     }
+}
+
+fn epoch_seconds() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64
 }
 
 #[cfg(test)]
@@ -312,7 +290,8 @@ mod tests {
             },
         )?;
 
-        let path = session_manager.session_rollout_events_path("thread-1");
+        let path =
+            thread_rollout_log::rollout_events_log_path(&session_manager.storage_dir, "thread-1");
         let content = fs::read_to_string(path)?;
         assert_eq!(content.lines().count(), 2);
 
@@ -378,8 +357,10 @@ mod tests {
         let events = session_manager.load_compaction_events("thread-legacy")?;
         assert_eq!(events.len(), 2);
 
-        let rollout_content =
-            fs::read_to_string(session_manager.session_rollout_events_path("thread-legacy"))?;
+        let rollout_content = fs::read_to_string(thread_rollout_log::rollout_events_log_path(
+            &session_manager.storage_dir,
+            "thread-legacy",
+        ))?;
         let rollout_events = rollout_content
             .lines()
             .filter(|line| !line.trim().is_empty())

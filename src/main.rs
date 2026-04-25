@@ -15,6 +15,7 @@ mod session;
 mod skill;
 mod state_db;
 mod thread_cli;
+mod thread_rollout_log;
 mod thread_store;
 mod tool;
 mod tool_result;

@@ -274,6 +274,7 @@ impl<'a> ThreadStore<'a> {
         recorder.replace_runtime_rollout_events(
             &forked_thread_id,
             &[PersistedStructuredRolloutEvent::RuntimeState {
+                recorded_at: None,
                 explanation: materialized.plan_explanation.clone(),
                 steps: materialized.plan_steps.clone(),
                 interactions: materialized.interactions.clone(),
@@ -333,8 +334,15 @@ impl<'a> ThreadStore<'a> {
             })
             .collect::<Result<Vec<_>>>()?;
         let mut rollout_items = Vec::new();
+        let mut ordered_rollout_items = Vec::new();
+        let mut rollout_order = 0usize;
         if structured_events.is_empty() && compaction.compaction_count > 0 {
-            rollout_items.push(RolloutItem::Compaction(compaction.clone()));
+            push_rollout_item(
+                &mut ordered_rollout_items,
+                &mut rollout_order,
+                0,
+                RolloutItem::Compaction(compaction.clone()),
+            );
         }
         let mut saw_runtime_state = false;
         let mut saw_plan_state = false;
@@ -345,22 +353,29 @@ impl<'a> ThreadStore<'a> {
         for item in structured_events {
             match item {
                 PersistedStructuredRolloutEvent::Compaction {
+                    recorded_at,
                     event_index,
                     before_tokens,
                     after_tokens,
                     boundary_version,
                     recent_files,
                     summary,
-                } => rollout_items.push(RolloutItem::Compaction(CompactionRecord {
-                    compaction_count: event_index,
-                    before_tokens: Some(before_tokens),
-                    after_tokens: Some(after_tokens),
-                    recent_file_count: Some(recent_files.len()),
-                    boundary_version: Some(boundary_version),
-                    recent_files,
-                    summary: Some(summary),
-                })),
+                } => push_rollout_item(
+                    &mut ordered_rollout_items,
+                    &mut rollout_order,
+                    recorded_at.unwrap_or(0),
+                    RolloutItem::Compaction(CompactionRecord {
+                        compaction_count: event_index,
+                        before_tokens: Some(before_tokens),
+                        after_tokens: Some(after_tokens),
+                        recent_file_count: Some(recent_files.len()),
+                        boundary_version: Some(boundary_version),
+                        recent_files,
+                        summary: Some(summary),
+                    }),
+                ),
                 PersistedStructuredRolloutEvent::RuntimeState {
+                    recorded_at,
                     explanation,
                     steps,
                     interactions: runtime_interactions,
@@ -372,24 +387,49 @@ impl<'a> ThreadStore<'a> {
                     plan_steps = steps.clone();
                     interactions = runtime_interactions.clone();
                     if !steps.is_empty() || explanation.is_some() {
-                        rollout_items.push(RolloutItem::PlanState { explanation, steps });
+                        push_rollout_item(
+                            &mut ordered_rollout_items,
+                            &mut rollout_order,
+                            recorded_at.unwrap_or(0),
+                            RolloutItem::PlanState { explanation, steps },
+                        );
                     }
-                    rollout_items.extend(
-                        runtime_interactions
-                            .into_iter()
-                            .map(RolloutItem::Interaction),
-                    );
+                    for interaction in runtime_interactions {
+                        push_rollout_item(
+                            &mut ordered_rollout_items,
+                            &mut rollout_order,
+                            recorded_at.unwrap_or(0),
+                            RolloutItem::Interaction(interaction),
+                        );
+                    }
                 }
-                PersistedStructuredRolloutEvent::PlanState { explanation, steps } => {
+                PersistedStructuredRolloutEvent::PlanState {
+                    recorded_at,
+                    explanation,
+                    steps,
+                } => {
                     saw_plan_state = true;
                     structured_plan_explanation = explanation.clone();
                     structured_plan_steps = steps.clone();
-                    rollout_items.push(RolloutItem::PlanState { explanation, steps });
+                    push_rollout_item(
+                        &mut ordered_rollout_items,
+                        &mut rollout_order,
+                        recorded_at.unwrap_or(0),
+                        RolloutItem::PlanState { explanation, steps },
+                    );
                 }
-                PersistedStructuredRolloutEvent::Interaction(interaction) => {
+                PersistedStructuredRolloutEvent::Interaction {
+                    recorded_at,
+                    interaction,
+                } => {
                     saw_interaction = true;
                     structured_interactions.push(interaction.clone());
-                    rollout_items.push(RolloutItem::Interaction(interaction));
+                    push_rollout_item(
+                        &mut ordered_rollout_items,
+                        &mut rollout_order,
+                        recorded_at.unwrap_or(0),
+                        RolloutItem::Interaction(interaction),
+                    );
                 }
             }
         }
@@ -427,76 +467,121 @@ impl<'a> ThreadStore<'a> {
             // Append-only runtime snapshots already defined the current plan/interaction state.
         } else if !saw_plan_state && !saw_interaction && legacy_runtime_rollout.is_empty() {
             if !plan_steps.is_empty() || plan_explanation.is_some() {
-                rollout_items.push(RolloutItem::PlanState {
-                    explanation: plan_explanation.clone(),
-                    steps: plan_steps.clone(),
-                });
+                push_rollout_item(
+                    &mut ordered_rollout_items,
+                    &mut rollout_order,
+                    0,
+                    RolloutItem::PlanState {
+                        explanation: plan_explanation.clone(),
+                        steps: plan_steps.clone(),
+                    },
+                );
             }
-            rollout_items.extend(interactions.iter().cloned().map(RolloutItem::Interaction));
+            for interaction in interactions.iter().cloned() {
+                push_rollout_item(
+                    &mut ordered_rollout_items,
+                    &mut rollout_order,
+                    0,
+                    RolloutItem::Interaction(interaction),
+                );
+            }
         } else if !saw_plan_state && !saw_interaction {
             if let Some((explanation, steps)) = legacy_plan_state.clone() {
                 plan_explanation = explanation;
                 plan_steps = steps;
             }
             interactions = legacy_interactions.clone();
-            rollout_items.extend(
-                legacy_runtime_rollout
-                    .iter()
-                    .cloned()
-                    .map(|item| match item {
+            for item in legacy_runtime_rollout.iter().cloned() {
+                push_rollout_item(
+                    &mut ordered_rollout_items,
+                    &mut rollout_order,
+                    0,
+                    match item {
                         PersistedRuntimeRolloutItem::PlanState { explanation, steps } => {
                             RolloutItem::PlanState { explanation, steps }
                         }
                         PersistedRuntimeRolloutItem::Interaction(interaction) => {
                             RolloutItem::Interaction(interaction)
                         }
-                    }),
-            );
+                    },
+                );
+            }
         } else {
             if !saw_plan_state {
                 if legacy_runtime_rollout.is_empty() {
                     if !plan_steps.is_empty() || plan_explanation.is_some() {
-                        rollout_items.push(RolloutItem::PlanState {
-                            explanation: plan_explanation.clone(),
-                            steps: plan_steps.clone(),
-                        });
+                        push_rollout_item(
+                            &mut ordered_rollout_items,
+                            &mut rollout_order,
+                            0,
+                            RolloutItem::PlanState {
+                                explanation: plan_explanation.clone(),
+                                steps: plan_steps.clone(),
+                            },
+                        );
                     }
                 } else {
                     if let Some((explanation, steps)) = legacy_plan_state.clone() {
                         plan_explanation = explanation;
                         plan_steps = steps;
                     }
-                    rollout_items.extend(legacy_runtime_rollout.iter().filter_map(
-                        |item| match item {
-                            PersistedRuntimeRolloutItem::PlanState { explanation, steps } => {
-                                Some(RolloutItem::PlanState {
+                    for item in legacy_runtime_rollout.iter() {
+                        if let PersistedRuntimeRolloutItem::PlanState { explanation, steps } = item
+                        {
+                            push_rollout_item(
+                                &mut ordered_rollout_items,
+                                &mut rollout_order,
+                                0,
+                                RolloutItem::PlanState {
                                     explanation: explanation.clone(),
                                     steps: steps.clone(),
-                                })
-                            }
-                            PersistedRuntimeRolloutItem::Interaction(_) => None,
-                        },
-                    ));
+                                },
+                            );
+                        }
+                    }
                 }
             }
             if !saw_interaction {
                 if legacy_runtime_rollout.is_empty() {
-                    rollout_items
-                        .extend(interactions.iter().cloned().map(RolloutItem::Interaction));
+                    for interaction in interactions.iter().cloned() {
+                        push_rollout_item(
+                            &mut ordered_rollout_items,
+                            &mut rollout_order,
+                            0,
+                            RolloutItem::Interaction(interaction),
+                        );
+                    }
                 } else {
                     interactions = legacy_interactions.clone();
-                    rollout_items.extend(legacy_runtime_rollout.into_iter().filter_map(|item| {
-                        match item {
-                            PersistedRuntimeRolloutItem::Interaction(interaction) => {
-                                Some(RolloutItem::Interaction(interaction))
-                            }
-                            PersistedRuntimeRolloutItem::PlanState { .. } => None,
+                    for item in legacy_runtime_rollout {
+                        if let PersistedRuntimeRolloutItem::Interaction(interaction) = item {
+                            push_rollout_item(
+                                &mut ordered_rollout_items,
+                                &mut rollout_order,
+                                0,
+                                RolloutItem::Interaction(interaction),
+                            );
                         }
-                    }));
+                    }
                 }
             }
         }
-        rollout_items.extend(turn_items);
+        for item in turn_items {
+            let timestamp = match &item {
+                RolloutItem::Turn(turn) => turn.summary.updated_at,
+                RolloutItem::Compaction(_)
+                | RolloutItem::PlanState { .. }
+                | RolloutItem::Interaction(_) => 0,
+            };
+            push_rollout_item(
+                &mut ordered_rollout_items,
+                &mut rollout_order,
+                timestamp,
+                item,
+            );
+        }
+        ordered_rollout_items.sort_by_key(|(timestamp, order, _)| (*timestamp, *order));
+        rollout_items.extend(ordered_rollout_items.into_iter().map(|(_, _, item)| item));
 
         Ok(ThreadMaterializedState {
             metadata: metadata.into(),
@@ -610,4 +695,14 @@ fn compact_state_from_record(record: &CompactionRecord) -> PersistedCompactState
             .or(Some(record.recent_files.len()).filter(|value| *value > 0)),
         last_compaction_boundary_version: record.boundary_version,
     }
+}
+
+fn push_rollout_item(
+    ordered_items: &mut Vec<(i64, usize, RolloutItem)>,
+    rollout_order: &mut usize,
+    timestamp: i64,
+    item: RolloutItem,
+) {
+    ordered_items.push((timestamp, *rollout_order, item));
+    *rollout_order += 1;
 }

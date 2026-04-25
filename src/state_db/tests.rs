@@ -295,6 +295,7 @@ fn load_rollout_events_prefers_append_only_log_without_snapshot_rewrite() -> Res
     db.replace_runtime_rollout_events(
         "session-events",
         &[PersistedStructuredRolloutEvent::PlanState {
+            recorded_at: None,
             explanation: Some("Structured runtime plan".to_string()),
             steps: vec![PersistedPlanStep {
                 step_index: 0,
@@ -328,6 +329,7 @@ fn load_rollout_events_prefers_append_only_log_without_snapshot_rewrite() -> Res
     assert!(matches!(
         &events[1],
         PersistedStructuredRolloutEvent::RuntimeState {
+            recorded_at: _,
             explanation,
             steps,
             interactions,
@@ -349,6 +351,7 @@ fn load_legacy_rollout_migration_collects_structured_and_runtime_fallbacks() -> 
     std::fs::write(
         rollout_dir.join("events.json"),
         serde_json::to_string_pretty(&vec![PersistedStructuredRolloutEvent::PlanState {
+            recorded_at: None,
             explanation: Some("Legacy structured plan".to_string()),
             steps: vec![PersistedPlanStep {
                 step_index: 0,
@@ -376,7 +379,11 @@ fn load_legacy_rollout_migration_collects_structured_and_runtime_fallbacks() -> 
     assert_eq!(migration.runtime_rollout.len(), 1);
     assert!(matches!(
         &migration.structured_events[0],
-        PersistedStructuredRolloutEvent::PlanState { explanation, steps }
+        PersistedStructuredRolloutEvent::PlanState {
+            recorded_at: _,
+            explanation,
+            steps,
+        }
             if explanation.as_deref() == Some("Legacy structured plan")
                 && steps[0].step == "Read old events snapshot"
     ));
