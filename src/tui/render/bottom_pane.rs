@@ -15,6 +15,8 @@ use super::super::queued_input::{
 use super::super::state::{ActivePendingInteractionKind, TaskKind, TuiApp};
 use super::badge;
 
+const COMPOSER_TAB_WIDTH: usize = 4;
+
 pub(crate) fn desired_viewport_height(app: &TuiApp, width: u16, rows: u16) -> u16 {
     if app.transcript_scroll > 0 {
         return rows.max(1);
@@ -552,7 +554,7 @@ fn wrap_logical_line_preserving_whitespace(
     }
 
     for ch in logical_line.chars() {
-        let char_width = UnicodeWidthChar::width(ch).unwrap_or(0);
+        let char_width = display_char_width(ch);
         let next_width = current_width.saturating_add(char_width);
         let can_wrap = current_width > current_prefix_width;
         if next_width > max_width && can_wrap {
@@ -567,6 +569,13 @@ fn wrap_logical_line_preserving_whitespace(
 
     rows.push(current);
     rows
+}
+
+fn display_char_width(ch: char) -> usize {
+    match ch {
+        '\t' => COMPOSER_TAB_WIDTH,
+        _ => UnicodeWidthChar::width(ch).unwrap_or(0),
+    }
 }
 
 #[cfg(test)]
@@ -765,5 +774,12 @@ mod tests {
 
         let cursor = wrapped_text_cursor_position("line one\n", area, Some("› "), Some("  "));
         assert_eq!(cursor, (6, 3));
+    }
+
+    #[test]
+    fn wrapped_text_rows_treat_tabs_as_fixed_width_columns() {
+        let rows = wrapped_text_rows("\t12345", 8, Some("› "), Some("  "));
+
+        assert_eq!(rows, vec!["› \t12", "  345"]);
     }
 }

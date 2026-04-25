@@ -329,7 +329,7 @@ fn active_turn_cell_labels_delegated_plan_questions() {
         .join("\n");
 
     assert!(rendered.contains(" Planning Question "));
-    assert!(rendered.contains("source:"));
+    assert!(rendered.contains("from:"));
     assert!(rendered.contains("plan_agent"));
     assert!(rendered.contains("Which discovery strategy should we keep?"));
 }
