@@ -407,11 +407,9 @@ impl<'a> RespondingCell<'a> {
 impl HistoryCell for RespondingCell<'_> {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
         match &self.content {
-            RespondingCellContent::Stream { lines, max_lines } => responding_card_lines(
-                "Responding",
-                markdown_body_lines(lines, *max_lines),
-                width,
-            ),
+            RespondingCellContent::Stream { lines, max_lines } => {
+                responding_card_lines("Responding", markdown_body_lines(lines, *max_lines), width)
+            }
             RespondingCellContent::Message {
                 role,
                 message,

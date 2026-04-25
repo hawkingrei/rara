@@ -368,6 +368,10 @@ mod tests {
             expected_runtime.plan.explanation
         );
         assert_eq!(
+            restored_runtime.assembly.entries,
+            expected_runtime.assembly.entries
+        );
+        assert_eq!(
             restored_runtime.compaction.last_compaction_boundary_version,
             expected_runtime.compaction.last_compaction_boundary_version
         );
@@ -387,6 +391,10 @@ mod tests {
         assert_eq!(
             restored_app.snapshot.plan_explanation,
             restored_runtime.plan.explanation
+        );
+        assert_eq!(
+            restored_app.snapshot.assembly_entries,
+            restored_runtime.assembly.entries
         );
         assert_eq!(
             restored_app.snapshot.last_compaction_boundary_version,
@@ -467,5 +475,117 @@ mod tests {
         let restored_agent = restored_slot.expect("restored agent");
         assert_eq!(restored_agent.session_id, "session-without-history");
         assert_eq!(restored_app.snapshot.session_id, "session-without-history");
+    }
+
+    #[test]
+    fn restore_session_surfaces_pending_interactions_in_assembled_context() {
+        let temp = tempdir().expect("tempdir");
+        let root = temp.path().join("repo");
+        let rara_dir = root.join(".rara");
+        fs::create_dir_all(rara_dir.join("rollouts")).expect("rollouts");
+        fs::create_dir_all(rara_dir.join("sessions")).expect("sessions");
+        fs::create_dir_all(rara_dir.join("tool-results")).expect("tool results");
+        fs::write(root.join("AGENTS.md"), "repo rules").expect("agents");
+
+        let session_manager = Arc::new(crate::session::SessionManager {
+            storage_dir: rara_dir.join("rollouts"),
+            legacy_storage_dir: rara_dir.join("sessions"),
+        });
+        let workspace = Arc::new(WorkspaceMemory::from_paths(root.clone(), rara_dir.clone()));
+        let backend = Arc::new(MockLlm);
+
+        let mut original_agent = Agent::new(
+            ToolManager::new(),
+            backend.clone(),
+            Arc::new(VectorDB::new(
+                &rara_dir.join("lancedb").display().to_string(),
+            )),
+            session_manager.clone(),
+            workspace.clone(),
+        );
+        original_agent.session_id = "session-pending-context".to_string();
+        original_agent.current_plan = vec![PlanStep {
+            step: "Restore pending approval".to_string(),
+            status: PlanStepStatus::Pending,
+        }];
+        original_agent.plan_explanation = Some("Keep restore and context aligned.".to_string());
+        original_agent.compact_state.compaction_count = 1;
+        original_agent.compact_state.last_compaction_before_tokens = Some(1800);
+        original_agent.compact_state.last_compaction_after_tokens = Some(900);
+        original_agent.pending_user_input = Some(PendingUserInput {
+            question: "Which path should we keep?".to_string(),
+            options: vec![("1".to_string(), "shared".to_string())],
+            note: Some("Need the user's decision before continuing.".to_string()),
+        });
+        original_agent.pending_approval = Some(PendingApproval {
+            tool_use_id: "tool-approval-1".to_string(),
+            request: BashCommandInput {
+                command: Some("cargo test".to_string()),
+                program: Some("cargo".to_string()),
+                args: vec!["test".to_string()],
+                cwd: Some(root.display().to_string()),
+                env: Default::default(),
+                allow_net: false,
+            },
+        });
+        original_agent.history.push(Message {
+            role: "user".to_string(),
+            content: json!([{"type":"text","text":"resume the blocked thread"}]),
+        });
+        session_manager
+            .save_session(&original_agent.session_id, &original_agent.history)
+            .expect("save session");
+
+        let state_db = Arc::new(StateDb::new_for_root_dir(rara_dir.clone()).expect("state db"));
+        let mut original_app = TuiApp::new(ConfigManager {
+            path: temp.path().join("config.json"),
+        })
+        .expect("app");
+        original_app.attach_state_db(state_db.clone());
+        original_app.sync_snapshot(&original_agent);
+
+        let restored_agent = Agent::new(
+            ToolManager::new(),
+            backend,
+            Arc::new(VectorDB::new(
+                &rara_dir.join("lancedb").display().to_string(),
+            )),
+            session_manager,
+            workspace,
+        );
+        let mut restored_slot = Some(restored_agent);
+        let mut restored_app = TuiApp::new(ConfigManager {
+            path: temp.path().join("config-restored.json"),
+        })
+        .expect("restored app");
+        restored_app.attach_state_db(state_db);
+
+        restore_thread_by_id(
+            original_agent.session_id.as_str(),
+            &mut restored_app,
+            &mut restored_slot,
+        )
+        .expect("restore thread");
+
+        let restored_agent = restored_slot.expect("restored agent");
+        let runtime = restored_agent.shared_runtime_context();
+        assert!(runtime
+            .assembly
+            .entries
+            .iter()
+            .any(|entry| entry.layer == "active_turn_state"
+                && entry.kind == "request_input"
+                && entry.injected));
+        assert!(runtime
+            .assembly
+            .entries
+            .iter()
+            .any(|entry| entry.layer == "active_turn_state"
+                && entry.kind == "approval"
+                && entry.injected));
+        assert_eq!(
+            restored_app.snapshot.assembly_entries,
+            runtime.assembly.entries
+        );
     }
 }

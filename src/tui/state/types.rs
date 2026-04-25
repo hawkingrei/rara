@@ -12,8 +12,10 @@ use super::super::queued_input::PendingFollowUpMessage;
 use crate::agent::{Agent, AgentExecutionMode, BashApprovalMode};
 use crate::codex_model_catalog::CodexModelOption;
 use crate::config::{ConfigManager, RaraConfig};
-use crate::context::{CompactionSourceContextEntry, PromptSourceContextEntry};
-use crate::context::{RetrievalSelectedItemContextEntry, RetrievalSourceContextEntry};
+use crate::context::{
+    CompactionSourceContextEntry, ContextAssemblyEntry, PromptSourceContextEntry,
+    RetrievalSourceContextEntry,
+};
 use crate::oauth::SavedCodexAuthMode;
 use crate::state_db::StateDb;
 use crate::thread_store::ThreadSummary;
@@ -117,6 +119,12 @@ pub struct RuntimeSnapshot {
     pub context_window_tokens: Option<usize>,
     pub compact_threshold_tokens: usize,
     pub reserved_output_tokens: usize,
+    pub stable_instructions_budget: usize,
+    pub workspace_prompt_budget: usize,
+    pub active_turn_budget: usize,
+    pub compacted_history_budget: usize,
+    pub retrieved_memory_budget: usize,
+    pub remaining_input_budget: Option<usize>,
     pub compaction_count: usize,
     pub last_compaction_before_tokens: Option<usize>,
     pub last_compaction_after_tokens: Option<usize>,
@@ -136,7 +144,8 @@ pub struct RuntimeSnapshot {
     pub prompt_append_system_prompt: Option<String>,
     pub prompt_warnings: Vec<String>,
     pub retrieval_source_entries: Vec<RetrievalSourceContextEntry>,
-    pub retrieval_selected_items: Vec<RetrievalSelectedItemContextEntry>,
+    pub memory_selection: crate::context::MemorySelectionContextView,
+    pub assembly_entries: Vec<ContextAssemblyEntry>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

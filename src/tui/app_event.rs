@@ -6,6 +6,7 @@ pub enum AppEvent {
     OpenOverlay(Overlay),
     CloseOverlay,
     SubmitComposer,
+    InsertNewline,
     InputChar(char),
     Backspace,
     ScrollTranscript(i32),

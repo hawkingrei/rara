@@ -36,32 +36,16 @@ Priority order for this phase:
      - makes `reasoning_summary` and provider migration logic easier to test
      - gives backend hot-swap a clearer config entry surface
 
-2. Land the Stage 1 context-architecture boundary as real objects
-   - Minimum first cut:
-     - define `ContextBudget`
-     - define `ContextAssembler`
-     - route existing prompt/context assembly through one entrypoint
-     - keep current retrieval behavior, but make the assembler own the final assembled context
-   - Why now:
-     - makes model input assembly explainable
-     - reduces the risk of TUI/runtime/backend each building overlapping prompts differently
-     - sets up compaction, resume, and later memory recall work
-
-3. Deepen the new thread persistence boundary
-   - Introduce objects along the lines of:
-     - `ThreadStore`
-     - `ThreadRecorder`
-     - `RolloutItem`
-     - `CompactionRecord`
-   - Why before more provider hot-swap work:
-     - restore reliability
-     - plan-state continuity
-     - pending-interaction continuity
-     - compaction fidelity all depend on this boundary being explicit
+2. Deepen retrieval and memory selection on top of the new context/thread boundaries
+   - The Stage 1 context-assembly boundary and thread persistence façade now exist.
+   - The remaining high-leverage work is:
+     - real retrieval budget decisions;
+     - vector/thread memory selection explanation;
+     - clearer ownership for selected-vs-dropped memory candidates.
 
 ## Architecture / Runtime
 
-- [ ] Extend the shared runtime context and `/context` from prompt-injected / compacted selected memory items into real recalled vector/thread memory selection so the runtime can explain why those items won the retrieval budget.
+- [ ] Extend the new `MemorySelection` contract from readiness-and-selection explanation into real recalled vector/thread memory selection so the runtime can explain why those items won the retrieval budget.
 
 ## Configuration / Provider Surface
 

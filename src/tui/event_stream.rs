@@ -14,7 +14,7 @@ pub fn translate_event(event: Event, app: &TuiApp) -> Option<UiEvent> {
     match event {
         Event::Key(key_event) => {
             if matches!(key_event.kind, KeyEventKind::Press | KeyEventKind::Repeat) {
-                Some(UiEvent::App(super::map_key_to_event(key_event.code, app)))
+                Some(UiEvent::App(super::map_key_to_event(key_event, app)))
             } else {
                 None
             }

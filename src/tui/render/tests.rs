@@ -10,10 +10,9 @@ use super::cells::HistoryCell;
 use super::viewport::TranscriptViewport;
 use super::{
     committed_turn_cell, compact_progress_summary_lines, compact_recent_first_summary_lines,
-    compact_summary_text,
-    current_turn_exploration_summary_from_entries, current_turn_tool_summary,
-    desired_viewport_height, renderable_transcript_lines, transcript_scroll_offset,
-    transcript_viewport, transcript_visual_row_count,
+    compact_summary_text, current_turn_exploration_summary_from_entries, current_turn_tool_summary,
+    desired_bottom_pane_height, desired_viewport_height, renderable_transcript_lines,
+    transcript_scroll_offset, transcript_viewport, transcript_visual_row_count,
 };
 
 #[test]
@@ -298,6 +297,69 @@ fn transcript_viewport_keeps_manual_scroll_when_overlay_opens() {
 }
 
 #[test]
+fn command_palette_does_not_change_scrolled_viewport_height() {
+    let temp = tempdir().expect("tempdir");
+    let mut app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("build tui app");
+    app.transcript_scroll = 5;
+
+    let base = desired_viewport_height(&app, 80, 24);
+    app.overlay = Some(Overlay::CommandPalette);
+    let with_palette = desired_viewport_height(&app, 80, 24);
+
+    assert_eq!(base, 24);
+    assert_eq!(base, with_palette);
+}
+
+#[test]
+fn bottom_pane_grows_for_multiline_input() {
+    let temp = tempdir().expect("tempdir");
+    let mut app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("build tui app");
+
+    let base = desired_bottom_pane_height(&app, 80, 24);
+    app.input = "first line\nsecond line\nthird line\nfourth line".into();
+    let expanded = desired_bottom_pane_height(&app, 80, 24);
+
+    assert_eq!(base, 5);
+    assert!(expanded > base);
+}
+
+#[test]
+fn bottom_pane_preserves_space_only_input_layout() {
+    let temp = tempdir().expect("tempdir");
+    let mut app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("build tui app");
+
+    app.input = " ".into();
+    let space_only = desired_bottom_pane_height(&app, 80, 24);
+
+    app.input = "  \n ".into();
+    let multiline_space_only = desired_bottom_pane_height(&app, 80, 24);
+
+    assert_eq!(space_only, 5);
+    assert!(multiline_space_only >= space_only);
+}
+
+#[test]
+fn bottom_pane_height_does_not_panic_on_tiny_terminal() {
+    let temp = tempdir().expect("tempdir");
+    let app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("build tui app");
+
+    assert_eq!(desired_bottom_pane_height(&app, 80, 1), 1);
+    assert_eq!(desired_bottom_pane_height(&app, 80, 3), 3);
+}
+
+#[test]
 fn transcript_viewport_visible_window_keeps_partial_wrapped_line_offset() {
     let viewport = TranscriptViewport::new(
         vec![
@@ -411,8 +473,7 @@ fn compact_recent_first_summary_lines_puts_current_running_step_first() {
         "Run task 5".to_string(),
     ];
 
-    let rendered =
-        compact_recent_first_summary_lines(items.as_slice(), 4, "more running step(s)");
+    let rendered = compact_recent_first_summary_lines(items.as_slice(), 4, "more running step(s)");
 
     let lines = rendered.lines().collect::<Vec<_>>();
     assert_eq!(lines[0], "└ Run task 5");

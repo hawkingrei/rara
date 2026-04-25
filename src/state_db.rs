@@ -924,8 +924,7 @@ impl StateDb {
         session_id: &str,
         migration: &PersistedLegacyRolloutMigration,
     ) -> Result<()> {
-        let path =
-            thread_rollout_log::rollout_events_log_path(&self.rollout_root(), session_id);
+        let path = thread_rollout_log::rollout_events_log_path(&self.rollout_root(), session_id);
         if path.exists() {
             return Ok(());
         }

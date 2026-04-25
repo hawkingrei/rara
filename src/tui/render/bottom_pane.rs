@@ -4,7 +4,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Paragraph, Wrap},
 };
-use textwrap::Options;
+use textwrap::{wrap, Options};
 use unicode_width::UnicodeWidthStr;
 
 use super::super::custom_terminal::Frame;
@@ -16,12 +16,12 @@ use super::super::queued_input::{
 use super::super::state::{ActivePendingInteractionKind, TaskKind, TuiApp};
 use super::badge;
 
-pub(crate) fn desired_viewport_height(app: &TuiApp, _width: u16, rows: u16) -> u16 {
-    if app.overlay.is_some() || app.transcript_scroll > 0 {
+pub(crate) fn desired_viewport_height(app: &TuiApp, width: u16, rows: u16) -> u16 {
+    if app.transcript_scroll > 0 {
         return rows.max(1);
     }
 
-    let bottom_pane_height = 5u16;
+    let bottom_pane_height = desired_bottom_pane_height(app, width, rows);
     let has_active_content =
         !app.active_turn.entries.is_empty() || app.has_pending_planning_suggestion();
     if !app.has_any_transcript() && !has_active_content {
@@ -41,12 +41,21 @@ pub(crate) fn desired_viewport_height(app: &TuiApp, _width: u16, rows: u16) -> u
         .max(1)
 }
 
+pub(crate) fn desired_bottom_pane_height(app: &TuiApp, width: u16, rows: u16) -> u16 {
+    let composer_rows = desired_composer_height(app, width, rows);
+    let total = composer_rows.saturating_add(2);
+    let max = rows.max(1);
+    let min = 5.min(max);
+    total.clamp(min, max)
+}
+
 pub(super) fn render_bottom_pane(f: &mut Frame, app: &TuiApp, area: Rect) -> Option<(u16, u16)> {
+    let composer_height = area.height.saturating_sub(2).max(3);
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(1),
-            Constraint::Min(3),
+            Constraint::Length(composer_height),
             Constraint::Length(1),
         ])
         .split(area);
@@ -217,7 +226,7 @@ fn render_composer(f: &mut Frame, app: &TuiApp, area: Rect) -> Option<(u16, u16)
         ])]
     } else {
         app.input
-            .lines()
+            .split('\n')
             .map(|line| {
                 Line::from(vec![
                     Span::styled(
@@ -339,7 +348,7 @@ fn composer_hint(app: &TuiApp) -> &'static str {
     } else if app.agent_execution_mode_label() == "plan" {
         "planning mode  analyze, refine, or finalize a plan"
     } else {
-        "/compact summarize history  /plan enter planning mode  /quit exit"
+        "Enter submit  Shift+Enter newline  / open commands"
     }
 }
 
@@ -404,6 +413,32 @@ fn composer_cursor_position(input: &str, area: Rect) -> (u16, u16) {
     wrapped_text_cursor_position(input, area, Some("› "), None)
 }
 
+fn desired_composer_height(app: &TuiApp, width: u16, rows: u16) -> u16 {
+    let available_width = width.max(1);
+    let content_rows = composer_content_line_count(app, available_width);
+    let max_height = rows.saturating_sub(4).max(3);
+    content_rows.clamp(3, max_height)
+}
+
+fn composer_content_line_count(app: &TuiApp, width: u16) -> u16 {
+    let content = if app.input.is_empty() {
+        if app.has_queued_follow_up_messages() {
+            queued_follow_up_preview_lines(app)
+                .into_iter()
+                .map(|line| line.to_string())
+                .collect::<Vec<_>>()
+                .join("\n")
+        } else {
+            "Ask about the repo, request a code change, or type /help to browse commands."
+                .to_string()
+        }
+    } else {
+        app.input.clone()
+    };
+
+    wrapped_text_row_count(&content, width, Some("› "), None)
+}
+
 pub(super) fn editor_cursor_position(input: &str, area: Rect) -> (u16, u16) {
     wrapped_text_cursor_position(input, inner_rect(area), None, None)
 }
@@ -429,24 +464,12 @@ fn wrapped_text_cursor_position(
 
     let initial_indent = initial_indent.unwrap_or("");
     let subsequent_indent = subsequent_indent.unwrap_or("");
-    let mut wrapped_rows: Vec<String> = Vec::new();
-
-    if input.is_empty() {
-        wrapped_rows.push(initial_indent.to_string());
-    } else {
-        for logical_line in input.split('\n') {
-            let options = Options::new(area.width as usize)
-                .initial_indent(initial_indent)
-                .subsequent_indent(subsequent_indent)
-                .break_words(false);
-            let wraps = textwrap::wrap(logical_line, options);
-            if wraps.is_empty() {
-                wrapped_rows.push(initial_indent.to_string());
-            } else {
-                wrapped_rows.extend(wraps.into_iter().map(|line| line.into_owned()));
-            }
-        }
-    }
+    let wrapped_rows = wrapped_text_rows(
+        input,
+        area.width,
+        Some(initial_indent),
+        Some(subsequent_indent),
+    );
 
     let last_row = wrapped_rows
         .last()
@@ -461,6 +484,47 @@ fn wrapped_text_cursor_position(
     let cursor_x = area.x.saturating_add(display_width.min(max_x_offset));
 
     (cursor_x, cursor_y)
+}
+
+fn wrapped_text_row_count(
+    input: &str,
+    width: u16,
+    initial_indent: Option<&str>,
+    subsequent_indent: Option<&str>,
+) -> u16 {
+    wrapped_text_rows(input, width, initial_indent, subsequent_indent).len() as u16
+}
+
+fn wrapped_text_rows(
+    input: &str,
+    width: u16,
+    initial_indent: Option<&str>,
+    subsequent_indent: Option<&str>,
+) -> Vec<String> {
+    let width = width.max(1);
+    let initial_indent = initial_indent.unwrap_or("");
+    let subsequent_indent = subsequent_indent.unwrap_or("");
+    let mut wrapped_rows = Vec::new();
+
+    if input.is_empty() {
+        wrapped_rows.push(initial_indent.to_string());
+        return wrapped_rows;
+    }
+
+    for logical_line in input.split('\n') {
+        let options = Options::new(width as usize)
+            .initial_indent(initial_indent)
+            .subsequent_indent(subsequent_indent)
+            .break_words(false);
+        let wraps = wrap(logical_line, options);
+        if wraps.is_empty() {
+            wrapped_rows.push(initial_indent.to_string());
+        } else {
+            wrapped_rows.extend(wraps.into_iter().map(|line| line.into_owned()));
+        }
+    }
+
+    wrapped_rows
 }
 
 #[cfg(test)]

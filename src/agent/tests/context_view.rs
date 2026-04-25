@@ -205,32 +205,124 @@ fn shared_runtime_context_collects_prompt_plan_and_compaction_state() {
     assert_eq!(runtime.retrieval.entries[1].status, "available");
     assert_eq!(runtime.retrieval.entries[2].kind, "vector_memory");
     assert_eq!(runtime.retrieval.entries[2].status, "available");
-    assert_eq!(runtime.retrieval.selected_items.len(), 6);
-    assert_eq!(runtime.retrieval.selected_items[0].kind, "workspace_memory");
-    assert!(runtime.retrieval.selected_items[0]
+    assert_eq!(runtime.retrieval.memory_selection.selected_items.len(), 6);
+    assert_eq!(
+        runtime.retrieval.memory_selection.selected_items[0].kind,
+        "workspace_memory"
+    );
+    assert!(runtime.retrieval.memory_selection.selected_items[0]
         .detail
         .contains(".rara/memory.md"));
-    assert!(runtime.retrieval.selected_items[0]
+    assert!(runtime.retrieval.memory_selection.selected_items[0]
         .detail
         .contains("2 non-empty lines"));
     assert_eq!(
-        runtime.retrieval.selected_items[1].kind,
+        runtime.retrieval.memory_selection.selected_items[1].kind,
         "compacted_summary"
     );
-    assert_eq!(runtime.retrieval.selected_items[2].kind, "recent_files");
     assert_eq!(
-        runtime.retrieval.selected_items[3].kind,
+        runtime.retrieval.memory_selection.selected_items[2].kind,
+        "recent_files"
+    );
+    assert_eq!(
+        runtime.retrieval.memory_selection.selected_items[3].kind,
         "recent_file_excerpts"
     );
-    assert_eq!(runtime.retrieval.selected_items[4].kind, "retrieve_experience");
-    assert!(runtime.retrieval.selected_items[4]
-        .detail
-        .contains("query=bootstrap contract"));
     assert_eq!(
-        runtime.retrieval.selected_items[5].kind,
-        "retrieve_session_context"
+        runtime.retrieval.memory_selection.selected_items[4].kind,
+        "retrieved_workspace_memory"
     );
-    assert!(runtime.retrieval.selected_items[5]
+    assert!(runtime.retrieval.memory_selection.selected_items[4]
         .detail
-        .contains("previous auth flow"));
+        .contains("recalled=2 item(s)"));
+    assert_eq!(
+        runtime.retrieval.memory_selection.selected_items[5].kind,
+        "retrieved_thread_context"
+    );
+    assert!(runtime.retrieval.memory_selection.selected_items[5]
+        .detail
+        .contains("Auth picker already moved behind the shared runtime bootstrap."));
+    assert_eq!(runtime.retrieval.memory_selection.dropped_items.len(), 2);
+    assert_eq!(
+        runtime.retrieval.memory_selection.dropped_items[0].kind,
+        "thread_history"
+    );
+    assert_eq!(
+        runtime.retrieval.memory_selection.dropped_items[1].kind,
+        "vector_memory"
+    );
+    assert!(runtime
+        .retrieval
+        .memory_selection
+        .selection_budget_tokens
+        .is_some());
+    assert!(runtime.budget.stable_instructions_budget > 0);
+    assert!(runtime.budget.active_turn_budget > 0);
+    assert!(runtime
+        .assembly
+        .entries
+        .iter()
+        .any(|entry| entry.layer == "stable_instructions" && entry.injected));
+    assert!(runtime
+        .assembly
+        .entries
+        .iter()
+        .any(|entry| entry.layer == "compacted_history" && entry.injected));
+    assert!(runtime
+        .assembly
+        .entries
+        .iter()
+        .any(|entry| entry.layer == "retrieval_ready" && !entry.injected));
+}
+
+#[test]
+fn assemble_turn_context_matches_prompt_and_runtime_views() {
+    let (_temp, session_manager, workspace, rara_dir) = test_runtime_storage();
+    std::fs::write(
+        rara_dir.join("memory.md"),
+        "# Team Notes\n\nPrefer the shared bootstrap path.\n",
+    )
+    .expect("write workspace memory");
+    let backend = Arc::new(SequencedBackend::new(vec![LlmResponse {
+        content: vec![ContentBlock::Text {
+            text: "ok".to_string(),
+        }],
+        stop_reason: Some("end_turn".to_string()),
+        usage: None,
+    }]));
+
+    let mut agent = Agent::new(
+        ToolManager::new(),
+        backend,
+        Arc::new(VectorDB::new(
+            &rara_dir.join("lancedb").display().to_string(),
+        )),
+        session_manager,
+        workspace,
+    );
+    agent.set_prompt_config(PromptRuntimeConfig {
+        append_system_prompt: Some("appendix".to_string()),
+        warnings: vec!["missing prompt file".to_string()],
+        ..PromptRuntimeConfig::default()
+    });
+    agent.execution_mode = AgentExecutionMode::Plan;
+    agent.current_plan = vec![PlanStep {
+        step: "inspect auth flow".to_string(),
+        status: PlanStepStatus::Pending,
+    }];
+    agent.plan_explanation = Some("Prefer one shared bootstrap path.".to_string());
+    agent.history.push(Message {
+        role: "user".to_string(),
+        content: json!([{"type":"text","text":"hello"}]),
+    });
+
+    let assembled = agent.assemble_turn_context();
+
+    assert_eq!(assembled.prompt.system_prompt(), agent.build_system_prompt());
+    assert_eq!(assembled.runtime, agent.shared_runtime_context());
+    assert_eq!(
+        assembled.runtime.prompt.append_system_prompt.as_deref(),
+        Some("appendix")
+    );
+    assert_eq!(assembled.runtime.plan.execution_mode, "plan");
 }
