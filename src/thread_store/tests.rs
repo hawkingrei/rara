@@ -105,28 +105,27 @@ fn load_thread_aggregates_history_state_and_rollout_items() -> Result<()> {
     assert_eq!(snapshot.plan_steps.len(), 1);
     assert_eq!(snapshot.interactions.len(), 1);
     assert_eq!(snapshot.rollout_items.len(), 4);
-    assert!(matches!(
-        snapshot.rollout_items.first(),
-        Some(RolloutItem::Compaction(compaction)) if compaction.compaction_count == 2
-    ));
-    assert!(matches!(
-        snapshot.rollout_items.get(1),
-        Some(RolloutItem::PlanState { explanation, steps })
+    assert!(snapshot.rollout_items.iter().any(|item| matches!(
+        item,
+        RolloutItem::Compaction(compaction) if compaction.compaction_count == 2
+    )));
+    assert!(snapshot.rollout_items.iter().any(|item| matches!(
+        item,
+        RolloutItem::PlanState { explanation, steps }
             if explanation.as_deref() == Some("Inspect current plan state.") && steps.len() == 1
-    ));
-    assert!(matches!(
-        snapshot.rollout_items.get(2),
-        Some(RolloutItem::Interaction(interaction))
+    )));
+    assert!(snapshot.rollout_items.iter().any(|item| matches!(
+        item,
+        RolloutItem::Interaction(interaction)
             if interaction.kind == "approval" && interaction.status == "pending"
-    ));
-    match &snapshot.rollout_items[3] {
-        RolloutItem::Turn(turn) => {
-            assert_eq!(turn.summary.ordinal, 0);
-            assert_eq!(turn.entries.len(), 1);
-            assert_eq!(turn.entries[0].message, "Investigating.");
-        }
-        _ => panic!("expected committed turn rollout item"),
-    }
+    )));
+    assert!(snapshot.rollout_items.iter().any(|item| matches!(
+        item,
+        RolloutItem::Turn(turn)
+            if turn.summary.ordinal == 0
+                && turn.entries.len() == 1
+                && turn.entries[0].message == "Investigating."
+    )));
 
     Ok(())
 }

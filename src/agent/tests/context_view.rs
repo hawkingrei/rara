@@ -73,30 +73,41 @@ fn shared_runtime_context_collects_prompt_plan_and_compaction_state() {
     });
     agent.history.push(Message {
         role: "system".to_string(),
-        content: json!({
+        content: json!([{
             "type": "compact_boundary",
             "version": 3,
             "before_tokens": 5000,
             "recent_file_count": 2
-        }),
+        }]),
     });
     agent.history.push(Message {
         role: "system".to_string(),
-        content: json!(
-            "STRUCTURED SUMMARY OF PREVIOUS CONVERSATION:\nUser Intent\n- finish the refactor"
-        ),
+        content: json!([{
+            "type": "compacted_summary",
+            "text": "User Intent\n- finish the refactor"
+        }]),
     });
     agent.history.push(Message {
         role: "system".to_string(),
-        content: json!(
-            "RECENT FILES FROM COMPACTED HISTORY:\n- src/main.rs\n- src/runtime_context.rs"
-        ),
+        content: json!([{
+            "type": "recent_files",
+            "files": [
+                "src/main.rs",
+                "src/runtime_context.rs"
+            ]
+        }]),
     });
     agent.history.push(Message {
         role: "system".to_string(),
-        content: json!(
-            "RECENT FILE EXCERPTS FROM COMPACTED HISTORY:\n### src/main.rs (lines 1-3)\ncode"
-        ),
+        content: json!([{
+            "type": "recent_file_excerpts",
+            "files": [{
+                "path": "src/main.rs",
+                "line_start": 1,
+                "line_end": 3,
+                "snippet": "code"
+            }]
+        }]),
     });
     agent.history.push(Message {
         role: "assistant".to_string(),
@@ -201,7 +212,7 @@ fn shared_runtime_context_collects_prompt_plan_and_compaction_state() {
         .contains(".rara/memory.md"));
     assert!(runtime.retrieval.selected_items[0]
         .detail
-        .contains("first line: # Team Notes"));
+        .contains("2 non-empty lines"));
     assert_eq!(
         runtime.retrieval.selected_items[1].kind,
         "compacted_summary"
@@ -211,16 +222,13 @@ fn shared_runtime_context_collects_prompt_plan_and_compaction_state() {
         runtime.retrieval.selected_items[3].kind,
         "recent_file_excerpts"
     );
-    assert_eq!(
-        runtime.retrieval.selected_items[4].kind,
-        "retrieved_workspace_memory"
-    );
+    assert_eq!(runtime.retrieval.selected_items[4].kind, "retrieve_experience");
     assert!(runtime.retrieval.selected_items[4]
         .detail
         .contains("query=bootstrap contract"));
     assert_eq!(
         runtime.retrieval.selected_items[5].kind,
-        "retrieved_thread_memory"
+        "retrieve_session_context"
     );
     assert!(runtime.retrieval.selected_items[5]
         .detail
