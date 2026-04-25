@@ -25,28 +25,31 @@ fn merge_rebuilt_agent(previous: Option<Agent>, mut rebuilt: Agent) -> Agent {
 
     let previous_append_system_prompt = previous.prompt_config().append_system_prompt.clone();
     let previous_prompt_warnings = previous.prompt_config().warnings.clone();
-    let previous_compact_state = previous.compact_state.clone();
-    let previous_session_id = previous.session_id.clone();
-    let previous_history = previous.history.clone();
-    let previous_total_input_tokens = previous.total_input_tokens;
-    let previous_total_output_tokens = previous.total_output_tokens;
-    let previous_current_plan = previous.current_plan.clone();
-    let previous_plan_explanation = previous.plan_explanation.clone();
-    let previous_pending_user_input = previous.pending_user_input.clone();
-    let previous_pending_approval = previous.pending_approval.clone();
-    let previous_completed_user_input = previous.completed_user_input.clone();
-    let previous_completed_approval = previous.completed_approval.clone();
+    let Agent {
+        session_id,
+        history,
+        total_input_tokens,
+        total_output_tokens,
+        current_plan,
+        plan_explanation,
+        pending_user_input,
+        pending_approval,
+        completed_user_input,
+        completed_approval,
+        compact_state: previous_compact_state,
+        ..
+    } = previous;
 
-    rebuilt.session_id = previous_session_id;
-    rebuilt.history = previous_history;
-    rebuilt.total_input_tokens = previous_total_input_tokens;
-    rebuilt.total_output_tokens = previous_total_output_tokens;
-    rebuilt.current_plan = previous_current_plan;
-    rebuilt.plan_explanation = previous_plan_explanation;
-    rebuilt.pending_user_input = previous_pending_user_input;
-    rebuilt.pending_approval = previous_pending_approval;
-    rebuilt.completed_user_input = previous_completed_user_input;
-    rebuilt.completed_approval = previous_completed_approval;
+    rebuilt.session_id = session_id;
+    rebuilt.history = history;
+    rebuilt.total_input_tokens = total_input_tokens;
+    rebuilt.total_output_tokens = total_output_tokens;
+    rebuilt.current_plan = current_plan;
+    rebuilt.plan_explanation = plan_explanation;
+    rebuilt.pending_user_input = pending_user_input;
+    rebuilt.pending_approval = pending_approval;
+    rebuilt.completed_user_input = completed_user_input;
+    rebuilt.completed_approval = completed_approval;
     rebuilt.compact_state.estimated_history_tokens = previous_compact_state.estimated_history_tokens;
     rebuilt.compact_state.compaction_count = previous_compact_state.compaction_count;
     rebuilt.compact_state.last_compaction_before_tokens =
