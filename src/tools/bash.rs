@@ -288,13 +288,19 @@ where
 }
 
 async fn ensure_sandbox_home_dirs() -> Result<(), ToolError> {
+    let config_dir = format!("{SANDBOX_HOME}/.config");
+    let cache_dir = format!("{SANDBOX_HOME}/.cache");
+    let local_dir = format!("{SANDBOX_HOME}/.local");
+    let state_dir = format!("{SANDBOX_HOME}/.local/state");
+    let share_dir = format!("{SANDBOX_HOME}/.local/share");
+
     for dir in [
         SANDBOX_HOME,
-        "/tmp/rara-home/.config",
-        "/tmp/rara-home/.cache",
-        "/tmp/rara-home/.local",
-        "/tmp/rara-home/.local/state",
-        "/tmp/rara-home/.local/share",
+        config_dir.as_str(),
+        cache_dir.as_str(),
+        local_dir.as_str(),
+        state_dir.as_str(),
+        share_dir.as_str(),
     ] {
         fs::create_dir_all(dir).await?;
     }
