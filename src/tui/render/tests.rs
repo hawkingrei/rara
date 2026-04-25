@@ -539,6 +539,23 @@ fn prefixed_message_lines_keep_first_and_latest_lines() {
 }
 
 #[test]
+fn prefixed_message_lines_show_truncation_when_max_lines_is_one() {
+    let agent_rendered = prefixed_message_lines("Agent", &["intro", "latest 1"].join("\n"), 1)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>();
+    assert_eq!(agent_rendered[0], "Agent: intro");
+    assert_eq!(agent_rendered[1], "  ... 1 more line(s)");
+
+    let user_rendered = prefixed_message_lines("You", &["intro", "latest 1"].join("\n"), 1)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>();
+    assert_eq!(user_rendered[0], "› intro");
+    assert_eq!(user_rendered[1], "  ... 1 more line(s)");
+}
+
+#[test]
 fn formatted_agent_markdown_keeps_first_and_latest_lines() {
     let rendered = formatted_message_lines(
         "Agent",

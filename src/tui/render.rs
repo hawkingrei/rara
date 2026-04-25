@@ -400,16 +400,14 @@ pub(crate) fn prefixed_message_lines(
     }
 
     let mut lines = Vec::new();
+    let hidden_count = truncated_line_count(message_lines.len(), max_lines);
     let (head, tail) = head_tail_line_window(message_lines.as_slice(), max_lines);
     if let Some(first) = head.first() {
         lines.push(Line::from(format!("{role}: {first}")));
     }
-    if !tail.is_empty() {
+    if hidden_count > 0 {
         lines.push(Line::from(Span::styled(
-            format!(
-                "  ... {} more line(s)",
-                truncated_line_count(message_lines.len(), max_lines)
-            ),
+            format!("  ... {} more line(s)", hidden_count),
             Style::default().fg(Color::DarkGray),
         )));
     }
@@ -427,16 +425,14 @@ fn user_message_lines(message: &str, max_lines: usize) -> Vec<Line<'static>> {
     }
 
     let mut lines = Vec::new();
+    let hidden_count = truncated_line_count(message_lines.len(), max_lines);
     let (head, tail) = head_tail_line_window(message_lines.as_slice(), max_lines);
     if let Some(first) = head.first() {
         lines.push(Line::from(format!("› {first}")));
     }
-    if !tail.is_empty() {
+    if hidden_count > 0 {
         lines.push(Line::from(Span::styled(
-            format!(
-                "  ... {} more line(s)",
-                truncated_line_count(message_lines.len(), max_lines)
-            ),
+            format!("  ... {} more line(s)", hidden_count),
             Style::default().fg(Color::DarkGray),
         )));
     }
