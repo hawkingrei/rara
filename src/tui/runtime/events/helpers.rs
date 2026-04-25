@@ -388,8 +388,7 @@ pub(super) fn format_tool_result(name: &str, content: &str) -> String {
             let exit_code = value
                 .get("exit_code")
                 .and_then(serde_json::Value::as_i64)
-                .map(|code| code.to_string())
-                .unwrap_or_else(|| "?".to_string());
+                .unwrap_or(-1);
             let stdout = value
                 .get("stdout")
                 .and_then(serde_json::Value::as_str)
@@ -402,9 +401,15 @@ pub(super) fn format_tool_result(name: &str, content: &str) -> String {
                 .get("live_streamed")
                 .and_then(serde_json::Value::as_bool)
                 .unwrap_or(false);
-            let mut summary = format!("bash completed exit_code={exit_code}");
+            let mut summary = if exit_code == 0 {
+                "bash finished with exit code 0".to_string()
+            } else if exit_code >= 0 {
+                format!("bash failed with exit code {exit_code}")
+            } else {
+                "bash finished with unknown exit status".to_string()
+            };
             if live_streamed {
-                summary.push_str("\nstreamed output shown above");
+                summary.push_str("\noutput streamed above");
                 return summary;
             }
             if let Some(stdout_preview) = output_tail_preview(stdout) {
@@ -445,16 +450,43 @@ pub(super) fn format_tool_result(name: &str, content: &str) -> String {
         .map(str::trim)
         .filter(|line| !line.is_empty())
     {
+        let summary = normalize_tool_result_summary(name, summary);
         let mut rendered = format!("{name}: {summary}");
         if content.contains("full_result_path=") {
             rendered.push_str("\\nfull result stored on disk");
-        } else if content.lines().nth(1).is_some() {
-            rendered.push_str("\\npreview available");
+        } else if let Some(preview) = tool_result_preview(content) {
+            rendered.push_str(&format!("\n{preview}"));
         }
         return rendered;
     }
 
     format!("{name}: {content}")
+}
+
+fn normalize_tool_result_summary(name: &str, summary: &str) -> String {
+    let trimmed = summary.trim();
+    let expected_prefix = format!("Tool {name} completed with ");
+    if trimmed.starts_with(&expected_prefix) {
+        return format!("{name} finished");
+    }
+    trimmed.to_string()
+}
+
+fn tool_result_preview(content: &str) -> Option<String> {
+    let preview_lines = content
+        .lines()
+        .skip(1)
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .take(3)
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+
+    if preview_lines.is_empty() {
+        None
+    } else {
+        Some(preview_lines.join("\n"))
+    }
 }
 
 pub(super) fn format_tool_progress(name: &str, stream: ToolOutputStream, chunk: &str) -> String {

@@ -28,6 +28,7 @@ const LINUX_RUNTIME_READ_ROOTS: &[&str] = &[
     "/nix/store",
     "/run/current-system/sw",
 ];
+const SANDBOX_HOME: &str = "/tmp/rara-home";
 
 impl SandboxManager {
     pub fn new() -> Result<Self> {
@@ -74,6 +75,17 @@ impl SandboxManager {
             bail!("sandbox profile creation is only supported on macOS");
         }
 
+        let mut file_rules = String::new();
+        if let Some(home) = env::var_os("HOME").map(PathBuf::from) {
+            for sensitive_dir in [".ssh", ".aws"] {
+                let path = home.join(sensitive_dir);
+                file_rules.push_str(&format!(
+                    "(deny file-read* (subpath \"{}\"))\n",
+                    path.display()
+                ));
+            }
+        }
+
         let mut net_rules = String::new();
         if allow_net {
             net_rules.push_str("(allow network*)");
@@ -90,8 +102,7 @@ impl SandboxManager {
         let profile = format!(
             r#"(version 1)
 (deny default)
-(deny file-read* (home-relative-path "/.ssh"))
-(deny file-read* (home-relative-path "/.aws"))
+{}
 (allow file-read* (subpath "/usr/bin"))
 (allow file-read* (subpath "/System"))
 (allow file-read* (subpath (param "CWD")))
@@ -101,6 +112,7 @@ impl SandboxManager {
 (allow sysctl-read)
 {}
 "#,
+            file_rules,
             net_rules
         );
         let profile_path = self
@@ -140,6 +152,8 @@ impl SandboxManager {
             "/proc".to_string(),
             "--tmpfs".to_string(),
             "/tmp".to_string(),
+            "--dir".to_string(),
+            SANDBOX_HOME.to_string(),
         ];
 
         for root in LINUX_RUNTIME_READ_ROOTS {
@@ -317,6 +331,16 @@ mod tests {
                 .any(|arg| arg == &cleanup_path.display().to_string()),
             "wrapped command should reference the generated profile path"
         );
+
+        let profile = std::fs::read_to_string(&cleanup_path).expect("profile contents");
+        assert!(
+            !profile.contains("home-relative-path"),
+            "profile should avoid unsupported home-relative-path forms"
+        );
+        assert!(
+            profile.contains("(deny file-read* (subpath "),
+            "profile should deny sensitive home subpaths using explicit paths"
+        );
     }
 
     #[test]
@@ -384,6 +408,48 @@ mod tests {
         assert!(
             wrapped.args.contains(&"--unshare-net".to_string()),
             "linux sandbox should isolate networking when allow_net is false"
+        );
+    }
+
+    #[test]
+    fn linux_sandbox_does_not_bind_the_entire_home_directory() {
+        let manager = SandboxManager {
+            os: "linux".to_string(),
+            profile_dir: PathBuf::from("/tmp/rara-test-sandbox"),
+        };
+
+        let wrapped = manager
+            .wrap_shell_command("echo test", "/home/tester/work/project", false)
+            .expect("linux sandbox wrapper");
+
+        assert_eq!(wrapped.program, "bwrap");
+        assert!(
+            !wrapped.args.windows(3).any(|window| {
+                window
+                    == [
+                        String::from("--bind"),
+                        String::from("/home/tester"),
+                        String::from("/home/tester"),
+                    ]
+                    || window
+                        == [
+                            String::from("--ro-bind"),
+                            String::from("/home/tester"),
+                            String::from("/home/tester"),
+                        ]
+            }),
+            "linux sandbox should not mount the entire home directory back in"
+        );
+        assert!(
+            wrapped.args.windows(3).any(|window| {
+                window
+                    == [
+                        String::from("--bind"),
+                        String::from("/home/tester/work/project"),
+                        String::from("/home/tester/work/project"),
+                    ]
+            }),
+            "linux sandbox should still mount the workspace path itself"
         );
     }
 }

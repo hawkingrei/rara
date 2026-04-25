@@ -202,3 +202,35 @@ fn committed_turn_cell_orders_completion_records_by_interaction_kind() {
     assert!(planning_question_idx < generic_question_idx);
     assert!(generic_question_idx < agent_idx);
 }
+
+#[test]
+fn committed_turn_cell_keeps_final_agent_response_when_system_notice_arrives_after_tool_turn() {
+    let entries = vec![
+        TranscriptEntry {
+            role: "You".into(),
+            message: "Inspect the repository and summarize the result".into(),
+        },
+        TranscriptEntry {
+            role: "Tool".into(),
+            message: "bash cargo check".into(),
+        },
+        TranscriptEntry {
+            role: "Agent".into(),
+            message: "The repository is healthy and the check passed.".into(),
+        },
+        TranscriptEntry {
+            role: "System".into(),
+            message: "Waiting for device-code confirmation.".into(),
+        },
+    ];
+
+    let rendered = CommittedTurnCell::new(entries.as_slice(), Some(Path::new(".")))
+        .display_lines(100)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(rendered.contains("• The repository is healthy and the check passed."));
+    assert!(!rendered.contains("Waiting for device-code confirmation."));
+}

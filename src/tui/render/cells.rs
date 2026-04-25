@@ -214,6 +214,44 @@ fn compact_live_response_message(message: &str) -> Option<String> {
     )
 }
 
+fn parse_render_plan_block(message: &str) -> Option<(Vec<(String, String)>, Option<String>)> {
+    let start = message.find("<plan>")?;
+    let end = message.find("</plan>")?;
+    if end <= start {
+        return None;
+    }
+
+    let block = &message[start + "<plan>".len()..end];
+    let mut steps = Vec::new();
+    for line in block.lines().map(str::trim).filter(|line| !line.is_empty()) {
+        let Some(step) = line
+            .strip_prefix("- [")
+            .or_else(|| line.strip_prefix("* ["))
+            .or_else(|| line.strip_prefix("• ["))
+        else {
+            continue;
+        };
+        let Some((status, rest)) = step.split_once(']') else {
+            continue;
+        };
+        let step = rest.trim();
+        if step.is_empty() {
+            continue;
+        }
+        steps.push((status.trim().to_string(), step.to_string()));
+    }
+
+    if steps.is_empty() {
+        return None;
+    }
+
+    let explanation = message[end + "</plan>".len()..].trim();
+    Some((
+        steps,
+        (!explanation.is_empty()).then(|| explanation.to_string()),
+    ))
+}
+
 fn ordered_exploration_agent_segments<'a>(
     current_turn: &[&'a TranscriptEntry],
 ) -> Option<Vec<OrderedActiveSegment<'a>>> {
@@ -656,11 +694,22 @@ impl ActiveCell for ActiveTurnCell<'_> {
         let compact_live_response =
             turn_live && (has_exploration_summary || has_planning_summary || has_running_summary);
 
+        let inline_plan_summary =
+            latest_agent.and_then(|message| parse_render_plan_block(message)).filter(|_| {
+                self.app.snapshot.plan_steps.is_empty()
+                    && matches!(
+                        self.app.agent_execution_mode,
+                        crate::agent::AgentExecutionMode::Plan
+                    )
+            });
+
         if should_show_updated_plan(self.app) {
             cells.push(Box::new(PlanSummaryCell::new(
                 self.app.snapshot.plan_steps.clone(),
                 self.app.snapshot.plan_explanation.clone(),
             )));
+        } else if let Some((steps, explanation)) = inline_plan_summary.clone() {
+            cells.push(Box::new(PlanSummaryCell::new(steps, explanation)));
         }
 
         if let Some(pending) = self.app.active_pending_interaction() {
@@ -704,8 +753,10 @@ impl ActiveCell for ActiveTurnCell<'_> {
             && self.app.snapshot.plan_steps.is_empty()
             && self.app.pending_request_input().is_none()
             && !self.app.has_pending_plan_approval();
-        let suppress_structured_plan_response = !self.app.snapshot.plan_steps.is_empty()
-            && latest_agent.is_some_and(contains_structured_planning_output);
+        let suppress_structured_plan_response =
+            (self.app.snapshot.plan_steps.is_empty() && inline_plan_summary.is_some())
+                || (!self.app.snapshot.plan_steps.is_empty()
+                    && latest_agent.is_some_and(contains_structured_planning_output));
 
         let responding_role = if turn_live { "Responding" } else { "Agent" };
         let prefer_responding_chrome = turn_live
@@ -844,7 +895,8 @@ impl ActiveCell for ActiveTurnCell<'_> {
 #[cfg(test)]
 mod helper_tests {
     use super::{
-        compact_live_response_message, compact_live_response_source, split_progress_sentences,
+        compact_live_response_message, compact_live_response_source, parse_render_plan_block,
+        split_progress_sentences,
     };
 
     #[test]
@@ -917,6 +969,25 @@ mod helper_tests {
         assert_eq!(
             rendered,
             "I inspected the current context path.\nI am starting the focused patch now."
+        );
+    }
+
+    #[test]
+    fn parse_render_plan_block_extracts_steps_and_explanation() {
+        let parsed = parse_render_plan_block(
+            "I reviewed the code.\n<plan>\n- [completed] Inspect the runtime path\n- [pending] Tighten the render path\n</plan>\nKeep the diff narrow.",
+        )
+        .unwrap();
+
+        assert_eq!(
+            parsed,
+            (
+                vec![
+                    ("completed".to_string(), "Inspect the runtime path".to_string()),
+                    ("pending".to_string(), "Tighten the render path".to_string()),
+                ],
+                Some("Keep the diff narrow.".to_string()),
+            )
         );
     }
 }

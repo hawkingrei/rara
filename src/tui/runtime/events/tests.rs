@@ -123,7 +123,7 @@ fn formats_bash_tool_result_with_output_tail() {
         .to_string(),
     );
 
-    assert!(rendered.contains("bash completed exit_code=0"));
+    assert!(rendered.contains("bash finished with exit code 0"));
     assert!(rendered.contains("stdout:"));
     assert!(rendered.contains("line 7"));
     assert!(rendered.contains("line 6"));
@@ -143,9 +143,22 @@ fn formats_live_bash_tool_result_without_duplicate_tail() {
         .to_string(),
     );
 
-    assert!(rendered.contains("bash completed exit_code=0"));
-    assert!(rendered.contains("streamed output shown above"));
+    assert!(rendered.contains("bash finished with exit code 0"));
+    assert!(rendered.contains("output streamed above"));
     assert!(!rendered.contains("stdout:"));
+}
+
+#[test]
+fn formats_generic_tool_result_without_preview_available_marker() {
+    let rendered = format_tool_result(
+        "bash",
+        "Tool bash completed with exit_code, live_streamed, stderr, stdout.\nline 1\nline 2",
+    );
+
+    assert!(rendered.contains("bash: bash finished"));
+    assert!(rendered.contains("line 1"));
+    assert!(rendered.contains("line 2"));
+    assert!(!rendered.contains("preview available"));
 }
 
 #[test]

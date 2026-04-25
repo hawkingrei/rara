@@ -446,6 +446,43 @@ fn active_turn_cell_hides_structured_plan_response_once_plan_card_exists() {
 }
 
 #[test]
+fn active_turn_cell_prefers_inline_plan_artifact_over_preamble_before_snapshot_sync() {
+    let temp = tempdir().unwrap();
+    let mut app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("build tui app");
+    app.agent_execution_mode = crate::agent::AgentExecutionMode::Plan;
+    app.runtime_phase = RuntimePhase::ProcessingResponse;
+    app.active_turn = TranscriptTurn {
+        entries: vec![
+            TranscriptEntry {
+                role: "You".into(),
+                message: "Review the codebase and propose changes".into(),
+            },
+            TranscriptEntry {
+                role: "Agent".into(),
+                message: "我基于当前代码的建议如下。\n这里先给一个简短前言。\n<plan>\n- [completed] Inspect the runtime entrypoint\n- [pending] Tighten the render path\n</plan>\nKeep the diff narrow and reviewable.".into(),
+            },
+        ],
+    };
+
+    let rendered = ActiveTurnCell::new(&app, Some(Path::new(".")))
+        .display_lines(100)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(rendered.contains("Updated Plan"));
+    assert!(rendered.contains("Inspect the runtime entrypoint"));
+    assert!(rendered.contains("Keep the diff narrow and reviewable."));
+    assert!(!rendered.contains("Responding"));
+    assert!(!rendered.contains("我基于当前代码的建议如下"));
+    assert!(!rendered.contains("<plan>"));
+}
+
+#[test]
 fn active_turn_cell_suppresses_planning_chatter_when_exploring() {
     let temp = tempdir().unwrap();
     let mut app = TuiApp::new(ConfigManager {
@@ -655,7 +692,7 @@ fn active_turn_cell_preserves_agent_then_exploration_order() {
 }
 
 #[test]
-fn active_turn_cell_uses_responding_label_while_busy() {
+fn active_turn_cell_uses_lightweight_busy_response_when_not_streaming() {
     let temp = tempdir().unwrap();
     let mut app = TuiApp::new(ConfigManager {
         path: temp.path().join("config.json"),
@@ -684,15 +721,15 @@ fn active_turn_cell_uses_responding_label_while_busy() {
         .collect::<Vec<_>>()
         .join("\n");
 
-    assert!(rendered.contains("Responding"));
-    assert!(rendered.contains("╭"));
-    assert!(rendered.contains("╰"));
+    assert!(!rendered.contains("Responding"));
+    assert!(!rendered.contains("╭"));
+    assert!(!rendered.contains("╰"));
     assert!(rendered.contains("• I have inspected"));
     assert!(!rendered.contains("Agent:"));
 }
 
 #[test]
-fn active_turn_cell_renders_live_response_as_card() {
+fn active_turn_cell_renders_live_response_as_lightweight_message() {
     let temp = tempdir().unwrap();
     let mut app = TuiApp::new(ConfigManager {
         path: temp.path().join("config.json"),
@@ -721,9 +758,9 @@ fn active_turn_cell_renders_live_response_as_card() {
         .collect::<Vec<_>>()
         .join("\n");
 
-    assert!(rendered.contains(" Responding ") || rendered.contains("Responding"));
-    assert!(rendered.contains("╭"));
-    assert!(rendered.contains("╰"));
+    assert!(!rendered.contains("Responding"));
+    assert!(!rendered.contains("╭"));
+    assert!(!rendered.contains("╰"));
     assert!(rendered.contains("• I have inspected the main module"));
 }
 
@@ -756,7 +793,7 @@ fn active_turn_cell_prefers_responding_over_tool_result_while_processing_respons
         .collect::<Vec<_>>()
         .join("\n");
 
-    assert!(rendered.contains(" Responding ") || rendered.contains("Responding"));
+    assert!(rendered.contains("• waiting for model output"));
     assert!(!rendered.contains("Tool Result"));
     assert!(!rendered.contains("bash stdout: partial output"));
 }
@@ -790,7 +827,7 @@ fn active_turn_cell_prefers_responding_over_system_notice_while_sending_prompt()
         .collect::<Vec<_>>()
         .join("\n");
 
-    assert!(rendered.contains(" Responding ") || rendered.contains("Responding"));
+    assert!(rendered.contains("• sending prompt to provider"));
     assert!(!rendered.contains("temporary setup notice"));
 }
 

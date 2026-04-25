@@ -246,7 +246,7 @@ fn render_composer(f: &mut Frame, app: &TuiApp, area: Rect) -> Option<(u16, u16)
                             .add_modifier(Modifier::BOLD),
                     ));
                 }
-                spans.push(Span::raw(remainder.to_string()));
+                spans.push(Span::raw(expand_composer_display_text(remainder)));
                 Line::from(spans)
             })
             .collect::<Vec<_>>()
@@ -490,7 +490,7 @@ fn wrapped_text_cursor_position(
     let cursor_y = area
         .y
         .saturating_add(row_index.min(area.height.saturating_sub(1) as usize) as u16);
-    let display_width = UnicodeWidthStr::width(last_row.as_str()) as u16;
+    let display_width = display_text_width(last_row.as_str()) as u16;
     let max_x_offset = area.width.saturating_sub(1);
     let cursor_x = area.x.saturating_add(display_width.min(max_x_offset));
 
@@ -504,6 +504,21 @@ fn wrapped_text_row_count(
     subsequent_indent: Option<&str>,
 ) -> u16 {
     wrapped_text_rows(input, width, initial_indent, subsequent_indent).len() as u16
+}
+
+fn expand_composer_display_text(text: &str) -> String {
+    let mut expanded = String::new();
+    for ch in text.chars() {
+        match ch {
+            '\t' => expanded.push_str(&" ".repeat(COMPOSER_TAB_WIDTH)),
+            _ => expanded.push(ch),
+        }
+    }
+    expanded
+}
+
+fn display_text_width(text: &str) -> usize {
+    text.chars().map(display_char_width).sum()
 }
 
 fn wrapped_text_rows(
@@ -781,5 +796,31 @@ mod tests {
         let rows = wrapped_text_rows("\t12345", 8, Some("› "), Some("  "));
 
         assert_eq!(rows, vec!["› \t12", "  345"]);
+    }
+
+    #[test]
+    fn wrapped_text_cursor_treats_tabs_as_fixed_width_columns() {
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 8,
+            height: 4,
+        };
+
+        let cursor = wrapped_text_cursor_position("\t12345", area, Some("› "), Some("  "));
+        assert_eq!(cursor, (5, 1));
+    }
+
+    #[test]
+    fn wrapped_text_cursor_tracks_space_only_composer_input() {
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 12,
+            height: 4,
+        };
+
+        let cursor = wrapped_text_cursor_position("   ", area, Some("› "), Some("  "));
+        assert_eq!(cursor, (5, 0));
     }
 }
