@@ -68,6 +68,7 @@ Priority order for this phase:
 - [ ] Expand focused tests around workspace prompt-source discovery and cache invalidation across cwd changes, git branch changes, nested workspaces, and outside-workspace fallback.
 - [ ] Define and document `WorkspaceMemory` cache invalidation rules for prompt files and environment info instead of relying on implicit behavior.
 - [ ] Unify `discover_prompt_sources()` and TUI `/status` source reporting so displayed prompt sources match the actual injected sources.
+- [ ] Design a project-scoped extension surface that can ingest Claude/Codex-style repo customizations from `.claude/agents/`, `.claude/hooks/`, and `.agents/skills/`, with explicit precedence and compatibility rules before adding runtime execution.
 - [ ] Define and surface skill precedence/override behavior across home, repo, nested repo roots, and workspace-local skill roots.
 - [ ] Extend `SkillManager::list_summaries()` (or equivalent status output) with source precedence and overridden-skill visibility so conflicts are debuggable.
 
