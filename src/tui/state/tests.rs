@@ -349,6 +349,32 @@ fn opening_openai_compatible_model_picker_keeps_active_profile_kind() {
 }
 
 #[test]
+fn openai_compatible_model_picker_includes_explicit_profile_actions() {
+    let dir = tempdir().expect("tempdir");
+    let cm = ConfigManager {
+        path: dir.path().join("config.json"),
+    };
+    let mut app = TuiApp::new(cm).expect("app");
+
+    app.provider_picker_idx = 1;
+    app.open_overlay(Overlay::ModelPicker);
+
+    assert_eq!(app.current_model_picker_len(), 8);
+
+    app.model_picker_idx = 4;
+    assert_eq!(
+        app.selected_openai_model_picker_action(),
+        Some(crate::tui::state::OpenAiModelPickerAction::Profiles)
+    );
+
+    app.model_picker_idx = 5;
+    assert_eq!(
+        app.selected_openai_model_picker_action(),
+        Some(crate::tui::state::OpenAiModelPickerAction::ApiKey)
+    );
+}
+
+#[test]
 fn opening_openai_profile_picker_prefers_active_profile_of_selected_kind() {
     let dir = tempdir().expect("tempdir");
     let cm = ConfigManager {
@@ -417,6 +443,20 @@ fn model_name_editor_seeds_from_selected_provider_state() {
     app.open_overlay(Overlay::ModelNameEditor);
 
     assert_eq!(app.model_name_input, "custom-model");
+}
+
+#[test]
+fn closing_auth_mode_picker_without_codex_catalog_returns_to_provider_picker() {
+    let dir = tempdir().expect("tempdir");
+    let cm = ConfigManager {
+        path: dir.path().join("config.json"),
+    };
+    let mut app = TuiApp::new(cm).expect("app");
+
+    app.open_overlay(Overlay::AuthModePicker);
+    app.close_overlay();
+
+    assert!(matches!(app.overlay, Some(Overlay::ProviderPicker)));
 }
 
 #[test]

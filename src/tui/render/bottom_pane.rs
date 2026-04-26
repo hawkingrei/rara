@@ -12,6 +12,7 @@ use super::super::queued_input::{
     pending_follow_up_heading, pending_follow_up_hint, queued_follow_up_heading,
     queued_follow_up_hint,
 };
+use super::super::state::char_offset_to_byte_index;
 use super::super::state::{ActivePendingInteractionKind, TaskKind, TuiApp};
 use super::badge;
 
@@ -260,7 +261,11 @@ fn render_composer(f: &mut Frame, app: &TuiApp, area: Rect) -> Option<(u16, u16)
     );
     let hint = composer_hint_line(app);
     f.render_widget(Paragraph::new(hint).alignment(Alignment::Left), chunks[1]);
-    Some(composer_cursor_position(app.input.as_str(), chunks[0]))
+    Some(composer_cursor_position(
+        app.input.as_str(),
+        app.composer_cursor_offset(),
+        chunks[0],
+    ))
 }
 
 fn queued_follow_up_preview_lines(app: &TuiApp) -> Vec<Line<'static>> {
@@ -420,8 +425,8 @@ fn shows_live_task_stats(app: &TuiApp) -> bool {
         )
 }
 
-fn composer_cursor_position(input: &str, area: Rect) -> (u16, u16) {
-    wrapped_text_cursor_position(input, area, Some("› "), Some("  "))
+fn composer_cursor_position(input: &str, cursor_offset: usize, area: Rect) -> (u16, u16) {
+    wrapped_text_cursor_position(input, cursor_offset, area, Some("› "), Some("  "))
 }
 
 fn desired_composer_height(app: &TuiApp, width: u16, rows: u16) -> u16 {
@@ -450,8 +455,8 @@ fn composer_content_line_count(app: &TuiApp, width: u16) -> u16 {
     wrapped_text_row_count(&content, width, Some("› "), None)
 }
 
-pub(super) fn editor_cursor_position(input: &str, area: Rect) -> (u16, u16) {
-    wrapped_text_cursor_position(input, inner_rect(area), None, None)
+pub(super) fn editor_cursor_position(input: &str, cursor_offset: usize, area: Rect) -> (u16, u16) {
+    wrapped_text_cursor_position(input, cursor_offset, inner_rect(area), None, None)
 }
 
 fn inner_rect(area: Rect) -> Rect {
@@ -465,6 +470,7 @@ fn inner_rect(area: Rect) -> Rect {
 
 fn wrapped_text_cursor_position(
     input: &str,
+    cursor_offset: usize,
     area: Rect,
     initial_indent: Option<&str>,
     subsequent_indent: Option<&str>,
@@ -475,8 +481,10 @@ fn wrapped_text_cursor_position(
 
     let initial_indent = initial_indent.unwrap_or("");
     let subsequent_indent = subsequent_indent.unwrap_or("");
+    let cursor_prefix_end = char_offset_to_byte_index(input, cursor_offset);
+    let cursor_prefix = &input[..cursor_prefix_end];
     let wrapped_rows = wrapped_text_rows(
-        input,
+        cursor_prefix,
         area.width,
         Some(initial_indent),
         Some(subsequent_indent),
@@ -787,7 +795,13 @@ mod tests {
             height: 6,
         };
 
-        let cursor = wrapped_text_cursor_position("line one\n", area, Some("› "), Some("  "));
+        let cursor = wrapped_text_cursor_position(
+            "line one\n",
+            "line one\n".chars().count(),
+            area,
+            Some("› "),
+            Some("  "),
+        );
         assert_eq!(cursor, (6, 3));
     }
 
@@ -807,7 +821,13 @@ mod tests {
             height: 4,
         };
 
-        let cursor = wrapped_text_cursor_position("\t12345", area, Some("› "), Some("  "));
+        let cursor = wrapped_text_cursor_position(
+            "\t12345",
+            "\t12345".chars().count(),
+            area,
+            Some("› "),
+            Some("  "),
+        );
         assert_eq!(cursor, (5, 1));
     }
 
@@ -820,7 +840,26 @@ mod tests {
             height: 4,
         };
 
-        let cursor = wrapped_text_cursor_position("   ", area, Some("› "), Some("  "));
+        let cursor = wrapped_text_cursor_position(
+            "   ",
+            "   ".chars().count(),
+            area,
+            Some("› "),
+            Some("  "),
+        );
         assert_eq!(cursor, (5, 0));
+    }
+
+    #[test]
+    fn wrapped_text_cursor_can_point_into_the_middle_of_input() {
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 12,
+            height: 4,
+        };
+
+        let cursor = wrapped_text_cursor_position("hello world", 5, area, Some("› "), Some("  "));
+        assert_eq!(cursor, (7, 0));
     }
 }

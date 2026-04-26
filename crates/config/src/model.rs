@@ -586,9 +586,8 @@ impl RaraConfig {
                         label: target_label,
                         kind: target_kind,
                         api_key: self.api_key.clone(),
-                        base_url: normalize_optional_string(self.base_url.clone()).or_else(|| {
-                            Some(target_kind.default_base_url().to_string())
-                        }),
+                        base_url: normalize_optional_string(self.base_url.clone())
+                            .or_else(|| Some(target_kind.default_base_url().to_string())),
                         model: normalize_optional_string(self.model.clone())
                             .or_else(|| Some(target_kind.default_model().to_string())),
                         reasoning_effort: normalize_optional_string(self.reasoning_effort.clone()),

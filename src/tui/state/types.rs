@@ -55,6 +55,14 @@ pub enum ProviderFamily {
     Ollama,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum OpenAiModelPickerAction {
+    Profiles,
+    ApiKey,
+    BaseUrl,
+    ModelName,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum LocalCommandKind {
     Help,
@@ -334,6 +342,7 @@ pub struct ActiveLiveSections {
 
 pub struct TuiApp {
     pub input: String,
+    pub input_cursor_offset: Option<usize>,
     pub committed_turns: Vec<TranscriptTurn>,
     pub active_turn: TranscriptTurn,
     pub startup_card_inserted: bool,
@@ -355,9 +364,13 @@ pub struct TuiApp {
     pub auth_mode_idx: usize,
     pub command_palette_idx: usize,
     pub base_url_input: String,
+    pub base_url_cursor_offset: Option<usize>,
     pub api_key_input: String,
+    pub api_key_cursor_offset: Option<usize>,
     pub model_name_input: String,
+    pub model_name_cursor_offset: Option<usize>,
     pub openai_profile_label_input: String,
+    pub openai_profile_label_cursor_offset: Option<usize>,
     pub codex_model_options: Vec<CodexModelOption>,
     pub recent_commands: Vec<String>,
     pub recent_threads: Vec<ThreadSummary>,
@@ -365,6 +378,7 @@ pub struct TuiApp {
     pub committed_render_generation: u64,
     pub committed_render_cache: RefCell<CommittedTranscriptRenderCache>,
     pub transcript_scroll: usize,
+    pub terminal_width: u16,
     pub agent_markdown_stream: Option<AgentMarkdownStreamState>,
     pub active_live: ActiveLiveSections,
     pub pending_planning_suggestion: Option<String>,

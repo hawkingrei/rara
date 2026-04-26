@@ -49,7 +49,9 @@ use self::runtime::{
 use self::session_restore::{
     provider_requires_api_key, restore_latest_thread, restore_thread_by_id,
 };
-use self::state::{LocalCommandKind, Overlay, TaskKind, TuiApp, PROVIDER_FAMILIES};
+use self::state::{
+    LocalCommandKind, OpenAiModelPickerAction, Overlay, TaskKind, TuiApp, PROVIDER_FAMILIES,
+};
 use self::terminal_ui::{
     build_terminal, flush_committed_history, handle_paste, is_ssh_session, teardown_terminal,
     update_terminal_viewport,
@@ -73,6 +75,7 @@ pub async fn run_tui(
     enable_raw_mode()?;
     let initial_size = terminal_size()?;
     let mut app = TuiApp::new(crate::config::ConfigManager::new()?)?;
+    app.terminal_width = initial_size.0;
     let mut viewport_height = desired_viewport_height(&app, initial_size.0, initial_size.1);
     let mut terminal = build_terminal(viewport_height)?;
     let mut agent_slot = Some(agent);
@@ -112,6 +115,7 @@ pub async fn run_tui(
         finish_running_task_if_ready(&mut app, &mut agent_slot).await?;
         clamp_command_palette_selection(&mut app);
         let size = terminal_size()?;
+        app.terminal_width = size.0;
         let desired_height = desired_viewport_height(&app, size.0, size.1);
         if desired_height != viewport_height {
             match update_terminal_viewport(&mut terminal, desired_height) {
@@ -192,36 +196,34 @@ async fn dispatch_event(
             }
         }
         AppEvent::InsertNewline => {
-            app.input.push('\n');
-            app.sync_command_palette_with_input();
+            app.insert_newline_in_composer();
         }
         AppEvent::InputChar(c) => {
-            if matches!(app.overlay, Some(Overlay::BaseUrlEditor)) {
-                app.base_url_input.push(c);
-            } else if matches!(app.overlay, Some(Overlay::ApiKeyEditor)) {
-                app.api_key_input.push(c);
-            } else if matches!(app.overlay, Some(Overlay::ModelNameEditor)) {
-                app.model_name_input.push(c);
-            } else if matches!(app.overlay, Some(Overlay::OpenAiProfileLabelEditor)) {
-                app.openai_profile_label_input.push(c);
-            } else {
-                app.input.push(c);
-                app.sync_command_palette_with_input();
-            }
+            app.insert_active_input_char(c);
         }
         AppEvent::Backspace => {
-            if matches!(app.overlay, Some(Overlay::BaseUrlEditor)) {
-                app.base_url_input.pop();
-            } else if matches!(app.overlay, Some(Overlay::ApiKeyEditor)) {
-                app.api_key_input.pop();
-            } else if matches!(app.overlay, Some(Overlay::ModelNameEditor)) {
-                app.model_name_input.pop();
-            } else if matches!(app.overlay, Some(Overlay::OpenAiProfileLabelEditor)) {
-                app.openai_profile_label_input.pop();
-            } else {
-                app.input.pop();
-                app.sync_command_palette_with_input();
-            }
+            app.backspace_active_input();
+        }
+        AppEvent::DeleteForward => {
+            app.delete_forward_active_input();
+        }
+        AppEvent::MoveCursorLeft => {
+            app.move_active_input_cursor_left();
+        }
+        AppEvent::MoveCursorRight => {
+            app.move_active_input_cursor_right();
+        }
+        AppEvent::MoveCursorHome => {
+            app.move_active_input_cursor_home();
+        }
+        AppEvent::MoveCursorEnd => {
+            app.move_active_input_cursor_end();
+        }
+        AppEvent::MoveCursorUp => {
+            app.move_composer_cursor_up();
+        }
+        AppEvent::MoveCursorDown => {
+            app.move_composer_cursor_down();
         }
         AppEvent::ScrollTranscript(delta) => app.scroll_transcript(delta),
         AppEvent::MoveCommandSelection(delta) => {
@@ -297,7 +299,26 @@ async fn dispatch_event(
                 && app.selected_provider_family() != self::state::ProviderFamily::Codex
                 && !app.is_busy()
             {
-                if should_open_codex_auth_guide(app, oauth_manager.as_ref()) {
+                if app.selected_provider_family() == self::state::ProviderFamily::OpenAiCompatible {
+                    match app.selected_openai_model_picker_action() {
+                        Some(OpenAiModelPickerAction::Profiles) => {
+                            app.open_overlay(Overlay::OpenAiProfilePicker);
+                        }
+                        Some(OpenAiModelPickerAction::ApiKey) => {
+                            app.open_overlay(Overlay::ApiKeyEditor);
+                        }
+                        Some(OpenAiModelPickerAction::BaseUrl) => {
+                            app.open_overlay(Overlay::BaseUrlEditor);
+                        }
+                        Some(OpenAiModelPickerAction::ModelName) => {
+                            app.open_overlay(Overlay::ModelNameEditor);
+                        }
+                        None => {
+                            app.select_local_model(app.model_picker_idx);
+                            start_rebuild_task(app);
+                        }
+                    }
+                } else if should_open_codex_auth_guide(app, oauth_manager.as_ref()) {
                     app.select_local_model(app.model_picker_idx);
                     app.open_overlay(Overlay::AuthModePicker);
                 } else {
@@ -393,7 +414,7 @@ async fn dispatch_event(
                                 agent.consume_pending_user_input(&label);
                                 app.sync_snapshot(agent);
                             }
-                            app.input = label;
+                            app.set_input(label);
                             if handle_submit(app, agent_slot, oauth_manager).await? {
                                 return Ok(true);
                             }
@@ -496,7 +517,7 @@ async fn dispatch_event(
             Some(Overlay::CommandPalette) => {
                 let query = app.input.trim_start().trim_start_matches('/');
                 if let Some(spec) = palette_command_by_index(app, query, app.command_palette_idx) {
-                    app.input = spec.usage.to_string();
+                    app.set_input(spec.usage.to_string());
                     app.close_overlay();
                     if handle_submit(app, agent_slot, oauth_manager).await? {
                         return Ok(true);
@@ -573,6 +594,27 @@ async fn dispatch_event(
                             start_rebuild_task(app);
                         } else {
                             app.open_overlay(Overlay::ReasoningEffortPicker);
+                        }
+                    } else if app.selected_provider_family()
+                        == self::state::ProviderFamily::OpenAiCompatible
+                    {
+                        match app.selected_openai_model_picker_action() {
+                            Some(OpenAiModelPickerAction::Profiles) => {
+                                app.open_overlay(Overlay::OpenAiProfilePicker);
+                            }
+                            Some(OpenAiModelPickerAction::ApiKey) => {
+                                app.open_overlay(Overlay::ApiKeyEditor);
+                            }
+                            Some(OpenAiModelPickerAction::BaseUrl) => {
+                                app.open_overlay(Overlay::BaseUrlEditor);
+                            }
+                            Some(OpenAiModelPickerAction::ModelName) => {
+                                app.open_overlay(Overlay::ModelNameEditor);
+                            }
+                            None => {
+                                app.select_local_model(app.model_picker_idx);
+                                start_rebuild_task(app);
+                            }
                         }
                     } else {
                         app.select_local_model(app.model_picker_idx);
@@ -651,7 +693,7 @@ async fn handle_submit(
     if matches!(app.overlay, Some(Overlay::CommandPalette)) {
         let query = app.input.trim_start().trim_start_matches('/');
         if let Some(spec) = palette_command_by_index(app, query, app.command_palette_idx) {
-            app.input = spec.usage.to_string();
+            app.set_input(spec.usage.to_string());
         }
         app.close_overlay();
     }
@@ -661,6 +703,7 @@ async fn handle_submit(
     }
     if app.is_busy() {
         let input = std::mem::take(&mut app.input);
+        app.input_cursor_offset = None;
         let trimmed = input.trim();
         if trimmed.is_empty() {
             return Ok(false);
@@ -702,6 +745,7 @@ async fn handle_submit(
     }
 
     let input = std::mem::take(&mut app.input);
+    app.input_cursor_offset = None;
     if app.has_pending_plan_approval() && !input.trim_start().starts_with('/') {
         if handle_pending_plan_approval_submit(app, agent_slot, input.trim()).await? {
             return Ok(false);

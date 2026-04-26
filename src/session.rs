@@ -20,6 +20,28 @@ pub struct PersistedCompactionEvent {
 #[derive(Debug, Clone, Default)]
 pub struct PersistedThreadHistoryMigration {
     pub history: Vec<Message>,
+    pub source: PersistedThreadHistorySource,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum PersistedThreadHistorySource {
+    #[default]
+    Canonical,
+    LegacyBackfilled,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct PersistedCompactionEventsMigration {
+    pub events: Vec<PersistedCompactionEvent>,
+    pub source: PersistedCompactionEventsSource,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum PersistedCompactionEventsSource {
+    StructuredLog,
+    LegacyBackfilled,
+    #[default]
+    Empty,
 }
 
 pub struct SessionManager {
@@ -72,9 +94,12 @@ impl SessionManager {
         thread_id: &str,
     ) -> Result<PersistedThreadHistoryMigration> {
         let path = self.session_history_path(thread_id);
-        let history = if path.exists() {
+        let (history, source) = if path.exists() {
             let content = fs::read_to_string(path)?;
-            serde_json::from_str(&content)?
+            (
+                serde_json::from_str(&content)?,
+                PersistedThreadHistorySource::Canonical,
+            )
         } else {
             let legacy = self.legacy_session_history_path(thread_id);
             if !legacy.exists() {
@@ -83,9 +108,9 @@ impl SessionManager {
             let content = fs::read_to_string(&legacy)?;
             let history: Vec<Message> = serde_json::from_str(&content)?;
             self.backfill_legacy_thread_history(thread_id, &history)?;
-            history
+            (history, PersistedThreadHistorySource::LegacyBackfilled)
         };
-        Ok(PersistedThreadHistoryMigration { history })
+        Ok(PersistedThreadHistoryMigration { history, source })
     }
 
     pub fn load_session(&self, session_id: &str) -> Result<Vec<Message>> {
@@ -116,8 +141,15 @@ impl SessionManager {
         &self,
         session_id: &str,
     ) -> Result<Vec<PersistedCompactionEvent>> {
+        Ok(self.load_compaction_events_migration(session_id)?.events)
+    }
+
+    pub fn load_compaction_events_migration(
+        &self,
+        session_id: &str,
+    ) -> Result<PersistedCompactionEventsMigration> {
         let events = self.load_structured_rollout_events(session_id)?;
-        let compactions = events
+        let structured_compactions = events
             .into_iter()
             .filter_map(|event| match event {
                 PersistedStructuredRolloutEvent::Compaction {
@@ -141,17 +173,26 @@ impl SessionManager {
                 | PersistedStructuredRolloutEvent::Interaction { .. } => None,
             })
             .collect::<Vec<_>>();
-        if !compactions.is_empty() {
-            return Ok(compactions);
+        if !structured_compactions.is_empty() {
+            return Ok(PersistedCompactionEventsMigration {
+                events: structured_compactions,
+                source: PersistedCompactionEventsSource::StructuredLog,
+            });
         }
         let path = self.session_compaction_events_path(session_id);
         if !path.exists() {
-            return Ok(Vec::new());
+            return Ok(PersistedCompactionEventsMigration {
+                events: Vec::new(),
+                source: PersistedCompactionEventsSource::Empty,
+            });
         }
         let content = fs::read_to_string(path)?;
         let compactions: Vec<PersistedCompactionEvent> = serde_json::from_str(&content)?;
         self.backfill_legacy_compaction_events(session_id, &compactions)?;
-        Ok(compactions)
+        Ok(PersistedCompactionEventsMigration {
+            events: compactions,
+            source: PersistedCompactionEventsSource::LegacyBackfilled,
+        })
     }
 
     pub fn get_context(

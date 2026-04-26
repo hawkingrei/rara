@@ -182,7 +182,7 @@ pub(super) fn render_model_picker_modal(f: &mut Frame, app: &TuiApp, area: Rect)
             .collect::<Vec<_>>()
     } else {
         let presets = current_model_presets(app.provider_picker_idx);
-        presets
+        let mut items = presets
             .iter()
             .enumerate()
             .map(|(idx, (label, provider, model))| {
@@ -224,16 +224,38 @@ pub(super) fn render_model_picker_modal(f: &mut Frame, app: &TuiApp, area: Rect)
                 ))
                 .style(style)
             })
-            .collect::<Vec<_>>()
+            .collect::<Vec<_>>();
+        if provider_label == "OpenAI-compatible" {
+            let actions = [
+                ("Profiles", "Switch or create endpoint profiles"),
+                ("API key", "Edit the API key for the active profile"),
+                ("Base URL", "Edit the base URL for the active profile"),
+                ("Model name", "Edit the model id for the active profile"),
+            ];
+            let offset = presets.len();
+            items.extend(
+                actions
+                    .into_iter()
+                    .enumerate()
+                    .map(|(idx, (label, detail))| {
+                        let absolute_idx = offset + idx;
+                        let style = if absolute_idx == app.model_picker_idx {
+                            Style::default()
+                                .fg(Color::Cyan)
+                                .add_modifier(Modifier::BOLD)
+                        } else {
+                            Style::default()
+                        };
+                        ListItem::new(vec![
+                            Line::from(format!("[{}] {label}", absolute_idx + 1)),
+                            Line::from(format!("  {detail}")),
+                        ])
+                        .style(style)
+                    }),
+            );
+        }
+        items
     };
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(3),
-            Constraint::Min(6),
-            Constraint::Length(2),
-        ])
-        .split(area);
     let help = if provider_label == "Codex" && api_key_status(&app.config) == "missing" {
         "Provider: Codex\nAuthentication is required before this preset can be used.\nEnter opens the Codex login guide."
     } else if provider_label == "Codex" {
@@ -247,7 +269,7 @@ pub(super) fn render_model_picker_modal(f: &mut Frame, app: &TuiApp, area: Rect)
         )
     } else if provider_label == "OpenAI-compatible" {
         &format!(
-            "Provider: {provider_label}\nEndpoint kind: {}\nEndpoint profile: {}\nBase URL: {}\nModel name: {}\nAPI key: {}\nUse P to switch profiles. B/A/N edit the current profile, then Enter to apply and rebuild.",
+            "Provider: {provider_label}\nEndpoint kind: {}\nEndpoint profile: {}\nBase URL: {}\nModel name: {}\nAPI key: {}\nChoose a preset to rebuild, or choose one of the action rows below to edit the active profile.",
             app.selected_openai_profile_kind()
                 .unwrap_or(crate::config::OpenAiEndpointKind::Custom)
                 .label(),
@@ -265,6 +287,15 @@ pub(super) fn render_model_picker_modal(f: &mut Frame, app: &TuiApp, area: Rect)
             app.config.base_url.as_deref().unwrap_or("http://localhost:11434"),
         )
     };
+    let help_height = help.lines().count().max(1) as u16 + 2;
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(help_height),
+            Constraint::Min(6),
+            Constraint::Length(2),
+        ])
+        .split(area);
     f.render_widget(
         Paragraph::new(help).block(
             Block::default()
@@ -281,7 +312,7 @@ pub(super) fn render_model_picker_modal(f: &mut Frame, app: &TuiApp, area: Rect)
         Paragraph::new(if provider_label == "Codex" {
             "1-9 jump  Up/Down move  Enter choose level  Esc close"
         } else if provider_label == "OpenAI-compatible" {
-            "1-9 jump  Up/Down move  P profiles  B base URL  A API key  N model name  Enter apply  Esc close"
+            "1-9 jump  Up/Down move  Enter choose  Esc close"
         } else {
             "1-9 apply directly  Up/Down move  B edit base URL  Enter apply  Esc close"
         })
@@ -440,6 +471,7 @@ pub(super) fn render_base_url_editor_modal(
     f.render_widget(footer, chunks[2]);
     Some(editor_cursor_position(
         app.base_url_input.as_str(),
+        app.base_url_cursor_offset(),
         chunks[1],
     ))
 }
@@ -521,6 +553,7 @@ pub(super) fn render_api_key_editor_modal(
     f.render_widget(footer, chunks[2]);
     Some(editor_cursor_position(
         app.api_key_input.as_str(),
+        app.api_key_cursor_offset(),
         chunks[1],
     ))
 }
@@ -552,6 +585,7 @@ pub(super) fn render_model_name_editor_modal(
     f.render_widget(footer, chunks[2]);
     Some(editor_cursor_position(
         app.model_name_input.as_str(),
+        app.model_name_cursor_offset(),
         chunks[1],
     ))
 }
@@ -589,6 +623,7 @@ pub(super) fn render_openai_profile_label_editor_modal(
     f.render_widget(footer, chunks[2]);
     Some(editor_cursor_position(
         app.openai_profile_label_input.as_str(),
+        app.openai_profile_label_cursor_offset(),
         chunks[1],
     ))
 }

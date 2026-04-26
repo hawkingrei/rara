@@ -92,6 +92,15 @@ pub enum PersistedStructuredRolloutEvent {
 pub struct PersistedLegacyRolloutMigration {
     pub structured_events: Vec<PersistedStructuredRolloutEvent>,
     pub runtime_rollout: Vec<PersistedRuntimeRolloutItem>,
+    pub source: PersistedLegacyRolloutSource,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum PersistedLegacyRolloutSource {
+    StructuredLog,
+    LegacyBackfilled,
+    #[default]
+    Empty,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -547,9 +556,19 @@ impl StateDb {
         &self,
         session_id: &str,
     ) -> Result<PersistedLegacyRolloutMigration> {
+        let structured_events = self.load_rollout_events(session_id)?;
+        let runtime_rollout = self.load_legacy_runtime_rollout(session_id)?;
+        let source = if !structured_events.is_empty() {
+            PersistedLegacyRolloutSource::StructuredLog
+        } else if !runtime_rollout.is_empty() {
+            PersistedLegacyRolloutSource::LegacyBackfilled
+        } else {
+            PersistedLegacyRolloutSource::Empty
+        };
         let migration = PersistedLegacyRolloutMigration {
-            structured_events: self.load_rollout_events(session_id)?,
-            runtime_rollout: self.load_legacy_runtime_rollout(session_id)?,
+            structured_events,
+            runtime_rollout,
+            source,
         };
         self.backfill_rollout_log_from_legacy(session_id, &migration)?;
         Ok(migration)

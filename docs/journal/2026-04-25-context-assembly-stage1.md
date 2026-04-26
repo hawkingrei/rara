@@ -86,6 +86,11 @@ of the model-send path.
   - a bounded selection budget for the current turn.
 - The retrieval side now uses an explicit candidate pool:
   - fixed inputs stay selected because they are already injected elsewhere;
+  - the fixed side now explicitly includes the active thread working set:
+    - plan explanation / plan steps;
+    - pending interactions;
+    - latest user request;
+    - recent tool results;
   - discretionary retrieval candidates compete for the remaining
     memory-selection budget;
   - dropped candidates carry concrete reasons such as:

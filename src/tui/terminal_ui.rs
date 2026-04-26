@@ -14,31 +14,7 @@ use super::render::{committed_turn_lines, startup_card_lines};
 use super::state::TuiApp;
 
 pub(super) fn handle_paste(text: String, app: &mut TuiApp) {
-    if matches!(app.overlay, Some(super::state::Overlay::BaseUrlEditor)) {
-        app.base_url_input.push_str(&text);
-        return;
-    }
-
-    if matches!(app.overlay, Some(super::state::Overlay::ApiKeyEditor)) {
-        app.api_key_input.push_str(&text);
-        return;
-    }
-
-    if matches!(app.overlay, Some(super::state::Overlay::ModelNameEditor)) {
-        app.model_name_input.push_str(&text);
-        return;
-    }
-
-    if matches!(
-        app.overlay,
-        Some(super::state::Overlay::OpenAiProfileLabelEditor)
-    ) {
-        app.openai_profile_label_input.push_str(&text);
-        return;
-    }
-
-    app.input.push_str(&text);
-    app.sync_command_palette_with_input();
+    app.insert_active_input_text(text.as_str());
 }
 
 pub(super) fn build_terminal(

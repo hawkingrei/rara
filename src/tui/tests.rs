@@ -195,6 +195,159 @@ fn shift_enter_inserts_newline_in_main_composer() {
 }
 
 #[test]
+fn arrow_keys_and_home_end_map_to_composer_cursor_events() {
+    let temp = tempdir().expect("tempdir");
+    let mut app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("app");
+    app.input = "hello".into();
+
+    assert!(matches!(
+        map_key_to_event(key(KeyCode::Left), &app),
+        AppEvent::MoveCursorLeft
+    ));
+    assert!(matches!(
+        map_key_to_event(key(KeyCode::Right), &app),
+        AppEvent::MoveCursorRight
+    ));
+    assert!(matches!(
+        map_key_to_event(key(KeyCode::Home), &app),
+        AppEvent::MoveCursorHome
+    ));
+    assert!(matches!(
+        map_key_to_event(key(KeyCode::End), &app),
+        AppEvent::MoveCursorEnd
+    ));
+    assert!(matches!(
+        map_key_to_event(key(KeyCode::Up), &app),
+        AppEvent::MoveCursorUp
+    ));
+    assert!(matches!(
+        map_key_to_event(key(KeyCode::Down), &app),
+        AppEvent::MoveCursorDown
+    ));
+}
+
+#[test]
+fn empty_composer_keeps_up_down_for_transcript_scroll() {
+    let temp = tempdir().expect("tempdir");
+    let app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("app");
+
+    assert!(matches!(
+        map_key_to_event(key(KeyCode::Up), &app),
+        AppEvent::ScrollTranscript(-1)
+    ));
+    assert!(matches!(
+        map_key_to_event(key(KeyCode::Down), &app),
+        AppEvent::ScrollTranscript(1)
+    ));
+}
+
+#[tokio::test]
+async fn composer_supports_mid_input_insertion_and_backspace() {
+    let temp = tempdir().expect("tempdir");
+    let mut app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("app");
+    app.set_input("helo".to_string());
+
+    let oauth_manager = Arc::new(
+        crate::oauth::OAuthManager::new_for_config_dir(temp.path().join(".rara"))
+            .expect("oauth manager"),
+    );
+    let mut agent_slot = None;
+
+    dispatch_event(
+        AppEvent::MoveCursorLeft,
+        &mut app,
+        &mut agent_slot,
+        &oauth_manager,
+    )
+    .await
+    .expect("move left");
+    dispatch_event(
+        AppEvent::InputChar('l'),
+        &mut app,
+        &mut agent_slot,
+        &oauth_manager,
+    )
+    .await
+    .expect("insert");
+    assert_eq!(app.input, "hello");
+    assert_eq!(app.composer_cursor_offset(), 4);
+
+    dispatch_event(
+        AppEvent::Backspace,
+        &mut app,
+        &mut agent_slot,
+        &oauth_manager,
+    )
+    .await
+    .expect("backspace");
+    assert_eq!(app.input, "helo");
+    assert_eq!(app.composer_cursor_offset(), 3);
+}
+
+#[tokio::test]
+async fn paste_inserts_at_current_cursor_offset() {
+    let temp = tempdir().expect("tempdir");
+    let mut app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("app");
+    app.set_input("helo".to_string());
+    app.move_active_input_cursor_left();
+
+    super::terminal_ui::handle_paste("l".to_string(), &mut app);
+
+    assert_eq!(app.input, "hello");
+    assert_eq!(app.composer_cursor_offset(), 4);
+}
+
+#[tokio::test]
+async fn composer_supports_vertical_cursor_navigation_across_lines() {
+    let temp = tempdir().expect("tempdir");
+    let mut app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("app");
+    app.terminal_width = 12;
+    app.set_input("abcd\nefgh".to_string());
+    app.input_cursor_offset = Some("abcd\nef".chars().count());
+
+    let oauth_manager = Arc::new(
+        crate::oauth::OAuthManager::new_for_config_dir(temp.path().join(".rara"))
+            .expect("oauth manager"),
+    );
+    let mut agent_slot = None;
+
+    dispatch_event(
+        AppEvent::MoveCursorUp,
+        &mut app,
+        &mut agent_slot,
+        &oauth_manager,
+    )
+    .await
+    .expect("move up");
+    assert_eq!(app.composer_cursor_offset(), 2);
+
+    dispatch_event(
+        AppEvent::MoveCursorDown,
+        &mut app,
+        &mut agent_slot,
+        &oauth_manager,
+    )
+    .await
+    .expect("move down");
+    assert_eq!(app.composer_cursor_offset(), "abcd\nef".chars().count());
+}
+
+#[test]
 fn app_starts_in_api_key_editor_for_hosted_provider_without_api_key() {
     let temp = tempdir().expect("tempdir");
     let cm = ConfigManager {
@@ -236,6 +389,63 @@ fn openai_compatible_model_picker_exposes_connection_edit_shortcuts() {
         map_key_to_event(key(KeyCode::Char('p')), &app),
         AppEvent::OpenOverlay(Overlay::OpenAiProfilePicker)
     ));
+}
+
+#[tokio::test]
+async fn openai_model_picker_action_row_opens_api_key_editor() {
+    let temp = tempdir().expect("tempdir");
+    let mut app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("app");
+    app.provider_picker_idx = 1;
+    app.open_overlay(Overlay::ModelPicker);
+    app.model_picker_idx = 5;
+
+    let oauth_manager = Arc::new(
+        crate::oauth::OAuthManager::new_for_config_dir(temp.path().join(".rara"))
+            .expect("oauth manager"),
+    );
+    let mut agent_slot = None;
+
+    dispatch_event(
+        AppEvent::ApplyOverlaySelection,
+        &mut app,
+        &mut agent_slot,
+        &oauth_manager,
+    )
+    .await
+    .expect("apply model selection");
+
+    assert!(matches!(app.overlay, Some(Overlay::ApiKeyEditor)));
+}
+
+#[tokio::test]
+async fn openai_model_picker_numeric_action_row_opens_profile_picker() {
+    let temp = tempdir().expect("tempdir");
+    let mut app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("app");
+    app.provider_picker_idx = 1;
+    app.open_overlay(Overlay::ModelPicker);
+
+    let oauth_manager = Arc::new(
+        crate::oauth::OAuthManager::new_for_config_dir(temp.path().join(".rara"))
+            .expect("oauth manager"),
+    );
+    let mut agent_slot = None;
+
+    dispatch_event(
+        AppEvent::SetModelSelection(4),
+        &mut app,
+        &mut agent_slot,
+        &oauth_manager,
+    )
+    .await
+    .expect("set model selection");
+
+    assert!(matches!(app.overlay, Some(Overlay::OpenAiProfilePicker)));
 }
 
 #[tokio::test]

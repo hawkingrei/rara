@@ -46,6 +46,7 @@ impl BrowserLoginSession {
 pub struct OAuthManager {
     pub config_dir: PathBuf,
     codex_home: PathBuf,
+    legacy_codex_home: PathBuf,
     saved_auth_available: Arc<Mutex<Option<bool>>>,
 }
 
@@ -57,11 +58,14 @@ impl OAuthManager {
 
     pub fn new_for_config_dir(config_dir: PathBuf) -> Result<Self> {
         std::fs::create_dir_all(&config_dir)?;
-        let codex_home = config_dir.join("codex-auth");
+        let codex_home = preferred_codex_home(&config_dir);
+        let legacy_codex_home = config_dir.join("codex-auth");
         std::fs::create_dir_all(&codex_home)?;
+        std::fs::create_dir_all(&legacy_codex_home)?;
         Ok(Self {
             config_dir,
             codex_home,
+            legacy_codex_home,
             saved_auth_available: Arc::new(Mutex::new(None)),
         })
     }
@@ -110,7 +114,10 @@ impl OAuthManager {
     }
 
     pub fn clear_saved_auth(&self) -> Result<bool> {
-        let removed = codex_logout(&self.codex_home, AuthCredentialsStoreMode::File)?;
+        let mut removed = codex_logout(&self.codex_home, AuthCredentialsStoreMode::File)?;
+        if self.legacy_codex_home != self.codex_home {
+            removed |= codex_logout(&self.legacy_codex_home, AuthCredentialsStoreMode::File)?;
+        }
         self.clear_saved_auth_cache();
         Ok(removed)
     }
@@ -119,22 +126,25 @@ impl OAuthManager {
         if let Some(cached) = self.saved_auth_cache() {
             return Ok(cached);
         }
-        let Some(auth) = load_auth_dot_json(&self.codex_home, AuthCredentialsStoreMode::File)?
-        else {
-            self.set_saved_auth_cache(false);
-            return Ok(false);
-        };
-        let has_api_key = auth
-            .openai_api_key
-            .as_deref()
-            .is_some_and(|value| !value.trim().is_empty());
-        let has_access_token = auth
-            .tokens
-            .as_ref()
-            .is_some_and(|tokens| !tokens.access_token.trim().is_empty());
-        let has_saved_auth = has_api_key || has_access_token;
-        self.set_saved_auth_cache(has_saved_auth);
-        Ok(has_saved_auth)
+        for home in self.auth_homes_in_read_order() {
+            let Some(auth) = load_auth_dot_json(home, AuthCredentialsStoreMode::File)? else {
+                continue;
+            };
+            let has_api_key = auth
+                .openai_api_key
+                .as_deref()
+                .is_some_and(|value| !value.trim().is_empty());
+            let has_access_token = auth
+                .tokens
+                .as_ref()
+                .is_some_and(|tokens| !tokens.access_token.trim().is_empty());
+            if has_api_key || has_access_token {
+                self.set_saved_auth_cache(true);
+                return Ok(true);
+            }
+        }
+        self.set_saved_auth_cache(false);
+        Ok(false)
     }
 
     pub fn read_api_key_from_stdin(&self) -> Result<SecretString> {
@@ -149,11 +159,15 @@ impl OAuthManager {
     }
 
     pub fn saved_auth_mode(&self) -> Result<Option<SavedCodexAuthMode>> {
-        let Some(auth) = load_auth_dot_json(&self.codex_home, AuthCredentialsStoreMode::File)?
-        else {
-            return Ok(None);
-        };
-        Ok(detect_saved_auth_mode(&auth))
+        for home in self.auth_homes_in_read_order() {
+            let Some(auth) = load_auth_dot_json(home, AuthCredentialsStoreMode::File)? else {
+                continue;
+            };
+            if let Some(mode) = detect_saved_auth_mode(&auth) {
+                return Ok(Some(mode));
+            }
+        }
+        Ok(None)
     }
 
     fn server_options(&self, open_browser: bool) -> ServerOptions {
@@ -169,26 +183,30 @@ impl OAuthManager {
     }
 
     pub fn load_saved_credential(&self) -> Result<SecretString> {
-        let auth = load_auth_dot_json(&self.codex_home, AuthCredentialsStoreMode::File)?
-            .ok_or_else(|| anyhow!("Codex login finished but no credential was saved"))?;
-        match detect_saved_auth_mode(&auth) {
-            Some(SavedCodexAuthMode::ApiKey) => {
-                if let Some(api_key) = auth.openai_api_key.filter(|value| !value.trim().is_empty())
-                {
-                    self.set_saved_auth_cache(true);
-                    return Ok(SecretString::from(api_key));
+        for home in self.auth_homes_in_read_order() {
+            let Some(auth) = load_auth_dot_json(home, AuthCredentialsStoreMode::File)? else {
+                continue;
+            };
+            match detect_saved_auth_mode(&auth) {
+                Some(SavedCodexAuthMode::ApiKey) => {
+                    if let Some(api_key) =
+                        auth.openai_api_key.filter(|value| !value.trim().is_empty())
+                    {
+                        self.set_saved_auth_cache(true);
+                        return Ok(SecretString::from(api_key));
+                    }
                 }
-            }
-            Some(SavedCodexAuthMode::Chatgpt) => {
-                if let Some(tokens) = auth
-                    .tokens
-                    .filter(|tokens| !tokens.access_token.trim().is_empty())
-                {
-                    self.set_saved_auth_cache(true);
-                    return Ok(SecretString::from(tokens.access_token));
+                Some(SavedCodexAuthMode::Chatgpt) => {
+                    if let Some(tokens) = auth
+                        .tokens
+                        .filter(|tokens| !tokens.access_token.trim().is_empty())
+                    {
+                        self.set_saved_auth_cache(true);
+                        return Ok(SecretString::from(tokens.access_token));
+                    }
                 }
+                None => {}
             }
-            None => {}
         }
         Err(anyhow!(
             "Codex login finished but auth storage did not contain an API key or access token"
@@ -201,6 +219,10 @@ impl OAuthManager {
 
     pub fn codex_home(&self) -> &Path {
         self.codex_home.as_path()
+    }
+
+    fn auth_homes_in_read_order(&self) -> [&Path; 2] {
+        [self.codex_home.as_path(), self.legacy_codex_home.as_path()]
     }
 
     fn saved_auth_cache(&self) -> Option<bool> {
@@ -221,6 +243,13 @@ impl OAuthManager {
             *guard = None;
         }
     }
+}
+
+fn preferred_codex_home(config_dir: &Path) -> PathBuf {
+    config_dir
+        .parent()
+        .map(|parent| parent.join(".codex"))
+        .unwrap_or_else(|| config_dir.join(".codex"))
 }
 
 fn detect_saved_auth_mode(auth: &AuthDotJson) -> Option<SavedCodexAuthMode> {
@@ -482,8 +511,70 @@ mod tests {
         assert!(manager.has_saved_auth().expect("refreshed auth"));
     }
 
+    #[test]
+    fn load_saved_credential_prefers_official_codex_home_over_legacy_fallback() {
+        let temp = tempdir().expect("tempdir");
+        let manager =
+            OAuthManager::new_for_config_dir(temp.path().join(".rara")).expect("oauth manager");
+
+        codex_login::save_auth(
+            legacy_auth_path(&manager),
+            &codex_login::AuthDotJson {
+                auth_mode: None,
+                openai_api_key: Some("sk-legacy".into()),
+                tokens: None,
+                last_refresh: None,
+                agent_identity: None,
+            },
+            AuthCredentialsStoreMode::File,
+        )
+        .expect("save legacy auth");
+        codex_login::save_auth(
+            auth_path(&manager),
+            &codex_login::AuthDotJson {
+                auth_mode: None,
+                openai_api_key: Some("sk-official".into()),
+                tokens: None,
+                last_refresh: None,
+                agent_identity: None,
+            },
+            AuthCredentialsStoreMode::File,
+        )
+        .expect("save official auth");
+
+        let saved = manager.load_saved_credential().expect("load preferred auth");
+        assert_eq!(saved.expose_secret(), "sk-official");
+    }
+
+    #[test]
+    fn load_saved_credential_falls_back_to_legacy_codex_home() {
+        let temp = tempdir().expect("tempdir");
+        let manager =
+            OAuthManager::new_for_config_dir(temp.path().join(".rara")).expect("oauth manager");
+
+        codex_login::save_auth(
+            legacy_auth_path(&manager),
+            &codex_login::AuthDotJson {
+                auth_mode: None,
+                openai_api_key: Some("sk-legacy".into()),
+                tokens: None,
+                last_refresh: None,
+                agent_identity: None,
+            },
+            AuthCredentialsStoreMode::File,
+        )
+        .expect("save legacy auth");
+
+        let saved = manager.load_saved_credential().expect("load legacy auth");
+        assert_eq!(saved.expose_secret(), "sk-legacy");
+    }
+
     fn auth_path(manager: &OAuthManager) -> &Path {
         manager.codex_home.as_path()
+    }
+
+    fn legacy_auth_path(manager: &OAuthManager) -> &Path {
+        manager.legacy_codex_home.as_path()
     }
 
     fn valid_id_token_info() -> codex_login::token_data::IdTokenInfo {
