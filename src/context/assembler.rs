@@ -906,6 +906,8 @@ fn select_memory_candidates(
     selection_budget_tokens: Option<usize>,
     fixed_selected_kinds: &[String],
 ) -> MemorySelectionDecision {
+    const BUDGET_DROP_REASON_PREFIX: &str =
+        "not selected because it would exceed the remaining memory-selection budget";
     candidates.sort_by_key(|candidate| candidate.priority);
     let mut remaining_budget = selection_budget_tokens;
     let has_compacted_history = fixed_selected_kinds.iter().any(|kind| {
@@ -934,11 +936,7 @@ fn select_memory_candidates(
         } else if let (Some(remaining), Some(cost)) =
             (remaining_budget, candidate.budget_impact_tokens)
         {
-            (cost > remaining).then(|| {
-                format!(
-                    "not selected because it would exceed the remaining memory-selection budget ({cost} > {remaining})"
-                )
-            })
+            (cost > remaining).then(|| format!("{BUDGET_DROP_REASON_PREFIX} ({cost} > {remaining})"))
         } else {
             None
         };
@@ -953,9 +951,11 @@ fn select_memory_candidates(
                 budget_impact_tokens: candidate.budget_impact_tokens,
                 dropped_reason: Some(dropped_reason),
             };
-            if item.dropped_reason.as_deref().is_some_and(|reason| {
-                reason.contains("exceed the remaining memory-selection budget")
-            }) {
+            if item
+                .dropped_reason
+                .as_deref()
+                .is_some_and(|reason| reason.starts_with(BUDGET_DROP_REASON_PREFIX))
+            {
                 decision.dropped_items.push(item);
             } else {
                 decision.available_items.push(item);

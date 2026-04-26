@@ -247,7 +247,7 @@ async fn dispatch_event(
         }
         AppEvent::MoveModelSelection(delta) => {
             let len = if matches!(app.overlay, Some(Overlay::OpenAiEndpointKindPicker)) {
-                4
+                app.openai_endpoint_kind_count()
             } else {
                 app.current_model_picker_len()
             };
@@ -302,7 +302,7 @@ async fn dispatch_event(
         }
         AppEvent::SetModelSelection(idx) => {
             let len = if matches!(app.overlay, Some(Overlay::OpenAiEndpointKindPicker)) {
-                4
+                app.openai_endpoint_kind_count()
             } else {
                 app.current_model_picker_len()
             };
@@ -311,7 +311,7 @@ async fn dispatch_event(
             }
             if matches!(app.overlay, Some(Overlay::OpenAiEndpointKindPicker)) {
                 app.openai_endpoint_kind_picker_idx = idx.min(len - 1);
-                return Ok(false);
+                return Ok(true);
             }
             app.model_picker_idx = idx.min(len - 1);
             if matches!(app.overlay, Some(Overlay::ModelPicker))

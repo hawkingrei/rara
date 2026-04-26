@@ -709,6 +709,10 @@ impl TuiApp {
         }
     }
 
+    pub fn openai_endpoint_kind_count(&self) -> usize {
+        current_model_presets(self.provider_picker_idx).len()
+    }
+
     fn openai_profile_setup_sequence(&self) -> Vec<Overlay> {
         let kind = self
             .selected_openai_profile_kind()
