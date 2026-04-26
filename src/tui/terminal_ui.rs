@@ -4,13 +4,13 @@ use anyhow::Result;
 use crossterm::{
     cursor::Show,
     execute,
-    terminal::{disable_raw_mode, size as terminal_size},
+    terminal::disable_raw_mode,
 };
 use ratatui::{backend::CrosstermBackend, layout::Rect, text::Line};
 
 use super::custom_terminal::Terminal;
 use super::insert_history::insert_history_lines;
-use super::render::{committed_turn_lines, startup_card_lines};
+use super::render::committed_turn_lines;
 use super::state::TuiApp;
 
 pub(super) fn handle_paste(text: String, app: &mut TuiApp) {
@@ -53,14 +53,6 @@ pub(super) fn flush_committed_history(
     terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
     app: &mut TuiApp,
 ) -> Result<()> {
-    if !app.startup_card_inserted {
-        let width = terminal_size()?.0;
-        let lines = startup_card_lines(app, width);
-        if !lines.is_empty() {
-            insert_history_lines(terminal, lines)?;
-        }
-        app.startup_card_inserted = true;
-    }
     while app.inserted_turns < app.committed_turns.len() {
         let turn = &app.committed_turns[app.inserted_turns];
         let cwd =

@@ -1,10 +1,13 @@
 use std::path::Path;
 
+use insta::assert_snapshot;
 use ratatui::text::Line;
+use ratatui::{buffer::Buffer, layout::Rect};
 use tempfile::tempdir;
 
-use crate::config::ConfigManager;
-use crate::tui::state::{Overlay, TranscriptEntry, TranscriptTurn, TuiApp};
+use crate::config::{ConfigManager, RaraConfig};
+use crate::tui::custom_terminal::Frame;
+use crate::tui::state::{Overlay, ProviderFamily, TranscriptEntry, TranscriptTurn, TuiApp};
 
 use super::cells::HistoryCell;
 use super::viewport::TranscriptViewport;
@@ -60,6 +63,30 @@ fn keeps_history_reserve_once_transcript_exists() {
     let height = desired_viewport_height(&app, 120, 24);
     assert!(height > 5);
     assert!(height < 24);
+}
+
+#[test]
+fn startup_viewport_uses_full_height_for_header() {
+    let temp = tempdir().expect("tempdir");
+    let app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("build tui app");
+
+    assert_eq!(desired_viewport_height(&app, 107, 53), 53);
+}
+
+#[test]
+fn overlay_viewport_uses_full_height_on_empty_transcript() {
+    let temp = tempdir().expect("tempdir");
+    let mut app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("build tui app");
+    app.input = "/model".into();
+    app.open_overlay(Overlay::CommandPalette);
+
+    assert_eq!(desired_viewport_height(&app, 107, 53), 53);
 }
 
 #[test]
@@ -148,6 +175,26 @@ fn renderable_transcript_lines_insert_turn_dividers_between_rounds() {
             .count(),
         2
     );
+}
+
+#[test]
+fn startup_header_renders_but_does_not_enter_transcript_lines() {
+    let temp = tempdir().expect("tempdir");
+    let app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("build tui app");
+
+    let rendered = render_screen_text(&app, 100, 24);
+    assert!(rendered.contains(">_ RARA"));
+
+    let transcript = renderable_transcript_lines(&app, 100)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(!transcript.contains(">_ RARA"));
+    assert!(!transcript.contains("directory:"));
 }
 
 #[test]
@@ -519,6 +566,129 @@ fn compact_summary_text_keeps_tail_of_long_explicit_blocks() {
     assert!(!rendered.contains("src/a.rs"));
     assert!(rendered.contains("src/b.rs"));
     assert!(rendered.contains("src/e.rs"));
+}
+
+#[test]
+fn ssh_startup_page_warns_without_opening_setup_window() {
+    let temp = tempdir().expect("tempdir");
+    let old_ssh_connection = std::env::var_os("SSH_CONNECTION");
+    let old_ssh_tty = std::env::var_os("SSH_TTY");
+    std::env::set_var("SSH_CONNECTION", "test");
+
+    let cm = ConfigManager {
+        path: temp.path().join("config.json"),
+    };
+    let mut config = RaraConfig::default();
+    config.set_provider("openai-compatible");
+    config.clear_api_key();
+    cm.save(&config).expect("save config");
+
+    let app = TuiApp::new(cm).expect("build tui app");
+    assert!(app.overlay.is_none());
+
+    let rendered = render_screen_text(&app, 100, 24);
+    assert_snapshot!("ssh_startup_warning_screen", rendered);
+
+    if let Some(value) = old_ssh_connection {
+        std::env::set_var("SSH_CONNECTION", value);
+    } else {
+        std::env::remove_var("SSH_CONNECTION");
+    }
+    if let Some(value) = old_ssh_tty {
+        std::env::set_var("SSH_TTY", value);
+    } else {
+        std::env::remove_var("SSH_TTY");
+    }
+}
+
+#[test]
+fn provider_picker_renders_as_full_overlay_on_standard_terminal() {
+    let temp = tempdir().expect("tempdir");
+    let mut app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("build tui app");
+    app.open_overlay(Overlay::ProviderPicker);
+
+    let rendered = render_screen_text(&app, 100, 24);
+    assert_snapshot!("provider_picker_standard_terminal", rendered);
+}
+
+#[test]
+fn command_palette_query_uses_full_width_without_leaking_bottom_status() {
+    let temp = tempdir().expect("tempdir");
+    let mut app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("build tui app");
+    app.input = "/m".into();
+    app.open_overlay(Overlay::CommandPalette);
+
+    let rendered = render_screen_text(&app, 107, 53);
+    assert!(rendered.contains("/model"));
+    assert!(!rendered.contains("ctx~=0"));
+    assert!(!rendered.contains("enter run  esc close"));
+}
+
+#[test]
+fn command_palette_empty_query_does_not_render_inline_footer_hint() {
+    let temp = tempdir().expect("tempdir");
+    let mut app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("build tui app");
+    app.input = "/".into();
+    app.open_overlay(Overlay::CommandPalette);
+
+    let rendered = render_screen_text(&app, 107, 53);
+    assert!(rendered.contains("/approval"));
+    assert!(rendered.contains("/model"));
+    assert!(!rendered.contains("enter run  esc close"));
+    assert!(!rendered.contains("up/down move  enter run  esc close"));
+}
+
+#[test]
+fn api_key_editor_renders_full_prompt_on_standard_terminal() {
+    let temp = tempdir().expect("tempdir");
+    let mut app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("build tui app");
+    let mut config = RaraConfig::default();
+    config.set_provider("openai-compatible");
+    config.base_url = Some("https://api.deepseek.com".into());
+    config.model = Some("deepseek-chat".into());
+    app.config = config;
+    app.provider_picker_idx = crate::tui::state::PROVIDER_FAMILIES
+        .iter()
+        .position(|(family, _, _)| *family == ProviderFamily::OpenAiCompatible)
+        .expect("openai-compatible family present");
+    app.open_overlay(Overlay::ApiKeyEditor);
+
+    let rendered = render_screen_text(&app, 100, 24);
+    assert_snapshot!("api_key_editor_standard_terminal", rendered);
+}
+
+fn render_screen_text(app: &TuiApp, width: u16, height: u16) -> String {
+    let area = Rect::new(0, 0, width, height);
+    let mut buffer = Buffer::empty(area);
+    let mut frame = Frame {
+        cursor_position: None,
+        viewport_area: area,
+        buffer: &mut buffer,
+    };
+    super::render(&mut frame, app);
+
+    (0..height)
+        .map(|y| {
+            let mut line = String::new();
+            for x in 0..width {
+                line.push_str(buffer[(x, y)].symbol());
+            }
+            line.trim_end().to_string()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 #[test]

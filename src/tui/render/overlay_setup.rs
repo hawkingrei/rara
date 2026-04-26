@@ -51,29 +51,30 @@ pub(super) fn render_provider_picker_modal(f: &mut Frame, app: &TuiApp, area: Re
             };
             ListItem::new(vec![
                 Line::from(format!("[{}] {}", idx + 1, label)),
-                Line::from(*detail),
-                Line::from(""),
+                Line::from(format!("  {detail}")),
             ])
             .style(style)
         })
         .collect::<Vec<_>>();
+    let intro =
+        "Choose a provider family first, then continue into model selection or setup.";
+    let intro_height = wrapped_text_height(intro, area.width);
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3),
+            Constraint::Length(intro_height),
             Constraint::Min(6),
             Constraint::Length(2),
         ])
         .split(area);
     f.render_widget(
-        Paragraph::new(
-            "Select a provider family first, then choose a concrete runtime or auth path.",
-        )
+        Paragraph::new(intro)
         .block(
             Block::default()
                 .borders(Borders::ALL)
                 .title(" Provider Menu "),
-        ),
+        )
+        .wrap(Wrap { trim: false }),
         chunks[0],
     );
     f.render_widget(
@@ -88,25 +89,28 @@ pub(super) fn render_provider_picker_modal(f: &mut Frame, app: &TuiApp, area: Re
 }
 
 pub(super) fn render_resume_picker_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(3),
-            Constraint::Min(8),
-            Constraint::Length(2),
-        ])
-        .split(area);
     let intro = if app.recent_threads.is_empty() {
         "No persisted threads found yet."
     } else {
         "Choose a recent thread to restore its transcript, plan state, and interaction cards."
     };
+    let intro_height = wrapped_text_height(intro, area.width);
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(intro_height),
+            Constraint::Min(8),
+            Constraint::Length(2),
+        ])
+        .split(area);
     f.render_widget(
-        Paragraph::new(intro).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(" Resume Thread "),
-        ),
+        Paragraph::new(intro)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(" Resume Thread "),
+            )
+            .wrap(Wrap { trim: false }),
         chunks[0],
     );
     let items = if app.recent_threads.is_empty() {
@@ -152,7 +156,6 @@ pub(super) fn render_resume_picker_modal(f: &mut Frame, app: &TuiApp, area: Rect
                         session.metadata.agent_mode, workspace, compaction
                     )),
                     Line::from(format!("  {preview}")),
-                    Line::from(""),
                 ])
                 .style(style)
             })
@@ -567,20 +570,23 @@ pub(super) fn render_base_url_editor_modal(
         app.selected_provider_family(),
         ProviderFamily::OpenAiCompatible
     );
+    let intro_text = if is_openai_compatible {
+        "Edit the base URL for the selected OpenAI-compatible endpoint profile.\nLeave it empty to restore that profile's default endpoint."
+    } else {
+        "Edit the Ollama base URL for this provider.\nLeave it empty to clear the override. Default: http://localhost:11434"
+    };
+    let intro_height = wrapped_text_height(intro_text, area.width);
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(4),
+            Constraint::Length(intro_height),
             Constraint::Length(3),
             Constraint::Length(2),
         ])
         .split(area);
-    let intro = Paragraph::new(if is_openai_compatible {
-        "Edit the base URL for the selected OpenAI-compatible endpoint profile.\nLeave it empty to restore that profile's default endpoint."
-    } else {
-        "Edit the Ollama base URL for this provider.\nLeave it empty to clear the override. Default: http://localhost:11434"
-    })
-    .block(Block::default().borders(Borders::ALL).title(" Base URL "));
+    let intro = Paragraph::new(intro_text)
+        .block(Block::default().borders(Borders::ALL).title(" Base URL "))
+        .wrap(Wrap { trim: false });
     let editor = Paragraph::new(app.base_url_input.as_str())
         .block(Block::default().borders(Borders::ALL).title(" Value "));
     let footer =
@@ -641,14 +647,6 @@ pub(super) fn render_api_key_editor_modal(
         app.selected_provider_family(),
         ProviderFamily::OpenAiCompatible
     );
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(4),
-            Constraint::Length(3),
-            Constraint::Length(2),
-        ])
-        .split(area);
     let (intro_text, title, footer_text) = if is_openai_compatible {
         (
             "Paste the API key for the selected OpenAI-compatible endpoint profile.",
@@ -662,6 +660,15 @@ pub(super) fn render_api_key_editor_modal(
             "Enter save and rebuild  Esc back to login guide",
         )
     };
+    let intro_height = wrapped_text_height(intro_text, area.width);
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(intro_height),
+            Constraint::Length(3),
+            Constraint::Length(2),
+        ])
+        .split(area);
     let intro = Paragraph::new(intro_text)
         .block(Block::default().borders(Borders::ALL).title(title))
         .wrap(Wrap { trim: false });
@@ -683,17 +690,18 @@ pub(super) fn render_model_name_editor_modal(
     app: &TuiApp,
     area: Rect,
 ) -> Option<(u16, u16)> {
+    let intro_text =
+        "Set the model name for the selected OpenAI-compatible endpoint profile.\nExample: gpt-4o-mini, kimi-k2, deepseek-chat, or any server-specific model id.";
+    let intro_height = wrapped_text_height(intro_text, area.width);
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(4),
+            Constraint::Length(intro_height),
             Constraint::Length(3),
             Constraint::Length(2),
         ])
         .split(area);
-    let intro = Paragraph::new(
-        "Set the model name for the selected OpenAI-compatible endpoint profile.\nExample: gpt-4o-mini, kimi-k2, deepseek-chat, or any server-specific model id.",
-    )
+    let intro = Paragraph::new(intro_text)
     .block(Block::default().borders(Borders::ALL).title(" Model Name "))
     .wrap(Wrap { trim: false });
     let editor = Paragraph::new(app.model_name_input.as_str())
@@ -718,23 +726,26 @@ pub(super) fn render_openai_profile_label_editor_modal(
     let kind = app
         .selected_openai_profile_kind()
         .unwrap_or(crate::config::OpenAiEndpointKind::Custom);
+    let intro_text = format!(
+        "Create a new {} endpoint profile.\nThis label is only used locally in the picker and status surfaces.",
+        kind.label()
+    );
+    let intro_height = wrapped_text_height(intro_text.as_str(), area.width);
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(4),
+            Constraint::Length(intro_height),
             Constraint::Length(3),
             Constraint::Length(2),
         ])
         .split(area);
-    let intro = Paragraph::new(format!(
-        "Create a new {} endpoint profile.\nThis label is only used locally in the picker and status surfaces.",
-        kind.label()
-    ))
+    let intro = Paragraph::new(intro_text)
     .block(
         Block::default()
             .borders(Borders::ALL)
             .title(" New Endpoint Profile "),
-    );
+    )
+    .wrap(Wrap { trim: false });
     let editor = Paragraph::new(app.openai_profile_label_input.as_str())
         .block(Block::default().borders(Borders::ALL).title(" Label "));
     let footer = Paragraph::new("Enter create  Esc back to profiles").alignment(Alignment::Center);

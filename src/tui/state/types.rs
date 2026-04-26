@@ -347,7 +347,6 @@ pub struct TuiApp {
     pub input_cursor_offset: Option<usize>,
     pub committed_turns: Vec<TranscriptTurn>,
     pub active_turn: TranscriptTurn,
-    pub startup_card_inserted: bool,
     pub inserted_turns: usize,
     pub overlay: Option<Overlay>,
     pub config: RaraConfig,

@@ -11,8 +11,7 @@ use unicode_width::UnicodeWidthChar;
 
 pub use self::state_presets::{
     current_model_presets, openai_compatible_preset_index, openai_compatible_preset_kind,
-    selected_preset_idx_for_config,
-    selected_provider_family_idx_for_config,
+    selected_preset_idx_for_config, selected_provider_family_idx_for_config,
 };
 use self::types::CommittedTranscriptRenderCache;
 pub use self::types::{
@@ -86,6 +85,20 @@ fn composer_display_char_width(ch: char) -> usize {
     match ch {
         '\t' => 4,
         _ => UnicodeWidthChar::width(ch).unwrap_or(0),
+    }
+}
+
+fn startup_warning_for_config(config: &crate::config::RaraConfig) -> Option<String> {
+    if config.provider == "codex" {
+        return None;
+    }
+    if !config.has_api_key() && super::provider_requires_api_key(&config.provider) {
+        Some(format!(
+            "Warning: {} is missing an API key. Use /model to configure the current provider.",
+            config.provider
+        ))
+    } else {
+        None
     }
 }
 
@@ -419,15 +432,8 @@ impl TuiApp {
 
     pub fn new(cm: ConfigManager) -> anyhow::Result<Self> {
         let cfg = cm.load()?;
-        let overlay = if !cfg.has_api_key() && super::provider_requires_api_key(&cfg.provider) {
-            if cfg.provider == "codex" {
-                Some(Overlay::AuthModePicker)
-            } else {
-                Some(Overlay::ApiKeyEditor)
-            }
-        } else {
-            None
-        };
+        let overlay = None;
+        let startup_notice = startup_warning_for_config(&cfg);
         let provider_picker_idx = selected_provider_family_idx_for_config(&cfg);
         let model_picker_idx = selected_preset_idx_for_config(&cfg, provider_picker_idx);
         Ok(Self {
@@ -435,13 +441,12 @@ impl TuiApp {
             input_cursor_offset: None,
             committed_turns: Vec::new(),
             active_turn: TranscriptTurn::default(),
-            startup_card_inserted: false,
             inserted_turns: 0,
             overlay,
             config: cfg,
             config_manager: cm,
             setup_status: None,
-            notice: None,
+            notice: startup_notice,
             runtime_phase: RuntimePhase::Idle,
             runtime_phase_detail: None,
             snapshot: RuntimeSnapshot::default(),

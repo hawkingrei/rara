@@ -19,6 +19,10 @@ use super::badge;
 const COMPOSER_TAB_WIDTH: usize = 4;
 
 pub(crate) fn desired_viewport_height(app: &TuiApp, width: u16, rows: u16) -> u16 {
+    if app.overlay.is_some() {
+        return rows.max(1);
+    }
+
     if app.transcript_scroll > 0 {
         return rows.max(1);
     }
@@ -27,7 +31,7 @@ pub(crate) fn desired_viewport_height(app: &TuiApp, width: u16, rows: u16) -> u1
     let has_active_content =
         !app.active_turn.entries.is_empty() || app.has_pending_planning_suggestion();
     if !app.has_any_transcript() && !has_active_content {
-        return bottom_pane_height.clamp(1, rows.max(1));
+        return rows.max(1);
     }
 
     let history_reserve = if rows >= 18 {
@@ -171,6 +175,10 @@ fn activity_status_line(app: &TuiApp) -> (&'static str, Color, String) {
             Color::Cyan,
             "analyze, refine, or finalize a plan".to_string(),
         );
+    }
+
+    if let Some(warning) = app.notice.as_deref().filter(|value| value.starts_with("Warning:")) {
+        return ("Warning", Color::Yellow, warning.to_string());
     }
 
     (
@@ -387,6 +395,13 @@ fn composer_hint_line(app: &TuiApp) -> Line<'static> {
 }
 
 fn render_footer(f: &mut Frame, app: &TuiApp, area: Rect) {
+    if matches!(
+        app.overlay,
+        Some(super::super::state::Overlay::CommandPalette)
+    ) {
+        f.render_widget(Paragraph::new(""), area);
+        return;
+    }
     let summary = footer_summary_text(app);
     f.render_widget(
         Paragraph::new(Line::from(Span::styled(
@@ -604,7 +619,7 @@ fn display_char_width(ch: char) -> usize {
 #[cfg(test)]
 mod tests {
     use insta::assert_snapshot;
-    use ratatui::layout::Rect;
+    use ratatui::{layout::Rect, style::Color};
     use tempfile::tempdir;
 
     use crate::config::ConfigManager;
@@ -680,6 +695,24 @@ mod tests {
         assert_eq!(label, "Plan Approval");
         assert!(detail.contains("start implementation"));
         assert!(detail.contains("continue planning"));
+    }
+
+    #[test]
+    fn activity_status_line_renders_warning_notice_in_yellow() {
+        let temp = tempdir().unwrap();
+        let mut app = TuiApp::new(ConfigManager {
+            path: temp.path().join("config.json"),
+        })
+        .expect("build tui app");
+        app.notice = Some(
+            "Warning: openai-compatible is missing an API key. Use /model to configure the current provider."
+                .into(),
+        );
+
+        let (label, color, detail) = activity_status_line(&app);
+        assert_eq!(label, "Warning");
+        assert_eq!(color, Color::Yellow);
+        assert!(detail.contains("missing an API key"));
     }
 
     #[test]
