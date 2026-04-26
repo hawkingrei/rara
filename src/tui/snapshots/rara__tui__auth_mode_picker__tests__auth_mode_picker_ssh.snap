@@ -1,5 +1,6 @@
 ---
 source: src/tui/auth_mode_picker.rs
+assertion_line: 95
 expression: popup
 ---
 Codex needs authentication before this preset can be used.
@@ -17,7 +18,7 @@ Credential status: not-required
 > Device code
     Best for SSH/headless sessions. Open the URL elsewhere and enter the one-time code.
   API key
-    Paste an existing Codex-compatible API key and save it locally.
+    Paste an existing Codex API key and save it locally.
   Logout
     Clear the saved provider credential and rebuild the current codex backend.
 

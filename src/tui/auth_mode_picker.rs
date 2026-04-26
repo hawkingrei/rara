@@ -28,7 +28,7 @@ pub(crate) fn build_auth_mode_picker_view(app: &TuiApp, ssh_session: bool) -> Au
         ),
         (
             "API key",
-            "Paste an existing Codex-compatible API key and save it locally.",
+            "Paste an existing Codex API key and save it locally.",
         ),
         (
             "Logout",

@@ -167,6 +167,11 @@ pub(super) async fn open_provider_family_overlay(
                 .await?;
         }
         app.open_overlay(Overlay::ModelPicker);
+        if matches!(app.selected_provider_family(), ProviderFamily::OpenAiCompatible)
+            && app.openai_profile_needs_setup()
+        {
+            app.begin_openai_profile_setup();
+        }
     }
     Ok(())
 }

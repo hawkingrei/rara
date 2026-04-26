@@ -37,6 +37,7 @@ pub enum Overlay {
     Context,
     ProviderPicker,
     ModelPicker,
+    OpenAiEndpointKindPicker,
     OpenAiProfilePicker,
     ResumePicker,
     BaseUrlEditor,
@@ -57,6 +58,7 @@ pub enum ProviderFamily {
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum OpenAiModelPickerAction {
+    Setup,
     Profiles,
     ApiKey,
     BaseUrl,
@@ -267,7 +269,7 @@ pub const PROVIDER_FAMILIES: [(ProviderFamily, &str, &str); 4] = [
     (
         ProviderFamily::Codex,
         "Codex",
-        "Use the Codex-compatible API with browser login, device-code login, or an API key.",
+        "Use Codex with browser login, device-code login, or a Codex API key.",
     ),
     (
         ProviderFamily::OpenAiCompatible,
@@ -359,6 +361,7 @@ pub struct TuiApp {
     pub bash_approval_mode: BashApprovalMode,
     pub provider_picker_idx: usize,
     pub model_picker_idx: usize,
+    pub openai_endpoint_kind_picker_idx: usize,
     pub openai_profile_picker_idx: usize,
     pub reasoning_effort_picker_idx: usize,
     pub auth_mode_idx: usize,
@@ -371,6 +374,7 @@ pub struct TuiApp {
     pub model_name_cursor_offset: Option<usize>,
     pub openai_profile_label_input: String,
     pub openai_profile_label_cursor_offset: Option<usize>,
+    pub openai_setup_steps: Vec<Overlay>,
     pub codex_model_options: Vec<CodexModelOption>,
     pub recent_commands: Vec<String>,
     pub recent_threads: Vec<ThreadSummary>,

@@ -246,10 +246,21 @@ async fn dispatch_event(
             }
         }
         AppEvent::MoveModelSelection(delta) => {
-            let len = app.current_model_picker_len();
+            let len = if matches!(app.overlay, Some(Overlay::OpenAiEndpointKindPicker)) {
+                4
+            } else {
+                app.current_model_picker_len()
+            };
             if len > 0 {
-                let next = (app.model_picker_idx as i32 + delta).clamp(0, len as i32 - 1);
-                app.model_picker_idx = next as usize;
+                let next = delta.clamp(-(len as i32), len as i32);
+                if matches!(app.overlay, Some(Overlay::OpenAiEndpointKindPicker)) {
+                    let idx = (app.openai_endpoint_kind_picker_idx as i32 + next)
+                        .clamp(0, len as i32 - 1);
+                    app.openai_endpoint_kind_picker_idx = idx as usize;
+                } else {
+                    let idx = (app.model_picker_idx as i32 + next).clamp(0, len as i32 - 1);
+                    app.model_picker_idx = idx as usize;
+                }
             }
         }
         AppEvent::MoveOpenAiProfileSelection(delta) => {
@@ -290,8 +301,16 @@ async fn dispatch_event(
             }
         }
         AppEvent::SetModelSelection(idx) => {
-            let len = app.current_model_picker_len();
+            let len = if matches!(app.overlay, Some(Overlay::OpenAiEndpointKindPicker)) {
+                4
+            } else {
+                app.current_model_picker_len()
+            };
             if len == 0 {
+                return Ok(false);
+            }
+            if matches!(app.overlay, Some(Overlay::OpenAiEndpointKindPicker)) {
+                app.openai_endpoint_kind_picker_idx = idx.min(len - 1);
                 return Ok(false);
             }
             app.model_picker_idx = idx.min(len - 1);
@@ -301,6 +320,9 @@ async fn dispatch_event(
             {
                 if app.selected_provider_family() == self::state::ProviderFamily::OpenAiCompatible {
                     match app.selected_openai_model_picker_action() {
+                        Some(OpenAiModelPickerAction::Setup) => {
+                            app.begin_openai_profile_setup();
+                        }
                         Some(OpenAiModelPickerAction::Profiles) => {
                             app.open_overlay(Overlay::OpenAiProfilePicker);
                         }
@@ -438,7 +460,11 @@ async fn dispatch_event(
                     "Saved base URL: {}",
                     app.config.base_url.as_deref().unwrap_or("unset")
                 ));
-                app.close_overlay();
+                if app.openai_setup_steps.is_empty() {
+                    app.close_overlay();
+                } else {
+                    app.advance_openai_profile_setup();
+                }
             }
         }
         AppEvent::SaveApiKeyInput => {
@@ -454,7 +480,11 @@ async fn dispatch_event(
                 }
                 app.config_manager.save(&app.config)?;
                 app.notice = Some("Cleared API key for the current provider.".into());
-                app.close_overlay();
+                if app.openai_setup_steps.is_empty() {
+                    app.close_overlay();
+                } else {
+                    app.advance_openai_profile_setup();
+                }
             } else {
                 app.config.set_api_key(value.to_string());
                 if app.config.provider == "codex" {
@@ -469,7 +499,11 @@ async fn dispatch_event(
                     start_rebuild_task(app);
                 } else {
                     app.notice = Some("Saved API key for the current provider.".into());
-                    app.close_overlay();
+                    if app.openai_setup_steps.is_empty() {
+                        app.close_overlay();
+                    } else {
+                        app.advance_openai_profile_setup();
+                    }
                 }
             }
         }
@@ -484,7 +518,11 @@ async fn dispatch_event(
                     app.config.set_model(Some(value.to_string()));
                     app.config_manager.save(&app.config)?;
                     app.notice = Some(format!("Saved model name: {}", value));
-                    app.close_overlay();
+                    if app.openai_setup_steps.is_empty() {
+                        app.close_overlay();
+                    } else {
+                        app.advance_openai_profile_setup();
+                    }
                 }
             }
         }
@@ -529,6 +567,17 @@ async fn dispatch_event(
                     app.push_notice("A task is already running. Wait for it to finish.");
                 } else {
                     open_provider_family_overlay(app, oauth_manager.as_ref()).await?;
+                }
+            }
+            Some(Overlay::OpenAiEndpointKindPicker) => {
+                if app.is_busy() {
+                    app.push_notice("A task is already running. Wait for it to finish.");
+                } else {
+                    let kind = crate::tui::state::openai_compatible_preset_kind(
+                        app.openai_endpoint_kind_picker_idx,
+                    );
+                    app.set_openai_setup_kind(kind);
+                    app.config_manager.save(&app.config)?;
                 }
             }
             Some(Overlay::ResumePicker) => {
@@ -599,6 +648,9 @@ async fn dispatch_event(
                         == self::state::ProviderFamily::OpenAiCompatible
                     {
                         match app.selected_openai_model_picker_action() {
+                            Some(OpenAiModelPickerAction::Setup) => {
+                                app.begin_openai_profile_setup();
+                            }
                             Some(OpenAiModelPickerAction::Profiles) => {
                                 app.open_overlay(Overlay::OpenAiProfilePicker);
                             }

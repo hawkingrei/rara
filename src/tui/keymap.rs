@@ -116,6 +116,17 @@ pub(super) fn map_key_to_event(key: KeyEvent, app: &TuiApp) -> AppEvent {
             KeyCode::Enter => AppEvent::ApplyOverlaySelection,
             _ => AppEvent::Noop,
         },
+        Some(Overlay::OpenAiEndpointKindPicker) => match code {
+            KeyCode::Esc => AppEvent::CloseOverlay,
+            KeyCode::Up | KeyCode::Char('k') => AppEvent::MoveModelSelection(-1),
+            KeyCode::Down | KeyCode::Char('j') => AppEvent::MoveModelSelection(1),
+            KeyCode::Char('1') => AppEvent::SetModelSelection(0),
+            KeyCode::Char('2') => AppEvent::SetModelSelection(1),
+            KeyCode::Char('3') => AppEvent::SetModelSelection(2),
+            KeyCode::Char('4') => AppEvent::SetModelSelection(3),
+            KeyCode::Enter => AppEvent::ApplyOverlaySelection,
+            _ => AppEvent::Noop,
+        },
         Some(Overlay::OpenAiProfilePicker) => match code {
             KeyCode::Esc => AppEvent::CloseOverlay,
             KeyCode::Up | KeyCode::Char('k') => AppEvent::MoveOpenAiProfileSelection(-1),
