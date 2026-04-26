@@ -3,3 +3,4 @@
 .rara/
 data/lancedb
 .DS_Store
+.tmp-pr-*

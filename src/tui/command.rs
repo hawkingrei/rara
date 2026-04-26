@@ -525,6 +525,24 @@ pub fn status_runtime_text(app: &TuiApp) -> String {
         .reasoning_summary
         .display_or(rara_config::DEFAULT_REASONING_SUMMARY);
     let reasoning_effort_label = app.current_reasoning_effort_label();
+    let endpoint_profile = if app.config.provider == "openai-compatible" {
+        app.config.active_openai_profile_label().unwrap_or("-")
+    } else {
+        "-"
+    };
+    let endpoint_kind = if app.config.provider == "openai-compatible" {
+        app.config
+            .active_openai_profile_kind()
+            .map(|kind| match kind {
+                rara_config::OpenAiEndpointKind::Custom => "custom",
+                rara_config::OpenAiEndpointKind::Deepseek => "deepseek",
+                rara_config::OpenAiEndpointKind::Kimi => "kimi",
+                rara_config::OpenAiEndpointKind::Openrouter => "openrouter",
+            })
+            .unwrap_or("-")
+    } else {
+        "-"
+    };
     let codex_auth_mode = match app.codex_auth_mode {
         Some(crate::oauth::SavedCodexAuthMode::ApiKey) => "api_key",
         Some(crate::oauth::SavedCodexAuthMode::Chatgpt) => "chatgpt",
@@ -546,8 +564,10 @@ pub fn status_runtime_text(app: &TuiApp) -> String {
         ("remote".to_string(), "-".to_string())
     };
     format!(
-        "provider={}\nmodel={}\nmodel_source={}\nbase_url={}\nbase_url_source={}\nrevision={}\nrevision_source={}\nagent_mode={}\nbash_approval={}\nmode={}\napi_key={}\napi_key_source={}\ncodex_auth_mode={}\ncodex_endpoint_kind={}\nthinking={}\nreasoning_summary={}\nreasoning_summary_source={}\nreasoning_effort={}\nreasoning_effort_source={}\ndevice={}\ndtype={}\nfocused={}\nphase={}\ndetail={}",
+        "provider={}\nendpoint_profile={}\nendpoint_kind={}\nmodel={}\nmodel_source={}\nbase_url={}\nbase_url_source={}\nrevision={}\nrevision_source={}\nagent_mode={}\nbash_approval={}\nmode={}\napi_key={}\napi_key_source={}\ncodex_auth_mode={}\ncodex_endpoint_kind={}\nthinking={}\nreasoning_summary={}\nreasoning_summary_source={}\nreasoning_effort={}\nreasoning_effort_source={}\ndevice={}\ndtype={}\nfocused={}\nphase={}\ndetail={}",
         surface.provider,
+        endpoint_profile,
+        endpoint_kind,
         surface.model.display_or(app.current_model_label()),
         surface.model.source.label(),
         surface.base_url.display_or("-"),
@@ -1447,6 +1467,8 @@ mod tests {
             .set_reasoning_summary(Some("detailed".to_string()));
 
         let rendered = status_runtime_text(&app);
+        assert!(rendered.contains("endpoint_profile=Custom endpoint"));
+        assert!(rendered.contains("endpoint_kind=custom"));
         assert!(rendered.contains("model=custom-model"));
         assert!(rendered.contains("model_source=provider_state"));
         assert!(rendered.contains("base_url_source=provider_state"));
@@ -1455,6 +1477,29 @@ mod tests {
         assert!(rendered.contains("reasoning_summary_source=provider_state"));
         assert!(rendered.contains("reasoning_effort_source=unset"));
         assert!(rendered.contains("revision_source=unset"));
+    }
+
+    #[test]
+    fn status_runtime_text_reports_active_openai_endpoint_profile() {
+        let dir = tempdir().expect("tempdir");
+        let mut app = TuiApp::new(ConfigManager {
+            path: dir.path().join("config.json"),
+        })
+        .expect("app");
+
+        app.config.select_openai_profile(
+            "openrouter-main",
+            "OpenRouter main",
+            rara_config::OpenAiEndpointKind::Openrouter,
+        );
+        app.config
+            .set_model(Some("anthropic/claude-sonnet-4".to_string()));
+
+        let rendered = status_runtime_text(&app);
+        assert!(rendered.contains("provider=openai-compatible"));
+        assert!(rendered.contains("endpoint_profile=OpenRouter main"));
+        assert!(rendered.contains("endpoint_kind=openrouter"));
+        assert!(rendered.contains("model=anthropic/claude-sonnet-4"));
     }
 
     #[test]

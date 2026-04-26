@@ -202,6 +202,8 @@ async fn dispatch_event(
                 app.api_key_input.push(c);
             } else if matches!(app.overlay, Some(Overlay::ModelNameEditor)) {
                 app.model_name_input.push(c);
+            } else if matches!(app.overlay, Some(Overlay::OpenAiProfileLabelEditor)) {
+                app.openai_profile_label_input.push(c);
             } else {
                 app.input.push(c);
                 app.sync_command_palette_with_input();
@@ -214,6 +216,8 @@ async fn dispatch_event(
                 app.api_key_input.pop();
             } else if matches!(app.overlay, Some(Overlay::ModelNameEditor)) {
                 app.model_name_input.pop();
+            } else if matches!(app.overlay, Some(Overlay::OpenAiProfileLabelEditor)) {
+                app.openai_profile_label_input.pop();
             } else {
                 app.input.pop();
                 app.sync_command_palette_with_input();
@@ -244,6 +248,13 @@ async fn dispatch_event(
             if len > 0 {
                 let next = (app.model_picker_idx as i32 + delta).clamp(0, len as i32 - 1);
                 app.model_picker_idx = next as usize;
+            }
+        }
+        AppEvent::MoveOpenAiProfileSelection(delta) => {
+            let len = app.selected_openai_profiles().len() + 1;
+            if len > 0 {
+                let next = (app.openai_profile_picker_idx as i32 + delta).clamp(0, len as i32 - 1);
+                app.openai_profile_picker_idx = next as usize;
             }
         }
         AppEvent::MoveReasoningEffortSelection(delta) => {
@@ -293,6 +304,12 @@ async fn dispatch_event(
                     app.select_local_model(app.model_picker_idx);
                     start_rebuild_task(app);
                 }
+            }
+        }
+        AppEvent::SetOpenAiProfileSelection(idx) => {
+            let len = app.selected_openai_profiles().len() + 1;
+            if len > 0 {
+                app.openai_profile_picker_idx = idx.min(len - 1);
             }
         }
         AppEvent::SelectPendingOption(idx) => {
@@ -450,6 +467,28 @@ async fn dispatch_event(
                 }
             }
         }
+        AppEvent::SaveOpenAiProfileLabelInput => {
+            if app.is_busy() {
+                app.push_notice("Wait for the current task before creating a profile.");
+            } else if app.selected_provider_family()
+                != self::state::ProviderFamily::OpenAiCompatible
+            {
+                app.push_notice(
+                    "OpenAI-compatible profiles are only available in that provider family.",
+                );
+            } else {
+                let label = app.openai_profile_label_input.trim();
+                if label.is_empty() {
+                    app.push_notice("Enter a profile label or press Esc to go back.");
+                } else if let Some(kind) = app.selected_openai_profile_kind() {
+                    let profile_id = app.next_openai_profile_id(kind, label);
+                    app.config.select_openai_profile(profile_id, label, kind);
+                    app.config_manager.save(&app.config)?;
+                    app.notice = Some(format!("Created endpoint profile: {label}"));
+                    app.overlay = Some(Overlay::ModelPicker);
+                }
+            }
+        }
         AppEvent::SelectHelpTab(tab) => {
             app.open_overlay(Overlay::Help(tab));
         }
@@ -481,6 +520,25 @@ async fn dispatch_event(
                 {
                     restore_thread_by_id(thread_id.as_str(), app, agent_slot)?;
                     app.close_overlay();
+                }
+            }
+            Some(Overlay::OpenAiProfilePicker) => {
+                if app.is_busy() {
+                    app.push_notice("A task is already running. Wait for it to finish.");
+                } else if app.openai_profile_picker_idx == 0 {
+                    app.open_overlay(Overlay::OpenAiProfileLabelEditor);
+                } else if let Some((profile_id, label)) = app
+                    .selected_openai_profiles()
+                    .get(app.openai_profile_picker_idx - 1)
+                    .cloned()
+                {
+                    if let Some(kind) = app.selected_openai_profile_kind() {
+                        app.config
+                            .select_openai_profile(profile_id, label.clone(), kind);
+                        app.config_manager.save(&app.config)?;
+                        app.notice = Some(format!("Selected endpoint profile: {label}"));
+                        app.overlay = Some(Overlay::ModelPicker);
+                    }
                 }
             }
             Some(Overlay::BaseUrlEditor) => {

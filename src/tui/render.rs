@@ -411,10 +411,7 @@ pub(crate) fn prefixed_message_lines(
             Style::default().fg(Color::DarkGray),
         )));
     }
-    lines.extend(
-        tail.iter()
-            .map(|line| Line::from(format!("  {line}"))),
-    );
+    lines.extend(tail.iter().map(|line| Line::from(format!("  {line}"))));
     lines
 }
 
@@ -436,10 +433,7 @@ fn user_message_lines(message: &str, max_lines: usize) -> Vec<Line<'static>> {
             Style::default().fg(Color::DarkGray),
         )));
     }
-    lines.extend(
-        tail.iter()
-            .map(|line| Line::from(format!("  {line}"))),
-    );
+    lines.extend(tail.iter().map(|line| Line::from(format!("  {line}"))));
     lines
 }
 

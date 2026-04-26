@@ -37,11 +37,13 @@ pub enum Overlay {
     Context,
     ProviderPicker,
     ModelPicker,
+    OpenAiProfilePicker,
     ResumePicker,
     BaseUrlEditor,
     AuthModePicker,
     ApiKeyEditor,
     ModelNameEditor,
+    OpenAiProfileLabelEditor,
     ReasoningEffortPicker,
 }
 
@@ -262,7 +264,7 @@ pub const PROVIDER_FAMILIES: [(ProviderFamily, &str, &str); 4] = [
     (
         ProviderFamily::OpenAiCompatible,
         "OpenAI-compatible",
-        "Use any OpenAI-compatible endpoint with a custom base URL, model name, and API key.",
+        "Use OpenAI-compatible endpoint profiles such as Custom, DeepSeek, Kimi, or OpenRouter.",
     ),
     (
         ProviderFamily::CandleLocal,
@@ -348,12 +350,14 @@ pub struct TuiApp {
     pub bash_approval_mode: BashApprovalMode,
     pub provider_picker_idx: usize,
     pub model_picker_idx: usize,
+    pub openai_profile_picker_idx: usize,
     pub reasoning_effort_picker_idx: usize,
     pub auth_mode_idx: usize,
     pub command_palette_idx: usize,
     pub base_url_input: String,
     pub api_key_input: String,
     pub model_name_input: String,
+    pub openai_profile_label_input: String,
     pub codex_model_options: Vec<CodexModelOption>,
     pub recent_commands: Vec<String>,
     pub recent_threads: Vec<ThreadSummary>,

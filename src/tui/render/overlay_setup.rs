@@ -193,7 +193,15 @@ pub(super) fn render_model_picker_modal(f: &mut Frame, app: &TuiApp, area: Rect)
                 } else {
                     Style::default()
                 };
-                let current = if app.config.provider == *provider
+                let current = if provider_label == "OpenAI-compatible" {
+                    if app.config.active_openai_profile_kind()
+                        == Some(crate::tui::state::openai_compatible_preset_kind(idx))
+                    {
+                        " current"
+                    } else {
+                        ""
+                    }
+                } else if app.config.provider == *provider
                     && app.config.model.as_deref() == Some(*model)
                 {
                     " current"
@@ -239,7 +247,11 @@ pub(super) fn render_model_picker_modal(f: &mut Frame, app: &TuiApp, area: Rect)
         )
     } else if provider_label == "OpenAI-compatible" {
         &format!(
-            "Provider: {provider_label}\nBase URL: {}\nModel name: {}\nAPI key: {}\nUse B/A/N to edit connection settings, then Enter to apply and rebuild.",
+            "Provider: {provider_label}\nEndpoint kind: {}\nEndpoint profile: {}\nBase URL: {}\nModel name: {}\nAPI key: {}\nUse P to switch profiles. B/A/N edit the current profile, then Enter to apply and rebuild.",
+            app.selected_openai_profile_kind()
+                .unwrap_or(crate::config::OpenAiEndpointKind::Custom)
+                .label(),
+            app.config.active_openai_profile_label().unwrap_or("-"),
             app.config
                 .base_url
                 .as_deref()
@@ -269,11 +281,79 @@ pub(super) fn render_model_picker_modal(f: &mut Frame, app: &TuiApp, area: Rect)
         Paragraph::new(if provider_label == "Codex" {
             "1-9 jump  Up/Down move  Enter choose level  Esc close"
         } else if provider_label == "OpenAI-compatible" {
-            "1 choose  Up/Down move  B edit base URL  A edit API key  N edit model name  Enter apply  Esc close"
+            "1-9 jump  Up/Down move  P profiles  B base URL  A API key  N model name  Enter apply  Esc close"
         } else {
             "1-9 apply directly  Up/Down move  B edit base URL  Enter apply  Esc close"
         })
         .alignment(Alignment::Center),
+        chunks[2],
+    );
+}
+
+pub(super) fn render_openai_profile_picker_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
+    let kind = app
+        .selected_openai_profile_kind()
+        .unwrap_or(crate::config::OpenAiEndpointKind::Custom);
+    let mut items = vec![ListItem::new(vec![
+        Line::from("[1] Create new profile"),
+        Line::from(format!("  Add another {} endpoint profile.", kind.label())),
+        Line::from(""),
+    ])];
+    items.extend(app.selected_openai_profiles().into_iter().enumerate().map(
+        |(idx, (id, label))| {
+            let active_suffix = if app.config.active_openai_profile_id() == Some(id.as_str()) {
+                " active"
+            } else {
+                ""
+            };
+            ListItem::new(vec![
+                Line::from(format!("[{}] {}{}", idx + 2, label, active_suffix)),
+                Line::from(format!("  id={id}")),
+                Line::from(""),
+            ])
+        },
+    ));
+    let items = items
+        .into_iter()
+        .enumerate()
+        .map(|(idx, item)| {
+            if idx == app.openai_profile_picker_idx {
+                item.style(
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                )
+            } else {
+                item
+            }
+        })
+        .collect::<Vec<_>>();
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(3),
+            Constraint::Min(6),
+            Constraint::Length(2),
+        ])
+        .split(area);
+    f.render_widget(
+        Paragraph::new(format!(
+            "Choose the active {} endpoint profile, or create a new one.",
+            kind.label()
+        ))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" Endpoint Profiles "),
+        ),
+        chunks[0],
+    );
+    f.render_widget(
+        List::new(items).block(Block::default().borders(Borders::LEFT | Borders::RIGHT)),
+        chunks[1],
+    );
+    f.render_widget(
+        Paragraph::new("Up/Down move  Enter choose  Esc back").alignment(Alignment::Center),
         chunks[2],
     );
 }
@@ -346,7 +426,7 @@ pub(super) fn render_base_url_editor_modal(
         ])
         .split(area);
     let intro = Paragraph::new(if is_openai_compatible {
-        "Edit the OpenAI-compatible base URL for this provider.\nLeave it empty to restore the default. Default: https://api.openai.com/v1"
+        "Edit the base URL for the selected OpenAI-compatible endpoint profile.\nLeave it empty to restore that profile's default endpoint."
     } else {
         "Edit the Ollama base URL for this provider.\nLeave it empty to clear the override. Default: http://localhost:11434"
     })
@@ -419,7 +499,7 @@ pub(super) fn render_api_key_editor_modal(
         .split(area);
     let (intro_text, title, footer_text) = if is_openai_compatible {
         (
-            "Paste the API key for the selected OpenAI-compatible endpoint.",
+            "Paste the API key for the selected OpenAI-compatible endpoint profile.",
             " API Key ",
             "Enter save  Esc back to model picker",
         )
@@ -459,7 +539,7 @@ pub(super) fn render_model_name_editor_modal(
         ])
         .split(area);
     let intro = Paragraph::new(
-        "Set the model name to send to the OpenAI-compatible endpoint.\nExample: gpt-4o-mini, kimi-k2, or any server-specific model id.",
+        "Set the model name for the selected OpenAI-compatible endpoint profile.\nExample: gpt-4o-mini, kimi-k2, deepseek-chat, or any server-specific model id.",
     )
     .block(Block::default().borders(Borders::ALL).title(" Model Name "))
     .wrap(Wrap { trim: false });
@@ -472,6 +552,43 @@ pub(super) fn render_model_name_editor_modal(
     f.render_widget(footer, chunks[2]);
     Some(editor_cursor_position(
         app.model_name_input.as_str(),
+        chunks[1],
+    ))
+}
+
+pub(super) fn render_openai_profile_label_editor_modal(
+    f: &mut Frame,
+    app: &TuiApp,
+    area: Rect,
+) -> Option<(u16, u16)> {
+    let kind = app
+        .selected_openai_profile_kind()
+        .unwrap_or(crate::config::OpenAiEndpointKind::Custom);
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(4),
+            Constraint::Length(3),
+            Constraint::Length(2),
+        ])
+        .split(area);
+    let intro = Paragraph::new(format!(
+        "Create a new {} endpoint profile.\nThis label is only used locally in the picker and status surfaces.",
+        kind.label()
+    ))
+    .block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(" New Endpoint Profile "),
+    );
+    let editor = Paragraph::new(app.openai_profile_label_input.as_str())
+        .block(Block::default().borders(Borders::ALL).title(" Label "));
+    let footer = Paragraph::new("Enter create  Esc back to profiles").alignment(Alignment::Center);
+    f.render_widget(intro, chunks[0]);
+    f.render_widget(editor, chunks[1]);
+    f.render_widget(footer, chunks[2]);
+    Some(editor_cursor_position(
+        app.openai_profile_label_input.as_str(),
         chunks[1],
     ))
 }

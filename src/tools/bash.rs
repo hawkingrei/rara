@@ -378,7 +378,10 @@ mod tests {
             ),
         ]));
 
-        assert_eq!(env_map.get("HOME").map(String::as_str), Some("/custom/home"));
+        assert_eq!(
+            env_map.get("HOME").map(String::as_str),
+            Some("/custom/home")
+        );
         assert_eq!(
             env_map.get("XDG_CACHE_HOME").map(String::as_str),
             Some("/custom/home/.cache")

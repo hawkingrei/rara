@@ -694,8 +694,9 @@ impl ActiveCell for ActiveTurnCell<'_> {
         let compact_live_response =
             turn_live && (has_exploration_summary || has_planning_summary || has_running_summary);
 
-        let inline_plan_summary =
-            latest_agent.and_then(|message| parse_render_plan_block(message)).filter(|_| {
+        let inline_plan_summary = latest_agent
+            .and_then(|message| parse_render_plan_block(message))
+            .filter(|_| {
                 self.app.snapshot.plan_steps.is_empty()
                     && matches!(
                         self.app.agent_execution_mode,
@@ -753,10 +754,10 @@ impl ActiveCell for ActiveTurnCell<'_> {
             && self.app.snapshot.plan_steps.is_empty()
             && self.app.pending_request_input().is_none()
             && !self.app.has_pending_plan_approval();
-        let suppress_structured_plan_response =
-            (self.app.snapshot.plan_steps.is_empty() && inline_plan_summary.is_some())
-                || (!self.app.snapshot.plan_steps.is_empty()
-                    && latest_agent.is_some_and(contains_structured_planning_output));
+        let suppress_structured_plan_response = (self.app.snapshot.plan_steps.is_empty()
+            && inline_plan_summary.is_some())
+            || (!self.app.snapshot.plan_steps.is_empty()
+                && latest_agent.is_some_and(contains_structured_planning_output));
 
         let responding_role = if turn_live { "Responding" } else { "Agent" };
         let prefer_responding_chrome = turn_live
@@ -983,7 +984,10 @@ mod helper_tests {
             parsed,
             (
                 vec![
-                    ("completed".to_string(), "Inspect the runtime path".to_string()),
+                    (
+                        "completed".to_string(),
+                        "Inspect the runtime path".to_string()
+                    ),
                     ("pending".to_string(), "Tighten the render path".to_string()),
                 ],
                 Some("Keep the diff narrow.".to_string()),

@@ -7,7 +7,8 @@ use anyhow::{bail, Context, Result};
 use self::tooling::{create_full_tool_manager, load_skill_manager, vector_db_uri_for_workspace};
 use crate::agent::Agent;
 use crate::config::{
-    RaraConfig, DEFAULT_CODEX_BASE_URL, DEFAULT_CODEX_MODEL, REASONING_SUMMARY_NONE,
+    OpenAiEndpointKind, RaraConfig, DEFAULT_CODEX_BASE_URL, DEFAULT_CODEX_MODEL,
+    REASONING_SUMMARY_NONE,
 };
 use crate::llm::{
     CodexBackend, GeminiBackend, LlmBackend, MockLlm, OllamaBackend, OpenAiCompatibleBackend,
@@ -95,19 +96,6 @@ pub(crate) async fn build_backend_with_progress(
     progress: Option<LocalProgressReporter>,
 ) -> Result<Box<dyn LlmBackend>> {
     match config.provider.as_str() {
-        "kimi" => Ok(Box::new(OpenAiCompatibleBackend::new(
-            Some(
-                config
-                    .api_key
-                    .clone()
-                    .context("API key required for Kimi provider")?,
-            ),
-            "https://api.moonshot.cn/v1".to_string(),
-            config
-                .model
-                .clone()
-                .unwrap_or_else(|| "moonshot-v1-8k".to_string()),
-        )?)),
         "codex" => Ok(Box::new(CodexBackend::new(
             config.api_key.clone(),
             config
@@ -120,17 +108,27 @@ pub(crate) async fn build_backend_with_progress(
                 .unwrap_or_else(|| DEFAULT_CODEX_MODEL.to_string()),
             config.reasoning_effort.clone(),
         )?)),
-        "openai-compatible" => Ok(Box::new(OpenAiCompatibleBackend::new(
-            config.api_key.clone(),
-            config
-                .base_url
-                .clone()
-                .unwrap_or_else(|| "https://api.openai.com/v1".to_string()),
-            config
-                .model
-                .clone()
-                .unwrap_or_else(|| "gpt-4o-mini".to_string()),
-        )?)),
+        provider if RaraConfig::is_openai_compatible_family(provider) => {
+            let kind = config
+                .active_openai_profile_kind()
+                .unwrap_or_else(|| match provider {
+                    "deepseek" => OpenAiEndpointKind::Deepseek,
+                    "kimi" => OpenAiEndpointKind::Kimi,
+                    "openrouter" => OpenAiEndpointKind::Openrouter,
+                    _ => OpenAiEndpointKind::Custom,
+                });
+            Ok(Box::new(OpenAiCompatibleBackend::new(
+                config.api_key.clone(),
+                config
+                    .base_url
+                    .clone()
+                    .unwrap_or_else(|| kind.default_base_url().to_string()),
+                config
+                    .model
+                    .clone()
+                    .unwrap_or_else(|| kind.default_model().to_string()),
+            )?))
+        }
         "ollama" | "ollama-native" => Ok(Box::new(OllamaBackend::new(
             config
                 .base_url
