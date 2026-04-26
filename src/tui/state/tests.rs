@@ -359,15 +359,21 @@ fn openai_compatible_model_picker_includes_explicit_profile_actions() {
     app.provider_picker_idx = 1;
     app.open_overlay(Overlay::ModelPicker);
 
-    assert_eq!(app.current_model_picker_len(), 8);
+    assert_eq!(app.current_model_picker_len(), 5);
 
-    app.model_picker_idx = 4;
+    app.model_picker_idx = 0;
+    assert_eq!(
+        app.selected_openai_model_picker_action(),
+        Some(crate::tui::state::OpenAiModelPickerAction::Setup)
+    );
+
+    app.model_picker_idx = 1;
     assert_eq!(
         app.selected_openai_model_picker_action(),
         Some(crate::tui::state::OpenAiModelPickerAction::Profiles)
     );
 
-    app.model_picker_idx = 5;
+    app.model_picker_idx = 2;
     assert_eq!(
         app.selected_openai_model_picker_action(),
         Some(crate::tui::state::OpenAiModelPickerAction::ApiKey)

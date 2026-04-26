@@ -400,7 +400,7 @@ async fn openai_model_picker_action_row_opens_api_key_editor() {
     .expect("app");
     app.provider_picker_idx = 1;
     app.open_overlay(Overlay::ModelPicker);
-    app.model_picker_idx = 5;
+    app.model_picker_idx = 2;
 
     let oauth_manager = Arc::new(
         crate::oauth::OAuthManager::new_for_config_dir(temp.path().join(".rara"))
@@ -437,7 +437,7 @@ async fn openai_model_picker_numeric_action_row_opens_profile_picker() {
     let mut agent_slot = None;
 
     dispatch_event(
-        AppEvent::SetModelSelection(4),
+        AppEvent::SetModelSelection(1),
         &mut app,
         &mut agent_slot,
         &oauth_manager,
@@ -446,6 +446,69 @@ async fn openai_model_picker_numeric_action_row_opens_profile_picker() {
     .expect("set model selection");
 
     assert!(matches!(app.overlay, Some(Overlay::OpenAiProfilePicker)));
+}
+
+#[tokio::test]
+async fn openai_model_picker_setup_row_opens_endpoint_kind_picker() {
+    let temp = tempdir().expect("tempdir");
+    let mut app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("app");
+    app.provider_picker_idx = 1;
+    app.open_overlay(Overlay::ModelPicker);
+    app.model_picker_idx = 0;
+
+    let oauth_manager = Arc::new(
+        crate::oauth::OAuthManager::new_for_config_dir(temp.path().join(".rara"))
+            .expect("oauth manager"),
+    );
+    let mut agent_slot = None;
+
+    dispatch_event(
+        AppEvent::ApplyOverlaySelection,
+        &mut app,
+        &mut agent_slot,
+        &oauth_manager,
+    )
+    .await
+    .expect("open endpoint kind picker");
+
+    assert!(matches!(app.overlay, Some(Overlay::OpenAiEndpointKindPicker)));
+    assert_eq!(app.openai_endpoint_kind_picker_idx, 0);
+}
+
+#[tokio::test]
+async fn selecting_custom_endpoint_kind_advances_into_guided_setup() {
+    let temp = tempdir().expect("tempdir");
+    let mut app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("app");
+    app.provider_picker_idx = 1;
+    app.overlay = Some(Overlay::OpenAiEndpointKindPicker);
+    app.openai_endpoint_kind_picker_idx = 0;
+
+    let oauth_manager = Arc::new(
+        crate::oauth::OAuthManager::new_for_config_dir(temp.path().join(".rara"))
+            .expect("oauth manager"),
+    );
+    let mut agent_slot = None;
+
+    dispatch_event(
+        AppEvent::ApplyOverlaySelection,
+        &mut app,
+        &mut agent_slot,
+        &oauth_manager,
+    )
+    .await
+    .expect("select endpoint kind");
+
+    assert!(matches!(app.overlay, Some(Overlay::BaseUrlEditor)));
+    assert_eq!(
+        app.openai_setup_steps,
+        vec![Overlay::ApiKeyEditor, Overlay::ModelNameEditor]
+    );
 }
 
 #[tokio::test]
@@ -500,15 +563,30 @@ async fn saving_openai_profile_label_creates_new_profile_for_selected_kind() {
     })
     .expect("app");
     app.provider_picker_idx = 1;
-    app.model_picker_idx = 1;
-    app.overlay = Some(Overlay::OpenAiProfileLabelEditor);
-    app.openai_profile_label_input = "DeepSeek backup".to_string();
+    app.config.select_openai_profile(
+        "deepseek-default",
+        "DeepSeek",
+        OpenAiEndpointKind::Deepseek,
+    );
+    app.open_overlay(Overlay::OpenAiProfilePicker);
+    app.openai_profile_picker_idx = 0;
 
     let oauth_manager = Arc::new(
         crate::oauth::OAuthManager::new_for_config_dir(temp.path().join(".rara"))
             .expect("oauth manager"),
     );
     let mut agent_slot = None;
+
+    dispatch_event(
+        AppEvent::ApplyOverlaySelection,
+        &mut app,
+        &mut agent_slot,
+        &oauth_manager,
+    )
+    .await
+    .expect("open profile label editor");
+
+    app.openai_profile_label_input = "DeepSeek backup".to_string();
 
     dispatch_event(
         AppEvent::SaveOpenAiProfileLabelInput,

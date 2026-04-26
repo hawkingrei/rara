@@ -10,7 +10,8 @@ use std::process::Command;
 use unicode_width::UnicodeWidthChar;
 
 pub use self::state_presets::{
-    current_model_presets, openai_compatible_preset_kind, selected_preset_idx_for_config,
+    current_model_presets, openai_compatible_preset_index, openai_compatible_preset_kind,
+    selected_preset_idx_for_config,
     selected_provider_family_idx_for_config,
 };
 use self::types::CommittedTranscriptRenderCache;
@@ -448,6 +449,7 @@ impl TuiApp {
             bash_approval_mode: BashApprovalMode::Suggestion,
             provider_picker_idx,
             model_picker_idx,
+            openai_endpoint_kind_picker_idx: 0,
             openai_profile_picker_idx: 0,
             reasoning_effort_picker_idx: 0,
             auth_mode_idx: 0,
@@ -460,6 +462,8 @@ impl TuiApp {
             model_name_cursor_offset: None,
             openai_profile_label_input: String::new(),
             openai_profile_label_cursor_offset: None,
+            openai_profile_label_kind: None,
+            openai_setup_steps: Vec::new(),
             codex_model_options: Vec::new(),
             recent_commands: Vec::new(),
             recent_threads: Vec::new(),
@@ -579,7 +583,9 @@ impl TuiApp {
         if self.selected_provider_family() == ProviderFamily::Codex {
             self.codex_model_options.len()
         } else if self.selected_provider_family() == ProviderFamily::OpenAiCompatible {
-            current_model_presets(self.provider_picker_idx).len() + 4
+            self.openai_model_picker_preset_count()
+                + 4
+                + usize::from(self.openai_profile_needs_setup())
         } else {
             current_model_presets(self.provider_picker_idx).len()
         }
@@ -647,7 +653,7 @@ impl TuiApp {
         if self.selected_provider_family() != ProviderFamily::OpenAiCompatible {
             return None;
         }
-        let preset_count = current_model_presets(self.provider_picker_idx).len();
+        let preset_count = self.openai_model_picker_preset_count();
         if self.model_picker_idx < preset_count {
             Some(openai_compatible_preset_kind(self.model_picker_idx))
         } else {
@@ -663,14 +669,109 @@ impl TuiApp {
         if self.selected_provider_family() != ProviderFamily::OpenAiCompatible {
             return None;
         }
-        let preset_count = current_model_presets(self.provider_picker_idx).len();
+        let preset_count = self.openai_model_picker_preset_count();
+        let setup_offset = usize::from(self.openai_profile_needs_setup());
         match self.model_picker_idx.checked_sub(preset_count) {
-            Some(0) => Some(OpenAiModelPickerAction::Profiles),
-            Some(1) => Some(OpenAiModelPickerAction::ApiKey),
-            Some(2) => Some(OpenAiModelPickerAction::BaseUrl),
-            Some(3) => Some(OpenAiModelPickerAction::ModelName),
+            Some(0) if self.openai_profile_needs_setup() => Some(OpenAiModelPickerAction::Setup),
+            Some(idx) if idx == setup_offset => Some(OpenAiModelPickerAction::Profiles),
+            Some(idx) if idx == setup_offset + 1 => Some(OpenAiModelPickerAction::ApiKey),
+            Some(idx) if idx == setup_offset + 2 => Some(OpenAiModelPickerAction::BaseUrl),
+            Some(idx) if idx == setup_offset + 3 => Some(OpenAiModelPickerAction::ModelName),
             _ => None,
         }
+    }
+
+    pub fn openai_profile_needs_setup(&self) -> bool {
+        if self.selected_provider_family() != ProviderFamily::OpenAiCompatible {
+            return false;
+        }
+        let missing_api = !self.config.has_api_key();
+        let missing_base_url = self
+            .config
+            .base_url
+            .as_deref()
+            .is_none_or(|value| value.trim().is_empty());
+        let missing_model = self
+            .config
+            .model
+            .as_deref()
+            .is_none_or(|value| value.trim().is_empty());
+        missing_api || missing_base_url || missing_model
+    }
+
+    pub fn openai_model_picker_preset_count(&self) -> usize {
+        if self.selected_provider_family() != ProviderFamily::OpenAiCompatible {
+            return current_model_presets(self.provider_picker_idx).len();
+        }
+        if self.openai_profile_needs_setup() {
+            0
+        } else {
+            current_model_presets(self.provider_picker_idx).len()
+        }
+    }
+
+    pub fn openai_endpoint_kind_count(&self) -> usize {
+        current_model_presets(self.provider_picker_idx).len()
+    }
+
+    fn openai_profile_setup_sequence(&self) -> Vec<Overlay> {
+        let kind = self
+            .selected_openai_profile_kind()
+            .unwrap_or(OpenAiEndpointKind::Custom);
+        let mut steps = Vec::new();
+        if matches!(kind, OpenAiEndpointKind::Custom) {
+            steps.push(Overlay::BaseUrlEditor);
+        } else if self
+            .config
+            .base_url
+            .as_deref()
+            .is_none_or(|value| value.trim().is_empty())
+        {
+            steps.push(Overlay::BaseUrlEditor);
+        }
+        if !self.config.has_api_key() || matches!(kind, OpenAiEndpointKind::Custom) {
+            steps.push(Overlay::ApiKeyEditor);
+        }
+        if matches!(kind, OpenAiEndpointKind::Custom)
+            || self
+                .config
+                .model
+                .as_deref()
+                .is_none_or(|value| value.trim().is_empty())
+        {
+            steps.push(Overlay::ModelNameEditor);
+        }
+        steps
+    }
+
+    pub fn begin_openai_profile_setup(&mut self) {
+        self.openai_setup_steps.clear();
+        self.openai_profile_label_kind = None;
+        self.open_overlay(Overlay::OpenAiEndpointKindPicker);
+    }
+
+    pub fn advance_openai_profile_setup(&mut self) {
+        if self.openai_setup_steps.is_empty() {
+            self.open_overlay(Overlay::ModelPicker);
+            self.notice = Some(
+                "Endpoint setup complete. Review the active profile and press Enter to rebuild."
+                    .into(),
+            );
+            return;
+        }
+        let next = self.openai_setup_steps.remove(0);
+        self.open_overlay(next);
+    }
+
+    pub fn cancel_openai_profile_setup(&mut self) {
+        self.openai_setup_steps.clear();
+    }
+
+    pub fn set_openai_setup_kind(&mut self, kind: OpenAiEndpointKind) {
+        self.config
+            .select_openai_profile(kind.default_profile_id(), kind.label(), kind);
+        self.openai_setup_steps = self.openai_profile_setup_sequence();
+        self.advance_openai_profile_setup();
     }
 
     pub fn selected_openai_profiles(&self) -> Vec<(String, String)> {
@@ -1036,7 +1137,18 @@ impl TuiApp {
                 self.config.set_provider(provider.to_string());
             }
             self.model_picker_idx = self.selected_preset_idx();
+            if matches!(selected_family, ProviderFamily::OpenAiCompatible)
+                && self.openai_profile_needs_setup()
+            {
+                self.model_picker_idx = 0;
+            }
             self.sync_reasoning_effort_picker();
+        }
+        if matches!(overlay, Overlay::OpenAiEndpointKindPicker) {
+            self.openai_endpoint_kind_picker_idx = self
+                .selected_openai_profile_kind()
+                .map(openai_compatible_preset_index)
+                .unwrap_or(0);
         }
         if matches!(overlay, Overlay::OpenAiProfilePicker) {
             self.sync_openai_profile_picker();
@@ -1071,7 +1183,8 @@ impl TuiApp {
         }
         if matches!(overlay, Overlay::OpenAiProfileLabelEditor) {
             let kind = self
-                .selected_openai_profile_kind()
+                .openai_profile_label_kind
+                .or_else(|| self.selected_openai_profile_kind())
                 .unwrap_or(OpenAiEndpointKind::Custom);
             self.openai_profile_label_input = format!("{} profile", kind.label());
             self.openai_profile_label_cursor_offset = None;
@@ -1261,7 +1374,14 @@ impl TuiApp {
     }
 
     pub fn close_overlay(&mut self) {
+        if matches!(
+            self.overlay,
+            Some(Overlay::BaseUrlEditor | Overlay::ApiKeyEditor | Overlay::ModelNameEditor)
+        ) {
+            self.cancel_openai_profile_setup();
+        }
         self.overlay = match self.overlay {
+            Some(Overlay::OpenAiEndpointKindPicker) => Some(Overlay::ModelPicker),
             Some(Overlay::OpenAiProfilePicker) => Some(Overlay::ModelPicker),
             Some(Overlay::BaseUrlEditor) => Some(Overlay::ModelPicker),
             Some(Overlay::ApiKeyEditor) => {
