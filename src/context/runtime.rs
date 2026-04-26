@@ -243,6 +243,7 @@ pub struct RetrievalSourceContextEntry {
 pub struct MemorySelectionContextView {
     pub selection_budget_tokens: Option<usize>,
     pub selected_items: Vec<MemorySelectionItemContextEntry>,
+    pub available_items: Vec<MemorySelectionItemContextEntry>,
     pub dropped_items: Vec<MemorySelectionItemContextEntry>,
 }
 

@@ -5,6 +5,7 @@ use ratatui::{
     widgets::{Block, Borders, List, ListItem, Paragraph, Wrap},
 };
 use std::path::Path;
+use unicode_width::UnicodeWidthChar;
 
 use super::Frame;
 use crate::tui::auth_mode_picker::build_auth_mode_picker_view;
@@ -12,6 +13,29 @@ use crate::tui::command::api_key_status;
 use crate::tui::is_ssh_session;
 use crate::tui::render::bottom_pane::editor_cursor_position;
 use crate::tui::state::{current_model_presets, ProviderFamily, TuiApp, PROVIDER_FAMILIES};
+
+fn wrapped_text_height(text: &str, area_width: u16) -> u16 {
+    let width = area_width.saturating_sub(2).max(1) as usize;
+    let mut rows = 0usize;
+    for line in text.split('\n') {
+        if line.is_empty() {
+            rows += 1;
+            continue;
+        }
+        let mut current_width = 0usize;
+        let mut line_rows = 1usize;
+        for ch in line.chars() {
+            let char_width = UnicodeWidthChar::width(ch).unwrap_or(0).max(1);
+            if current_width > 0 && current_width + char_width > width {
+                line_rows += 1;
+                current_width = 0;
+            }
+            current_width += char_width;
+        }
+        rows += line_rows;
+    }
+    rows as u16 + 2
+}
 
 pub(super) fn render_provider_picker_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
     let items = PROVIDER_FAMILIES
@@ -182,8 +206,10 @@ pub(super) fn render_model_picker_modal(f: &mut Frame, app: &TuiApp, area: Rect)
             .collect::<Vec<_>>()
     } else {
         let presets = current_model_presets(app.provider_picker_idx);
+        let displayed_preset_count = app.openai_model_picker_preset_count();
         let mut items = presets
             .iter()
+            .take(displayed_preset_count)
             .enumerate()
             .map(|(idx, (label, provider, model))| {
                 let style = if idx == app.model_picker_idx {
@@ -226,13 +252,20 @@ pub(super) fn render_model_picker_modal(f: &mut Frame, app: &TuiApp, area: Rect)
             })
             .collect::<Vec<_>>();
         if provider_label == "OpenAI-compatible" {
-            let actions = [
+            let mut actions = Vec::new();
+            if app.openai_profile_needs_setup() {
+                actions.push((
+                    "Setup endpoint",
+                    "Guided setup for endpoint URL, API key, and model name.",
+                ));
+            }
+            actions.extend([
                 ("Profiles", "Switch or create endpoint profiles"),
                 ("API key", "Edit the API key for the active profile"),
                 ("Base URL", "Edit the base URL for the active profile"),
                 ("Model name", "Edit the model id for the active profile"),
-            ];
-            let offset = presets.len();
+            ]);
+            let offset = displayed_preset_count;
             items.extend(
                 actions
                     .into_iter()
@@ -269,7 +302,7 @@ pub(super) fn render_model_picker_modal(f: &mut Frame, app: &TuiApp, area: Rect)
         )
     } else if provider_label == "OpenAI-compatible" {
         &format!(
-            "Provider: {provider_label}\nEndpoint kind: {}\nEndpoint profile: {}\nBase URL: {}\nModel name: {}\nAPI key: {}\nChoose a preset to rebuild, or choose one of the action rows below to edit the active profile.",
+            "Provider: {provider_label}\nEndpoint kind: {}\nEndpoint profile: {}\nBase URL: {}\nModel name: {}\nAPI key: {}\n{}",
             app.selected_openai_profile_kind()
                 .unwrap_or(crate::config::OpenAiEndpointKind::Custom)
                 .label(),
@@ -280,6 +313,11 @@ pub(super) fn render_model_picker_modal(f: &mut Frame, app: &TuiApp, area: Rect)
                 .unwrap_or("https://api.openai.com/v1"),
             app.current_model_label(),
             api_key_status(&app.config),
+            if app.openai_profile_needs_setup() {
+                "Active profile still needs setup. Press Enter on `Setup endpoint` to choose an endpoint family and walk through the required fields."
+            } else {
+                "The active profile is ready. Choose a preset to rebuild, or use the action rows below to edit the active profile."
+            },
         )
     } else {
         &format!(
@@ -287,7 +325,7 @@ pub(super) fn render_model_picker_modal(f: &mut Frame, app: &TuiApp, area: Rect)
             app.config.base_url.as_deref().unwrap_or("http://localhost:11434"),
         )
     };
-    let help_height = help.lines().count().max(1) as u16 + 2;
+    let help_height = wrapped_text_height(help, area.width);
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -312,7 +350,11 @@ pub(super) fn render_model_picker_modal(f: &mut Frame, app: &TuiApp, area: Rect)
         Paragraph::new(if provider_label == "Codex" {
             "1-9 jump  Up/Down move  Enter choose level  Esc close"
         } else if provider_label == "OpenAI-compatible" {
-            "1-9 jump  Up/Down move  Enter choose  Esc close"
+            if app.openai_profile_needs_setup() {
+                "1-5 jump  Up/Down move  Enter continue  Esc close"
+            } else {
+                "1-9 jump  Up/Down move  Enter choose  Esc close"
+            }
         } else {
             "1-9 apply directly  Up/Down move  B edit base URL  Enter apply  Esc close"
         })
@@ -385,6 +427,83 @@ pub(super) fn render_openai_profile_picker_modal(f: &mut Frame, app: &TuiApp, ar
     );
     f.render_widget(
         Paragraph::new("Up/Down move  Enter choose  Esc back").alignment(Alignment::Center),
+        chunks[2],
+    );
+}
+
+pub(super) fn render_openai_endpoint_kind_picker_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
+    let kinds = [
+        crate::config::OpenAiEndpointKind::Custom,
+        crate::config::OpenAiEndpointKind::Deepseek,
+        crate::config::OpenAiEndpointKind::Kimi,
+        crate::config::OpenAiEndpointKind::Openrouter,
+    ];
+    let items = kinds
+        .into_iter()
+        .enumerate()
+        .map(|(idx, kind)| {
+            let current = if app.config.active_openai_profile_kind() == Some(kind) {
+                " current"
+            } else {
+                ""
+            };
+            let detail = match kind {
+                crate::config::OpenAiEndpointKind::Custom => {
+                    "Bring your own endpoint URL, API key, and model id."
+                }
+                crate::config::OpenAiEndpointKind::Deepseek => {
+                    "Use DeepSeek defaults, then fill in the API key."
+                }
+                crate::config::OpenAiEndpointKind::Kimi => {
+                    "Use Kimi defaults, then fill in the API key."
+                }
+                crate::config::OpenAiEndpointKind::Openrouter => {
+                    "Use OpenRouter defaults, then fill in the API key."
+                }
+            };
+            let item = ListItem::new(vec![
+                Line::from(format!("[{}] {}{}", idx + 1, kind.label(), current)),
+                Line::from(format!("  {detail}")),
+                Line::from(""),
+            ]);
+            if idx == app.openai_endpoint_kind_picker_idx {
+                item.style(
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                )
+            } else {
+                item
+            }
+        })
+        .collect::<Vec<_>>();
+    let intro = "Choose which OpenAI-compatible endpoint family to configure first.\nThe next steps will walk through the connection fields for that endpoint.";
+    let intro_height = wrapped_text_height(intro, area.width);
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(intro_height),
+            Constraint::Min(8),
+            Constraint::Length(2),
+        ])
+        .split(area);
+    f.render_widget(
+        Paragraph::new(intro)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" Endpoint Kind "),
+        )
+        .wrap(Wrap { trim: false }),
+        chunks[0],
+    );
+    f.render_widget(
+        List::new(items).block(Block::default().borders(Borders::LEFT | Borders::RIGHT)),
+        chunks[1],
+    );
+    f.render_widget(
+        Paragraph::new("1-4 jump  Up/Down move  Enter choose  Esc back")
+            .alignment(Alignment::Center),
         chunks[2],
     );
 }
@@ -477,15 +596,16 @@ pub(super) fn render_base_url_editor_modal(
 }
 
 pub(super) fn render_auth_mode_picker_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
+    let view = build_auth_mode_picker_view(app, is_ssh_session());
+    let intro_height = wrapped_text_height(view.intro.as_str(), area.width);
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(8),
+            Constraint::Length(intro_height),
             Constraint::Min(6),
             Constraint::Length(2),
         ])
         .split(area);
-    let view = build_auth_mode_picker_view(app, is_ssh_session());
     f.render_widget(
         Paragraph::new(view.intro)
             .block(
@@ -537,7 +657,7 @@ pub(super) fn render_api_key_editor_modal(
         )
     } else {
         (
-            "Paste a Codex-compatible API key. This is the recommended path for SSH/headless sessions.",
+            "Paste a Codex API key. This is the recommended path for SSH/headless sessions.",
             " Codex API Key ",
             "Enter save and rebuild  Esc back to login guide",
         )

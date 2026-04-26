@@ -12,7 +12,7 @@ use crate::state_db::{
 
 use super::{
     RolloutItem, ThreadHistorySource, ThreadMetadataSource, ThreadNonTurnRolloutSource,
-    ThreadRecorder, ThreadRuntimeState, ThreadStore,
+    ThreadRecorder, ThreadRuntimeLineage, ThreadRuntimeState, ThreadStore,
 };
 
 #[test]
@@ -752,6 +752,66 @@ fn thread_recorder_persists_runtime_state_via_state_db() -> Result<()> {
     assert_eq!(threads[0].session_id, "session-recorder");
     assert_eq!(threads[0].compaction_count, 1);
     assert_eq!(threads[0].last_compaction_after_tokens, Some(1200));
+    Ok(())
+}
+
+#[test]
+fn thread_recorder_preserves_existing_lineage_on_runtime_updates() -> Result<()> {
+    let temp = tempdir()?;
+    let state_db = StateDb::new_for_root_dir(temp.path().join(".rara"))?;
+    let recorder = ThreadRecorder::new(&state_db);
+
+    recorder.persist_runtime_state_with_lineage(
+        &ThreadRuntimeState {
+            session_id: "session-lineage",
+            cwd: "/tmp/workspace",
+            branch: "feature/fork",
+            provider: "codex",
+            model: "gpt-5",
+            base_url: Some("https://chatgpt.com/backend-api/codex"),
+            agent_mode: "execute",
+            bash_approval: "suggestion",
+            plan_explanation: None,
+            prompt_runtime: PersistedPromptRuntimeState::default(),
+            history_len: 1,
+            transcript_len: 1,
+            compact_state: PersistedCompactState::default(),
+        },
+        &ThreadRuntimeLineage {
+            origin_kind: "fork".to_string(),
+            forked_from_thread_id: Some("thread-parent".to_string()),
+        },
+    )?;
+
+    recorder.persist_runtime_state(&ThreadRuntimeState {
+        session_id: "session-lineage",
+        cwd: "/tmp/workspace",
+        branch: "feature/fork-updated",
+        provider: "codex",
+        model: "gpt-5",
+        base_url: Some("https://chatgpt.com/backend-api/codex"),
+        agent_mode: "plan",
+        bash_approval: "always",
+        plan_explanation: Some("Keep lineage stable."),
+        prompt_runtime: PersistedPromptRuntimeState::default(),
+        history_len: 3,
+        transcript_len: 2,
+        compact_state: PersistedCompactState {
+            compaction_count: 1,
+            ..Default::default()
+        },
+    })?;
+
+    let record = state_db
+        .load_thread_record("session-lineage")?
+        .expect("thread record");
+    assert_eq!(record.lineage.origin_kind, "fork");
+    assert_eq!(
+        record.lineage.forked_from_thread_id.as_deref(),
+        Some("thread-parent")
+    );
+    assert_eq!(record.branch, "feature/fork-updated");
+    assert_eq!(record.agent_mode, "plan");
     Ok(())
 }
 

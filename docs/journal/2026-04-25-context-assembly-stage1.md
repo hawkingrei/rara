@@ -82,6 +82,7 @@ of the model-send path.
 - Added a first `MemorySelection` contract on top of Stage 1 assembly so the
   runtime can distinguish:
   - selected memory-like inputs;
+  - available-but-not-injected inputs;
   - dropped-but-considered inputs;
   - a bounded selection budget for the current turn.
 - The retrieval side now uses an explicit candidate pool:
@@ -93,17 +94,19 @@ of the model-send path.
     - recent tool results;
   - discretionary retrieval candidates compete for the remaining
     memory-selection budget;
-  - dropped candidates carry concrete reasons such as:
+  - available candidates carry concrete reasons such as:
     - compacted history already covering the thread need;
     - a more focused retrieved thread-context candidate winning;
+    - workspace memory existing but not being activated as a prompt source;
+  - dropped candidates now narrow to ranking/budget losses such as:
     - the remaining memory-selection budget being exhausted.
 - Retrieval tool outputs now normalize into more semantic candidate kinds:
   - `retrieved_workspace_memory`
   - `retrieved_thread_context`
   instead of only echoing raw tool names.
-- This still stops short of real vector candidate ranking. The current dropped
-  side can therefore include readiness-only items such as the configured vector
-  memory store.
+- This still stops short of real vector candidate ranking. The current
+  available side can therefore include readiness-only items such as the
+  configured vector memory store.
 
 - Push this Stage 1 assembly contract deeper into real retrieval selection so
   `/context` can explain why vector/thread candidates won or lost the retrieval

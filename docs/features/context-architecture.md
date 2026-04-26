@@ -189,6 +189,7 @@ ad hoc inclusion decisions inline.
 The first cut of `MemorySelection` should:
 
 - collect the currently selected memory-like inputs;
+- collect available-but-not-injected inputs separately from dropped ones;
 - collect considered-but-dropped inputs;
 - preserve human-readable selection and drop reasons;
 - expose a bounded selection budget for the current turn.

@@ -11,6 +11,7 @@ use ratatui::{
 use self::overlay_setup::{
     render_api_key_editor_modal, render_auth_mode_picker_modal, render_base_url_editor_modal,
     render_model_name_editor_modal, render_model_picker_modal,
+    render_openai_endpoint_kind_picker_modal,
     render_openai_profile_label_editor_modal, render_openai_profile_picker_modal,
     render_provider_picker_modal, render_reasoning_effort_picker_modal, render_resume_picker_modal,
 };
@@ -72,6 +73,12 @@ pub(super) fn render_overlay(
             let popup = centered_rect(78, 70, f.area());
             f.render_widget(Clear, popup);
             render_model_picker_modal(f, app, popup);
+            None
+        }
+        Overlay::OpenAiEndpointKindPicker => {
+            let popup = centered_rect(78, 70, f.area());
+            f.render_widget(Clear, popup);
+            render_openai_endpoint_kind_picker_modal(f, app, popup);
             None
         }
         Overlay::OpenAiProfilePicker => {

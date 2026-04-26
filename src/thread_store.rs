@@ -277,24 +277,28 @@ impl<'a> ThreadStore<'a> {
 
         self.session_manager
             .save_session(&forked_thread_id, &materialized.history)?;
-        self.state_db.upsert_session_with_lineage(
-            &forked_thread_id,
-            &materialized.metadata.cwd,
-            &materialized.metadata.branch,
-            &materialized.metadata.provider,
-            &materialized.metadata.model,
-            materialized.metadata.base_url.as_deref(),
-            &materialized.metadata.agent_mode,
-            &materialized.metadata.bash_approval,
-            &lineage,
-            materialized.plan_explanation.as_deref(),
-            &runtime_state.prompt_runtime,
-            materialized.history.len(),
-            materialized.metadata.transcript_len,
-            &compact_state,
-        )?;
-
         let recorder = ThreadRecorder::new(self.state_db);
+        recorder.persist_runtime_state_with_lineage(
+            &ThreadRuntimeState {
+                session_id: &forked_thread_id,
+                cwd: &materialized.metadata.cwd,
+                branch: &materialized.metadata.branch,
+                provider: &materialized.metadata.provider,
+                model: &materialized.metadata.model,
+                base_url: materialized.metadata.base_url.as_deref(),
+                agent_mode: &materialized.metadata.agent_mode,
+                bash_approval: &materialized.metadata.bash_approval,
+                plan_explanation: materialized.plan_explanation.as_deref(),
+                prompt_runtime: runtime_state.prompt_runtime.clone(),
+                history_len: materialized.history.len(),
+                transcript_len: materialized.metadata.transcript_len,
+                compact_state: compact_state.clone(),
+            },
+            &ThreadRuntimeLineage {
+                origin_kind: lineage.origin_kind.clone(),
+                forked_from_thread_id: lineage.forked_from_thread_id.clone(),
+            },
+        )?;
         recorder.replace_plan_steps(&forked_thread_id, &materialized.plan_steps)?;
         recorder.replace_interactions(&forked_thread_id, &materialized.interactions)?;
 
@@ -724,6 +728,11 @@ pub struct ThreadRuntimeState<'a> {
     pub compact_state: PersistedCompactState,
 }
 
+pub struct ThreadRuntimeLineage {
+    pub origin_kind: String,
+    pub forked_from_thread_id: Option<String>,
+}
+
 pub struct ThreadRecorder<'a> {
     state_db: &'a StateDb,
 }
@@ -734,7 +743,16 @@ impl<'a> ThreadRecorder<'a> {
     }
 
     pub fn persist_runtime_state(&self, state: &ThreadRuntimeState<'_>) -> Result<()> {
-        self.state_db.upsert_session(
+        let lineage = self.current_lineage(state.session_id)?;
+        self.persist_runtime_state_with_lineage(state, &lineage)
+    }
+
+    pub fn persist_runtime_state_with_lineage(
+        &self,
+        state: &ThreadRuntimeState<'_>,
+        lineage: &ThreadRuntimeLineage,
+    ) -> Result<()> {
+        self.state_db.upsert_session_with_lineage(
             state.session_id,
             state.cwd,
             state.branch,
@@ -743,12 +761,31 @@ impl<'a> ThreadRecorder<'a> {
             state.base_url,
             state.agent_mode,
             state.bash_approval,
+            &PersistedThreadLineage {
+                origin_kind: lineage.origin_kind.clone(),
+                forked_from_thread_id: lineage.forked_from_thread_id.clone(),
+            },
             state.plan_explanation,
             &state.prompt_runtime,
             state.history_len,
             state.transcript_len,
             &state.compact_state,
         )
+    }
+
+    fn current_lineage(&self, session_id: &str) -> Result<ThreadRuntimeLineage> {
+        let lineage = self
+            .state_db
+            .load_thread_record(session_id)?
+            .map(|record| ThreadRuntimeLineage {
+                origin_kind: record.lineage.origin_kind,
+                forked_from_thread_id: record.lineage.forked_from_thread_id,
+            })
+            .unwrap_or(ThreadRuntimeLineage {
+                origin_kind: "fresh".to_string(),
+                forked_from_thread_id: None,
+            });
+        Ok(lineage)
     }
 
     pub fn replace_plan_steps(&self, session_id: &str, steps: &[PersistedPlanStep]) -> Result<()> {
