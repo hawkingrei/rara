@@ -403,8 +403,8 @@ mod tests {
         let popup = command_palette_rect(area, bottom_pane, &app);
 
         assert!(popup.bottom() <= bottom_pane.y);
-        assert_eq!(popup.x, 1);
-        assert!(popup.width <= 76);
+        assert_eq!(popup.x, 0);
+        assert_eq!(popup.width, area.width);
     }
 
     #[test]
@@ -421,7 +421,7 @@ mod tests {
         let popup = command_palette_rect(area, bottom_pane, &app);
 
         assert!(popup.height >= 12);
-        assert!(popup.width >= 70);
+        assert_eq!(popup.width, area.width);
     }
 
     #[test]
@@ -614,12 +614,8 @@ fn command_palette_rect(area: Rect, bottom_pane_area: Rect, app: &TuiApp) -> Rec
     let height = visible_rows
         .saturating_add(1)
         .min(area.height.saturating_sub(2).max(4));
-    let max_width = area.width.saturating_sub(4).max(24);
-    let width = 76.min(max_width);
-    let x = bottom_pane_area
-        .x
-        .saturating_add(1)
-        .min(area.right().saturating_sub(width).max(area.x));
+    let width = area.width;
+    let x = area.x;
     let max_y = bottom_pane_area.y.saturating_sub(1);
     let y = max_y.saturating_sub(height).max(area.y);
 

@@ -391,6 +391,13 @@ fn composer_hint_line(app: &TuiApp) -> Line<'static> {
 }
 
 fn render_footer(f: &mut Frame, app: &TuiApp, area: Rect) {
+    if matches!(
+        app.overlay,
+        Some(super::super::state::Overlay::CommandPalette)
+    ) {
+        f.render_widget(Paragraph::new(""), area);
+        return;
+    }
     let summary = footer_summary_text(app);
     f.render_widget(
         Paragraph::new(Line::from(Span::styled(

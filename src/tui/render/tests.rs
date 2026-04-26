@@ -586,6 +586,87 @@ fn provider_picker_does_not_panic_on_106x25_terminal_after_model_command() {
 }
 
 #[test]
+fn command_palette_does_not_panic_on_107x53_terminal_with_slash_input() {
+    let temp = tempdir().expect("tempdir");
+    let mut app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("build tui app");
+    app.input = "/stat".into();
+    app.open_overlay(Overlay::CommandPalette);
+
+    let rendered = render_screen_text(&app, 107, 53);
+    assert!(rendered.contains("/status"));
+}
+
+#[test]
+fn command_palette_query_uses_full_width_without_leaking_bottom_status() {
+    let temp = tempdir().expect("tempdir");
+    let mut app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("build tui app");
+    app.input = "/m".into();
+    app.open_overlay(Overlay::CommandPalette);
+
+    let rendered = render_screen_text(&app, 107, 53);
+    assert!(rendered.contains("/model"));
+    assert!(!rendered.contains("ctx~=0"));
+}
+
+#[test]
+fn provider_picker_does_not_panic_on_107x53_terminal_after_model_command() {
+    let temp = tempdir().expect("tempdir");
+    let mut app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("build tui app");
+    app.input = "/model".into();
+    app.open_overlay(Overlay::ProviderPicker);
+
+    let rendered = render_screen_text(&app, 107, 53);
+    assert!(rendered.contains("Provider Menu"));
+}
+
+#[test]
+fn auth_mode_picker_does_not_panic_on_107x53_terminal_after_auth_command() {
+    let temp = tempdir().expect("tempdir");
+    let mut app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("build tui app");
+    app.input = "/auth".into();
+    app.open_overlay(Overlay::AuthModePicker);
+
+    let rendered = render_screen_text(&app, 107, 53);
+    assert!(rendered.contains("Codex Login"));
+}
+
+#[test]
+fn render_clamps_cursor_to_frame_bounds() {
+    let temp = tempdir().expect("tempdir");
+    let mut app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("build tui app");
+    app.input = "/model".into();
+    app.open_overlay(Overlay::ProviderPicker);
+
+    let area = Rect::new(0, 0, 106, 25);
+    let mut buffer = Buffer::empty(area);
+    let mut frame = Frame {
+        cursor_position: None,
+        viewport_area: area,
+        buffer: &mut buffer,
+    };
+    super::render(&mut frame, &app);
+
+    let cursor = frame.cursor_position.expect("cursor should be set");
+    assert!(cursor.x < area.right());
+    assert!(cursor.y < area.bottom());
+}
+
+#[test]
 fn api_key_editor_renders_full_prompt_on_standard_terminal() {
     let temp = tempdir().expect("tempdir");
     let mut app = TuiApp::new(ConfigManager {
