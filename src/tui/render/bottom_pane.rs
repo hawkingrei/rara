@@ -12,6 +12,7 @@ use super::super::queued_input::{
     pending_follow_up_heading, pending_follow_up_hint, queued_follow_up_heading,
     queued_follow_up_hint,
 };
+use super::super::state::char_offset_to_byte_index;
 use super::super::state::{ActivePendingInteractionKind, TaskKind, TuiApp};
 use super::badge;
 
@@ -480,9 +481,10 @@ fn wrapped_text_cursor_position(
 
     let initial_indent = initial_indent.unwrap_or("");
     let subsequent_indent = subsequent_indent.unwrap_or("");
-    let cursor_prefix = input.chars().take(cursor_offset).collect::<String>();
+    let cursor_prefix_end = char_offset_to_byte_index(input, cursor_offset);
+    let cursor_prefix = &input[..cursor_prefix_end];
     let wrapped_rows = wrapped_text_rows(
-        cursor_prefix.as_str(),
+        cursor_prefix,
         area.width,
         Some(initial_indent),
         Some(subsequent_indent),

@@ -197,10 +197,11 @@ fn shift_enter_inserts_newline_in_main_composer() {
 #[test]
 fn arrow_keys_and_home_end_map_to_composer_cursor_events() {
     let temp = tempdir().expect("tempdir");
-    let app = TuiApp::new(ConfigManager {
+    let mut app = TuiApp::new(ConfigManager {
         path: temp.path().join("config.json"),
     })
     .expect("app");
+    app.input = "hello".into();
 
     assert!(matches!(
         map_key_to_event(key(KeyCode::Left), &app),
@@ -225,6 +226,24 @@ fn arrow_keys_and_home_end_map_to_composer_cursor_events() {
     assert!(matches!(
         map_key_to_event(key(KeyCode::Down), &app),
         AppEvent::MoveCursorDown
+    ));
+}
+
+#[test]
+fn empty_composer_keeps_up_down_for_transcript_scroll() {
+    let temp = tempdir().expect("tempdir");
+    let app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("app");
+
+    assert!(matches!(
+        map_key_to_event(key(KeyCode::Up), &app),
+        AppEvent::ScrollTranscript(-1)
+    ));
+    assert!(matches!(
+        map_key_to_event(key(KeyCode::Down), &app),
+        AppEvent::ScrollTranscript(1)
     ));
 }
 

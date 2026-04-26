@@ -70,7 +70,7 @@ fn effective_cursor_offset(text: &str, cursor_offset: Option<usize>) -> usize {
         .min(text.chars().count())
 }
 
-fn char_offset_to_byte_index(text: &str, char_offset: usize) -> usize {
+pub(crate) fn char_offset_to_byte_index(text: &str, char_offset: usize) -> usize {
     if char_offset == 0 {
         return 0;
     }
@@ -232,26 +232,64 @@ impl TuiApp {
         target_row: usize,
         target_column: usize,
     ) -> usize {
-        let total = self.input.chars().count();
-        let mut best_offset = None;
+        let max_width = self.terminal_width.max(1) as usize;
+        let mut row = 0usize;
+        let mut column = 2usize;
+        let mut content_width = 0usize;
+        let mut current_offset = 0usize;
+        let mut best_offset = 0usize;
         let mut best_distance = usize::MAX;
 
-        for offset in 0..=total {
-            let (row, column) = self.composer_visual_position_for_offset(offset);
+        for ch in self.input.chars() {
             if row != target_row {
+                if row > target_row {
+                    return best_offset;
+                }
+            } else {
+                let distance = column.abs_diff(target_column);
+                if distance < best_distance
+                    || (distance == best_distance && current_offset > best_offset)
+                {
+                    best_distance = distance;
+                    best_offset = current_offset;
+                }
+            }
+
+            current_offset += 1;
+
+            if ch == '\n' {
+                row += 1;
+                column = 2;
+                content_width = 0;
                 continue;
             }
 
-            let distance = column.abs_diff(target_column);
-            if distance < best_distance
-                || (distance == best_distance && best_offset.is_some_and(|best| offset > best))
+            let char_width = composer_display_char_width(ch);
+            if 2usize
+                .saturating_add(content_width)
+                .saturating_add(char_width)
+                > max_width
+                && content_width > 0
             {
-                best_distance = distance;
-                best_offset = Some(offset);
+                row += 1;
+                content_width = 0;
             }
+
+            content_width = content_width.saturating_add(char_width);
+            column = 2usize.saturating_add(content_width);
         }
 
-        best_offset.unwrap_or(total)
+        if row == target_row {
+            let distance = column.abs_diff(target_column);
+            if distance < best_distance
+                || (distance == best_distance && current_offset > best_offset)
+            {
+                best_offset = current_offset;
+            }
+            return best_offset;
+        }
+
+        current_offset
     }
 
     pub fn backspace_active_input(&mut self) {
