@@ -11,9 +11,9 @@ use ratatui::{
 use self::overlay_setup::{
     render_api_key_editor_modal, render_auth_mode_picker_modal, render_base_url_editor_modal,
     render_model_name_editor_modal, render_model_picker_modal,
-    render_openai_endpoint_kind_picker_modal,
-    render_openai_profile_label_editor_modal, render_openai_profile_picker_modal,
-    render_provider_picker_modal, render_reasoning_effort_picker_modal, render_resume_picker_modal,
+    render_openai_endpoint_kind_picker_modal, render_openai_profile_label_editor_modal,
+    render_openai_profile_picker_modal, render_provider_picker_modal,
+    render_reasoning_effort_picker_modal, render_resume_picker_modal,
 };
 use super::super::command::{
     current_turn_preview, download_status_text, general_help_text, matching_commands,
@@ -241,10 +241,6 @@ fn render_help_modal(f: &mut Frame, app: &TuiApp, area: Rect, tab: HelpTab) {
 
 fn render_command_palette(f: &mut Frame, app: &TuiApp, area: Rect) {
     let query = app.input.trim_start().trim_start_matches('/');
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Min(1), Constraint::Length(1)])
-        .split(area);
     let items = if query.is_empty() {
         palette_items_for_empty_query(app)
     } else {
@@ -255,12 +251,8 @@ fn render_command_palette(f: &mut Frame, app: &TuiApp, area: Rect) {
         List::new(items)
             .highlight_style(command_list_highlight_style())
             .highlight_symbol("› "),
-        chunks[0],
+        area,
         &mut state,
-    );
-    f.render_widget(
-        Paragraph::new(command_palette_footer_text(query)).alignment(Alignment::Left),
-        chunks[1],
     );
 }
 
@@ -300,14 +292,6 @@ fn command_palette_line(spec: &CommandSpec) -> Line<'static> {
         ),
         Span::styled(spec.summary.to_string(), Style::default().fg(Color::Gray)),
     ])
-}
-
-fn command_palette_footer_text(query: &str) -> &'static str {
-    if query.is_empty() {
-        "enter run  esc close"
-    } else {
-        "up/down move  enter run  esc close"
-    }
 }
 
 fn panel_text(title: &str, body: &str) -> String {
@@ -371,15 +355,6 @@ mod tests {
 
         assert_eq!(items.len(), COMMAND_SPECS.len());
         assert_eq!(names, sorted);
-    }
-
-    #[test]
-    fn command_palette_footer_is_minimal_for_empty_query() {
-        assert_eq!(command_palette_footer_text(""), "enter run  esc close");
-        assert_eq!(
-            command_palette_footer_text("mod"),
-            "up/down move  enter run  esc close"
-        );
     }
 
     #[test]
@@ -611,9 +586,7 @@ fn command_palette_rect(area: Rect, bottom_pane_area: Rect, app: &TuiApp) -> Rec
     };
     let max_visible_rows = area.height.saturating_sub(6).clamp(6, 14) as usize;
     let visible_rows = item_count.clamp(1, max_visible_rows) as u16;
-    let height = visible_rows
-        .saturating_add(1)
-        .min(area.height.saturating_sub(2).max(4));
+    let height = visible_rows.min(area.height.saturating_sub(2).max(4));
     let width = area.width;
     let x = area.x;
     let max_y = bottom_pane_area.y.saturating_sub(1);

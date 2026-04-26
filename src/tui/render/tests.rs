@@ -1,8 +1,8 @@
 use std::path::Path;
 
 use insta::assert_snapshot;
-use ratatui::{buffer::Buffer, layout::Rect};
 use ratatui::text::Line;
+use ratatui::{buffer::Buffer, layout::Rect};
 use tempfile::tempdir;
 
 use crate::config::{ConfigManager, RaraConfig};
@@ -612,6 +612,24 @@ fn command_palette_query_uses_full_width_without_leaking_bottom_status() {
     let rendered = render_screen_text(&app, 107, 53);
     assert!(rendered.contains("/model"));
     assert!(!rendered.contains("ctx~=0"));
+    assert!(!rendered.contains("enter run  esc close"));
+}
+
+#[test]
+fn command_palette_empty_query_does_not_render_inline_footer_hint() {
+    let temp = tempdir().expect("tempdir");
+    let mut app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("build tui app");
+    app.input = "/".into();
+    app.open_overlay(Overlay::CommandPalette);
+
+    let rendered = render_screen_text(&app, 107, 53);
+    assert!(rendered.contains("/approval"));
+    assert!(rendered.contains("/model"));
+    assert!(!rendered.contains("enter run  esc close"));
+    assert!(!rendered.contains("up/down move  enter run  esc close"));
 }
 
 #[test]
