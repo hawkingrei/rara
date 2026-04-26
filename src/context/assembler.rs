@@ -181,6 +181,7 @@ impl<'a> ContextAssembler<'a> {
             inputs.pending_interactions.as_slice(),
             compaction.source_entries.as_slice(),
             retrieval.memory_selection.selected_items.as_slice(),
+            retrieval.memory_selection.available_items.as_slice(),
             retrieval.memory_selection.dropped_items.as_slice(),
             inputs.history,
         );
@@ -234,6 +235,7 @@ fn assemble_context_view(
     pending_interactions: &[RuntimeInteractionInput],
     compaction_entries: &[CompactionSourceContextEntry],
     selected_memory_items: &[MemorySelectionItemContextEntry],
+    available_memory_items: &[MemorySelectionItemContextEntry],
     dropped_memory_items: &[MemorySelectionItemContextEntry],
     history: &[Message],
 ) -> ContextAssemblyView {
@@ -383,6 +385,20 @@ fn assemble_context_view(
             inclusion_reason: item.selection_reason.clone(),
             budget_impact_tokens: item.budget_impact_tokens,
             dropped_reason: None,
+        });
+    }
+
+    for item in available_memory_items {
+        push(ContextAssemblyEntry {
+            order: 0,
+            layer: "retrieval_ready".to_string(),
+            kind: item.kind.clone(),
+            label: item.label.clone(),
+            source_path: None,
+            injected: false,
+            inclusion_reason: item.selection_reason.clone(),
+            budget_impact_tokens: item.budget_impact_tokens,
+            dropped_reason: item.dropped_reason.clone(),
         });
     }
 
@@ -603,13 +619,18 @@ fn memory_selection(
         item.order = idx + 1;
     }
 
-    let mut dropped_items = discretionary.dropped_items;
+    let mut available_items = discretionary.available_items;
     if !selected_items
         .iter()
         .any(|item| item.kind == "workspace_memory")
     {
-        dropped_items.push(workspace_memory_dropped_item(prompt_sources));
+        available_items.push(workspace_memory_available_item(prompt_sources));
     }
+    for (idx, item) in available_items.iter_mut().enumerate() {
+        item.order = idx + 1;
+    }
+
+    let mut dropped_items = discretionary.dropped_items;
     for (idx, item) in dropped_items.iter_mut().enumerate() {
         item.order = idx + 1;
     }
@@ -617,6 +638,7 @@ fn memory_selection(
     MemorySelectionContextView {
         selection_budget_tokens,
         selected_items,
+        available_items,
         dropped_items,
     }
 }
@@ -636,6 +658,7 @@ struct MemorySelectionCandidate {
 #[derive(Debug, Default)]
 struct MemorySelectionDecision {
     selected_items: Vec<MemorySelectionItemContextEntry>,
+    available_items: Vec<MemorySelectionItemContextEntry>,
     dropped_items: Vec<MemorySelectionItemContextEntry>,
 }
 
@@ -921,17 +944,22 @@ fn select_memory_candidates(
         };
 
         if let Some(dropped_reason) = should_drop {
-            decision
-                .dropped_items
-                .push(MemorySelectionItemContextEntry {
-                    order: 0,
-                    kind: candidate.kind,
-                    label: candidate.label,
-                    detail: candidate.detail,
-                    selection_reason: candidate.selection_reason,
-                    budget_impact_tokens: candidate.budget_impact_tokens,
-                    dropped_reason: Some(dropped_reason),
-                });
+            let item = MemorySelectionItemContextEntry {
+                order: 0,
+                kind: candidate.kind,
+                label: candidate.label,
+                detail: candidate.detail,
+                selection_reason: candidate.selection_reason,
+                budget_impact_tokens: candidate.budget_impact_tokens,
+                dropped_reason: Some(dropped_reason),
+            };
+            if item.dropped_reason.as_deref().is_some_and(|reason| {
+                reason.contains("exceed the remaining memory-selection budget")
+            }) {
+                decision.dropped_items.push(item);
+            } else {
+                decision.available_items.push(item);
+            }
             continue;
         }
 
@@ -957,7 +985,7 @@ fn select_memory_candidates(
     decision
 }
 
-fn workspace_memory_dropped_item(
+fn workspace_memory_available_item(
     prompt_sources: &[PromptSource],
 ) -> MemorySelectionItemContextEntry {
     let workspace_memory_available = prompt_sources
@@ -975,7 +1003,7 @@ fn workspace_memory_dropped_item(
         selection_reason: "workspace memory participates in the selection contract even when it is not part of the current assembled working set".to_string(),
         budget_impact_tokens: None,
         dropped_reason: Some(if workspace_memory_available {
-            "not selected into the current turn because workspace memory was not activated as a prompt input".to_string()
+            "available for recall, but not selected into the current turn because workspace memory was not activated as a prompt input".to_string()
         } else {
             "no workspace memory candidate is currently available".to_string()
         }),

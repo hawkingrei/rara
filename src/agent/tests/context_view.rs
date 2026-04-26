@@ -268,15 +268,16 @@ fn shared_runtime_context_collects_prompt_plan_and_compaction_state() {
         .is_some_and(|item| item
             .detail
             .contains("Auth picker already moved behind the shared runtime bootstrap.")));
-    assert_eq!(runtime.retrieval.memory_selection.dropped_items.len(), 2);
+    assert_eq!(runtime.retrieval.memory_selection.available_items.len(), 2);
     assert_eq!(
-        runtime.retrieval.memory_selection.dropped_items[0].kind,
+        runtime.retrieval.memory_selection.available_items[0].kind,
         "thread_history"
     );
     assert_eq!(
-        runtime.retrieval.memory_selection.dropped_items[1].kind,
+        runtime.retrieval.memory_selection.available_items[1].kind,
         "vector_memory"
     );
+    assert!(runtime.retrieval.memory_selection.dropped_items.is_empty());
     assert!(runtime
         .retrieval
         .memory_selection

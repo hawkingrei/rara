@@ -354,6 +354,27 @@ fn render_memory_selection(app: &TuiApp) -> String {
             .collect::<Vec<_>>()
             .join("\n")
     };
+    let available = if app.snapshot.memory_selection.available_items.is_empty() {
+        "  - None.".to_string()
+    } else {
+        app.snapshot
+            .memory_selection
+            .available_items
+            .iter()
+            .map(|item| {
+                format!(
+                    "  {}. {} ({})\n     detail: {}\n     why available: {}\n     not injected: {}",
+                    item.order,
+                    item.label,
+                    item.kind,
+                    item.detail,
+                    item.selection_reason,
+                    item.dropped_reason.as_deref().unwrap_or("-")
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
     let dropped = if app.snapshot.memory_selection.dropped_items.is_empty() {
         "  - None.".to_string()
     } else {
@@ -377,8 +398,8 @@ fn render_memory_selection(app: &TuiApp) -> String {
     };
 
     format!(
-        "Memory Selection\n  selection budget: {}\n  selected now:\n{}\n  dropped now:\n{}",
-        budget, selected, dropped
+        "Memory Selection\n  selection budget: {}\n  selected now:\n{}\n  available but not injected:\n{}\n  dropped by ranking or budget:\n{}",
+        budget, selected, available, dropped
     )
 }
 
@@ -1148,6 +1169,7 @@ mod tests {
                         dropped_reason: None,
                     },
                 ],
+                available_items: Vec::new(),
                 dropped_items: Vec::new(),
             },
             compaction_count: 2,
@@ -1309,7 +1331,7 @@ mod tests {
                         dropped_reason: None,
                     },
                 ],
-                dropped_items: vec![crate::context::MemorySelectionItemContextEntry {
+                available_items: vec![crate::context::MemorySelectionItemContextEntry {
                     order: 1,
                     kind: "thread_history".into(),
                     label: "Thread History".into(),
@@ -1319,6 +1341,18 @@ mod tests {
                     budget_impact_tokens: None,
                     dropped_reason: Some(
                         "raw thread history was not selected directly because the current turn already has sufficient active-turn and compacted-history context".into(),
+                    ),
+                }],
+                dropped_items: vec![crate::context::MemorySelectionItemContextEntry {
+                    order: 1,
+                    kind: "retrieved_workspace_memory".into(),
+                    label: "Retrieved Experience".into(),
+                    detail: "query=bootstrap contract; recalled=5 item(s)".into(),
+                    selection_reason:
+                        "selected because the retrieval tool returned relevant durable memory candidates for the current task".into(),
+                    budget_impact_tokens: Some(2_048),
+                    dropped_reason: Some(
+                        "not selected because it would exceed the remaining memory-selection budget (2048 > 1024)".into(),
                     ),
                 }],
             },
@@ -1439,6 +1473,8 @@ mod tests {
         assert!(rendered.contains("Compacted History"));
         assert!(rendered.contains("Active Turn State"));
         assert!(rendered.contains("Retrieval-ready but not injected items"));
+        assert!(rendered.contains("available but not injected"));
+        assert!(rendered.contains("dropped by ranking or budget"));
         assert!(rendered.contains("1. Project Instruction (AGENTS.md) (project_instruction)"));
         assert!(rendered.contains("path: AGENTS.md"));
         assert!(rendered.contains("injected: yes"));
@@ -1446,7 +1482,10 @@ mod tests {
         assert!(rendered.contains("dropped: -"));
         assert!(rendered.contains("6. Thread History (thread_history)"));
         assert!(rendered.contains("injected: no"));
-        assert!(rendered.contains("dropped: raw thread history was not selected directly"));
+        assert!(rendered.contains("not injected: raw thread history was not selected directly"));
+        assert!(rendered.contains(
+            "dropped: not selected because it would exceed the remaining memory-selection budget"
+        ));
         assert!(rendered.contains("why selected: selected because the current effective prompt includes the workspace memory file as an active input"));
         assert!(rendered.contains("[pending] Implement /context"));
     }
