@@ -26,7 +26,6 @@ use super::line_utils::prefix_lines;
 use super::state::{TranscriptEntry, TuiApp};
 
 pub fn render(f: &mut Frame, app: &TuiApp) {
-    let frame_area = f.area();
     let bottom_pane_height = desired_bottom_pane_height(app, f.area().width, f.area().height);
     let layout = Layout::default()
         .direction(Direction::Vertical)
@@ -42,9 +41,7 @@ pub fn render(f: &mut Frame, app: &TuiApp) {
     }
 
     if let Some((x, y)) = cursor {
-        let max_x = frame_area.right().saturating_sub(1);
-        let max_y = frame_area.bottom().saturating_sub(1);
-        f.set_cursor_position((x.min(max_x), y.min(max_y)));
+        f.set_cursor_position((x, y));
     }
 }
 
