@@ -539,11 +539,15 @@ async fn dispatch_event(
                 let label = app.openai_profile_label_input.trim();
                 if label.is_empty() {
                     app.push_notice("Enter a profile label or press Esc to go back.");
-                } else if let Some(kind) = app.selected_openai_profile_kind() {
+                } else if let Some(kind) = app
+                    .openai_profile_label_kind
+                    .or_else(|| app.selected_openai_profile_kind())
+                {
                     let profile_id = app.next_openai_profile_id(kind, label);
                     app.config.select_openai_profile(profile_id, label, kind);
                     app.config_manager.save(&app.config)?;
                     app.notice = Some(format!("Created endpoint profile: {label}"));
+                    app.openai_profile_label_kind = None;
                     app.overlay = Some(Overlay::ModelPicker);
                 }
             }
@@ -596,6 +600,7 @@ async fn dispatch_event(
                 if app.is_busy() {
                     app.push_notice("A task is already running. Wait for it to finish.");
                 } else if app.openai_profile_picker_idx == 0 {
+                    app.openai_profile_label_kind = app.selected_openai_profile_kind();
                     app.open_overlay(Overlay::OpenAiProfileLabelEditor);
                 } else if let Some((profile_id, label)) = app
                     .selected_openai_profiles()

@@ -563,15 +563,30 @@ async fn saving_openai_profile_label_creates_new_profile_for_selected_kind() {
     })
     .expect("app");
     app.provider_picker_idx = 1;
-    app.model_picker_idx = 1;
-    app.overlay = Some(Overlay::OpenAiProfileLabelEditor);
-    app.openai_profile_label_input = "DeepSeek backup".to_string();
+    app.config.select_openai_profile(
+        "deepseek-default",
+        "DeepSeek",
+        OpenAiEndpointKind::Deepseek,
+    );
+    app.open_overlay(Overlay::OpenAiProfilePicker);
+    app.openai_profile_picker_idx = 0;
 
     let oauth_manager = Arc::new(
         crate::oauth::OAuthManager::new_for_config_dir(temp.path().join(".rara"))
             .expect("oauth manager"),
     );
     let mut agent_slot = None;
+
+    dispatch_event(
+        AppEvent::ApplyOverlaySelection,
+        &mut app,
+        &mut agent_slot,
+        &oauth_manager,
+    )
+    .await
+    .expect("open profile label editor");
+
+    app.openai_profile_label_input = "DeepSeek backup".to_string();
 
     dispatch_event(
         AppEvent::SaveOpenAiProfileLabelInput,

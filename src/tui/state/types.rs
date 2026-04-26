@@ -11,7 +11,7 @@ use super::super::markdown_stream::MarkdownStreamCollector;
 use super::super::queued_input::PendingFollowUpMessage;
 use crate::agent::{Agent, AgentExecutionMode, BashApprovalMode};
 use crate::codex_model_catalog::CodexModelOption;
-use crate::config::{ConfigManager, RaraConfig};
+use crate::config::{ConfigManager, OpenAiEndpointKind, RaraConfig};
 use crate::context::{
     CompactionSourceContextEntry, ContextAssemblyEntry, PromptSourceContextEntry,
     RetrievalSourceContextEntry,
@@ -374,6 +374,7 @@ pub struct TuiApp {
     pub model_name_cursor_offset: Option<usize>,
     pub openai_profile_label_input: String,
     pub openai_profile_label_cursor_offset: Option<usize>,
+    pub openai_profile_label_kind: Option<OpenAiEndpointKind>,
     pub openai_setup_steps: Vec<Overlay>,
     pub codex_model_options: Vec<CodexModelOption>,
     pub recent_commands: Vec<String>,

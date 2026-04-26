@@ -462,6 +462,7 @@ impl TuiApp {
             model_name_cursor_offset: None,
             openai_profile_label_input: String::new(),
             openai_profile_label_cursor_offset: None,
+            openai_profile_label_kind: None,
             openai_setup_steps: Vec::new(),
             codex_model_options: Vec::new(),
             recent_commands: Vec::new(),
@@ -745,6 +746,7 @@ impl TuiApp {
 
     pub fn begin_openai_profile_setup(&mut self) {
         self.openai_setup_steps.clear();
+        self.openai_profile_label_kind = None;
         self.open_overlay(Overlay::OpenAiEndpointKindPicker);
     }
 
@@ -1181,7 +1183,8 @@ impl TuiApp {
         }
         if matches!(overlay, Overlay::OpenAiProfileLabelEditor) {
             let kind = self
-                .selected_openai_profile_kind()
+                .openai_profile_label_kind
+                .or_else(|| self.selected_openai_profile_kind())
                 .unwrap_or(OpenAiEndpointKind::Custom);
             self.openai_profile_label_input = format!("{} profile", kind.label());
             self.openai_profile_label_cursor_offset = None;
