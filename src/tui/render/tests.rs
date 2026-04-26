@@ -571,6 +571,21 @@ fn provider_picker_renders_as_full_overlay_on_standard_terminal() {
 }
 
 #[test]
+fn provider_picker_does_not_panic_on_106x25_terminal_after_model_command() {
+    let temp = tempdir().expect("tempdir");
+    let mut app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("build tui app");
+    app.input = "/model".into();
+    app.open_overlay(Overlay::ProviderPicker);
+
+    let rendered = render_screen_text(&app, 106, 25);
+    assert!(rendered.contains("Provider Menu"));
+    assert!(rendered.contains("OpenAI-compatible"));
+}
+
+#[test]
 fn api_key_editor_renders_full_prompt_on_standard_terminal() {
     let temp = tempdir().expect("tempdir");
     let mut app = TuiApp::new(ConfigManager {
