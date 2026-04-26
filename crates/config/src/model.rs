@@ -523,6 +523,9 @@ impl RaraConfig {
     fn migrate_legacy_openai_profiles(&mut self) {
         let mut migrated_profiles = BTreeMap::new();
         let mut active_profile_id = self.active_openai_profile_id.clone();
+        let current_provider = self.provider.clone();
+        let mut should_apply_active_profile = false;
+        let mut should_switch_provider = false;
 
         for legacy_provider in ["openai-compatible", "deepseek", "kimi", "openrouter"] {
             let Some(kind) = OpenAiEndpointKind::from_legacy_provider(legacy_provider) else {
@@ -551,19 +554,43 @@ impl RaraConfig {
                 );
             }
 
-            if self.provider == legacy_provider {
-                active_profile_id = Some(profile_id.clone());
+            if current_provider == legacy_provider {
+                should_apply_active_profile = true;
+                should_switch_provider = legacy_provider != "openai-compatible";
+                let existing_active_profile = if legacy_provider == "openai-compatible" {
+                    self.active_openai_profile().cloned()
+                } else {
+                    None
+                };
+                if legacy_provider != "openai-compatible"
+                    || (active_profile_id.is_none() && existing_active_profile.is_none())
+                {
+                    active_profile_id = Some(profile_id.clone());
+                }
+                let (target_profile_id, target_kind, target_label) =
+                    if let Some(profile) = existing_active_profile {
+                        (profile.id, profile.kind, profile.label)
+                    } else {
+                        (
+                            active_profile_id
+                                .clone()
+                                .unwrap_or_else(|| profile_id.clone()),
+                            kind,
+                            label,
+                        )
+                    };
                 migrated_profiles.insert(
-                    profile_id.clone(),
+                    target_profile_id.clone(),
                     OpenAiEndpointProfile {
-                        id: profile_id.clone(),
-                        label,
-                        kind,
+                        id: target_profile_id,
+                        label: target_label,
+                        kind: target_kind,
                         api_key: self.api_key.clone(),
-                        base_url: normalize_optional_string(self.base_url.clone())
-                            .or_else(|| Some(kind.default_base_url().to_string())),
+                        base_url: normalize_optional_string(self.base_url.clone()).or_else(|| {
+                            Some(target_kind.default_base_url().to_string())
+                        }),
                         model: normalize_optional_string(self.model.clone())
-                            .or_else(|| Some(kind.default_model().to_string())),
+                            .or_else(|| Some(target_kind.default_model().to_string())),
                         reasoning_effort: normalize_optional_string(self.reasoning_effort.clone()),
                         reasoning_summary: normalize_reasoning_summary(
                             self.reasoning_summary.clone(),
@@ -577,7 +604,11 @@ impl RaraConfig {
 
         if !migrated_profiles.is_empty() {
             self.openai_profiles.extend(migrated_profiles);
+        }
+        if should_switch_provider {
             self.provider = "openai-compatible".to_string();
+        }
+        if should_apply_active_profile {
             self.active_openai_profile_id = active_profile_id;
             if let Some(profile) = self.active_openai_profile().cloned() {
                 self.apply_openai_profile(profile);
@@ -723,8 +754,8 @@ fn stable_path_hash(root: &Path) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        workspace_data_dir_for_home, ConfigManager, OpenAiEndpointKind, ProviderConfigState,
-        RaraConfig,
+        workspace_data_dir_for_home, ConfigManager, OpenAiEndpointKind, OpenAiEndpointProfile,
+        ProviderConfigState, RaraConfig,
     };
     use crate::defaults::{
         DEFAULT_CODEX_BASE_URL, DEFAULT_CODEX_CHATGPT_BASE_URL, DEFAULT_CODEX_MODEL,
@@ -871,6 +902,67 @@ mod tests {
         assert!(config.openai_profiles.contains_key("kimi-default"));
         assert!(config.openai_profiles.contains_key("openrouter-default"));
         assert!(config.provider_states.is_empty());
+    }
+
+    #[test]
+    fn provider_state_migration_does_not_switch_unrelated_provider() {
+        let mut config = RaraConfig {
+            provider: "ollama".to_string(),
+            model: Some("qwen3".to_string()),
+            provider_states: BTreeMap::from([(
+                "openrouter".to_string(),
+                ProviderConfigState {
+                    api_key: Some("sk-openrouter".into()),
+                    base_url: Some(DEFAULT_OPENROUTER_BASE_URL.to_string()),
+                    model: Some(DEFAULT_OPENROUTER_MODEL.to_string()),
+                    ..Default::default()
+                },
+            )]),
+            ..Default::default()
+        };
+
+        config.migrate_legacy_provider_state();
+
+        assert_eq!(config.provider, "ollama");
+        assert_eq!(config.model.as_deref(), Some("qwen3"));
+        assert!(config.openai_profiles.contains_key("openrouter-default"));
+    }
+
+    #[test]
+    fn provider_state_migration_preserves_existing_openai_active_profile_id() {
+        let mut config = RaraConfig {
+            provider: "openai-compatible".to_string(),
+            active_openai_profile_id: Some("openrouter-main".to_string()),
+            openai_profiles: BTreeMap::from([(
+                "openrouter-main".to_string(),
+                OpenAiEndpointProfile {
+                    id: "openrouter-main".to_string(),
+                    label: "OpenRouter main".to_string(),
+                    kind: OpenAiEndpointKind::Openrouter,
+                    ..Default::default()
+                },
+            )]),
+            base_url: Some("https://openrouter.ai/api/v1".to_string()),
+            model: Some("anthropic/claude-sonnet-4".to_string()),
+            api_key: Some("sk-openrouter-main".into()),
+            ..Default::default()
+        };
+
+        config.migrate_legacy_provider_state();
+
+        assert_eq!(config.provider, "openai-compatible");
+        assert_eq!(config.active_openai_profile_id(), Some("openrouter-main"));
+        let profile = config
+            .active_openai_profile()
+            .expect("active openai profile");
+        assert_eq!(profile.id, "openrouter-main");
+        assert_eq!(profile.label, "OpenRouter main");
+        assert_eq!(profile.kind, OpenAiEndpointKind::Openrouter);
+        assert_eq!(profile.model.as_deref(), Some("anthropic/claude-sonnet-4"));
+        assert_eq!(
+            profile.api_key.as_ref().map(|value| value.expose_secret()),
+            Some("sk-openrouter-main")
+        );
     }
 
     #[test]
