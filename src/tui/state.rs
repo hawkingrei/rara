@@ -7,6 +7,7 @@ mod types;
 
 use std::cell::RefCell;
 use std::process::Command;
+use unicode_width::UnicodeWidthChar;
 
 pub use self::state_presets::{
     current_model_presets, openai_compatible_preset_kind, selected_preset_idx_for_config,
@@ -16,10 +17,10 @@ use self::types::CommittedTranscriptRenderCache;
 pub use self::types::{
     ActiveLiveSections, ActivePendingInteraction, ActivePendingInteractionKind,
     AgentMarkdownStreamState, CommandSpec, CompletedInteractionSnapshot, HelpTab, InteractionKind,
-    LocalCommand, LocalCommandKind, OAuthLoginMode, Overlay, PendingApprovalSnapshot,
-    PendingInteractionSnapshot, ProviderFamily, RebuildSuccess, RunningTask, RuntimePhase,
-    RuntimeSnapshot, TaskCompletion, TaskKind, TranscriptEntry, TranscriptTurn, TuiApp, TuiEvent,
-    PROVIDER_FAMILIES,
+    LocalCommand, LocalCommandKind, OAuthLoginMode, OpenAiModelPickerAction, Overlay,
+    PendingApprovalSnapshot, PendingInteractionSnapshot, ProviderFamily, RebuildSuccess,
+    RunningTask, RuntimePhase, RuntimeSnapshot, TaskCompletion, TaskKind, TranscriptEntry,
+    TranscriptTurn, TuiApp, TuiEvent, PROVIDER_FAMILIES,
 };
 use super::queued_input::PendingFollowUpMessage;
 use crate::agent::{Agent, AgentExecutionMode, BashApprovalMode};
@@ -54,7 +55,276 @@ fn state_db_status_error(prefix: &str, message: impl Into<String>) -> String {
     format!("{prefix}: {}", redact_secrets(message.into()))
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TextInputTarget {
+    Composer,
+    BaseUrl,
+    ApiKey,
+    ModelName,
+    OpenAiProfileLabel,
+}
+
+fn effective_cursor_offset(text: &str, cursor_offset: Option<usize>) -> usize {
+    cursor_offset
+        .unwrap_or_else(|| text.chars().count())
+        .min(text.chars().count())
+}
+
+fn char_offset_to_byte_index(text: &str, char_offset: usize) -> usize {
+    if char_offset == 0 {
+        return 0;
+    }
+
+    text.char_indices()
+        .nth(char_offset)
+        .map(|(idx, _)| idx)
+        .unwrap_or(text.len())
+}
+
+fn composer_display_char_width(ch: char) -> usize {
+    match ch {
+        '\t' => 4,
+        _ => UnicodeWidthChar::width(ch).unwrap_or(0),
+    }
+}
+
 impl TuiApp {
+    fn active_text_input_target(&self) -> TextInputTarget {
+        match self.overlay {
+            Some(Overlay::BaseUrlEditor) => TextInputTarget::BaseUrl,
+            Some(Overlay::ApiKeyEditor) => TextInputTarget::ApiKey,
+            Some(Overlay::ModelNameEditor) => TextInputTarget::ModelName,
+            Some(Overlay::OpenAiProfileLabelEditor) => TextInputTarget::OpenAiProfileLabel,
+            _ => TextInputTarget::Composer,
+        }
+    }
+
+    fn text_and_cursor_mut(
+        &mut self,
+        target: TextInputTarget,
+    ) -> (&mut String, &mut Option<usize>) {
+        match target {
+            TextInputTarget::Composer => (&mut self.input, &mut self.input_cursor_offset),
+            TextInputTarget::BaseUrl => {
+                (&mut self.base_url_input, &mut self.base_url_cursor_offset)
+            }
+            TextInputTarget::ApiKey => (&mut self.api_key_input, &mut self.api_key_cursor_offset),
+            TextInputTarget::ModelName => (
+                &mut self.model_name_input,
+                &mut self.model_name_cursor_offset,
+            ),
+            TextInputTarget::OpenAiProfileLabel => (
+                &mut self.openai_profile_label_input,
+                &mut self.openai_profile_label_cursor_offset,
+            ),
+        }
+    }
+
+    fn update_composer_after_edit_if_needed(&mut self, target: TextInputTarget) {
+        if matches!(target, TextInputTarget::Composer) {
+            self.sync_command_palette_with_input();
+        }
+    }
+
+    pub fn composer_cursor_offset(&self) -> usize {
+        effective_cursor_offset(self.input.as_str(), self.input_cursor_offset)
+    }
+
+    pub fn base_url_cursor_offset(&self) -> usize {
+        effective_cursor_offset(self.base_url_input.as_str(), self.base_url_cursor_offset)
+    }
+
+    pub fn api_key_cursor_offset(&self) -> usize {
+        effective_cursor_offset(self.api_key_input.as_str(), self.api_key_cursor_offset)
+    }
+
+    pub fn model_name_cursor_offset(&self) -> usize {
+        effective_cursor_offset(
+            self.model_name_input.as_str(),
+            self.model_name_cursor_offset,
+        )
+    }
+
+    pub fn openai_profile_label_cursor_offset(&self) -> usize {
+        effective_cursor_offset(
+            self.openai_profile_label_input.as_str(),
+            self.openai_profile_label_cursor_offset,
+        )
+    }
+
+    pub fn set_input(&mut self, input: String) {
+        self.input = input;
+        self.input_cursor_offset = None;
+        self.sync_command_palette_with_input();
+    }
+
+    pub fn insert_active_input_char(&mut self, ch: char) {
+        let target = self.active_text_input_target();
+        let (text, cursor_offset) = self.text_and_cursor_mut(target);
+        let cursor = effective_cursor_offset(text.as_str(), *cursor_offset);
+        let byte_idx = char_offset_to_byte_index(text.as_str(), cursor);
+        text.insert(byte_idx, ch);
+        *cursor_offset = Some(cursor.saturating_add(1));
+        self.update_composer_after_edit_if_needed(target);
+    }
+
+    pub fn insert_active_input_text(&mut self, inserted: &str) {
+        if inserted.is_empty() {
+            return;
+        }
+        let target = self.active_text_input_target();
+        let (text, cursor_offset) = self.text_and_cursor_mut(target);
+        let cursor = effective_cursor_offset(text.as_str(), *cursor_offset);
+        let byte_idx = char_offset_to_byte_index(text.as_str(), cursor);
+        text.insert_str(byte_idx, inserted);
+        *cursor_offset = Some(cursor.saturating_add(inserted.chars().count()));
+        self.update_composer_after_edit_if_needed(target);
+    }
+
+    pub fn insert_newline_in_composer(&mut self) {
+        let cursor = self.composer_cursor_offset();
+        let byte_idx = char_offset_to_byte_index(self.input.as_str(), cursor);
+        self.input.insert(byte_idx, '\n');
+        self.input_cursor_offset = Some(cursor.saturating_add(1));
+        self.sync_command_palette_with_input();
+    }
+
+    fn composer_visual_position_for_offset(&self, cursor_offset: usize) -> (usize, usize) {
+        let max_width = self.terminal_width.max(1) as usize;
+        let mut row = 0usize;
+        let mut column = 2usize;
+        let mut content_width = 0usize;
+        let mut seen = 0usize;
+
+        for ch in self.input.chars() {
+            if seen >= cursor_offset {
+                break;
+            }
+            seen += 1;
+
+            if ch == '\n' {
+                row += 1;
+                column = 2;
+                content_width = 0;
+                continue;
+            }
+
+            let char_width = composer_display_char_width(ch);
+            if 2usize
+                .saturating_add(content_width)
+                .saturating_add(char_width)
+                > max_width
+                && content_width > 0
+            {
+                row += 1;
+                content_width = 0;
+            }
+
+            content_width = content_width.saturating_add(char_width);
+            column = 2usize.saturating_add(content_width);
+        }
+
+        (row, column)
+    }
+
+    fn composer_offset_for_visual_position(
+        &self,
+        target_row: usize,
+        target_column: usize,
+    ) -> usize {
+        let total = self.input.chars().count();
+        let mut best_offset = None;
+        let mut best_distance = usize::MAX;
+
+        for offset in 0..=total {
+            let (row, column) = self.composer_visual_position_for_offset(offset);
+            if row != target_row {
+                continue;
+            }
+
+            let distance = column.abs_diff(target_column);
+            if distance < best_distance
+                || (distance == best_distance && best_offset.is_some_and(|best| offset > best))
+            {
+                best_distance = distance;
+                best_offset = Some(offset);
+            }
+        }
+
+        best_offset.unwrap_or(total)
+    }
+
+    pub fn backspace_active_input(&mut self) {
+        let target = self.active_text_input_target();
+        let (text, cursor_offset) = self.text_and_cursor_mut(target);
+        let cursor = effective_cursor_offset(text.as_str(), *cursor_offset);
+        if cursor == 0 {
+            return;
+        }
+        let start = char_offset_to_byte_index(text.as_str(), cursor - 1);
+        let end = char_offset_to_byte_index(text.as_str(), cursor);
+        text.replace_range(start..end, "");
+        *cursor_offset = Some(cursor - 1);
+        self.update_composer_after_edit_if_needed(target);
+    }
+
+    pub fn delete_forward_active_input(&mut self) {
+        let target = self.active_text_input_target();
+        let (text, cursor_offset) = self.text_and_cursor_mut(target);
+        let cursor = effective_cursor_offset(text.as_str(), *cursor_offset);
+        if cursor >= text.chars().count() {
+            return;
+        }
+        let start = char_offset_to_byte_index(text.as_str(), cursor);
+        let end = char_offset_to_byte_index(text.as_str(), cursor + 1);
+        text.replace_range(start..end, "");
+        *cursor_offset = Some(cursor);
+        self.update_composer_after_edit_if_needed(target);
+    }
+
+    pub fn move_active_input_cursor_left(&mut self) {
+        let target = self.active_text_input_target();
+        let (text, cursor_offset) = self.text_and_cursor_mut(target);
+        let cursor = effective_cursor_offset(text.as_str(), *cursor_offset);
+        *cursor_offset = Some(cursor.saturating_sub(1));
+    }
+
+    pub fn move_active_input_cursor_right(&mut self) {
+        let target = self.active_text_input_target();
+        let (text, cursor_offset) = self.text_and_cursor_mut(target);
+        let cursor = effective_cursor_offset(text.as_str(), *cursor_offset);
+        *cursor_offset = Some((cursor + 1).min(text.chars().count()));
+    }
+
+    pub fn move_active_input_cursor_home(&mut self) {
+        let target = self.active_text_input_target();
+        let (_, cursor_offset) = self.text_and_cursor_mut(target);
+        *cursor_offset = Some(0);
+    }
+
+    pub fn move_active_input_cursor_end(&mut self) {
+        let target = self.active_text_input_target();
+        let (text, cursor_offset) = self.text_and_cursor_mut(target);
+        *cursor_offset = Some(text.chars().count());
+    }
+
+    pub fn move_composer_cursor_up(&mut self) {
+        let cursor = self.composer_cursor_offset();
+        let (row, column) = self.composer_visual_position_for_offset(cursor);
+        if row == 0 {
+            self.input_cursor_offset = Some(0);
+            return;
+        }
+        self.input_cursor_offset = Some(self.composer_offset_for_visual_position(row - 1, column));
+    }
+
+    pub fn move_composer_cursor_down(&mut self) {
+        let cursor = self.composer_cursor_offset();
+        let (row, column) = self.composer_visual_position_for_offset(cursor);
+        let target = self.composer_offset_for_visual_position(row + 1, column);
+        self.input_cursor_offset = Some(target);
+    }
+
     fn ensure_completed_interaction_entry(
         &mut self,
         kind: InteractionKind,
@@ -123,6 +393,7 @@ impl TuiApp {
         let model_picker_idx = selected_preset_idx_for_config(&cfg, provider_picker_idx);
         Ok(Self {
             input: String::new(),
+            input_cursor_offset: None,
             committed_turns: Vec::new(),
             active_turn: TranscriptTurn::default(),
             startup_card_inserted: false,
@@ -144,9 +415,13 @@ impl TuiApp {
             auth_mode_idx: 0,
             command_palette_idx: 0,
             base_url_input: String::new(),
+            base_url_cursor_offset: None,
             api_key_input: String::new(),
+            api_key_cursor_offset: None,
             model_name_input: String::new(),
+            model_name_cursor_offset: None,
             openai_profile_label_input: String::new(),
+            openai_profile_label_cursor_offset: None,
             codex_model_options: Vec::new(),
             recent_commands: Vec::new(),
             recent_threads: Vec::new(),
@@ -154,6 +429,7 @@ impl TuiApp {
             committed_render_generation: 0,
             committed_render_cache: RefCell::new(CommittedTranscriptRenderCache::default()),
             transcript_scroll: 0,
+            terminal_width: 80,
             agent_markdown_stream: None,
             active_live: ActiveLiveSections::default(),
             pending_planning_suggestion: None,
@@ -264,6 +540,8 @@ impl TuiApp {
     pub fn current_model_picker_len(&self) -> usize {
         if self.selected_provider_family() == ProviderFamily::Codex {
             self.codex_model_options.len()
+        } else if self.selected_provider_family() == ProviderFamily::OpenAiCompatible {
+            current_model_presets(self.provider_picker_idx).len() + 4
         } else {
             current_model_presets(self.provider_picker_idx).len()
         }
@@ -331,7 +609,30 @@ impl TuiApp {
         if self.selected_provider_family() != ProviderFamily::OpenAiCompatible {
             return None;
         }
-        Some(openai_compatible_preset_kind(self.model_picker_idx))
+        let preset_count = current_model_presets(self.provider_picker_idx).len();
+        if self.model_picker_idx < preset_count {
+            Some(openai_compatible_preset_kind(self.model_picker_idx))
+        } else {
+            Some(
+                self.config
+                    .active_openai_profile_kind()
+                    .unwrap_or(OpenAiEndpointKind::Custom),
+            )
+        }
+    }
+
+    pub fn selected_openai_model_picker_action(&self) -> Option<OpenAiModelPickerAction> {
+        if self.selected_provider_family() != ProviderFamily::OpenAiCompatible {
+            return None;
+        }
+        let preset_count = current_model_presets(self.provider_picker_idx).len();
+        match self.model_picker_idx.checked_sub(preset_count) {
+            Some(0) => Some(OpenAiModelPickerAction::Profiles),
+            Some(1) => Some(OpenAiModelPickerAction::ApiKey),
+            Some(2) => Some(OpenAiModelPickerAction::BaseUrl),
+            Some(3) => Some(OpenAiModelPickerAction::ModelName),
+            _ => None,
+        }
     }
 
     pub fn selected_openai_profiles(&self) -> Vec<(String, String)> {
@@ -439,6 +740,9 @@ impl TuiApp {
         }
 
         let presets = current_model_presets(self.provider_picker_idx);
+        if idx >= presets.len() {
+            return;
+        }
         let (_, provider, model) = presets[idx];
         if self.selected_provider_family() == ProviderFamily::OpenAiCompatible {
             let kind = openai_compatible_preset_kind(idx);
@@ -712,9 +1016,11 @@ impl TuiApp {
                     "http://localhost:11434".to_string()
                 }
             });
+            self.base_url_cursor_offset = None;
         }
         if matches!(overlay, Overlay::ApiKeyEditor) {
             self.api_key_input.clear();
+            self.api_key_cursor_offset = None;
         }
         if matches!(overlay, Overlay::ModelNameEditor) {
             let (_, _, default_model) = self.selected_model_preset();
@@ -723,12 +1029,14 @@ impl TuiApp {
                 .model
                 .clone()
                 .unwrap_or_else(|| default_model.to_string());
+            self.model_name_cursor_offset = None;
         }
         if matches!(overlay, Overlay::OpenAiProfileLabelEditor) {
             let kind = self
                 .selected_openai_profile_kind()
                 .unwrap_or(OpenAiEndpointKind::Custom);
             self.openai_profile_label_input = format!("{} profile", kind.label());
+            self.openai_profile_label_cursor_offset = None;
         }
         if matches!(overlay, Overlay::AuthModePicker) {
             self.auth_mode_idx = if is_ssh_session() { 1 } else { 0 };
@@ -927,7 +1235,13 @@ impl TuiApp {
             }
             Some(Overlay::ModelNameEditor) => Some(Overlay::ModelPicker),
             Some(Overlay::OpenAiProfileLabelEditor) => Some(Overlay::OpenAiProfilePicker),
-            Some(Overlay::AuthModePicker) => Some(Overlay::ModelPicker),
+            Some(Overlay::AuthModePicker) => {
+                if self.codex_model_options.is_empty() {
+                    Some(Overlay::ProviderPicker)
+                } else {
+                    Some(Overlay::ModelPicker)
+                }
+            }
             _ => None,
         };
     }

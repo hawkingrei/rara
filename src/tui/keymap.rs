@@ -30,7 +30,12 @@ pub(super) fn map_key_to_event(key: KeyEvent, app: &TuiApp) -> AppEvent {
             KeyCode::Up | KeyCode::Char('k') => AppEvent::MoveCommandSelection(-1),
             KeyCode::Down | KeyCode::Char('j') => AppEvent::MoveCommandSelection(1),
             KeyCode::Enter => AppEvent::ApplyOverlaySelection,
+            KeyCode::Left => AppEvent::MoveCursorLeft,
+            KeyCode::Right => AppEvent::MoveCursorRight,
+            KeyCode::Home => AppEvent::MoveCursorHome,
+            KeyCode::End => AppEvent::MoveCursorEnd,
             KeyCode::Backspace => AppEvent::Backspace,
+            KeyCode::Delete => AppEvent::DeleteForward,
             KeyCode::Char(c) => AppEvent::InputChar(c),
             _ => AppEvent::Noop,
         },
@@ -141,28 +146,48 @@ pub(super) fn map_key_to_event(key: KeyEvent, app: &TuiApp) -> AppEvent {
         Some(Overlay::BaseUrlEditor) => match code {
             KeyCode::Esc => AppEvent::CloseOverlay,
             KeyCode::Enter => AppEvent::SaveBaseUrlInput,
+            KeyCode::Left => AppEvent::MoveCursorLeft,
+            KeyCode::Right => AppEvent::MoveCursorRight,
+            KeyCode::Home => AppEvent::MoveCursorHome,
+            KeyCode::End => AppEvent::MoveCursorEnd,
             KeyCode::Backspace => AppEvent::Backspace,
+            KeyCode::Delete => AppEvent::DeleteForward,
             KeyCode::Char(c) => AppEvent::InputChar(c),
             _ => AppEvent::Noop,
         },
         Some(Overlay::ApiKeyEditor) => match code {
             KeyCode::Esc => AppEvent::CloseOverlay,
             KeyCode::Enter => AppEvent::SaveApiKeyInput,
+            KeyCode::Left => AppEvent::MoveCursorLeft,
+            KeyCode::Right => AppEvent::MoveCursorRight,
+            KeyCode::Home => AppEvent::MoveCursorHome,
+            KeyCode::End => AppEvent::MoveCursorEnd,
             KeyCode::Backspace => AppEvent::Backspace,
+            KeyCode::Delete => AppEvent::DeleteForward,
             KeyCode::Char(c) => AppEvent::InputChar(c),
             _ => AppEvent::Noop,
         },
         Some(Overlay::ModelNameEditor) => match code {
             KeyCode::Esc => AppEvent::CloseOverlay,
             KeyCode::Enter => AppEvent::SaveModelNameInput,
+            KeyCode::Left => AppEvent::MoveCursorLeft,
+            KeyCode::Right => AppEvent::MoveCursorRight,
+            KeyCode::Home => AppEvent::MoveCursorHome,
+            KeyCode::End => AppEvent::MoveCursorEnd,
             KeyCode::Backspace => AppEvent::Backspace,
+            KeyCode::Delete => AppEvent::DeleteForward,
             KeyCode::Char(c) => AppEvent::InputChar(c),
             _ => AppEvent::Noop,
         },
         Some(Overlay::OpenAiProfileLabelEditor) => match code {
             KeyCode::Esc => AppEvent::CloseOverlay,
             KeyCode::Enter => AppEvent::SaveOpenAiProfileLabelInput,
+            KeyCode::Left => AppEvent::MoveCursorLeft,
+            KeyCode::Right => AppEvent::MoveCursorRight,
+            KeyCode::Home => AppEvent::MoveCursorHome,
+            KeyCode::End => AppEvent::MoveCursorEnd,
             KeyCode::Backspace => AppEvent::Backspace,
+            KeyCode::Delete => AppEvent::DeleteForward,
             KeyCode::Char(c) => AppEvent::InputChar(c),
             _ => AppEvent::Noop,
         },
@@ -184,12 +209,22 @@ pub(super) fn map_key_to_event(key: KeyEvent, app: &TuiApp) -> AppEvent {
                 AppEvent::InsertNewline
             }
             (KeyCode::Enter, _) => AppEvent::SubmitComposer,
+            (KeyCode::Left, _) => AppEvent::MoveCursorLeft,
+            (KeyCode::Right, _) => AppEvent::MoveCursorRight,
+            (KeyCode::Home, _) | (KeyCode::Char('a'), KeyModifiers::CONTROL) => {
+                AppEvent::MoveCursorHome
+            }
+            (KeyCode::End, _) | (KeyCode::Char('e'), KeyModifiers::CONTROL) => {
+                AppEvent::MoveCursorEnd
+            }
             (KeyCode::Up | KeyCode::Char('k'), _) if app.input.is_empty() => {
                 AppEvent::ScrollTranscript(-1)
             }
+            (KeyCode::Up, _) => AppEvent::MoveCursorUp,
             (KeyCode::Down | KeyCode::Char('j'), _) if app.input.is_empty() => {
                 AppEvent::ScrollTranscript(1)
             }
+            (KeyCode::Down, _) => AppEvent::MoveCursorDown,
             (KeyCode::PageUp, _) if app.input.is_empty() => AppEvent::ScrollTranscript(-8),
             (KeyCode::PageDown, _) if app.input.is_empty() => AppEvent::ScrollTranscript(8),
             (KeyCode::Char('1'), _)
@@ -215,6 +250,9 @@ pub(super) fn map_key_to_event(key: KeyEvent, app: &TuiApp) -> AppEvent {
                 AppEvent::SelectPendingOption(2)
             }
             (KeyCode::Backspace, _) => AppEvent::Backspace,
+            (KeyCode::Delete, _) | (KeyCode::Char('d'), KeyModifiers::CONTROL) => {
+                AppEvent::DeleteForward
+            }
             (KeyCode::Char(c), _) => AppEvent::InputChar(c),
             _ => AppEvent::Noop,
         },
