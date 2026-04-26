@@ -11,8 +11,7 @@ use unicode_width::UnicodeWidthChar;
 
 pub use self::state_presets::{
     current_model_presets, openai_compatible_preset_index, openai_compatible_preset_kind,
-    selected_preset_idx_for_config,
-    selected_provider_family_idx_for_config,
+    selected_preset_idx_for_config, selected_provider_family_idx_for_config,
 };
 use self::types::CommittedTranscriptRenderCache;
 pub use self::types::{
@@ -442,7 +441,6 @@ impl TuiApp {
             input_cursor_offset: None,
             committed_turns: Vec::new(),
             active_turn: TranscriptTurn::default(),
-            startup_card_inserted: false,
             inserted_turns: 0,
             overlay,
             config: cfg,

@@ -154,6 +154,26 @@ fn renderable_transcript_lines_insert_turn_dividers_between_rounds() {
 }
 
 #[test]
+fn startup_header_renders_but_does_not_enter_transcript_lines() {
+    let temp = tempdir().expect("tempdir");
+    let app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("build tui app");
+
+    let rendered = render_screen_text(&app, 100, 24);
+    assert!(rendered.contains(">_ RARA"));
+
+    let transcript = renderable_transcript_lines(&app, 100)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(!transcript.contains(">_ RARA"));
+    assert!(!transcript.contains("directory:"));
+}
+
+#[test]
 fn transcript_scroll_offset_keeps_zero_sticky_to_bottom() {
     let temp = tempdir().expect("tempdir");
     let mut app = TuiApp::new(ConfigManager {

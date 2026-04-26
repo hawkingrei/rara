@@ -1,8 +1,14 @@
 ---
 source: src/tui/render/tests.rs
-assertion_line: 546
+assertion_line: 566
 expression: rendered
 ---
+╭──────────────────────────────────────────────────────────╮
+│ >_ RARA                                                  │
+│                                                          │
+│ model:     gpt-4o-mini                  /model to change │
+│ directory: ~/devel/opensource/rara                       │
+╰──────────────────────────────────────────────────────────╯
 Ready.
 Use the input bar below to start a task or run a local command.
 
@@ -15,12 +21,6 @@ Start with:
 Prompt ideas:
   Explain this repository structure.
   Find the main agent loop and summarize it.
-
-
-
-
-
-
 
 Warning  Warning: openai-compatible is missing an API key. Use /model to configure the current provi
 › Ask about the repo, request a code change, or type /help to browse commands.
