@@ -173,6 +173,10 @@ fn activity_status_line(app: &TuiApp) -> (&'static str, Color, String) {
         );
     }
 
+    if let Some(warning) = app.notice.as_deref().filter(|value| value.starts_with("Warning:")) {
+        return ("Warning", Color::Yellow, warning.to_string());
+    }
+
     (
         "Ready",
         Color::Green,
@@ -604,7 +608,7 @@ fn display_char_width(ch: char) -> usize {
 #[cfg(test)]
 mod tests {
     use insta::assert_snapshot;
-    use ratatui::layout::Rect;
+    use ratatui::{layout::Rect, style::Color};
     use tempfile::tempdir;
 
     use crate::config::ConfigManager;
@@ -680,6 +684,24 @@ mod tests {
         assert_eq!(label, "Plan Approval");
         assert!(detail.contains("start implementation"));
         assert!(detail.contains("continue planning"));
+    }
+
+    #[test]
+    fn activity_status_line_renders_warning_notice_in_yellow() {
+        let temp = tempdir().unwrap();
+        let mut app = TuiApp::new(ConfigManager {
+            path: temp.path().join("config.json"),
+        })
+        .expect("build tui app");
+        app.notice = Some(
+            "Warning: openai-compatible is missing an API key. Use /model to configure the current provider."
+                .into(),
+        );
+
+        let (label, color, detail) = activity_status_line(&app);
+        assert_eq!(label, "Warning");
+        assert_eq!(color, Color::Yellow);
+        assert!(detail.contains("missing an API key"));
     }
 
     #[test]

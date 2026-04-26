@@ -89,6 +89,20 @@ fn composer_display_char_width(ch: char) -> usize {
     }
 }
 
+fn startup_warning_for_config(config: &crate::config::RaraConfig) -> Option<String> {
+    if config.provider == "codex" {
+        return None;
+    }
+    if !config.has_api_key() && super::provider_requires_api_key(&config.provider) {
+        Some(format!(
+            "Warning: {} is missing an API key. Use /model to configure the current provider.",
+            config.provider
+        ))
+    } else {
+        None
+    }
+}
+
 impl TuiApp {
     fn active_text_input_target(&self) -> TextInputTarget {
         match self.overlay {
@@ -419,15 +433,8 @@ impl TuiApp {
 
     pub fn new(cm: ConfigManager) -> anyhow::Result<Self> {
         let cfg = cm.load()?;
-        let overlay = if !cfg.has_api_key() && super::provider_requires_api_key(&cfg.provider) {
-            if cfg.provider == "codex" {
-                Some(Overlay::AuthModePicker)
-            } else {
-                Some(Overlay::ApiKeyEditor)
-            }
-        } else {
-            None
-        };
+        let overlay = None;
+        let startup_notice = startup_warning_for_config(&cfg);
         let provider_picker_idx = selected_provider_family_idx_for_config(&cfg);
         let model_picker_idx = selected_preset_idx_for_config(&cfg, provider_picker_idx);
         Ok(Self {
@@ -441,7 +448,7 @@ impl TuiApp {
             config: cfg,
             config_manager: cm,
             setup_status: None,
-            notice: None,
+            notice: startup_notice,
             runtime_phase: RuntimePhase::Idle,
             runtime_phase_detail: None,
             snapshot: RuntimeSnapshot::default(),

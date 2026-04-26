@@ -58,31 +58,31 @@ pub(super) fn render_overlay(
             None
         }
         Overlay::ProviderPicker => {
-            let popup = centered_rect(78, 70, f.area());
+            let popup = setup_flow_rect(f.area());
             f.render_widget(Clear, popup);
             render_provider_picker_modal(f, app, popup);
             None
         }
         Overlay::ResumePicker => {
-            let popup = centered_rect(78, 70, f.area());
+            let popup = setup_flow_rect(f.area());
             f.render_widget(Clear, popup);
             render_resume_picker_modal(f, app, popup);
             None
         }
         Overlay::ModelPicker => {
-            let popup = centered_rect(78, 70, f.area());
+            let popup = setup_flow_rect(f.area());
             f.render_widget(Clear, popup);
             render_model_picker_modal(f, app, popup);
             None
         }
         Overlay::OpenAiEndpointKindPicker => {
-            let popup = centered_rect(78, 70, f.area());
+            let popup = setup_flow_rect(f.area());
             f.render_widget(Clear, popup);
             render_openai_endpoint_kind_picker_modal(f, app, popup);
             None
         }
         Overlay::OpenAiProfilePicker => {
-            let popup = centered_rect(78, 70, f.area());
+            let popup = setup_flow_rect(f.area());
             f.render_widget(Clear, popup);
             render_openai_profile_picker_modal(f, app, popup);
             None
@@ -94,28 +94,28 @@ pub(super) fn render_overlay(
             None
         }
         Overlay::BaseUrlEditor => {
-            let popup = centered_rect(78, 70, f.area());
+            let popup = setup_flow_rect(f.area());
             f.render_widget(Clear, popup);
             render_base_url_editor_modal(f, app, popup)
         }
         Overlay::AuthModePicker => {
-            let popup = centered_rect(78, 70, f.area());
+            let popup = setup_flow_rect(f.area());
             f.render_widget(Clear, popup);
             render_auth_mode_picker_modal(f, app, popup);
             None
         }
         Overlay::ApiKeyEditor => {
-            let popup = centered_rect(78, 70, f.area());
+            let popup = setup_flow_rect(f.area());
             f.render_widget(Clear, popup);
             render_api_key_editor_modal(f, app, popup)
         }
         Overlay::ModelNameEditor => {
-            let popup = centered_rect(78, 70, f.area());
+            let popup = setup_flow_rect(f.area());
             f.render_widget(Clear, popup);
             render_model_name_editor_modal(f, app, popup)
         }
         Overlay::OpenAiProfileLabelEditor => {
-            let popup = centered_rect(78, 70, f.area());
+            let popup = setup_flow_rect(f.area());
             f.render_widget(Clear, popup);
             render_openai_profile_label_editor_modal(f, app, popup)
         }
@@ -365,10 +365,12 @@ mod tests {
     #[test]
     fn help_command_items_are_alphabetical_for_empty_query() {
         let items = help_command_items("");
+        let names = items.iter().map(|spec| spec.name).collect::<Vec<_>>();
+        let mut sorted = names.clone();
+        sorted.sort();
 
         assert_eq!(items.len(), COMMAND_SPECS.len());
-        assert_eq!(items.first().map(|spec| spec.name), Some("approval"));
-        assert_eq!(items.last().map(|spec| spec.name), Some("status"));
+        assert_eq!(names, sorted);
     }
 
     #[test]
@@ -402,7 +404,33 @@ mod tests {
 
         assert!(popup.bottom() <= bottom_pane.y);
         assert_eq!(popup.x, 1);
-        assert!(popup.width <= 56);
+        assert!(popup.width <= 76);
+    }
+
+    #[test]
+    fn command_palette_rect_expands_for_full_empty_query_list() {
+        let temp = tempdir().unwrap();
+        let mut app = TuiApp::new(ConfigManager {
+            path: temp.path().join("config.json"),
+        })
+        .expect("build tui app");
+        app.input = "/".into();
+        let area = Rect::new(0, 0, 100, 24);
+        let bottom_pane = Rect::new(0, 19, 100, 5);
+
+        let popup = command_palette_rect(area, bottom_pane, &app);
+
+        assert!(popup.height >= 12);
+        assert!(popup.width >= 70);
+    }
+
+    #[test]
+    fn setup_flow_rect_is_tall_enough_for_small_terminal_onboarding() {
+        let area = Rect::new(0, 0, 100, 24);
+        let popup = setup_flow_rect(area);
+
+        assert!(popup.height >= 20);
+        assert!(popup.width >= 90);
     }
 }
 
@@ -549,6 +577,31 @@ fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
     horizontal[1]
 }
 
+fn setup_flow_rect(area: Rect) -> Rect {
+    let horizontal_margin = if area.width > 140 {
+        8
+    } else if area.width > 110 {
+        4
+    } else {
+        0
+    };
+    let vertical_margin = if area.height > 28 {
+        2
+    } else if area.height > 24 {
+        1
+    } else {
+        0
+    };
+    let width = area.width.saturating_sub(horizontal_margin * 2).max(24);
+    let height = area.height.saturating_sub(vertical_margin * 2).max(8);
+    Rect::new(
+        area.x.saturating_add(horizontal_margin),
+        area.y.saturating_add(vertical_margin),
+        width,
+        height,
+    )
+}
+
 fn command_palette_rect(area: Rect, bottom_pane_area: Rect, app: &TuiApp) -> Rect {
     let query = app.input.trim_start().trim_start_matches('/');
     let item_count = if query.is_empty() {
@@ -556,12 +609,13 @@ fn command_palette_rect(area: Rect, bottom_pane_area: Rect, app: &TuiApp) -> Rec
     } else {
         matching_commands(query).len()
     };
-    let visible_rows = item_count.clamp(1, 8) as u16;
+    let max_visible_rows = area.height.saturating_sub(6).clamp(6, 14) as usize;
+    let visible_rows = item_count.clamp(1, max_visible_rows) as u16;
     let height = visible_rows
         .saturating_add(1)
-        .min(area.height.saturating_sub(2).max(3));
+        .min(area.height.saturating_sub(2).max(4));
     let max_width = area.width.saturating_sub(4).max(24);
-    let width = 56.min(max_width);
+    let width = 76.min(max_width);
     let x = bottom_pane_area
         .x
         .saturating_add(1)

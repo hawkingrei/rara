@@ -9,6 +9,7 @@ use tokio::sync::mpsc;
 use crate::codex_model_catalog::{CodexModelOption, CodexReasoningOption};
 use crate::config::{ConfigManager, OpenAiEndpointKind};
 use crate::config::{DEFAULT_CODEX_BASE_URL, DEFAULT_CODEX_CHATGPT_BASE_URL, DEFAULT_CODEX_MODEL};
+use crate::tui::command::palette_commands;
 
 use super::app_event::AppEvent;
 use super::provider_flow::{
@@ -135,6 +136,60 @@ async fn busy_submit_allows_quit_command() {
 
     if let Some(task) = app.running_task.take() {
         task.handle.abort();
+    }
+}
+
+#[tokio::test]
+async fn slash_palette_model_selection_opens_provider_picker_in_local_and_ssh() {
+    for ssh in [false, true] {
+        let temp = tempdir().expect("tempdir");
+        let old_ssh_connection = std::env::var_os("SSH_CONNECTION");
+        let old_ssh_tty = std::env::var_os("SSH_TTY");
+        if ssh {
+            std::env::set_var("SSH_CONNECTION", "test");
+        } else {
+            std::env::remove_var("SSH_CONNECTION");
+            std::env::remove_var("SSH_TTY");
+        }
+
+        let mut app = TuiApp::new(ConfigManager {
+            path: temp.path().join("config.json"),
+        })
+        .expect("app");
+        app.set_input("/".to_string());
+        let model_idx = palette_commands(&app, "")
+            .iter()
+            .position(|spec| spec.name == "model")
+            .expect("model command present");
+        app.command_palette_idx = model_idx;
+
+        let oauth_manager = Arc::new(
+            crate::oauth::OAuthManager::new_for_config_dir(temp.path().join(".rara"))
+                .expect("oauth manager"),
+        );
+        let mut agent_slot = None;
+        dispatch_event(
+            AppEvent::ApplyOverlaySelection,
+            &mut app,
+            &mut agent_slot,
+            &oauth_manager,
+        )
+        .await
+        .expect("apply command palette selection");
+
+        assert!(matches!(app.overlay, Some(Overlay::ProviderPicker)));
+        assert_eq!(app.notice.as_deref(), Some("Opened provider picker."));
+
+        if let Some(value) = old_ssh_connection {
+            std::env::set_var("SSH_CONNECTION", value);
+        } else {
+            std::env::remove_var("SSH_CONNECTION");
+        }
+        if let Some(value) = old_ssh_tty {
+            std::env::set_var("SSH_TTY", value);
+        } else {
+            std::env::remove_var("SSH_TTY");
+        }
     }
 }
 
@@ -348,7 +403,7 @@ async fn composer_supports_vertical_cursor_navigation_across_lines() {
 }
 
 #[test]
-fn app_starts_in_api_key_editor_for_hosted_provider_without_api_key() {
+fn app_starts_with_warning_instead_of_api_key_editor_for_hosted_provider_without_api_key() {
     let temp = tempdir().expect("tempdir");
     let cm = ConfigManager {
         path: temp.path().join("config.json"),
@@ -359,7 +414,11 @@ fn app_starts_in_api_key_editor_for_hosted_provider_without_api_key() {
     cm.save(&config).expect("save config");
 
     let app = TuiApp::new(cm).expect("app");
-    assert!(matches!(app.overlay, Some(Overlay::ApiKeyEditor)));
+    assert!(app.overlay.is_none());
+    assert!(app
+        .notice
+        .as_deref()
+        .is_some_and(|value| value.starts_with("Warning:")));
 }
 
 #[test]
