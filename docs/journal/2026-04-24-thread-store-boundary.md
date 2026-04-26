@@ -215,3 +215,25 @@ Still open:
 - add richer lineage metadata beyond the minimal `forked_from_thread_id`
   surface;
 - separate thread lifecycle objects from TUI-specific restore logic further.
+
+## Provenance Checkpoint
+
+The thread boundary now also records where the materialized thread state came
+from instead of silently falling back across persistence layers.
+
+- `ThreadSnapshot` now carries explicit provenance for:
+  - metadata source;
+  - history source;
+  - non-turn rollout source.
+- history provenance distinguishes:
+  - canonical `rollouts/<thread>/history.json`;
+  - legacy `sessions/<thread>.json` backfilled into the canonical path;
+  - missing local history.
+- non-turn rollout provenance distinguishes:
+  - canonical `events.jsonl`;
+  - legacy runtime/compaction files that were backfilled;
+  - state-db fallback when no structured rollout log existed yet.
+
+This does not change the storage format by itself, but it turns the current
+legacy-fallback contract into an explicit part of the thread domain instead of
+keeping that knowledge hidden inside restore-only branching logic.

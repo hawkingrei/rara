@@ -22,10 +22,10 @@ pub(super) fn restore_latest_thread(
         return Ok(());
     };
     let store = ThreadStore::new(agent.session_manager.as_ref(), state_db.as_ref());
-    let Some(thread_id) = store.latest_thread_id()? else {
+    let Some(thread) = store.latest_thread_summary()? else {
         return Ok(());
     };
-    restore_thread_by_id(thread_id.as_str(), app, agent_slot)
+    restore_thread_by_id(thread.metadata.session_id.as_str(), app, agent_slot)
 }
 
 pub(super) fn restore_thread_by_id(
@@ -43,6 +43,7 @@ pub(super) fn restore_thread_by_id(
     let thread = thread_store.load_thread(thread_id)?;
     let crate::thread_store::ThreadSnapshot {
         metadata,
+        provenance: _,
         history,
         compaction,
         plan_explanation,

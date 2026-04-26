@@ -196,7 +196,9 @@ The first cut of `MemorySelection` should:
 The next step on top of that first cut is to split the selection surface into:
 
 - fixed memory inputs that are already injected by ownership elsewhere
-  (for example workspace memory or compacted carry-over);
+  (for example workspace memory, compacted carry-over, or active thread
+  working-set items such as plan state, pending interactions, and recent tool
+  results);
 - discretionary retrieval candidates that still compete for the current
   selection budget.
 

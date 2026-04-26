@@ -23,35 +23,43 @@ Acceptance:
 
 Priority order for this phase:
 
-1. Split `crates/config/src/lib.rs`
-   - Target modules:
-     - `defaults.rs`
-     - `provider_surface.rs`
-     - `migration.rs`
-     - `secrets.rs`
-     - `serde_helpers.rs`
-     - `model.rs`
-   - Why first:
-     - low-risk organization win
-     - makes `reasoning_summary` and provider migration logic easier to test
-     - gives backend hot-swap a clearer config entry surface
+1. Complete `MemorySelection` as the authoritative bounded retrieval-selection pipeline
+   - The current Stage 1 skeleton exists:
+     - candidate pool;
+     - selected/dropped reason reporting;
+     - selection budget surface;
+   - The next step is to make it the real runtime path for bounded recall.
+   - Rollout order:
+     - 1A. promote selection logic into the primary path for thread/workspace candidates;
+     - 1B. replace placeholder retrieval with real vector-backed retrieval for thread and workspace memory.
 
-2. Deepen retrieval and memory selection on top of the new context/thread boundaries
-   - The Stage 1 context-assembly boundary and thread persistence façade now exist.
-   - The remaining high-leverage work is:
-     - real retrieval budget decisions;
-     - vector/thread memory selection explanation;
-     - clearer ownership for selected-vs-dropped memory candidates.
+2. Deepen the `ThreadStore` / `ThreadRecorder` boundary into a real thread domain
+   - The current thread boundary and lifecycle surface now exist:
+     - `threads`
+     - `thread`
+     - `resume --last`
+     - `fork`
+   - The remaining work is to define:
+     - authoritative thread metadata ownership;
+     - rollout-item ownership;
+     - lineage / fork source / latest-thread contract;
+     - which legacy files remain fallback-only.
+
+3. Continue promoting compaction into a first-class runtime lifecycle event
+   - Build on the current persisted summaries, token counters, and boundary metadata.
+   - Tighten ownership between compaction state and thread/runtime persistence.
+   - Keep this coupled to the thread-domain work instead of treating it as a UI-only follow-up.
 
 ## Architecture / Runtime
 
-- [ ] Extend the new `MemorySelection` contract from readiness-and-selection explanation into real recalled vector/thread memory selection so the runtime can explain why those items won the retrieval budget.
+- [ ] Promote the current `MemorySelection` skeleton into the authoritative bounded retrieval-selection pipeline for thread and workspace recall.
+- [ ] Finish the first non-vector cut of `MemorySelection` so thread memory, workspace memory, active thread state, pending interaction state, and recent tool results all flow through one selected/available/dropped explanation path.
 
 ## Configuration / Provider Surface
 
-- [ ] Replace provider-scoped `thinking: bool` with a Codex-style reasoning summary configuration model plus config migration.
+- [ ] Complete `reasoning_summary` rollout across backend requests, switching flows, and status surfaces; retire remaining `thinking`-only behavior outside migration fallback.
 - [ ] Surface provider-scoped reasoning configuration in `/status` and provider/model switching flows, including where the effective value came from.
-- [ ] Support in-session model/provider switching via backend hot-swap without resetting the active TUI transcript, session id, plan state, pending interactions, or compacted history.
+- [ ] Deepen provider-surface continuity after hot-swap landed: tighten auth-mode/endpoint alignment, provenance reporting, and remaining runtime continuity edge cases.
 - [ ] Align Codex endpoint selection with auth mode so ChatGPT/Codex login and OpenAI API key sessions do not blindly share the same provider URL.
 - [ ] Split Codex-specific persisted auth/config back out to `~/.codex` while keeping provider-agnostic RARA config and runtime/session state under `~/.rara`.
 
@@ -65,9 +73,9 @@ Priority order for this phase:
 
 ## Memory / Retrieval / Persistence
 
-- [ ] Extend the new local `ThreadStore` / `ThreadRecorder` boundary from a façade over `SessionManager` + `StateDb` into a true structured thread store with explicit thread metadata and rollout-item ownership.
+- [ ] Extend the local `ThreadStore` / `ThreadRecorder` boundary from a façade over `SessionManager` + `StateDb` into a true structured thread store with explicit thread metadata and rollout-item ownership.
 - [ ] Complete the thread lifecycle surface around the new thread boundary: stable `threads`/`thread`/`resume --last`/`fork` flows now exist, but richer lineage metadata and a clearer `latest thread` contract still need to land.
-- [ ] Make compaction a first-class runtime event with persisted summaries, token counters, and boundary metadata.
+- [ ] Make compaction a first-class runtime lifecycle event with persisted summaries, token counters, and boundary metadata ownership aligned with the thread domain.
 - [ ] Define thread-scoped and workspace-scoped `MemoryRecord` storage plus promotion rules so durable findings are not mixed with transient turn context.
 - [ ] Replace the current placeholder retrieval path with real vector retrieval over Lance/LanceDB, including metadata-aware ranking for thread and workspace memory selection.
 - [ ] Add the retrieval orchestration layer described in `docs/features/context-architecture.md` so thread recall, vector recall, and later graph recall compose into one bounded `MemorySelection`.

@@ -2,12 +2,16 @@ use anyhow::Result;
 use uuid::Uuid;
 
 use crate::agent::Message;
-use crate::session::{PersistedCompactionEvent, SessionManager};
+use crate::session::{
+    PersistedCompactionEvent, PersistedCompactionEventsSource, PersistedThreadHistorySource,
+    SessionManager,
+};
 use crate::state_db::{
     PersistedCompactState, PersistedInteraction, PersistedLegacyRolloutMigration,
-    PersistedPlanStep, PersistedPromptRuntimeState, PersistedRecentThreadRecord,
-    PersistedRuntimeRolloutItem, PersistedStructuredRolloutEvent, PersistedThreadLineage,
-    PersistedThreadRecord, PersistedTurnEntry, PersistedTurnSummary, StateDb,
+    PersistedLegacyRolloutSource, PersistedPlanStep, PersistedPromptRuntimeState,
+    PersistedRecentThreadRecord, PersistedRuntimeRolloutItem, PersistedStructuredRolloutEvent,
+    PersistedThreadLineage, PersistedThreadRecord, PersistedTurnEntry, PersistedTurnSummary,
+    StateDb,
 };
 
 #[cfg(test)]
@@ -75,6 +79,33 @@ pub struct ThreadSummary {
     pub metadata: ThreadMetadata,
     pub preview: String,
     pub compaction: CompactionRecord,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ThreadMetadataSource {
+    StateDb,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ThreadHistorySource {
+    CanonicalHistory,
+    LegacyHistoryBackfilled,
+    Missing,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ThreadNonTurnRolloutSource {
+    StructuredEventsLog,
+    LegacyBackfilled,
+    StateDbFallback,
+    Empty,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ThreadMaterializationProvenance {
+    pub metadata_source: ThreadMetadataSource,
+    pub history_source: ThreadHistorySource,
+    pub non_turn_rollout_source: ThreadNonTurnRolloutSource,
 }
 
 impl From<PersistedThreadRecord> for ThreadMetadata {
@@ -151,6 +182,7 @@ pub enum RolloutItem {
 #[derive(Debug, Clone)]
 pub struct ThreadSnapshot {
     pub metadata: ThreadMetadata,
+    pub provenance: ThreadMaterializationProvenance,
     pub history: Vec<Message>,
     pub compaction: CompactionRecord,
     pub plan_explanation: Option<String>,
@@ -162,6 +194,7 @@ pub struct ThreadSnapshot {
 #[derive(Debug, Clone)]
 struct ThreadMaterializedState {
     metadata: ThreadMetadata,
+    provenance: ThreadMaterializationProvenance,
     history: Vec<Message>,
     compaction: CompactionRecord,
     plan_explanation: Option<String>,
@@ -175,6 +208,8 @@ struct LegacyNonTurnRolloutMigration {
     structured_events: Vec<PersistedStructuredRolloutEvent>,
     runtime_rollout: Vec<PersistedRuntimeRolloutItem>,
     compaction_events: Vec<PersistedCompactionEvent>,
+    rollout_source: PersistedLegacyRolloutSource,
+    compaction_source: PersistedCompactionEventsSource,
 }
 
 pub struct ThreadStore<'a> {
@@ -200,7 +235,13 @@ impl<'a> ThreadStore<'a> {
     }
 
     pub fn latest_thread_id(&self) -> Result<Option<String>> {
-        self.state_db.latest_thread_id()
+        Ok(self
+            .latest_thread_summary()?
+            .map(|thread| thread.metadata.session_id))
+    }
+
+    pub fn latest_thread_summary(&self) -> Result<Option<ThreadSummary>> {
+        Ok(self.list_recent_threads(1)?.into_iter().next())
     }
 
     pub fn list_recent_threads(&self, limit: usize) -> Result<Vec<ThreadSummary>> {
@@ -211,6 +252,7 @@ impl<'a> ThreadStore<'a> {
         let materialized = self.materialize_thread_state(session_id)?;
         Ok(ThreadSnapshot {
             metadata: materialized.metadata,
+            provenance: materialized.provenance,
             history: materialized.history,
             compaction: materialized.compaction,
             plan_explanation: materialized.plan_explanation,
@@ -292,12 +334,24 @@ impl<'a> ThreadStore<'a> {
     }
 
     fn materialize_thread_state(&self, session_id: &str) -> Result<ThreadMaterializedState> {
-        let history = match self
+        let (history, history_source) = match self
             .session_manager
             .load_thread_history_migration(session_id)
         {
-            Ok(migration) => migration.history,
-            Err(err) if SessionManager::is_missing_thread_history_error(&err) => Vec::new(),
+            Ok(migration) => (
+                migration.history,
+                match migration.source {
+                    PersistedThreadHistorySource::Canonical => {
+                        ThreadHistorySource::CanonicalHistory
+                    }
+                    PersistedThreadHistorySource::LegacyBackfilled => {
+                        ThreadHistorySource::LegacyHistoryBackfilled
+                    }
+                },
+            ),
+            Err(err) if SessionManager::is_missing_thread_history_error(&err) => {
+                (Vec::new(), ThreadHistorySource::Missing)
+            }
             Err(err) => return Err(err),
         };
         let metadata = self
@@ -308,7 +362,11 @@ impl<'a> ThreadStore<'a> {
             structured_events,
             runtime_rollout: migration_runtime_rollout,
             compaction_events,
+            rollout_source,
+            compaction_source,
         } = self.load_legacy_non_turn_rollout_migration(session_id)?;
+        let had_structured_events = !structured_events.is_empty();
+        let had_compaction_events = !compaction_events.is_empty();
         let compaction = compaction_events
             .last()
             .cloned()
@@ -449,6 +507,7 @@ impl<'a> ThreadStore<'a> {
         } else {
             migration_runtime_rollout
         };
+        let has_legacy_runtime_rollout = !legacy_runtime_rollout.is_empty();
         let legacy_plan_state = legacy_runtime_rollout.iter().find_map(|item| match item {
             PersistedRuntimeRolloutItem::PlanState { explanation, steps } => {
                 Some((explanation.clone(), steps.clone()))
@@ -553,7 +612,7 @@ impl<'a> ThreadStore<'a> {
                     }
                 } else {
                     interactions = legacy_interactions.clone();
-                    for item in legacy_runtime_rollout {
+                    for item in legacy_runtime_rollout.iter().cloned() {
                         if let PersistedRuntimeRolloutItem::Interaction(interaction) = item {
                             push_rollout_item(
                                 &mut ordered_rollout_items,
@@ -583,8 +642,41 @@ impl<'a> ThreadStore<'a> {
         ordered_rollout_items.sort_by_key(|(timestamp, order, _)| (*timestamp, *order));
         rollout_items.extend(ordered_rollout_items.into_iter().map(|(_, _, item)| item));
 
+        let used_state_db_non_turn_fallback = (!saw_plan_state
+            && !saw_interaction
+            && !has_legacy_runtime_rollout
+            && (plan_explanation.is_some() || !plan_steps.is_empty() || !interactions.is_empty()))
+            || (!had_structured_events
+                && !had_compaction_events
+                && compaction.compaction_count > 0);
+        let non_turn_rollout_source = if matches!(
+            rollout_source,
+            PersistedLegacyRolloutSource::LegacyBackfilled
+        ) || matches!(
+            compaction_source,
+            PersistedCompactionEventsSource::LegacyBackfilled
+        ) {
+            ThreadNonTurnRolloutSource::LegacyBackfilled
+        } else if had_structured_events
+            || matches!(
+                compaction_source,
+                PersistedCompactionEventsSource::StructuredLog
+            )
+        {
+            ThreadNonTurnRolloutSource::StructuredEventsLog
+        } else if used_state_db_non_turn_fallback {
+            ThreadNonTurnRolloutSource::StateDbFallback
+        } else {
+            ThreadNonTurnRolloutSource::Empty
+        };
+
         Ok(ThreadMaterializedState {
             metadata: metadata.into(),
+            provenance: ThreadMaterializationProvenance {
+                metadata_source: ThreadMetadataSource::StateDb,
+                history_source,
+                non_turn_rollout_source,
+            },
             history,
             compaction,
             plan_explanation,
@@ -601,12 +693,17 @@ impl<'a> ThreadStore<'a> {
         let PersistedLegacyRolloutMigration {
             structured_events,
             runtime_rollout,
+            source,
         } = self.state_db.load_legacy_rollout_migration(session_id)?;
-        let compaction_events = self.session_manager.load_compaction_events(session_id)?;
+        let compaction_events = self
+            .session_manager
+            .load_compaction_events_migration(session_id)?;
         Ok(LegacyNonTurnRolloutMigration {
             structured_events,
             runtime_rollout,
-            compaction_events,
+            compaction_events: compaction_events.events,
+            rollout_source: source,
+            compaction_source: compaction_events.source,
         })
     }
 }

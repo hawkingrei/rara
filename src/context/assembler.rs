@@ -153,6 +153,9 @@ impl<'a> ContextAssembler<'a> {
             entries: retrieval_entries,
             memory_selection: memory_selection(
                 effective_prompt.sources.as_slice(),
+                inputs.plan_explanation.as_deref(),
+                inputs.plan_steps.as_slice(),
+                inputs.pending_interactions.as_slice(),
                 inputs.history,
                 inputs.session_id.as_str(),
                 inputs.vdb_uri,
@@ -435,8 +438,8 @@ fn latest_user_request(history: &[Message]) -> Option<String> {
     history
         .iter()
         .rev()
-        .find(|message| message.role == "user")
-        .and_then(|message| extract_latest_text(message))
+        .filter(|message| message.role == "user")
+        .find_map(extract_latest_text)
 }
 
 fn latest_tool_results(history: &[Message]) -> Vec<(String, String)> {
@@ -571,12 +574,21 @@ fn retrieval_source_entries(
 
 fn memory_selection(
     prompt_sources: &[PromptSource],
+    plan_explanation: Option<&str>,
+    plan_steps: &[(PlanStepStatus, String)],
+    pending_interactions: &[RuntimeInteractionInput],
     history: &[Message],
     session_id: &str,
     vdb_uri: &str,
     selection_budget_tokens: Option<usize>,
 ) -> MemorySelectionContextView {
-    let mut selected_items = fixed_memory_selection_items(prompt_sources, history);
+    let mut selected_items = fixed_memory_selection_items(
+        prompt_sources,
+        plan_explanation,
+        plan_steps,
+        pending_interactions,
+        history,
+    );
     let fixed_kinds = selected_items
         .iter()
         .map(|item| item.kind.clone())
@@ -629,11 +641,106 @@ struct MemorySelectionDecision {
 
 fn fixed_memory_selection_items(
     prompt_sources: &[PromptSource],
+    plan_explanation: Option<&str>,
+    plan_steps: &[(PlanStepStatus, String)],
+    pending_interactions: &[RuntimeInteractionInput],
     history: &[Message],
 ) -> Vec<MemorySelectionItemContextEntry> {
     let mut items = Vec::new();
     items.extend(workspace_memory_selected_items(prompt_sources));
     items.extend(compacted_history_selected_items(history));
+    items.extend(active_thread_selected_items(
+        plan_explanation,
+        plan_steps,
+        pending_interactions,
+        history,
+    ));
+    items
+}
+
+fn active_thread_selected_items(
+    plan_explanation: Option<&str>,
+    plan_steps: &[(PlanStepStatus, String)],
+    pending_interactions: &[RuntimeInteractionInput],
+    history: &[Message],
+) -> Vec<MemorySelectionItemContextEntry> {
+    let mut items = Vec::new();
+
+    if let Some(plan_explanation) = plan_explanation.filter(|value| !value.trim().is_empty()) {
+        items.push(MemorySelectionItemContextEntry {
+            order: 0,
+            kind: "plan_explanation".to_string(),
+            label: "Plan Explanation".to_string(),
+            detail: plan_explanation.trim().to_string(),
+            selection_reason: "selected because the active thread currently carries a structured plan explanation that must remain visible to the runtime and restore surfaces".to_string(),
+            budget_impact_tokens: Some(estimate_text_tokens(plan_explanation)),
+            dropped_reason: None,
+        });
+    }
+
+    if !plan_steps.is_empty() {
+        let detail = plan_steps
+            .iter()
+            .map(|(status, step)| {
+                let status = match status {
+                    PlanStepStatus::Pending => "pending",
+                    PlanStepStatus::InProgress => "in_progress",
+                    PlanStepStatus::Completed => "completed",
+                };
+                format!("[{status}] {step}")
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        items.push(MemorySelectionItemContextEntry {
+            order: 0,
+            kind: "plan_steps".to_string(),
+            label: "Plan Steps".to_string(),
+            detail: detail.clone(),
+            selection_reason: "selected because structured plan steps are part of the current thread working set and must survive restore".to_string(),
+            budget_impact_tokens: Some(estimate_text_tokens(detail.as_str())),
+            dropped_reason: None,
+        });
+    }
+
+    for interaction in pending_interactions {
+        items.push(MemorySelectionItemContextEntry {
+            order: 0,
+            kind: interaction.kind.clone(),
+            label: interaction.title.clone(),
+            detail: interaction.summary.clone(),
+            selection_reason: "selected because pending interactions are active runtime obligations that must remain available until answered".to_string(),
+            budget_impact_tokens: Some(
+                estimate_text_tokens(interaction.title.as_str())
+                    + estimate_text_tokens(interaction.summary.as_str()),
+            ),
+            dropped_reason: None,
+        });
+    }
+
+    if let Some(user_request) = latest_user_request(history) {
+        items.push(MemorySelectionItemContextEntry {
+            order: 0,
+            kind: "latest_user_request".to_string(),
+            label: "Latest User Request".to_string(),
+            detail: user_request.clone(),
+            selection_reason: "selected because the latest user request anchors the current turn objective and should stay in the active working set".to_string(),
+            budget_impact_tokens: Some(estimate_text_tokens(user_request.as_str())),
+            dropped_reason: None,
+        });
+    }
+
+    for (label, detail) in latest_tool_results(history) {
+        items.push(MemorySelectionItemContextEntry {
+            order: 0,
+            kind: "tool_result".to_string(),
+            label,
+            detail: detail.clone(),
+            selection_reason: "selected because recent tool results are part of the active thread working set until the assistant synthesizes a final answer".to_string(),
+            budget_impact_tokens: Some(estimate_text_tokens(detail.as_str())),
+            dropped_reason: None,
+        });
+    }
+
     items
 }
 
@@ -1389,6 +1496,70 @@ mod tests {
                     .as_deref()
                     .is_some_and(|reason| reason.contains("memory-selection budget"))
             }));
+    }
+
+    #[test]
+    fn assemble_runtime_includes_active_thread_working_set_in_memory_selection() {
+        let workspace = test_workspace();
+        let runtime = PromptRuntimeConfig::default();
+        let history = vec![
+            Message {
+                role: "user".to_string(),
+                content: json!([{"type":"text","text":"please continue the bootstrap cleanup"}]),
+            },
+            Message {
+                role: "user".to_string(),
+                content: json!([
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "tool-shell-1",
+                        "content": "diff preview"
+                    }
+                ]),
+            },
+        ];
+
+        let runtime_context = ContextAssembler::new(&workspace, &runtime).assemble_runtime(
+            PromptMode::Plan,
+            RuntimeContextInputs {
+                cwd: "repo".to_string(),
+                branch: "main".to_string(),
+                session_id: "session-1".to_string(),
+                history_len: history.len(),
+                total_input_tokens: 11,
+                total_output_tokens: 7,
+                execution_mode: "plan".to_string(),
+                plan_steps: vec![(PlanStepStatus::Pending, "inspect bootstrap".to_string())],
+                plan_explanation: Some("Keep one assembly path.".to_string()),
+                compact_state: crate::agent::CompactState {
+                    context_window_tokens: Some(8_192),
+                    compact_threshold_tokens: 7_000,
+                    reserved_output_tokens: 1_024,
+                    ..Default::default()
+                },
+                history: &history,
+                vdb_uri: "",
+                pending_interactions: vec![RuntimeInteractionInput {
+                    kind: "approval".to_string(),
+                    title: "Approve shell command".to_string(),
+                    summary: "Allow one shell command in the repo root.".to_string(),
+                    source: None,
+                }],
+            },
+        );
+
+        let selected_kinds = runtime_context
+            .retrieval
+            .memory_selection
+            .selected_items
+            .iter()
+            .map(|item| item.kind.as_str())
+            .collect::<Vec<_>>();
+        assert!(selected_kinds.contains(&"plan_explanation"));
+        assert!(selected_kinds.contains(&"plan_steps"));
+        assert!(selected_kinds.contains(&"approval"));
+        assert!(selected_kinds.contains(&"latest_user_request"));
+        assert!(selected_kinds.contains(&"tool_result"));
     }
 
     #[test]

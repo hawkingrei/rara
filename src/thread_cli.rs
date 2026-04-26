@@ -176,7 +176,9 @@ mod tests {
     use super::{format_recent_threads, format_thread_snapshot};
     use crate::state_db::PersistedInteraction;
     use crate::thread_store::{
-        CompactionRecord, RolloutItem, ThreadMetadata, ThreadSnapshot, ThreadSummary,
+        CompactionRecord, RolloutItem, ThreadHistorySource, ThreadMaterializationProvenance,
+        ThreadMetadata, ThreadMetadataSource, ThreadNonTurnRolloutSource, ThreadSnapshot,
+        ThreadSummary,
     };
 
     fn metadata() -> ThreadMetadata {
@@ -225,6 +227,11 @@ mod tests {
     fn thread_snapshot_output_surfaces_runtime_metadata_and_rollout_counts() {
         let output = format_thread_snapshot(&ThreadSnapshot {
             metadata: metadata(),
+            provenance: ThreadMaterializationProvenance {
+                metadata_source: ThreadMetadataSource::StateDb,
+                history_source: ThreadHistorySource::CanonicalHistory,
+                non_turn_rollout_source: ThreadNonTurnRolloutSource::StructuredEventsLog,
+            },
             history: vec![],
             compaction: CompactionRecord {
                 compaction_count: 3,

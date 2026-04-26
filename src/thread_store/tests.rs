@@ -1,5 +1,6 @@
 use anyhow::Result;
 use std::fs;
+use std::time::Duration;
 use tempfile::tempdir;
 
 use crate::agent::Message;
@@ -9,7 +10,10 @@ use crate::state_db::{
     PersistedRuntimeRolloutItem, PersistedStructuredRolloutEvent, PersistedTurnEntry, StateDb,
 };
 
-use super::{RolloutItem, ThreadRecorder, ThreadRuntimeState, ThreadStore};
+use super::{
+    RolloutItem, ThreadHistorySource, ThreadMetadataSource, ThreadNonTurnRolloutSource,
+    ThreadRecorder, ThreadRuntimeState, ThreadStore,
+};
 
 #[test]
 fn load_thread_aggregates_history_state_and_rollout_items() -> Result<()> {
@@ -87,6 +91,18 @@ fn load_thread_aggregates_history_state_and_rollout_items() -> Result<()> {
     let snapshot = store.load_thread("session-1")?;
 
     assert_eq!(snapshot.metadata.session_id, "session-1");
+    assert_eq!(
+        snapshot.provenance.metadata_source,
+        ThreadMetadataSource::StateDb
+    );
+    assert_eq!(
+        snapshot.provenance.history_source,
+        ThreadHistorySource::CanonicalHistory
+    );
+    assert_eq!(
+        snapshot.provenance.non_turn_rollout_source,
+        ThreadNonTurnRolloutSource::StructuredEventsLog
+    );
     assert_eq!(snapshot.metadata.provider, "ollama");
     assert_eq!(snapshot.history.len(), 1);
     assert_eq!(snapshot.compaction.compaction_count, 2);
@@ -157,6 +173,10 @@ fn load_thread_keeps_session_without_history_file() -> Result<()> {
 
     assert_eq!(snapshot.metadata.session_id, "session-missing-history");
     assert!(snapshot.history.is_empty());
+    assert_eq!(
+        snapshot.provenance.history_source,
+        ThreadHistorySource::Missing
+    );
     Ok(())
 }
 
@@ -195,6 +215,10 @@ fn load_thread_backfills_legacy_history_file_into_rollout_root() -> Result<()> {
     let snapshot = store.load_thread("session-legacy-history")?;
 
     assert_eq!(snapshot.history.len(), 1);
+    assert_eq!(
+        snapshot.provenance.history_source,
+        ThreadHistorySource::LegacyHistoryBackfilled
+    );
     let canonical_history = fs::read_to_string(
         session_manager
             .storage_dir
@@ -255,6 +279,10 @@ fn load_thread_prefers_structured_compaction_event_over_session_counters() -> Re
     assert_eq!(
         snapshot.compaction.summary.as_deref(),
         Some("Compacted long planning history.")
+    );
+    assert_eq!(
+        snapshot.provenance.non_turn_rollout_source,
+        ThreadNonTurnRolloutSource::StructuredEventsLog
     );
     Ok(())
 }
@@ -326,6 +354,10 @@ fn load_thread_prefers_structured_runtime_rollout_items() -> Result<()> {
     let store = ThreadStore::new(&session_manager, &state_db);
     let snapshot = store.load_thread("session-runtime-rollout")?;
 
+    assert_eq!(
+        snapshot.provenance.non_turn_rollout_source,
+        ThreadNonTurnRolloutSource::StructuredEventsLog
+    );
     assert!(matches!(
         snapshot.rollout_items.get(0),
         Some(RolloutItem::PlanState { explanation, steps })
@@ -409,6 +441,10 @@ fn load_thread_falls_back_to_legacy_runtime_rollout_file() -> Result<()> {
     let store = ThreadStore::new(&session_manager, &state_db);
     let snapshot = store.load_thread("session-legacy-runtime-rollout")?;
 
+    assert_eq!(
+        snapshot.provenance.non_turn_rollout_source,
+        ThreadNonTurnRolloutSource::LegacyBackfilled
+    );
     assert!(matches!(
         snapshot.rollout_items.get(0),
         Some(RolloutItem::PlanState { explanation, steps })
@@ -488,6 +524,10 @@ fn load_thread_backfills_legacy_non_turn_rollout_files_into_event_log() -> Resul
     let store = ThreadStore::new(&session_manager, &state_db);
     let snapshot = store.load_thread("session-legacy-non-turn")?;
 
+    assert_eq!(
+        snapshot.provenance.non_turn_rollout_source,
+        ThreadNonTurnRolloutSource::LegacyBackfilled
+    );
     assert_eq!(
         snapshot.plan_explanation.as_deref(),
         Some("Legacy runtime rollout plan")
@@ -624,6 +664,62 @@ fn load_thread_preserves_structured_rollout_event_order() -> Result<()> {
 }
 
 #[test]
+fn load_thread_reports_state_db_fallback_for_non_turn_rollout() -> Result<()> {
+    let temp = tempdir()?;
+    let rara_dir = temp.path().join(".rara");
+    let session_manager = SessionManager::new_for_rara_dir(rara_dir.clone())?;
+    let state_db = StateDb::new_for_root_dir(rara_dir)?;
+    state_db.upsert_session(
+        "session-state-fallback",
+        "/tmp/workspace",
+        "main",
+        "ollama",
+        "qwen3",
+        None,
+        "execute",
+        "always",
+        Some("Fallback plan explanation."),
+        &PersistedPromptRuntimeState::default(),
+        0,
+        0,
+        &PersistedCompactState::default(),
+    )?;
+    state_db.replace_plan_steps(
+        "session-state-fallback",
+        &[PersistedPlanStep {
+            step_index: 0,
+            status: "pending".to_string(),
+            step: "Fallback plan step".to_string(),
+        }],
+    )?;
+    state_db.replace_interactions(
+        "session-state-fallback",
+        &[PersistedInteraction {
+            kind: "approval".to_string(),
+            status: "pending".to_string(),
+            title: "Fallback Approval".to_string(),
+            summary: "state db only".to_string(),
+            payload: None,
+        }],
+    )?;
+
+    let store = ThreadStore::new(&session_manager, &state_db);
+    let snapshot = store.load_thread("session-state-fallback")?;
+
+    assert_eq!(
+        snapshot.provenance.non_turn_rollout_source,
+        ThreadNonTurnRolloutSource::StateDbFallback
+    );
+    assert_eq!(
+        snapshot.plan_explanation.as_deref(),
+        Some("Fallback plan explanation.")
+    );
+    assert_eq!(snapshot.plan_steps.len(), 1);
+    assert_eq!(snapshot.interactions.len(), 1);
+    Ok(())
+}
+
+#[test]
 fn thread_recorder_persists_runtime_state_via_state_db() -> Result<()> {
     let temp = tempdir()?;
     let state_db = StateDb::new_for_root_dir(temp.path().join(".rara"))?;
@@ -708,6 +804,85 @@ fn list_recent_threads_exposes_thread_metadata_surface() -> Result<()> {
     assert_eq!(threads[0].preview, "Agent: Preview line");
     assert_eq!(threads[0].compaction.compaction_count, 2);
     assert_eq!(threads[0].compaction.after_tokens, Some(1536));
+    Ok(())
+}
+
+#[test]
+fn latest_thread_summary_uses_thread_summary_contract() -> Result<()> {
+    let temp = tempdir()?;
+    let rara_dir = temp.path().join(".rara");
+    let session_manager = SessionManager::new_for_rara_dir(rara_dir.clone())?;
+    let state_db = StateDb::new_for_root_dir(rara_dir)?;
+
+    state_db.upsert_session_with_lineage(
+        "thread-old",
+        "/tmp/workspace-old",
+        "main",
+        "ollama",
+        "qwen3",
+        None,
+        "execute",
+        "always",
+        &crate::state_db::PersistedThreadLineage::default(),
+        None,
+        &PersistedPromptRuntimeState::default(),
+        1,
+        1,
+        &PersistedCompactState::default(),
+    )?;
+    state_db.persist_turn(
+        "thread-old",
+        0,
+        &[PersistedTurnEntry {
+            role: "Agent".to_string(),
+            message: "Older preview".to_string(),
+        }],
+    )?;
+    std::thread::sleep(Duration::from_secs(1));
+    state_db.upsert_session_with_lineage(
+        "thread-new",
+        "/tmp/workspace-new",
+        "feature",
+        "codex",
+        "gpt-5",
+        Some("https://chatgpt.com/backend-api/codex"),
+        "plan",
+        "on-request",
+        &crate::state_db::PersistedThreadLineage {
+            origin_kind: "fork".to_string(),
+            forked_from_thread_id: Some("thread-old".to_string()),
+        },
+        None,
+        &PersistedPromptRuntimeState::default(),
+        2,
+        1,
+        &PersistedCompactState {
+            compaction_count: 2,
+            ..Default::default()
+        },
+    )?;
+    state_db.persist_turn(
+        "thread-new",
+        0,
+        &[PersistedTurnEntry {
+            role: "Agent".to_string(),
+            message: "Newer preview".to_string(),
+        }],
+    )?;
+
+    let store = ThreadStore::new(&session_manager, &state_db);
+    let latest = store
+        .latest_thread_summary()?
+        .expect("latest thread should exist");
+
+    assert_eq!(latest.metadata.session_id, "thread-new");
+    assert_eq!(latest.metadata.origin_kind, "fork");
+    assert_eq!(
+        latest.metadata.forked_from_thread_id.as_deref(),
+        Some("thread-old")
+    );
+    assert_eq!(latest.preview, "Agent: Newer preview");
+    assert_eq!(latest.compaction.compaction_count, 2);
     Ok(())
 }
 
