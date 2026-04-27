@@ -43,8 +43,8 @@ use self::provider_flow::{
 use self::render::{desired_viewport_height, render};
 use self::runtime::{
     execute_local_command, finish_running_task_if_ready, should_suggest_planning_mode,
-    start_oauth_task, start_pending_approval_task, start_plan_approval_resume_task,
-    start_query_task, start_rebuild_task,
+    start_deepseek_model_list_task, start_oauth_task, start_pending_approval_task,
+    start_plan_approval_resume_task, start_query_task, start_rebuild_task,
 };
 use self::session_restore::{
     provider_requires_api_key, restore_latest_thread, restore_thread_by_id,
@@ -320,6 +320,8 @@ async fn dispatch_event(
             {
                 if app.selected_provider_family() == self::state::ProviderFamily::OpenAiCompatible {
                     return Ok(false);
+                } else if app.selected_provider_family() == self::state::ProviderFamily::DeepSeek {
+                    return Ok(false);
                 } else if should_open_codex_auth_guide(app, oauth_manager.as_ref()) {
                     app.select_local_model(app.model_picker_idx);
                     app.open_overlay(Overlay::AuthModePicker);
@@ -453,6 +455,10 @@ async fn dispatch_event(
                 app.push_notice("Wait for the current task before saving the API key.");
             } else if value.is_empty() && app.config.provider == "codex" {
                 app.push_notice("Enter a Codex API key or press Esc to go back.");
+            } else if value.is_empty()
+                && app.selected_provider_family() == self::state::ProviderFamily::DeepSeek
+            {
+                app.push_notice("Enter a DeepSeek API key or press Esc to go back.");
             } else if value.is_empty() && app.openai_setup_keep_empty_api_key {
                 app.notice = Some("Kept existing API key for the current profile.".into());
                 app.advance_openai_profile_setup();
@@ -469,6 +475,8 @@ async fn dispatch_event(
                     app.advance_openai_profile_setup();
                 }
             } else {
+                let was_deepseek =
+                    app.selected_provider_family() == self::state::ProviderFamily::DeepSeek;
                 app.config.set_api_key(value.to_string());
                 if app.config.provider == "codex" {
                     app.codex_auth_mode = Some(crate::oauth::SavedCodexAuthMode::ApiKey);
@@ -480,6 +488,10 @@ async fn dispatch_event(
                     app.notice = Some("Saved Codex API key. Rebuilding backend.".into());
                     app.overlay = None;
                     start_rebuild_task(app);
+                } else if was_deepseek {
+                    app.notice = Some("Saved DeepSeek API key. Loading models.".into());
+                    app.overlay = None;
+                    start_deepseek_model_list_task(app);
                 } else {
                     app.notice = Some("Saved API key for the current provider.".into());
                     if app.openai_setup_steps.is_empty() {
@@ -563,6 +575,17 @@ async fn dispatch_event(
                 apply_openai_model_picker_action(app, OpenAiModelPickerAction::DeleteProfile)?;
             }
         }
+        AppEvent::RefreshDeepSeekModels => {
+            if app.is_busy() {
+                app.push_notice("Wait for the current task before refreshing DeepSeek models.");
+            } else if app.selected_provider_family() != self::state::ProviderFamily::DeepSeek {
+                app.push_notice("DeepSeek model refresh is only available in DeepSeek.");
+            } else if !app.config.has_api_key() {
+                app.open_overlay(Overlay::ApiKeyEditor);
+            } else {
+                start_deepseek_model_list_task(app);
+            }
+        }
         AppEvent::SelectHelpTab(tab) => {
             app.open_overlay(Overlay::Help(tab));
         }
@@ -582,15 +605,19 @@ async fn dispatch_event(
                     app.push_notice("A task is already running. Wait for it to finish.");
                 } else {
                     open_provider_family_overlay(app, oauth_manager.as_ref()).await?;
+                    if app.selected_provider_family() == self::state::ProviderFamily::DeepSeek
+                        && app.config.has_api_key()
+                        && matches!(app.overlay, Some(Overlay::ModelPicker))
+                    {
+                        start_deepseek_model_list_task(app);
+                    }
                 }
             }
             Some(Overlay::OpenAiEndpointKindPicker) => {
                 if app.is_busy() {
                     app.push_notice("A task is already running. Wait for it to finish.");
                 } else {
-                    let kind = crate::tui::state::openai_compatible_preset_kind(
-                        app.openai_endpoint_kind_picker_idx,
-                    );
+                    let kind = app.selected_openai_setup_kind();
                     app.set_openai_setup_kind(kind);
                     app.config_manager.save(&app.config)?;
                 }
@@ -665,6 +692,15 @@ async fn dispatch_event(
                     {
                         if let Some(action) = app.selected_openai_model_picker_action() {
                             apply_openai_model_picker_action(app, action)?;
+                        }
+                    } else if app.selected_provider_family()
+                        == self::state::ProviderFamily::DeepSeek
+                    {
+                        if app.config.has_api_key() {
+                            app.select_local_model(app.model_picker_idx);
+                            start_rebuild_task(app);
+                        } else {
+                            app.open_overlay(Overlay::ApiKeyEditor);
                         }
                     } else {
                         app.select_local_model(app.model_picker_idx);

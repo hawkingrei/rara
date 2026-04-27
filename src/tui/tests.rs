@@ -29,6 +29,13 @@ use super::{
     PendingPlanApprovalAction,
 };
 
+fn provider_family_idx(family: ProviderFamily) -> usize {
+    super::state::PROVIDER_FAMILIES
+        .iter()
+        .position(|(candidate, _, _)| *candidate == family)
+        .expect("provider family present")
+}
+
 #[test]
 fn pending_plan_approval_treats_generic_continue_as_approval() {
     assert_eq!(
@@ -429,7 +436,7 @@ fn openai_compatible_model_picker_exposes_profile_table_shortcuts() {
     })
     .expect("app");
 
-    app.provider_picker_idx = 1;
+    app.provider_picker_idx = provider_family_idx(ProviderFamily::OpenAiCompatible);
     app.open_overlay(Overlay::ModelPicker);
 
     assert!(matches!(
@@ -457,7 +464,7 @@ async fn openai_model_picker_delete_row_removes_active_profile() {
         path: temp.path().join("config.json"),
     })
     .expect("app");
-    app.provider_picker_idx = 1;
+    app.provider_picker_idx = provider_family_idx(ProviderFamily::OpenAiCompatible);
     app.config.select_openai_profile(
         "custom-default",
         "Custom endpoint",
@@ -507,7 +514,7 @@ async fn openai_model_picker_space_activates_selected_profile_and_starts_setup_w
         path: temp.path().join("config.json"),
     })
     .expect("app");
-    app.provider_picker_idx = 1;
+    app.provider_picker_idx = provider_family_idx(ProviderFamily::OpenAiCompatible);
     app.open_overlay(Overlay::ModelPicker);
 
     let oauth_manager = Arc::new(
@@ -540,13 +547,105 @@ async fn openai_model_picker_space_activates_selected_profile_and_starts_setup_w
 }
 
 #[tokio::test]
+async fn deepseek_provider_family_prompts_for_api_key_before_model_list() {
+    let temp = tempdir().expect("tempdir");
+    let mut app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("app");
+    let oauth_manager = crate::oauth::OAuthManager::new_for_config_dir(temp.path().join(".rara"))
+        .expect("oauth manager");
+    app.provider_picker_idx = provider_family_idx(ProviderFamily::DeepSeek);
+
+    open_provider_family_overlay(&mut app, &oauth_manager)
+        .await
+        .expect("open overlay");
+
+    assert_eq!(
+        app.config.active_openai_profile_kind(),
+        Some(OpenAiEndpointKind::Deepseek)
+    );
+    assert!(matches!(app.overlay, Some(Overlay::ApiKeyEditor)));
+}
+
+#[tokio::test]
+async fn deepseek_api_key_save_starts_model_catalog_task() {
+    let temp = tempdir().expect("tempdir");
+    let mut app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("app");
+    app.provider_picker_idx = provider_family_idx(ProviderFamily::DeepSeek);
+    app.config
+        .select_openai_profile("deepseek-default", "DeepSeek", OpenAiEndpointKind::Deepseek);
+    app.open_overlay(Overlay::ApiKeyEditor);
+    app.api_key_input = "sk-deepseek-test".to_string();
+
+    let oauth_manager = Arc::new(
+        crate::oauth::OAuthManager::new_for_config_dir(temp.path().join(".rara"))
+            .expect("oauth manager"),
+    );
+    let mut agent_slot = None;
+
+    dispatch_event(
+        AppEvent::SaveApiKeyInput,
+        &mut app,
+        &mut agent_slot,
+        &oauth_manager,
+    )
+    .await
+    .expect("save api key");
+
+    assert_eq!(app.config.api_key(), Some("sk-deepseek-test"));
+    assert!(matches!(
+        app.running_task.as_ref(),
+        Some(task) if matches!(task.kind, TaskKind::DeepSeekModels)
+    ));
+    if let Some(task) = app.running_task.take() {
+        task.handle.abort();
+    }
+}
+
+#[tokio::test]
+async fn deepseek_model_picker_enter_without_api_key_opens_api_key_editor() {
+    let temp = tempdir().expect("tempdir");
+    let mut app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("app");
+    app.provider_picker_idx = provider_family_idx(ProviderFamily::DeepSeek);
+    app.config
+        .select_openai_profile("deepseek-default", "DeepSeek", OpenAiEndpointKind::Deepseek);
+    app.config.clear_api_key();
+    app.open_overlay(Overlay::ModelPicker);
+
+    let oauth_manager = Arc::new(
+        crate::oauth::OAuthManager::new_for_config_dir(temp.path().join(".rara"))
+            .expect("oauth manager"),
+    );
+    let mut agent_slot = None;
+
+    dispatch_event(
+        AppEvent::ApplyOverlaySelection,
+        &mut app,
+        &mut agent_slot,
+        &oauth_manager,
+    )
+    .await
+    .expect("apply model selection");
+
+    assert!(matches!(app.overlay, Some(Overlay::ApiKeyEditor)));
+    assert!(app.running_task.is_none());
+}
+
+#[tokio::test]
 async fn openai_model_picker_edit_shortcut_starts_wizard_for_selected_profile() {
     let temp = tempdir().expect("tempdir");
     let mut app = TuiApp::new(ConfigManager {
         path: temp.path().join("config.json"),
     })
     .expect("app");
-    app.provider_picker_idx = 1;
+    app.provider_picker_idx = provider_family_idx(ProviderFamily::OpenAiCompatible);
     app.config.select_openai_profile(
         "custom-default",
         "Custom endpoint",
@@ -593,7 +692,7 @@ async fn openai_profile_edit_wizard_keeps_existing_api_key_when_blank() {
         path: temp.path().join("config.json"),
     })
     .expect("app");
-    app.provider_picker_idx = 1;
+    app.provider_picker_idx = provider_family_idx(ProviderFamily::OpenAiCompatible);
     app.config.select_openai_profile(
         "openrouter-default",
         "OpenRouter",
@@ -649,7 +748,7 @@ async fn openai_model_picker_create_shortcut_opens_endpoint_kind_picker() {
         path: temp.path().join("config.json"),
     })
     .expect("app");
-    app.provider_picker_idx = 1;
+    app.provider_picker_idx = provider_family_idx(ProviderFamily::OpenAiCompatible);
     app.open_overlay(Overlay::ModelPicker);
 
     let oauth_manager = Arc::new(
@@ -681,7 +780,7 @@ async fn selecting_custom_endpoint_kind_prompts_for_profile_label() {
         path: temp.path().join("config.json"),
     })
     .expect("app");
-    app.provider_picker_idx = 1;
+    app.provider_picker_idx = provider_family_idx(ProviderFamily::OpenAiCompatible);
     app.overlay = Some(Overlay::OpenAiEndpointKindPicker);
     app.openai_endpoint_kind_picker_idx = 0;
 
@@ -717,7 +816,7 @@ async fn selecting_openai_profile_from_picker_switches_active_profile() {
         path: temp.path().join("config.json"),
     })
     .expect("app");
-    app.provider_picker_idx = 1;
+    app.provider_picker_idx = provider_family_idx(ProviderFamily::OpenAiCompatible);
     app.config.select_openai_profile(
         "openrouter-main",
         "OpenRouter Main",
@@ -755,15 +854,18 @@ async fn selecting_openai_profile_from_picker_switches_active_profile() {
 }
 
 #[tokio::test]
-async fn saving_openai_profile_label_creates_new_profile_for_selected_kind() {
+async fn saving_openai_profile_label_creates_new_openrouter_profile() {
     let temp = tempdir().expect("tempdir");
     let mut app = TuiApp::new(ConfigManager {
         path: temp.path().join("config.json"),
     })
     .expect("app");
-    app.provider_picker_idx = 1;
-    app.config
-        .select_openai_profile("deepseek-default", "DeepSeek", OpenAiEndpointKind::Deepseek);
+    app.provider_picker_idx = provider_family_idx(ProviderFamily::OpenAiCompatible);
+    app.config.select_openai_profile(
+        "openrouter-default",
+        "OpenRouter",
+        OpenAiEndpointKind::Openrouter,
+    );
     app.open_overlay(Overlay::OpenAiProfilePicker);
     app.openai_profile_picker_idx = 0;
 
@@ -782,7 +884,7 @@ async fn saving_openai_profile_label_creates_new_profile_for_selected_kind() {
     .await
     .expect("open profile label editor");
 
-    app.openai_profile_label_input = "DeepSeek backup".to_string();
+    app.openai_profile_label_input = "OpenRouter backup".to_string();
 
     dispatch_event(
         AppEvent::SaveOpenAiProfileLabelInput,
@@ -795,16 +897,16 @@ async fn saving_openai_profile_label_creates_new_profile_for_selected_kind() {
 
     assert_eq!(
         app.config.active_openai_profile_id(),
-        Some("deepseek-deepseek-backup")
+        Some("openrouter-openrouter-backup")
     );
     assert_eq!(
         app.config.active_openai_profile_kind(),
-        Some(OpenAiEndpointKind::Deepseek)
+        Some(OpenAiEndpointKind::Openrouter)
     );
     assert!(app
         .config
         .openai_profiles
-        .contains_key("deepseek-deepseek-backup"));
+        .contains_key("openrouter-openrouter-backup"));
     assert!(matches!(app.overlay, Some(Overlay::ApiKeyEditor)));
     assert_eq!(app.openai_setup_steps, vec![Overlay::ModelNameEditor]);
 }

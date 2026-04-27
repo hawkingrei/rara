@@ -42,6 +42,10 @@ pub fn start_oauth_task(app: &mut TuiApp, oauth_manager: Arc<OAuthManager>, mode
     tasks::start_oauth_task(app, oauth_manager, mode);
 }
 
+pub fn start_deepseek_model_list_task(app: &mut TuiApp) {
+    tasks::start_deepseek_model_list_task(app);
+}
+
 pub async fn finish_running_task_if_ready(
     app: &mut TuiApp,
     agent_slot: &mut Option<Agent>,

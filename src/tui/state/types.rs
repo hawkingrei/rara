@@ -51,6 +51,7 @@ pub enum Overlay {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ProviderFamily {
     Codex,
+    DeepSeek,
     OpenAiCompatible,
     CandleLocal,
     Ollama,
@@ -211,6 +212,7 @@ pub enum TaskKind {
     Compact,
     Rebuild,
     OAuth,
+    DeepSeekModels,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -234,6 +236,9 @@ pub enum TaskCompletion {
     OAuth {
         mode: OAuthLoginMode,
         result: anyhow::Result<secrecy::SecretString>,
+    },
+    DeepSeekModels {
+        result: anyhow::Result<Vec<String>>,
     },
 }
 
@@ -262,16 +267,21 @@ pub struct RunningTask {
     pub next_heartbeat_after_secs: u64,
 }
 
-pub const PROVIDER_FAMILIES: [(ProviderFamily, &str, &str); 4] = [
+pub const PROVIDER_FAMILIES: [(ProviderFamily, &str, &str); 5] = [
     (
         ProviderFamily::Codex,
         "Codex",
         "Use Codex with browser login, device-code login, or a Codex API key.",
     ),
     (
+        ProviderFamily::DeepSeek,
+        "DeepSeek",
+        "Use DeepSeek with an API key and model list from api.deepseek.com.",
+    ),
+    (
         ProviderFamily::OpenAiCompatible,
         "OpenAI-compatible",
-        "Use OpenAI-compatible endpoint profiles such as Custom, DeepSeek, Kimi, or OpenRouter.",
+        "Use OpenAI-compatible endpoint profiles such as Custom, Kimi, or OpenRouter.",
     ),
     (
         ProviderFamily::CandleLocal,
@@ -374,6 +384,7 @@ pub struct TuiApp {
     pub openai_setup_steps: Vec<Overlay>,
     pub openai_setup_keep_empty_api_key: bool,
     pub codex_model_options: Vec<CodexModelOption>,
+    pub deepseek_model_options: Vec<String>,
     pub recent_commands: Vec<String>,
     pub recent_threads: Vec<ThreadSummary>,
     pub resume_picker_idx: usize,

@@ -947,6 +947,23 @@ pub fn model_help_text(app: &TuiApp) -> String {
                         .collect::<Vec<_>>()
                         .join("\n")
                 }
+            } else if matches!(family, ProviderFamily::DeepSeek) {
+                app.deepseek_model_options
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, model)| {
+                        let marker = if app.config.active_openai_profile_kind()
+                            == Some(rara_config::OpenAiEndpointKind::Deepseek)
+                            && app.config.model.as_deref() == Some(model.as_str())
+                        {
+                            "*"
+                        } else {
+                            " "
+                        };
+                        format!("{marker} {}. {model} (deepseek/{model})", idx + 1)
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n")
             } else {
                 current_model_presets(provider_idx)
                     .iter()
@@ -961,6 +978,7 @@ pub fn model_help_text(app: &TuiApp) -> String {
                         };
                         let shortcut = match family {
                             ProviderFamily::Codex => (idx + 1).to_string(),
+                            ProviderFamily::DeepSeek => (idx + 1).to_string(),
                             ProviderFamily::OpenAiCompatible => (idx + 1).to_string(),
                             ProviderFamily::CandleLocal => (idx + 1).to_string(),
                             ProviderFamily::Ollama => model.to_string(),

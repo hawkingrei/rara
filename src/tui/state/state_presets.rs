@@ -26,9 +26,17 @@ pub const OLLAMA_MODEL_PRESETS: [(&str, &str, &str); 3] = [
 pub fn selected_provider_family_idx_for_config(config: &RaraConfig) -> usize {
     match config.provider.as_str() {
         "codex" => 0,
-        "openai-compatible" | "deepseek" | "kimi" | "openrouter" => 1,
-        "ollama" | "ollama-native" | "ollama-openai" => 3,
-        "gemma4" | "qwn3" | "qwen3" => 2,
+        "deepseek" => 1,
+        "openai-compatible" => {
+            if config.active_openai_profile_kind() == Some(OpenAiEndpointKind::Deepseek) {
+                1
+            } else {
+                2
+            }
+        }
+        "kimi" | "openrouter" => 2,
+        "ollama" | "ollama-native" | "ollama-openai" => 4,
+        "gemma4" | "qwn3" | "qwen3" => 3,
         _ => 0,
     }
 }
@@ -38,6 +46,7 @@ pub fn current_model_presets(
 ) -> &'static [(&'static str, &'static str, &'static str)] {
     match super::PROVIDER_FAMILIES[provider_picker_idx].0 {
         ProviderFamily::Codex => &CODEX_MODEL_PRESETS,
+        ProviderFamily::DeepSeek => &[],
         ProviderFamily::OpenAiCompatible => &OPENAI_COMPATIBLE_MODEL_PRESETS,
         ProviderFamily::CandleLocal => &LOCAL_MODEL_PRESETS,
         ProviderFamily::Ollama => &OLLAMA_MODEL_PRESETS,
@@ -95,7 +104,7 @@ mod tests {
             ..RaraConfig::default()
         };
 
-        assert_eq!(selected_provider_family_idx_for_config(&config), 1);
+        assert_eq!(selected_provider_family_idx_for_config(&config), 2);
     }
 
     #[test]
@@ -117,21 +126,31 @@ mod tests {
             ..RaraConfig::default()
         };
 
-        assert_eq!(selected_provider_family_idx_for_config(&local), 2);
-        assert_eq!(selected_provider_family_idx_for_config(&ollama), 3);
-        assert_eq!(selected_provider_family_idx_for_config(&ollama_native), 3);
-        assert_eq!(selected_provider_family_idx_for_config(&ollama_openai), 3);
+        assert_eq!(selected_provider_family_idx_for_config(&local), 3);
+        assert_eq!(selected_provider_family_idx_for_config(&ollama), 4);
+        assert_eq!(selected_provider_family_idx_for_config(&ollama_native), 4);
+        assert_eq!(selected_provider_family_idx_for_config(&ollama_openai), 4);
     }
 
     #[test]
     fn keeps_legacy_openai_endpoint_providers_in_openai_compatible_family() {
-        for provider in ["deepseek", "kimi", "openrouter"] {
+        for provider in ["kimi", "openrouter"] {
             let config = RaraConfig {
                 provider: provider.to_string(),
                 ..RaraConfig::default()
             };
-            assert_eq!(selected_provider_family_idx_for_config(&config), 1);
+            assert_eq!(selected_provider_family_idx_for_config(&config), 2);
         }
+    }
+
+    #[test]
+    fn routes_deepseek_provider_to_dedicated_family() {
+        let config = RaraConfig {
+            provider: "deepseek".to_string(),
+            ..RaraConfig::default()
+        };
+
+        assert_eq!(selected_provider_family_idx_for_config(&config), 1);
     }
 
     #[test]

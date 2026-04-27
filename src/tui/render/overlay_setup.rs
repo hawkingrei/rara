@@ -14,7 +14,9 @@ use crate::tui::auth_mode_picker::build_auth_mode_picker_view;
 use crate::tui::command::api_key_status;
 use crate::tui::is_ssh_session;
 use crate::tui::render::bottom_pane::editor_cursor_position;
-use crate::tui::state::{current_model_presets, ProviderFamily, TuiApp, PROVIDER_FAMILIES};
+use crate::tui::state::{
+    current_model_presets, openai_profile_setup_kinds, ProviderFamily, TuiApp, PROVIDER_FAMILIES,
+};
 
 fn wrapped_text_height(text: &str, area_width: u16) -> u16 {
     let width = area_width.saturating_sub(2).max(1) as usize;
@@ -83,7 +85,7 @@ pub(super) fn render_provider_picker_modal(f: &mut Frame, app: &TuiApp, area: Re
         chunks[1],
     );
     f.render_widget(
-        Paragraph::new("1/2/3/4 select  Up/Down move  Enter continue  Esc close")
+        Paragraph::new("number jump  up/down move  enter choose  esc close")
             .alignment(Alignment::Center),
         chunks[2],
     );
@@ -212,6 +214,29 @@ pub(super) fn render_model_picker_modal(f: &mut Frame, app: &TuiApp, area: Rect)
                 .style(style)
             })
             .collect::<Vec<_>>()
+    } else if app.selected_provider_family() == ProviderFamily::DeepSeek {
+        app.deepseek_model_options
+            .iter()
+            .enumerate()
+            .map(|(idx, model)| {
+                let style = if idx == app.model_picker_idx {
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default()
+                };
+                let current = if app.config.active_openai_profile_kind()
+                    == Some(crate::config::OpenAiEndpointKind::Deepseek)
+                    && app.config.model.as_deref() == Some(model.as_str())
+                {
+                    " current"
+                } else {
+                    ""
+                };
+                ListItem::new(format!("[{}] {}{}", idx + 1, model, current)).style(style)
+            })
+            .collect::<Vec<_>>()
     } else {
         let presets = current_model_presets(app.provider_picker_idx);
         presets
@@ -261,6 +286,15 @@ pub(super) fn render_model_picker_modal(f: &mut Frame, app: &TuiApp, area: Rect)
                 .unwrap_or("https://api.openai.com/v1"),
             app.current_reasoning_effort_label(),
         )
+    } else if provider_label == "DeepSeek" {
+        &format!(
+            "Provider: DeepSeek\nBase URL: {}\nAPI key: {}\nChoose a DeepSeek model. R refreshes /models.",
+            app.config
+                .base_url
+                .as_deref()
+                .unwrap_or(crate::config::DEFAULT_DEEPSEEK_BASE_URL),
+            api_key_status(&app.config),
+        )
     } else {
         &format!(
             "Provider: {provider_label}\nBase URL: {}\nSelect a concrete model preset. Enter applies immediately.",
@@ -291,6 +325,8 @@ pub(super) fn render_model_picker_modal(f: &mut Frame, app: &TuiApp, area: Rect)
     f.render_widget(
         Paragraph::new(if provider_label == "Codex" {
             "1-9 jump  Up/Down move  Enter choose level  Esc close"
+        } else if provider_label == "DeepSeek" {
+            "1-9 jump  Up/Down move  Enter apply  A api key  R refresh  Esc close"
         } else {
             "1-9 apply directly  Up/Down move  B edit base URL  Enter apply  Esc close"
         })
@@ -494,14 +530,9 @@ pub(super) fn render_openai_profile_picker_modal(f: &mut Frame, app: &TuiApp, ar
 }
 
 pub(super) fn render_openai_endpoint_kind_picker_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
-    let kinds = [
-        crate::config::OpenAiEndpointKind::Custom,
-        crate::config::OpenAiEndpointKind::Deepseek,
-        crate::config::OpenAiEndpointKind::Kimi,
-        crate::config::OpenAiEndpointKind::Openrouter,
-    ];
-    let items = kinds
-        .into_iter()
+    let items = openai_profile_setup_kinds()
+        .iter()
+        .copied()
         .enumerate()
         .map(|(idx, kind)| {
             let current = if app.config.active_openai_profile_kind() == Some(kind) {

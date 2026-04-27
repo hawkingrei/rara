@@ -39,6 +39,7 @@ pub enum AppEvent {
     CreateOpenAiProfile,
     EditOpenAiProfile,
     DeleteOpenAiProfile,
+    RefreshDeepSeekModels,
     SelectHelpTab(HelpTab),
     ApplyOverlaySelection,
 }

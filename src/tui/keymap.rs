@@ -92,6 +92,12 @@ pub(super) fn map_key_to_event(key: KeyEvent, app: &TuiApp) -> AppEvent {
             KeyCode::Char('b') if app.selected_provider_family() == ProviderFamily::Ollama => {
                 AppEvent::OpenOverlay(Overlay::BaseUrlEditor)
             }
+            KeyCode::Char('r') if app.selected_provider_family() == ProviderFamily::DeepSeek => {
+                AppEvent::RefreshDeepSeekModels
+            }
+            KeyCode::Char('a') if app.selected_provider_family() == ProviderFamily::DeepSeek => {
+                AppEvent::OpenOverlay(Overlay::ApiKeyEditor)
+            }
             KeyCode::Char('e')
                 if matches!(
                     app.selected_provider_family(),

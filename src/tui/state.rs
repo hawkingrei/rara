@@ -10,8 +10,8 @@ use std::process::Command;
 use unicode_width::UnicodeWidthChar;
 
 pub use self::state_presets::{
-    current_model_presets, openai_compatible_preset_index, openai_compatible_preset_kind,
-    selected_preset_idx_for_config, selected_provider_family_idx_for_config,
+    current_model_presets, openai_compatible_preset_kind, selected_preset_idx_for_config,
+    selected_provider_family_idx_for_config,
 };
 use self::types::CommittedTranscriptRenderCache;
 pub use self::types::{
@@ -22,6 +22,17 @@ pub use self::types::{
     RunningTask, RuntimePhase, RuntimeSnapshot, TaskCompletion, TaskKind, TranscriptEntry,
     TranscriptTurn, TuiApp, TuiEvent, PROVIDER_FAMILIES,
 };
+
+const OPENAI_PROFILE_SETUP_KINDS: [OpenAiEndpointKind; 3] = [
+    OpenAiEndpointKind::Custom,
+    OpenAiEndpointKind::Kimi,
+    OpenAiEndpointKind::Openrouter,
+];
+
+pub fn openai_profile_setup_kinds() -> &'static [OpenAiEndpointKind] {
+    &OPENAI_PROFILE_SETUP_KINDS
+}
+
 use super::queued_input::PendingFollowUpMessage;
 use crate::agent::{Agent, AgentExecutionMode, BashApprovalMode};
 use crate::codex_model_catalog::{CodexModelOption, CodexReasoningOption};
@@ -29,6 +40,7 @@ use crate::config::{ConfigManager, OpenAiEndpointKind, DEFAULT_CODEX_BASE_URL};
 use crate::redaction::redact_secrets;
 use crate::state_db::StateDb;
 use crate::tui::is_ssh_session;
+use rara_provider_catalog::{fallback_models, ModelCatalogProvider};
 
 fn completed_interaction_role(kind: InteractionKind, source: Option<&str>) -> &'static str {
     match kind {
@@ -471,6 +483,7 @@ impl TuiApp {
             openai_setup_steps: Vec::new(),
             openai_setup_keep_empty_api_key: false,
             codex_model_options: Vec::new(),
+            deepseek_model_options: fallback_models(ModelCatalogProvider::DeepSeek),
             recent_commands: Vec::new(),
             recent_threads: Vec::new(),
             resume_picker_idx: 0,
@@ -578,6 +591,13 @@ impl TuiApp {
                 })
                 .unwrap_or(0);
         }
+        if self.selected_provider_family() == ProviderFamily::DeepSeek {
+            return self
+                .deepseek_model_options
+                .iter()
+                .position(|model| self.config.model.as_deref() == Some(model.as_str()))
+                .unwrap_or(0);
+        }
         selected_preset_idx_for_config(&self.config, self.provider_picker_idx)
     }
 
@@ -588,6 +608,8 @@ impl TuiApp {
     pub fn current_model_picker_len(&self) -> usize {
         if self.selected_provider_family() == ProviderFamily::Codex {
             self.codex_model_options.len()
+        } else if self.selected_provider_family() == ProviderFamily::DeepSeek {
+            self.deepseek_model_options.len()
         } else if self.selected_provider_family() == ProviderFamily::OpenAiCompatible {
             self.openai_model_picker_profiles().len()
         } else {
@@ -648,6 +670,29 @@ impl TuiApp {
         self.sync_reasoning_effort_picker();
     }
 
+    pub fn set_deepseek_model_options(&mut self, options: Vec<String>) {
+        let mut options = if options.is_empty() {
+            fallback_models(ModelCatalogProvider::DeepSeek)
+        } else {
+            options
+        };
+        if let Some(current_model) = self
+            .config
+            .model
+            .as_deref()
+            .map(str::trim)
+            .filter(|model| !model.is_empty())
+        {
+            if !options.iter().any(|model| model == current_model) {
+                options.insert(0, current_model.to_string());
+            }
+        }
+        options.sort();
+        options.dedup();
+        self.deepseek_model_options = options;
+        self.model_picker_idx = self.selected_preset_idx();
+    }
+
     fn selected_model_preset(&self) -> (&'static str, &'static str, &'static str) {
         let presets = current_model_presets(self.provider_picker_idx);
         presets[self.model_picker_idx.min(presets.len().saturating_sub(1))]
@@ -660,6 +705,7 @@ impl TuiApp {
         self.selected_openai_model_picker_profile()
             .map(|profile| profile.kind)
             .or_else(|| self.config.active_openai_profile_kind())
+            .filter(|kind| *kind != OpenAiEndpointKind::Deepseek)
             .or(Some(OpenAiEndpointKind::Custom))
     }
 
@@ -697,7 +743,17 @@ impl TuiApp {
     }
 
     pub fn openai_endpoint_kind_count(&self) -> usize {
-        current_model_presets(self.provider_picker_idx).len()
+        openai_profile_setup_kinds().len()
+    }
+
+    pub fn selected_openai_setup_kind(&self) -> OpenAiEndpointKind {
+        openai_profile_setup_kinds()
+            .get(
+                self.openai_endpoint_kind_picker_idx
+                    .min(openai_profile_setup_kinds().len().saturating_sub(1)),
+            )
+            .copied()
+            .unwrap_or(OpenAiEndpointKind::Custom)
     }
 
     fn openai_profile_setup_sequence(&self) -> Vec<Overlay> {
@@ -809,7 +865,12 @@ impl TuiApp {
 
     pub fn openai_model_picker_profiles(&self) -> Vec<&crate::config::OpenAiEndpointProfile> {
         let active_id = self.config.active_openai_profile_id();
-        let mut profiles = self.config.openai_profiles.values().collect::<Vec<_>>();
+        let mut profiles = self
+            .config
+            .openai_profiles
+            .values()
+            .filter(|profile| profile.kind != OpenAiEndpointKind::Deepseek)
+            .collect::<Vec<_>>();
         profiles.sort_by(|left, right| {
             let left_active = Some(left.id.as_str()) == active_id;
             let right_active = Some(right.id.as_str()) == active_id;
@@ -917,6 +978,9 @@ impl TuiApp {
         if self.selected_provider_family() == ProviderFamily::Codex {
             return Some("codex");
         }
+        if self.selected_provider_family() == ProviderFamily::DeepSeek {
+            return None;
+        }
         if self.selected_provider_family() == ProviderFamily::OpenAiCompatible {
             return None;
         }
@@ -946,6 +1010,23 @@ impl TuiApp {
                     .set_base_url(Some(DEFAULT_CODEX_BASE_URL.to_string()));
             }
             self.sync_reasoning_effort_picker();
+            return;
+        }
+        if self.selected_provider_family() == ProviderFamily::DeepSeek {
+            let Some(model) = self
+                .deepseek_model_options
+                .get(idx.min(self.deepseek_model_options.len().saturating_sub(1)))
+                .cloned()
+            else {
+                return;
+            };
+            self.config.select_openai_profile(
+                OpenAiEndpointKind::Deepseek.default_profile_id(),
+                OpenAiEndpointKind::Deepseek.label(),
+                OpenAiEndpointKind::Deepseek,
+            );
+            self.config.set_model(Some(model));
+            self.config.set_revision(None);
             return;
         }
 
@@ -1201,8 +1282,20 @@ impl TuiApp {
         if matches!(overlay, Overlay::ModelPicker) {
             let selected_family = self.selected_provider_family();
             if matches!(selected_family, ProviderFamily::OpenAiCompatible) {
-                if !matches!(selected_provider_family_idx_for_config(&self.config), 1) {
+                if !matches!(
+                    PROVIDER_FAMILIES
+                        .get(selected_provider_family_idx_for_config(&self.config))
+                        .map(|(family, _, _)| *family),
+                    Some(ProviderFamily::OpenAiCompatible)
+                ) {
                     self.config.set_provider("openai-compatible");
+                }
+                if self.config.active_openai_profile_kind() == Some(OpenAiEndpointKind::Deepseek) {
+                    self.config.select_openai_profile(
+                        OpenAiEndpointKind::Custom.default_profile_id(),
+                        OpenAiEndpointKind::Custom.label(),
+                        OpenAiEndpointKind::Custom,
+                    );
                 }
                 self.model_picker_idx = 0;
             } else if let Some(provider) = self.single_provider_for_selected_family() {
@@ -1214,7 +1307,11 @@ impl TuiApp {
         if matches!(overlay, Overlay::OpenAiEndpointKindPicker) {
             self.openai_endpoint_kind_picker_idx = self
                 .selected_openai_profile_kind()
-                .map(openai_compatible_preset_index)
+                .and_then(|kind| {
+                    openai_profile_setup_kinds()
+                        .iter()
+                        .position(|candidate| *candidate == kind)
+                })
                 .unwrap_or(0);
         }
         if matches!(overlay, Overlay::OpenAiProfilePicker) {
