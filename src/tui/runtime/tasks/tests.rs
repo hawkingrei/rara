@@ -54,8 +54,7 @@ fn skips_planning_for_simple_requests() {
 #[test]
 fn browser_oauth_is_rejected_before_task_start_in_ssh() {
     let temp = tempdir().unwrap();
-    let old_ssh = std::env::var_os("SSH_CONNECTION");
-    std::env::set_var("SSH_CONNECTION", "test");
+    let _ssh_env = crate::tui::terminal_ui::test_env::set_ssh_session(true);
 
     let mut app = TuiApp::new(ConfigManager {
         path: temp.path().join("config.json"),
@@ -72,12 +71,6 @@ fn browser_oauth_is_rejected_before_task_start_in_ssh() {
         .notice
         .as_deref()
         .is_some_and(|value| value.contains("Browser login is unavailable")));
-
-    if let Some(value) = old_ssh {
-        std::env::set_var("SSH_CONNECTION", value);
-    } else {
-        std::env::remove_var("SSH_CONNECTION");
-    }
 }
 
 #[test]

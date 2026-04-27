@@ -578,9 +578,7 @@ fn compact_summary_text_keeps_tail_of_long_explicit_blocks() {
 #[test]
 fn ssh_startup_page_warns_without_opening_setup_window() {
     let temp = tempdir().expect("tempdir");
-    let old_ssh_connection = std::env::var_os("SSH_CONNECTION");
-    let old_ssh_tty = std::env::var_os("SSH_TTY");
-    std::env::set_var("SSH_CONNECTION", "test");
+    let _ssh_env = crate::tui::terminal_ui::test_env::set_ssh_session(true);
 
     let cm = ConfigManager {
         path: temp.path().join("config.json"),
@@ -596,17 +594,6 @@ fn ssh_startup_page_warns_without_opening_setup_window() {
 
     let rendered = render_screen_text(&app, 100, 24);
     assert_snapshot!("ssh_startup_warning_screen", rendered);
-
-    if let Some(value) = old_ssh_connection {
-        std::env::set_var("SSH_CONNECTION", value);
-    } else {
-        std::env::remove_var("SSH_CONNECTION");
-    }
-    if let Some(value) = old_ssh_tty {
-        std::env::set_var("SSH_TTY", value);
-    } else {
-        std::env::remove_var("SSH_TTY");
-    }
 }
 
 #[test]

@@ -150,14 +150,7 @@ async fn busy_submit_allows_quit_command() {
 async fn slash_palette_model_selection_opens_provider_picker_in_local_and_ssh() {
     for ssh in [false, true] {
         let temp = tempdir().expect("tempdir");
-        let old_ssh_connection = std::env::var_os("SSH_CONNECTION");
-        let old_ssh_tty = std::env::var_os("SSH_TTY");
-        if ssh {
-            std::env::set_var("SSH_CONNECTION", "test");
-        } else {
-            std::env::remove_var("SSH_CONNECTION");
-            std::env::remove_var("SSH_TTY");
-        }
+        let _ssh_env = super::terminal_ui::test_env::set_ssh_session(ssh);
 
         let mut app = TuiApp::new(ConfigManager {
             path: temp.path().join("config.json"),
@@ -186,17 +179,6 @@ async fn slash_palette_model_selection_opens_provider_picker_in_local_and_ssh() 
 
         assert!(matches!(app.overlay, Some(Overlay::ProviderPicker)));
         assert_eq!(app.notice.as_deref(), Some("Opened provider picker."));
-
-        if let Some(value) = old_ssh_connection {
-            std::env::set_var("SSH_CONNECTION", value);
-        } else {
-            std::env::remove_var("SSH_CONNECTION");
-        }
-        if let Some(value) = old_ssh_tty {
-            std::env::set_var("SSH_TTY", value);
-        } else {
-            std::env::remove_var("SSH_TTY");
-        }
     }
 }
 
