@@ -583,7 +583,8 @@ fn ssh_startup_page_warns_without_opening_setup_window() {
     config.clear_api_key();
     cm.save(&config).expect("save config");
 
-    let app = TuiApp::new(cm).expect("build tui app");
+    let mut app = TuiApp::new(cm).expect("build tui app");
+    app.snapshot.cwd = "~/devel/opensource/rara".into();
     assert!(app.overlay.is_none());
 
     let rendered = render_screen_text(&app, 100, 24);
