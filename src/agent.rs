@@ -473,10 +473,7 @@ impl Agent {
                             self.tool_loop_limit_result_messages(&final_turn.tool_calls, report);
                         self.extend_history_messages(skipped_results);
                     }
-                    let fallback_text = self.tool_loop_limit_fallback_text(
-                        *tool_rounds,
-                        final_turn.text_response.as_deref(),
-                    );
+                    let fallback_text = self.tool_loop_limit_fallback_text();
                     report(AgentEvent::Status(
                         "Tool loop reached the limit. Returning a bounded final response without more tool calls."
                             .to_string(),
@@ -528,25 +525,13 @@ impl Agent {
             .collect()
     }
 
-    fn tool_loop_limit_fallback_text(
-        &self,
-        tool_rounds: usize,
-        final_text: Option<&str>,
-    ) -> String {
+    fn tool_loop_limit_fallback_text(&self) -> String {
         let mut lines = vec![
             format!(
-                "Tool loop reached the {tool_rounds}-round limit before a clean final answer was produced."
+                "Tool loop reached the {MAX_TOOL_ROUNDS_PER_TURN}-round limit before a clean final answer was produced."
             ),
             "I stopped additional tool execution, recorded any skipped tool calls as error results, and preserved the transcript for the next turn.".to_string(),
         ];
-        if let Some(text) = final_text.filter(|text| !text.trim().is_empty()) {
-            lines.push(String::new());
-            lines.push(
-                "The model also emitted this partial text before requesting more tools:"
-                    .to_string(),
-            );
-            lines.push(text.trim().to_string());
-        }
         if !self.current_plan.is_empty() {
             lines.push(String::new());
             lines.push("Current plan state:".to_string());

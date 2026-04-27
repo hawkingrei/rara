@@ -214,11 +214,16 @@ async fn returns_local_fallback_when_forced_final_answer_still_calls_tools() {
         })
         .collect::<Vec<_>>();
     responses.push(LlmResponse {
-        content: vec![ContentBlock::ToolUse {
-            id: "tool-final".to_string(),
-            name: "stub_tool".to_string(),
-            input: json!({}),
-        }],
+        content: vec![
+            ContentBlock::Text {
+                text: "Partial text before requesting another tool.".to_string(),
+            },
+            ContentBlock::ToolUse {
+                id: "tool-final".to_string(),
+                name: "stub_tool".to_string(),
+                input: json!({}),
+            },
+        ],
         stop_reason: Some("tool_use".to_string()),
         usage: Some(TokenUsage::default()),
     });
@@ -246,10 +251,17 @@ async fn returns_local_fallback_when_forced_final_answer_still_calls_tools() {
 
     let observed_tools = backend.observed_tools();
     assert!(observed_tools.last().is_some_and(|tools| tools.is_empty()));
-    assert!(agent.history.last().is_some_and(|message| message
+    let fallback_message = agent
+        .history
+        .last()
+        .expect("fallback message should be appended")
         .content
-        .to_string()
-        .contains("Tool loop reached the")));
+        .to_string();
+    assert!(fallback_message.contains(&format!(
+        "Tool loop reached the {}-round limit",
+        super::super::MAX_TOOL_ROUNDS_PER_TURN
+    )));
+    assert!(!fallback_message.contains("Partial text before requesting another tool."));
     assert!(agent
         .history
         .iter()
