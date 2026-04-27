@@ -201,6 +201,24 @@ async fn slash_palette_model_selection_opens_provider_picker_in_local_and_ssh() 
 }
 
 #[test]
+fn provider_picker_number_keys_cover_current_provider_families() {
+    let temp = tempdir().expect("tempdir");
+    let mut app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("app");
+    app.open_overlay(Overlay::ProviderPicker);
+
+    let key_char =
+        char::from_digit(super::state::PROVIDER_FAMILIES.len() as u32, 10).expect("digit key");
+    assert!(matches!(
+        map_key_to_event(key(KeyCode::Char(key_char)), &app),
+        AppEvent::SetProviderSelection(idx)
+            if idx == super::state::PROVIDER_FAMILIES.len() - 1
+    ));
+}
+
+#[test]
 fn auth_mode_picker_prefers_selection_navigation() {
     let temp = tempdir().expect("tempdir");
     let mut app = TuiApp::new(ConfigManager {
