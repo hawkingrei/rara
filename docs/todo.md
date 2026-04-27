@@ -101,7 +101,7 @@ Priority order for this phase:
 
 ## Security / Reliability / Performance
 
-- [ ] Replace the current string-based shell execution path in `src/tools/bash.rs` and `src/sandbox.rs` with a structured command model (`program`, `args`, `cwd`, `allow_net`).
+- [ ] Replace the current string-based shell execution path in `src/tools/bash.rs` and `crates/sandbox` with a structured command model (`program`, `args`, `cwd`, `allow_net`).
 - [ ] Design an auditable command permission and sandbox-bypass rule model inspired by Codex and Claude Code:
   - keep approval rules separate from sandbox rules;
   - make deny rules take precedence over allow / bypass rules;

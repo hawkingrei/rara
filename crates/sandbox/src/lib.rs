@@ -2,6 +2,7 @@ use std::collections::HashSet;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime};
 
 use anyhow::{bail, Result};
 use uuid::Uuid;
@@ -9,6 +10,7 @@ use uuid::Uuid;
 pub struct SandboxManager {
     os: String,
     profile_dir: PathBuf,
+    sandbox_home: PathBuf,
     backend: SandboxBackend,
 }
 
@@ -18,6 +20,8 @@ pub struct WrappedCommand {
     pub args: Vec<String>,
     pub cleanup_path: Option<PathBuf>,
     pub sandboxed: bool,
+    pub sandbox_backend: String,
+    pub sandbox_home: Option<PathBuf>,
 }
 
 const LINUX_RUNTIME_READ_ROOTS: &[&str] = &[
@@ -30,9 +34,9 @@ const LINUX_RUNTIME_READ_ROOTS: &[&str] = &[
     "/nix/store",
     "/run/current-system/sw",
 ];
-const SANDBOX_HOME: &str = "/tmp/rara-home";
 const MACOS_SANDBOX_EXEC: &str = "/usr/bin/sandbox-exec";
 const DEFAULT_SHELL: &str = "/bin/sh";
+const PROFILE_CLEANUP_AGE: Duration = Duration::from_secs(60 * 60);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum SandboxBackend {
@@ -64,12 +68,14 @@ impl SandboxManager {
             fs::create_dir_all(&profile_dir)?;
         }
         cleanup_stale_profiles(&profile_dir)?;
+        let sandbox_home = process_sandbox_home();
 
         let backend = SandboxBackend::detect(os.as_str());
 
         Ok(Self {
             os,
             profile_dir,
+            sandbox_home,
             backend,
         })
     }
@@ -170,9 +176,11 @@ impl SandboxManager {
             "/proc".to_string(),
             "--tmpfs".to_string(),
             "/tmp".to_string(),
-            "--dir".to_string(),
-            SANDBOX_HOME.to_string(),
         ];
+        for dir in sandbox_home_dirs(&self.sandbox_home) {
+            args.push("--dir".to_string());
+            args.push(dir.display().to_string());
+        }
 
         for root in LINUX_RUNTIME_READ_ROOTS {
             if Path::new(root).exists() {
@@ -220,6 +228,8 @@ impl SandboxManager {
                     ],
                     cleanup_path: Some(profile_path),
                     sandboxed: true,
+                    sandbox_backend: self.backend.name().to_string(),
+                    sandbox_home: Some(self.sandbox_home.clone()),
                 })
             }
             SandboxBackend::LinuxBubblewrap => {
@@ -233,6 +243,8 @@ impl SandboxManager {
                     args,
                     cleanup_path: None,
                     sandboxed: true,
+                    sandbox_backend: self.backend.name().to_string(),
+                    sandbox_home: Some(self.sandbox_home.clone()),
                 })
             }
             SandboxBackend::Direct => Ok(wrap_direct_shell_command(original_cmd)),
@@ -266,6 +278,8 @@ impl SandboxManager {
                     args: wrapped_args,
                     cleanup_path: Some(profile_path),
                     sandboxed: true,
+                    sandbox_backend: self.backend.name().to_string(),
+                    sandbox_home: Some(self.sandbox_home.clone()),
                 })
             }
             SandboxBackend::LinuxBubblewrap => {
@@ -278,6 +292,8 @@ impl SandboxManager {
                     args: wrapped_args,
                     cleanup_path: None,
                     sandboxed: true,
+                    sandbox_backend: self.backend.name().to_string(),
+                    sandbox_home: Some(self.sandbox_home.clone()),
                 })
             }
             SandboxBackend::Direct => Ok(wrap_direct_exec_command(program, args)),
@@ -305,12 +321,28 @@ impl SandboxBackend {
     fn detect(os: &str) -> Self {
         match os {
             "macos" if Path::new(MACOS_SANDBOX_EXEC).is_file() => Self::MacosSeatbelt,
-            "macos" => Self::Direct,
+            "macos" => Self::Unsupported {
+                platform: format!(
+                    "macos (sandbox unavailable: {} is missing)",
+                    MACOS_SANDBOX_EXEC
+                ),
+            },
             "linux" if command_exists("bwrap") => Self::LinuxBubblewrap,
-            "linux" => Self::Direct,
+            "linux" => Self::Unsupported {
+                platform: "linux (sandbox unavailable: install bubblewrap/bwrap)".to_string(),
+            },
             platform => Self::Unsupported {
                 platform: platform.to_string(),
             },
+        }
+    }
+
+    fn name(&self) -> &'static str {
+        match self {
+            Self::MacosSeatbelt => "macos-seatbelt",
+            Self::LinuxBubblewrap => "linux-bubblewrap",
+            Self::Direct => "direct",
+            Self::Unsupported { .. } => "unsupported",
         }
     }
 }
@@ -323,6 +355,8 @@ fn wrap_direct_shell_command(original_cmd: &str) -> WrappedCommand {
         args: vec![shell_flag, original_cmd.to_string()],
         cleanup_path: None,
         sandboxed: false,
+        sandbox_backend: SandboxBackend::Direct.name().to_string(),
+        sandbox_home: None,
     }
 }
 
@@ -332,6 +366,8 @@ fn wrap_direct_exec_command(program: &str, args: &[String]) -> WrappedCommand {
         args: args.to_vec(),
         cleanup_path: None,
         sandboxed: false,
+        sandbox_backend: SandboxBackend::Direct.name().to_string(),
+        sandbox_home: None,
     }
 }
 
@@ -384,7 +420,31 @@ fn shell_command_flag(shell: &str) -> String {
     }
 }
 
+fn process_sandbox_home() -> PathBuf {
+    env::temp_dir().join(format!(
+        "rara-home-{}-{}",
+        std::process::id(),
+        Uuid::new_v4()
+    ))
+}
+
+fn sandbox_home_dirs(sandbox_home: &Path) -> Vec<PathBuf> {
+    vec![
+        sandbox_home.to_path_buf(),
+        sandbox_home.join(".config"),
+        sandbox_home.join(".cache"),
+        sandbox_home.join(".local"),
+        sandbox_home.join(".local/state"),
+        sandbox_home.join(".local/share"),
+    ]
+}
+
 fn cleanup_stale_profiles(profile_dir: &Path) -> Result<()> {
+    cleanup_profiles_older_than(profile_dir, PROFILE_CLEANUP_AGE)
+}
+
+fn cleanup_profiles_older_than(profile_dir: &Path, max_age: Duration) -> Result<()> {
+    let now = SystemTime::now();
     for entry in fs::read_dir(profile_dir)? {
         let entry = entry?;
         let path = entry.path();
@@ -392,7 +452,18 @@ fn cleanup_stale_profiles(profile_dir: &Path) -> Result<()> {
             continue;
         };
         if path.is_file() && file_name.starts_with("sandbox-") && file_name.ends_with(".sb") {
-            let _ = fs::remove_file(&path);
+            let Ok(metadata) = entry.metadata() else {
+                continue;
+            };
+            let Ok(modified) = metadata.modified() else {
+                continue;
+            };
+            let Ok(age) = now.duration_since(modified) else {
+                continue;
+            };
+            if age >= max_age {
+                let _ = fs::remove_file(&path);
+            }
         }
     }
     Ok(())
@@ -401,16 +472,19 @@ fn cleanup_stale_profiles(profile_dir: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        sanitize_shell_program, shell_command_flag, shell_program, SandboxBackend, SandboxManager,
-        DEFAULT_SHELL, MACOS_SANDBOX_EXEC,
+        cleanup_profiles_older_than, cleanup_stale_profiles, sanitize_shell_program,
+        shell_command_flag, shell_program, SandboxBackend, SandboxManager, DEFAULT_SHELL,
+        MACOS_SANDBOX_EXEC,
     };
     use std::path::PathBuf;
+    use std::time::Duration;
     use tempfile::tempdir;
 
     fn manager(os: &str, backend: SandboxBackend) -> SandboxManager {
         SandboxManager {
             os: os.to_string(),
             profile_dir: PathBuf::from("/tmp/rara-test-sandbox"),
+            sandbox_home: PathBuf::from("/tmp/rara-test-sandbox-home"),
             backend,
         }
     }
@@ -434,11 +508,43 @@ mod tests {
     }
 
     #[test]
+    fn detect_fails_closed_when_macos_sandbox_exec_is_unavailable() {
+        let backend = SandboxBackend::detect("macos");
+
+        if PathBuf::from(MACOS_SANDBOX_EXEC).is_file() {
+            assert_eq!(backend, SandboxBackend::MacosSeatbelt);
+        } else {
+            assert!(matches!(
+                backend,
+                SandboxBackend::Unsupported { platform } if platform.contains("sandbox unavailable")
+            ));
+        }
+    }
+
+    #[test]
+    fn detect_fails_closed_when_linux_bwrap_is_unavailable() {
+        let original_path = std::env::var_os("PATH");
+        std::env::set_var("PATH", "");
+        let backend = SandboxBackend::detect("linux");
+        if let Some(path) = original_path {
+            std::env::set_var("PATH", path);
+        } else {
+            std::env::remove_var("PATH");
+        }
+
+        assert!(matches!(
+            backend,
+            SandboxBackend::Unsupported { platform } if platform.contains("install bubblewrap")
+        ));
+    }
+
+    #[test]
     fn wrap_command_creates_unique_cleanup_profile_on_macos() {
         let tempdir = tempdir().expect("tempdir");
         let manager = SandboxManager {
             os: "macos".to_string(),
             profile_dir: tempdir.path().to_path_buf(),
+            sandbox_home: tempdir.path().join("home"),
             backend: SandboxBackend::MacosSeatbelt,
         };
 
@@ -448,6 +554,11 @@ mod tests {
 
         assert_eq!(wrapped.program, MACOS_SANDBOX_EXEC);
         assert!(wrapped.sandboxed);
+        assert_eq!(wrapped.sandbox_backend, "macos-seatbelt");
+        assert_eq!(
+            wrapped.sandbox_home.as_deref(),
+            Some(manager.sandbox_home.as_path())
+        );
 
         let cleanup_path = wrapped
             .cleanup_path
@@ -474,7 +585,7 @@ mod tests {
     }
 
     #[test]
-    fn wrap_command_falls_back_to_direct_when_macos_sandbox_exec_is_unavailable() {
+    fn wrap_command_can_be_explicitly_direct() {
         let manager = manager("macos", SandboxBackend::Direct);
 
         let wrapped = manager
@@ -489,8 +600,10 @@ mod tests {
         assert!(wrapped.cleanup_path.is_none());
         assert!(
             !wrapped.sandboxed,
-            "direct fallback should not apply sandbox env or profiles"
+            "direct execution should not apply sandbox env or profiles"
         );
+        assert_eq!(wrapped.sandbox_backend, "direct");
+        assert!(wrapped.sandbox_home.is_none());
     }
 
     #[test]
@@ -516,13 +629,13 @@ mod tests {
     }
 
     #[test]
-    fn new_removes_stale_macos_profiles() {
+    fn new_keeps_recent_macos_profiles() {
         let tempdir = tempdir().expect("tempdir");
         let rara_dir = tempdir.path().join(".rara");
         let profile_dir = rara_dir.join("sandbox");
         std::fs::create_dir_all(&profile_dir).expect("profile dir");
-        let stale_profile = profile_dir.join("sandbox-stale.sb");
-        std::fs::write(&stale_profile, "(version 1)").expect("stale profile");
+        let recent_profile = profile_dir.join("sandbox-recent.sb");
+        std::fs::write(&recent_profile, "(version 1)").expect("recent profile");
 
         let manager = SandboxManager::new_for_rara_dir(rara_dir.clone()).expect("sandbox manager");
 
@@ -531,8 +644,42 @@ mod tests {
             "sandbox manager should point at the configured sandbox dir"
         );
         assert!(
+            recent_profile.exists(),
+            "recent sandbox profiles should not be removed on startup"
+        );
+    }
+
+    #[test]
+    fn cleanup_removes_profiles_when_they_are_older_than_the_threshold() {
+        let tempdir = tempdir().expect("tempdir");
+        let stale_profile = tempdir.path().join("sandbox-stale.sb");
+        let unrelated_file = tempdir.path().join("notes.txt");
+        std::fs::write(&stale_profile, "(version 1)").expect("stale profile");
+        std::fs::write(&unrelated_file, "keep").expect("unrelated file");
+
+        cleanup_profiles_older_than(tempdir.path(), Duration::ZERO).expect("cleanup");
+
+        assert!(
             !stale_profile.exists(),
-            "stale sandbox profiles should be cleaned up on startup"
+            "matching profiles should be removed when past the cleanup threshold"
+        );
+        assert!(
+            unrelated_file.exists(),
+            "non-profile files must not be removed by sandbox cleanup"
+        );
+    }
+
+    #[test]
+    fn cleanup_keeps_recent_profiles_with_default_threshold() {
+        let tempdir = tempdir().expect("tempdir");
+        let recent_profile = tempdir.path().join("sandbox-recent.sb");
+        std::fs::write(&recent_profile, "(version 1)").expect("recent profile");
+
+        cleanup_stale_profiles(tempdir.path()).expect("cleanup");
+
+        assert!(
+            recent_profile.exists(),
+            "startup cleanup should not remove profiles that may belong to active instances"
         );
     }
 
@@ -578,6 +725,37 @@ mod tests {
             wrapped.args.contains(&"--unshare-net".to_string()),
             "linux sandbox should isolate networking when allow_net is false"
         );
+        assert_eq!(wrapped.sandbox_backend, "linux-bubblewrap");
+        assert_eq!(
+            wrapped.sandbox_home.as_deref(),
+            Some(manager.sandbox_home.as_path())
+        );
+    }
+
+    #[test]
+    fn linux_sandbox_creates_home_dirs_inside_bubblewrap() {
+        let manager = manager("linux", SandboxBackend::LinuxBubblewrap);
+
+        let wrapped = manager
+            .wrap_shell_command("echo test", "/workspace/project", false)
+            .expect("linux sandbox wrapper");
+
+        for dir in [
+            manager.sandbox_home.clone(),
+            manager.sandbox_home.join(".config"),
+            manager.sandbox_home.join(".cache"),
+            manager.sandbox_home.join(".local/state"),
+            manager.sandbox_home.join(".local/share"),
+        ] {
+            assert!(
+                wrapped
+                    .args
+                    .windows(2)
+                    .any(|window| { window == [String::from("--dir"), dir.display().to_string()] }),
+                "linux sandbox should create {} inside the tmpfs root",
+                dir.display()
+            );
+        }
     }
 
     #[test]
