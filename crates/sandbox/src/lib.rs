@@ -421,7 +421,7 @@ fn shell_command_flag(shell: &str) -> String {
 }
 
 fn process_sandbox_home() -> PathBuf {
-    env::temp_dir().join(format!(
+    PathBuf::from("/tmp").join(format!(
         "rara-home-{}-{}",
         std::process::id(),
         Uuid::new_v4()
@@ -680,6 +680,19 @@ mod tests {
         assert!(
             recent_profile.exists(),
             "startup cleanup should not remove profiles that may belong to active instances"
+        );
+    }
+
+    #[test]
+    fn process_sandbox_home_uses_tmp_root_and_unique_names() {
+        let first = super::process_sandbox_home();
+        let second = super::process_sandbox_home();
+
+        assert!(first.starts_with("/tmp"));
+        assert!(second.starts_with("/tmp"));
+        assert_ne!(
+            first, second,
+            "sandbox home paths must not collide between manager instances"
         );
     }
 
