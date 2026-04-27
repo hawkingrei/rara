@@ -1,10 +1,11 @@
-use crate::sandbox::{sandbox_failure_hint, SandboxManager};
+use crate::sandbox::{sandbox_failure_hint, SandboxManager, WrappedCommand};
 use crate::tool::{Tool, ToolError, ToolOutputStream, ToolProgressEvent};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::env;
+use std::path::Path;
 use std::process::Stdio;
 use std::sync::Arc;
 use tokio::fs;
@@ -15,8 +16,6 @@ use tokio::sync::mpsc;
 pub struct BashTool {
     pub sandbox: Arc<SandboxManager>,
 }
-
-const SANDBOX_HOME: &str = "/tmp/rara-home";
 
 #[derive(Clone, Copy, Debug)]
 enum BashStreamKind {
@@ -108,28 +107,46 @@ impl BashCommandInput {
     }
 }
 
-fn sandbox_command_env(overrides: &HashMap<String, String>) -> HashMap<String, String> {
+fn sandbox_command_env(
+    sandbox_home: &Path,
+    overrides: &HashMap<String, String>,
+) -> HashMap<String, String> {
+    let sandbox_home = sandbox_home.to_string_lossy();
     let mut env_map = HashMap::from([
-        ("HOME".to_string(), SANDBOX_HOME.to_string()),
+        ("HOME".to_string(), sandbox_home.to_string()),
         (
             "XDG_CONFIG_HOME".to_string(),
-            format!("{SANDBOX_HOME}/.config"),
+            format!("{sandbox_home}/.config"),
         ),
         (
             "XDG_CACHE_HOME".to_string(),
-            format!("{SANDBOX_HOME}/.cache"),
+            format!("{sandbox_home}/.cache"),
         ),
         (
             "XDG_STATE_HOME".to_string(),
-            format!("{SANDBOX_HOME}/.local/state"),
+            format!("{sandbox_home}/.local/state"),
         ),
         (
             "XDG_DATA_HOME".to_string(),
-            format!("{SANDBOX_HOME}/.local/share"),
+            format!("{sandbox_home}/.local/share"),
         ),
     ]);
     env_map.extend(overrides.clone());
     env_map
+}
+
+fn command_env_for_wrapped(
+    wrapped: &WrappedCommand,
+    overrides: &HashMap<String, String>,
+) -> Result<HashMap<String, String>, ToolError> {
+    if wrapped.sandboxed {
+        let sandbox_home = wrapped.sandbox_home.as_deref().ok_or_else(|| {
+            ToolError::ExecutionFailed("sandboxed command is missing sandbox home".into())
+        })?;
+        Ok(sandbox_command_env(sandbox_home, overrides))
+    } else {
+        Ok(overrides.clone())
+    }
 }
 
 #[async_trait]
@@ -185,7 +202,6 @@ impl Tool for BashTool {
     ) -> Result<Value, ToolError> {
         let request = BashCommandInput::from_value(i)?;
         let cwd = request.working_dir()?;
-        let command_env = sandbox_command_env(&request.env);
         let wrapped = if let Some(command) = request.command.as_deref() {
             self.sandbox
                 .wrap_shell_command(command, &cwd, request.allow_net)
@@ -204,8 +220,14 @@ impl Tool for BashTool {
                     ToolError::ExecutionFailed(format!("{} {}", e, sandbox_failure_hint()))
                 })?
         };
+        let command_env = command_env_for_wrapped(&wrapped, &request.env)?;
 
-        ensure_sandbox_home_dirs().await?;
+        if wrapped.sandboxed && wrapped.sandbox_backend == "macos-seatbelt" {
+            let sandbox_home = wrapped.sandbox_home.as_deref().ok_or_else(|| {
+                ToolError::ExecutionFailed("sandboxed command is missing sandbox home".into())
+            })?;
+            ensure_sandbox_home_dirs(sandbox_home).await?;
+        }
 
         let mut command = Command::new(&wrapped.program);
         command
@@ -215,11 +237,18 @@ impl Tool for BashTool {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         let mut child = command.spawn().map_err(|err| {
-            ToolError::ExecutionFailed(format!(
-                "failed to launch sandbox '{}': {err}. {}",
-                wrapped.program,
-                sandbox_failure_hint()
-            ))
+            if wrapped.sandboxed {
+                ToolError::ExecutionFailed(format!(
+                    "failed to launch sandbox '{}': {err}. {}",
+                    wrapped.program,
+                    sandbox_failure_hint()
+                ))
+            } else {
+                ToolError::ExecutionFailed(format!(
+                    "failed to launch command '{}': {err}",
+                    wrapped.program
+                ))
+            }
         })?;
 
         let stdout = child
@@ -242,6 +271,15 @@ impl Tool for BashTool {
         let mut stdout_text = String::new();
         let mut stderr_text = String::new();
         let mut live_streamed = false;
+        if !wrapped.sandboxed {
+            let chunk = unsandboxed_execution_warning(&wrapped);
+            stderr_text.push_str(&chunk);
+            live_streamed = true;
+            report(ToolProgressEvent::Output {
+                stream: ToolOutputStream::Stderr,
+                chunk,
+            });
+        }
         while let Some((stream, chunk)) = rx.recv().await {
             if chunk.is_empty() {
                 continue;
@@ -267,8 +305,10 @@ impl Tool for BashTool {
         if let Some(path) = wrapped.cleanup_path.as_ref() {
             let _ = fs::remove_file(path).await;
         }
-        if let Some(hint) = sandbox_output_hint(&stderr_text) {
-            stderr_text.push_str(hint);
+        if wrapped.sandboxed {
+            if let Some(hint) = sandbox_output_hint(&stderr_text) {
+                stderr_text.push_str(hint);
+            }
         }
 
         Ok(json!({
@@ -276,6 +316,8 @@ impl Tool for BashTool {
             "stderr": stderr_text,
             "exit_code": status.code(),
             "live_streamed": live_streamed,
+            "sandboxed": wrapped.sandboxed,
+            "sandbox_backend": wrapped.sandbox_backend,
         }))
     }
 }
@@ -315,20 +357,21 @@ fn sandbox_output_hint(stderr: &str) -> Option<&'static str> {
     }
 }
 
-async fn ensure_sandbox_home_dirs() -> Result<(), ToolError> {
-    let config_dir = format!("{SANDBOX_HOME}/.config");
-    let cache_dir = format!("{SANDBOX_HOME}/.cache");
-    let local_dir = format!("{SANDBOX_HOME}/.local");
-    let state_dir = format!("{SANDBOX_HOME}/.local/state");
-    let share_dir = format!("{SANDBOX_HOME}/.local/share");
+fn unsandboxed_execution_warning(wrapped: &WrappedCommand) -> String {
+    format!(
+        "warning: command is running without sandbox isolation (backend: {}).\n",
+        wrapped.sandbox_backend
+    )
+}
 
+async fn ensure_sandbox_home_dirs(sandbox_home: &Path) -> Result<(), ToolError> {
     for dir in [
-        SANDBOX_HOME,
-        config_dir.as_str(),
-        cache_dir.as_str(),
-        local_dir.as_str(),
-        state_dir.as_str(),
-        share_dir.as_str(),
+        sandbox_home.to_path_buf(),
+        sandbox_home.join(".config"),
+        sandbox_home.join(".cache"),
+        sandbox_home.join(".local"),
+        sandbox_home.join(".local/state"),
+        sandbox_home.join(".local/share"),
     ] {
         fs::create_dir_all(dir).await?;
     }
@@ -338,9 +381,10 @@ async fn ensure_sandbox_home_dirs() -> Result<(), ToolError> {
 #[cfg(test)]
 mod tests {
     use super::{
-        sandbox_command_env, sandbox_output_hint, BashCommandInput, BashTool, SANDBOX_HOME,
+        command_env_for_wrapped, sandbox_command_env, sandbox_output_hint,
+        unsandboxed_execution_warning, BashCommandInput, BashTool,
     };
-    use crate::sandbox::SandboxManager;
+    use crate::sandbox::{SandboxManager, WrappedCommand};
     use crate::tool::{Tool, ToolOutputStream, ToolProgressEvent};
     use serde_json::{json, Value};
     use std::collections::HashMap;
@@ -385,28 +429,36 @@ mod tests {
 
     #[test]
     fn sandbox_command_env_defaults_home_and_xdg_roots() {
-        let env_map = sandbox_command_env(&HashMap::new());
+        let sandbox_home = Path::new("/tmp/rara-test-home");
+        let env_map = sandbox_command_env(sandbox_home, &HashMap::new());
 
-        assert_eq!(env_map.get("HOME").map(String::as_str), Some(SANDBOX_HOME));
+        assert_eq!(
+            env_map.get("HOME").map(String::as_str),
+            Some("/tmp/rara-test-home")
+        );
         assert_eq!(
             env_map.get("XDG_CONFIG_HOME").map(String::as_str),
-            Some("/tmp/rara-home/.config")
+            Some("/tmp/rara-test-home/.config")
         );
         assert_eq!(
             env_map.get("XDG_CACHE_HOME").map(String::as_str),
-            Some("/tmp/rara-home/.cache")
+            Some("/tmp/rara-test-home/.cache")
         );
     }
 
     #[test]
     fn sandbox_command_env_keeps_explicit_overrides() {
-        let env_map = sandbox_command_env(&HashMap::from([
-            ("HOME".to_string(), "/custom/home".to_string()),
-            (
-                "XDG_CACHE_HOME".to_string(),
-                "/custom/home/.cache".to_string(),
-            ),
-        ]));
+        let sandbox_home = Path::new("/tmp/rara-test-home");
+        let env_map = sandbox_command_env(
+            sandbox_home,
+            &HashMap::from([
+                ("HOME".to_string(), "/custom/home".to_string()),
+                (
+                    "XDG_CACHE_HOME".to_string(),
+                    "/custom/home/.cache".to_string(),
+                ),
+            ]),
+        );
 
         assert_eq!(
             env_map.get("HOME").map(String::as_str),
@@ -418,7 +470,7 @@ mod tests {
         );
         assert_eq!(
             env_map.get("XDG_CONFIG_HOME").map(String::as_str),
-            Some("/tmp/rara-home/.config")
+            Some("/tmp/rara-test-home/.config")
         );
     }
 
@@ -431,21 +483,61 @@ mod tests {
         assert!(hint.contains("replace_lines"));
     }
 
+    #[test]
+    fn direct_wrapped_command_keeps_caller_environment_overrides_only() {
+        let wrapped = WrappedCommand {
+            program: "sh".to_string(),
+            args: vec!["-c".to_string(), "pwd".to_string()],
+            cleanup_path: None,
+            sandboxed: false,
+            sandbox_backend: "direct".to_string(),
+            sandbox_home: None,
+        };
+        let env_map = command_env_for_wrapped(
+            &wrapped,
+            &HashMap::from([("HOME".to_string(), "/real/home".to_string())]),
+        )
+        .expect("direct env");
+
+        assert_eq!(env_map.get("HOME").map(String::as_str), Some("/real/home"));
+        assert!(
+            !env_map.contains_key("XDG_CONFIG_HOME"),
+            "direct fallback should not apply sandbox-only XDG roots"
+        );
+    }
+
+    #[test]
+    fn unsandboxed_warning_names_the_backend() {
+        let wrapped = WrappedCommand {
+            program: "sh".to_string(),
+            args: vec!["-c".to_string(), "pwd".to_string()],
+            cleanup_path: None,
+            sandboxed: false,
+            sandbox_backend: "direct".to_string(),
+            sandbox_home: None,
+        };
+
+        let warning = unsandboxed_execution_warning(&wrapped);
+
+        assert!(warning.contains("without sandbox isolation"));
+        assert!(warning.contains("direct"));
+    }
+
     #[tokio::test]
     async fn streaming_call_reports_stdout_and_stderr_chunks() {
         let temp = tempdir().expect("tempdir");
         let sandbox = SandboxManager::new_for_rara_dir(temp.path().join(".rara")).expect("sandbox");
-        let wrapped = sandbox
-            .wrap_exec_command(
-                "sh",
-                &[
-                    "-c".to_string(),
-                    "printf 'out\\n'; printf 'err\\n' >&2".to_string(),
-                ],
-                temp.path().to_string_lossy().as_ref(),
-                false,
-            )
-            .expect("wrapped command");
+        let Ok(wrapped) = sandbox.wrap_exec_command(
+            "sh",
+            &[
+                "-c".to_string(),
+                "printf 'out\\n'; printf 'err\\n' >&2".to_string(),
+            ],
+            temp.path().to_string_lossy().as_ref(),
+            false,
+        ) else {
+            return;
+        };
         if !binary_exists(&wrapped.program) {
             return;
         }
@@ -475,6 +567,14 @@ mod tests {
         assert_eq!(
             result.get("live_streamed").and_then(Value::as_bool),
             Some(true)
+        );
+        assert_eq!(
+            result.get("sandboxed").and_then(Value::as_bool),
+            Some(wrapped.sandboxed)
+        );
+        assert_eq!(
+            result.get("sandbox_backend").and_then(Value::as_str),
+            Some(wrapped.sandbox_backend.as_str())
         );
     }
 
