@@ -639,6 +639,60 @@ async fn deepseek_model_picker_enter_without_api_key_opens_api_key_editor() {
 }
 
 #[tokio::test]
+async fn deepseek_model_picker_api_key_action_opens_editor_even_when_key_exists() {
+    let temp = tempdir().expect("tempdir");
+    let mut app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("app");
+    app.provider_picker_idx = provider_family_idx(ProviderFamily::DeepSeek);
+    app.config
+        .select_openai_profile("deepseek-default", "DeepSeek", OpenAiEndpointKind::Deepseek);
+    app.config.set_api_key("sk-deepseek-test");
+    app.set_deepseek_model_options(vec!["deepseek-chat".to_string()]);
+    app.model_picker_idx = app.deepseek_api_key_action_idx();
+    app.open_overlay(Overlay::ModelPicker);
+
+    let oauth_manager = Arc::new(
+        crate::oauth::OAuthManager::new_for_config_dir(temp.path().join(".rara"))
+            .expect("oauth manager"),
+    );
+    let mut agent_slot = None;
+
+    dispatch_event(
+        AppEvent::ApplyOverlaySelection,
+        &mut app,
+        &mut agent_slot,
+        &oauth_manager,
+    )
+    .await
+    .expect("apply api key action");
+
+    assert!(matches!(app.overlay, Some(Overlay::ApiKeyEditor)));
+    assert!(app.running_task.is_none());
+}
+
+#[test]
+fn deepseek_model_picker_accepts_uppercase_api_key_and_refresh_shortcuts() {
+    let temp = tempdir().expect("tempdir");
+    let mut app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("app");
+    app.provider_picker_idx = provider_family_idx(ProviderFamily::DeepSeek);
+    app.open_overlay(Overlay::ModelPicker);
+
+    assert!(matches!(
+        map_key_to_event(key(KeyCode::Char('A')), &app),
+        AppEvent::OpenOverlay(Overlay::ApiKeyEditor)
+    ));
+    assert!(matches!(
+        map_key_to_event(key(KeyCode::Char('R')), &app),
+        AppEvent::RefreshDeepSeekModels
+    ));
+}
+
+#[tokio::test]
 async fn openai_model_picker_edit_shortcut_starts_wizard_for_selected_profile() {
     let temp = tempdir().expect("tempdir");
     let mut app = TuiApp::new(ConfigManager {

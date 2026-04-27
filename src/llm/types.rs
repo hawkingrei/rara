@@ -25,4 +25,10 @@ pub enum ContentBlock {
         name: String,
         input: Value,
     },
+    #[serde(rename = "provider_metadata")]
+    ProviderMetadata {
+        provider: String,
+        key: String,
+        value: Value,
+    },
 }

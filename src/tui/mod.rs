@@ -696,7 +696,9 @@ async fn dispatch_event(
                     } else if app.selected_provider_family()
                         == self::state::ProviderFamily::DeepSeek
                     {
-                        if app.config.has_api_key() {
+                        if app.selected_deepseek_api_key_action() {
+                            app.open_overlay(Overlay::ApiKeyEditor);
+                        } else if app.config.has_api_key() {
                             app.select_local_model(app.model_picker_idx);
                             start_rebuild_task(app);
                         } else {

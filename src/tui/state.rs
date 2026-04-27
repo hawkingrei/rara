@@ -609,12 +609,21 @@ impl TuiApp {
         if self.selected_provider_family() == ProviderFamily::Codex {
             self.codex_model_options.len()
         } else if self.selected_provider_family() == ProviderFamily::DeepSeek {
-            self.deepseek_model_options.len()
+            self.deepseek_model_options.len() + 1
         } else if self.selected_provider_family() == ProviderFamily::OpenAiCompatible {
             self.openai_model_picker_profiles().len()
         } else {
             current_model_presets(self.provider_picker_idx).len()
         }
+    }
+
+    pub fn deepseek_api_key_action_idx(&self) -> usize {
+        self.deepseek_model_options.len()
+    }
+
+    pub fn selected_deepseek_api_key_action(&self) -> bool {
+        self.selected_provider_family() == ProviderFamily::DeepSeek
+            && self.model_picker_idx >= self.deepseek_api_key_action_idx()
     }
 
     pub fn selected_codex_model(&self) -> Option<&CodexModelOption> {
@@ -1013,11 +1022,7 @@ impl TuiApp {
             return;
         }
         if self.selected_provider_family() == ProviderFamily::DeepSeek {
-            let Some(model) = self
-                .deepseek_model_options
-                .get(idx.min(self.deepseek_model_options.len().saturating_sub(1)))
-                .cloned()
-            else {
+            let Some(model) = self.deepseek_model_options.get(idx).cloned() else {
                 return;
             };
             self.config.select_openai_profile(

@@ -660,6 +660,8 @@ fn deepseek_model_picker_renders_catalog_models_and_refresh_hint() {
     assert!(rendered.contains("Provider: DeepSeek"));
     assert!(rendered.contains("deepseek-chat"));
     assert!(rendered.contains("deepseek-reasoner"));
+    assert!(rendered.contains("API key"));
+    assert!(rendered.contains("Edit the active DeepSeek API key"));
     assert!(rendered.contains("R refreshes /models"));
     assert!(rendered.contains("A api key"));
 }
@@ -742,6 +744,28 @@ fn api_key_editor_renders_full_prompt_on_standard_terminal() {
 
     let rendered = render_screen_text(&app, 100, 24);
     assert_snapshot!("api_key_editor_standard_terminal", rendered);
+}
+
+#[test]
+fn deepseek_api_key_editor_uses_deepseek_copy() {
+    let temp = tempdir().expect("tempdir");
+    let mut app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("build tui app");
+    app.provider_picker_idx = provider_family_idx(ProviderFamily::DeepSeek);
+    app.config
+        .select_openai_profile("deepseek-default", "DeepSeek", OpenAiEndpointKind::Deepseek);
+    app.config.set_api_key("sk-deepseek");
+    app.open_overlay(Overlay::ApiKeyEditor);
+
+    let rendered = render_screen_text(&app, 100, 24);
+    assert!(rendered.contains("DeepSeek API Key"));
+    assert!(rendered.contains("Paste a DeepSeek API key"));
+    assert!(rendered.contains("Enter save and load models"));
+    assert!(rendered.contains("Esc back to model picker"));
+    assert!(!rendered.contains("Codex API Key"));
+    assert!(!rendered.contains("Esc back to login guide"));
 }
 
 fn render_screen_text(app: &TuiApp, width: u16, height: u16) -> String {
