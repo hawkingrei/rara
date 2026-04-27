@@ -379,19 +379,19 @@ fn render_openai_profile_manager_modal(f: &mut Frame, app: &TuiApp, area: Rect) 
     );
 }
 
-fn openai_profile_table_row(app: &TuiApp, profile: &OpenAiEndpointProfile) -> Row<'static> {
+fn openai_profile_table_row<'a>(app: &TuiApp, profile: &'a OpenAiEndpointProfile) -> Row<'a> {
     let active = if app.config.active_openai_profile_id() == Some(profile.id.as_str()) {
         "active"
     } else {
         ""
     };
     Row::new(vec![
-        Cell::from(active.to_string()),
-        Cell::from(profile.label.clone()),
-        Cell::from(profile.kind.label().to_string()),
-        Cell::from(profile.model.clone().unwrap_or_else(|| "-".to_string())),
-        Cell::from(profile_api_key_status(profile).to_string()),
-        Cell::from(profile.base_url.clone().unwrap_or_else(|| "-".to_string())),
+        Cell::from(active),
+        Cell::from(profile.label.as_str()),
+        Cell::from(profile.kind.label()),
+        Cell::from(profile.model.as_deref().unwrap_or("-")),
+        Cell::from(profile_api_key_status(profile)),
+        Cell::from(profile.base_url.as_deref().unwrap_or("-")),
     ])
 }
 

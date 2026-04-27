@@ -319,7 +319,7 @@ async fn dispatch_event(
                 && !app.is_busy()
             {
                 if app.selected_provider_family() == self::state::ProviderFamily::OpenAiCompatible {
-                    return Ok(true);
+                    return Ok(false);
                 } else if should_open_codex_auth_guide(app, oauth_manager.as_ref()) {
                     app.select_local_model(app.model_picker_idx);
                     app.open_overlay(Overlay::AuthModePicker);
