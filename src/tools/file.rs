@@ -13,15 +13,15 @@ impl Tool for ReadFileTool {
         "read_file"
     }
     fn description(&self) -> &str {
-        "Read the content of a file"
+        "Read a file, optionally with 1-based inclusive line ranges for large files"
     }
     fn input_schema(&self) -> Value {
         json!({
             "type": "object",
             "properties": {
-                "path": { "type": "string" },
-                "start_line": { "type": "integer", "minimum": 1 },
-                "end_line": { "type": "integer", "minimum": 1 }
+                "path": { "type": "string", "description": "Path to read." },
+                "start_line": { "type": "integer", "minimum": 1, "description": "Optional 1-based first line to include." },
+                "end_line": { "type": "integer", "minimum": 1, "description": "Optional 1-based last line to include." }
             },
             "required": ["path"]
         })
@@ -83,14 +83,14 @@ impl Tool for WriteFileTool {
         "write_file"
     }
     fn description(&self) -> &str {
-        "Write content to a file"
+        "Create a new file or intentionally rewrite a whole file. For existing files, read the file first and prefer apply_patch for partial edits."
     }
     fn input_schema(&self) -> Value {
         json!({
             "type": "object",
             "properties": {
-                "path": { "type": "string" },
-                "content": { "type": "string" }
+                "path": { "type": "string", "description": "Path to create or fully rewrite." },
+                "content": { "type": "string", "description": "Complete new file contents. Do not use for small edits to existing files." }
             },
             "required": ["path", "content"]
         })
@@ -128,15 +128,15 @@ impl Tool for ReplaceTool {
         "replace"
     }
     fn description(&self) -> &str {
-        "Replace a specific string in a file"
+        "Replace one exact, unique string in a file. Read the file first and prefer apply_patch for structured multi-line edits."
     }
     fn input_schema(&self) -> Value {
         json!({
             "type": "object",
             "properties": {
-                "path": { "type": "string" },
-                "old_string": { "type": "string" },
-                "new_string": { "type": "string" }
+                "path": { "type": "string", "description": "Path to edit." },
+                "old_string": { "type": "string", "description": "Exact text to replace. It must appear exactly once in the file." },
+                "new_string": { "type": "string", "description": "Replacement text." }
             },
             "required": ["path", "old_string", "new_string"]
         })
@@ -177,15 +177,15 @@ impl Tool for ReplaceLinesTool {
         "replace_lines"
     }
     fn description(&self) -> &str {
-        "Replace an inclusive line range in a file. Use this for large or line-addressable edits when apply_patch is impractical."
+        "Replace an inclusive line range in a file. Use only after reading the target range and verifying the current line numbers."
     }
     fn input_schema(&self) -> Value {
         json!({
             "type": "object",
             "properties": {
-                "path": { "type": "string" },
-                "start_line": { "type": "integer", "minimum": 1 },
-                "end_line": { "type": "integer", "minimum": 1 },
+                "path": { "type": "string", "description": "Path to edit." },
+                "start_line": { "type": "integer", "minimum": 1, "description": "1-based first line to replace." },
+                "end_line": { "type": "integer", "minimum": 1, "description": "1-based last line to replace, inclusive." },
                 "new_string": {
                     "type": "string",
                     "description": "Replacement text for the inclusive line range. Use an empty string to delete the range."
@@ -475,5 +475,20 @@ mod tests {
         assert_eq!(result["removed_lines"], 2);
         assert_eq!(result["inserted_lines"], 1);
         assert_eq!(result["line_delta"], -1);
+    }
+
+    #[test]
+    fn file_tool_descriptions_encode_safe_edit_contract() {
+        let write_tool = WriteFileTool;
+        let replace_tool = ReplaceTool;
+        let replace_lines_tool = ReplaceLinesTool;
+
+        assert!(write_tool.description().contains("Create a new file"));
+        assert!(write_tool.description().contains("read the file first"));
+        assert!(replace_tool.description().contains("exact, unique string"));
+        assert!(replace_tool.description().contains("Read the file first"));
+        assert!(replace_lines_tool
+            .description()
+            .contains("verifying the current line numbers"));
     }
 }
