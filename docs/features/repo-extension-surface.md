@@ -7,8 +7,8 @@ ecosystems without immediately coupling discovery to execution.
 
 The initial target is compatibility with:
 
-- repo context files that describe local project rules, conventions, and active
-  workspace facts;
+- Repository context files such as `AGENTS.md` and `.rara/instructions.md`
+  that describe local project rules, conventions, and active workspace facts;
 - native RARA skills under `.agents/skills/`;
 - Claude-style agent definitions under `.claude/agents/`;
 - Claude-style lifecycle hooks under `.claude/hooks/`.
@@ -58,7 +58,7 @@ Later follow-up phases may include:
 ## Related Codex Capabilities
 
 Codex has a different extension shape, but the same compatibility pressure:
-repository guidance, local skills, runtime memory, and tool/result context must
+Repository context, local skills, runtime memory, and tool/result context must
 compose without making the model-facing prompt unstable across releases.
 
 RARA should therefore treat Codex-style inputs as additional normalized context
@@ -67,7 +67,7 @@ sections.
 
 The Codex-related behaviors to preserve are:
 
-- repository instructions and repo-local skills participate in the same source
+- Repository context and repo-local skills participate in the same source
   discovery pipeline as other workspace prompt sources;
 - durable memory and recalled thread/workspace facts enter through
   `MemorySelection`;
@@ -106,6 +106,36 @@ They should not:
 If a new source needs a label for explainability, that label should be attached
 to the structured source object and rendered by `/context` or `/status`, not
 invented as an unowned prompt prefix.
+
+## Resume Context Contract
+
+Resume should restore thread/runtime state, then rebuild the current
+model-facing context from owned sources. It should not replay a stale prompt
+snapshot as if it were still authoritative.
+
+On resume, RARA should restore:
+
+- thread history and rollout items;
+- session id, lineage, cwd, provider, model, approval, and sandbox metadata;
+- compaction state and compacted summaries;
+- plan state and pending interactions;
+- enough context baseline metadata to explain whether later assembly reused,
+  refreshed, or replaced prior context inputs.
+
+On resume, RARA should re-discover or re-project:
+
+- Repository context files from the current workspace roots;
+- repo-local and home/global skills;
+- imported-agent profiles and hook declarations;
+- durable thread/workspace memory candidates through `MemorySelection`;
+- runtime environment facts such as branch and cwd.
+
+This mirrors the useful behavior in Codex and Claude Code: persisted transcript
+and runtime state carry conversation continuity, while repository context and
+memory-like inputs are rebuilt from the current workspace and explained through
+their provenance. If a resumed thread needs to preserve an older context
+baseline, that baseline should be represented as structured metadata or a
+selected memory/context item, not as a rewritten top-level prompt prefix.
 
 ## Non-Goals
 
@@ -320,7 +350,7 @@ That means:
 
 - imported Claude agents still run through RARA sub-agent/thread contracts;
 - imported hooks still operate through RARA lifecycle events;
-- repo context and repo-local skills still enter through source discovery and
+- Repository context and repo-local skills still enter through source discovery and
   context assembly instead of bypassing prompt ownership;
 - context injection still flows through `ContextAssembler` and
   `MemorySelection`;

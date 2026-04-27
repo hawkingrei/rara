@@ -68,7 +68,7 @@ Priority order for this phase:
 - [ ] Expand focused tests around workspace prompt-source discovery and cache invalidation across cwd changes, git branch changes, nested workspaces, and outside-workspace fallback.
 - [ ] Define and document `WorkspaceMemory` cache invalidation rules for prompt files and environment info instead of relying on implicit behavior.
 - [ ] Unify `discover_prompt_sources()` and TUI `/status` source reporting so displayed prompt sources match the actual injected sources.
-- [ ] Preserve stable top-level prompt/context prefixes while adding repo context, skills, hooks, imported agents, and memory sources; new inputs should enter through structured source objects, `MemorySelection`, lifecycle events, or thread-owned agent profiles instead of ad hoc prompt text.
+- [ ] Preserve stable top-level prompt/context prefixes while adding Repository context, skills, hooks, imported agents, and memory sources; new inputs should enter through structured source objects, `MemorySelection`, lifecycle events, or imported-agent profiles instead of ad hoc prompt text.
 - [ ] Design a project-scoped extension surface that can ingest Claude/Codex-style repo customizations from `.claude/agents/`, `.claude/hooks/`, and `.agents/skills/`, with explicit precedence and compatibility rules before adding runtime execution.
 - [ ] Define and surface skill precedence/override behavior across home, repo, nested repo roots, and workspace-local skill roots.
 - [ ] Extend `SkillManager::list_summaries()` (or equivalent status output) with source precedence and overridden-skill visibility so conflicts are debuggable.
@@ -78,6 +78,7 @@ Priority order for this phase:
 - [ ] Extend the local `ThreadStore` / `ThreadRecorder` boundary from a façade over `SessionManager` + `StateDb` into a true structured thread store with explicit thread metadata and rollout-item ownership.
 - [ ] Complete the thread lifecycle surface around the new thread boundary: stable `threads`/`thread`/`resume --last`/`fork` flows now exist, but richer lineage metadata and a clearer `latest thread` contract still need to land.
 - [ ] Make compaction a first-class runtime lifecycle event with persisted summaries, token counters, and boundary metadata ownership aligned with the thread domain.
+- [ ] Define the resume context contract so restored thread/runtime state is distinguished from rediscovered Repository context, skills, hooks, imported-agent profiles, and memory candidates in `/context`.
 - [ ] Define thread-scoped and workspace-scoped `MemoryRecord` storage plus promotion rules so durable findings are not mixed with transient turn context.
 - [ ] Replace the current placeholder retrieval path with real vector retrieval over Lance/LanceDB, including metadata-aware ranking for thread and workspace memory selection.
 - [ ] Add the retrieval orchestration layer described in `docs/features/context-architecture.md` so thread recall, vector recall, and later graph recall compose into one bounded `MemorySelection`.

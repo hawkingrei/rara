@@ -232,6 +232,13 @@ model-facing prefixes. In particular, transient runtime artifacts such as
 orphan tool results should not be serialized back into ordinary user text with
 synthetic labels.
 
+Resume should follow the same boundary. It restores thread/runtime state and
+then reassembles the current context from source objects, prompt-source
+discovery, and `MemorySelection`. Repository context and memory candidates may
+change between runs, so `/context` should explain whether a resumed item was
+restored from thread state, rediscovered from the workspace, or selected again
+from durable memory.
+
 ### Memory Scopes
 
 RARA should distinguish at least two memory scopes.
