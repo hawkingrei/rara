@@ -947,6 +947,26 @@ pub fn model_help_text(app: &TuiApp) -> String {
                         .collect::<Vec<_>>()
                         .join("\n")
                 }
+            } else if matches!(family, ProviderFamily::DeepSeek) {
+                app.deepseek_model_options
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, model)| {
+                        let marker = if app.config.active_openai_profile_kind()
+                            == Some(rara_config::OpenAiEndpointKind::Deepseek)
+                            && app.config.model.as_deref() == Some(model.as_str())
+                        {
+                            "*"
+                        } else {
+                            " "
+                        };
+                        format!(
+                            "{marker} {}. {model} (openai-compatible:deepseek/{model})",
+                            idx + 1
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n")
             } else {
                 current_model_presets(provider_idx)
                     .iter()
@@ -961,6 +981,7 @@ pub fn model_help_text(app: &TuiApp) -> String {
                         };
                         let shortcut = match family {
                             ProviderFamily::Codex => (idx + 1).to_string(),
+                            ProviderFamily::DeepSeek => (idx + 1).to_string(),
                             ProviderFamily::OpenAiCompatible => (idx + 1).to_string(),
                             ProviderFamily::CandleLocal => (idx + 1).to_string(),
                             ProviderFamily::Ollama => model.to_string(),
@@ -1011,11 +1032,11 @@ pub fn normalize_command_token(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        help_text, matching_commands, normalize_command_token, palette_commands,
+        help_text, matching_commands, model_help_text, normalize_command_token, palette_commands,
         parse_local_command, status_context_text, status_prompt_sources_text,
         status_resources_text, status_runtime_text, LocalCommandKind, COMMAND_SPECS,
     };
-    use crate::config::ConfigManager;
+    use crate::config::{ConfigManager, OpenAiEndpointKind};
     use crate::context::PromptSourceContextEntry;
     use crate::tui::state::{RuntimeSnapshot, TuiApp};
     use tempfile::tempdir;
@@ -1025,6 +1046,27 @@ mod tests {
         let command = parse_local_command("/model anything").expect("command should parse");
         assert!(matches!(command.kind, LocalCommandKind::Model));
         assert_eq!(command.arg.as_deref(), Some("anything"));
+    }
+
+    #[test]
+    fn model_help_text_labels_deepseek_as_openai_compatible_endpoint() {
+        let dir = tempdir().expect("tempdir");
+        let mut app = TuiApp::new(ConfigManager {
+            path: dir.path().join("config.json"),
+        })
+        .expect("app");
+        app.config.select_openai_profile(
+            "deepseek-default",
+            "DeepSeek",
+            OpenAiEndpointKind::Deepseek,
+        );
+        app.config.set_model(Some("deepseek-chat".to_string()));
+        app.set_deepseek_model_options(vec!["deepseek-chat".to_string()]);
+
+        let rendered = model_help_text(&app);
+
+        assert!(rendered.contains("* 1. deepseek-chat (openai-compatible:deepseek/deepseek-chat)"));
+        assert!(!rendered.contains("(deepseek/deepseek-chat)"));
     }
 
     #[test]

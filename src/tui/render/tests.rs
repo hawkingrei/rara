@@ -19,6 +19,13 @@ use super::{
     transcript_viewport, transcript_visual_row_count,
 };
 
+fn provider_family_idx(family: ProviderFamily) -> usize {
+    crate::tui::state::PROVIDER_FAMILIES
+        .iter()
+        .position(|(candidate, _, _)| *candidate == family)
+        .expect("provider family present")
+}
+
 #[test]
 fn committed_turn_does_not_truncate_agent_response() {
     let entries = vec![
@@ -571,9 +578,7 @@ fn compact_summary_text_keeps_tail_of_long_explicit_blocks() {
 #[test]
 fn ssh_startup_page_warns_without_opening_setup_window() {
     let temp = tempdir().expect("tempdir");
-    let old_ssh_connection = std::env::var_os("SSH_CONNECTION");
-    let old_ssh_tty = std::env::var_os("SSH_TTY");
-    std::env::set_var("SSH_CONNECTION", "test");
+    let _ssh_env = crate::tui::terminal_ui::test_env::set_ssh_session(true);
 
     let cm = ConfigManager {
         path: temp.path().join("config.json"),
@@ -589,17 +594,6 @@ fn ssh_startup_page_warns_without_opening_setup_window() {
 
     let rendered = render_screen_text(&app, 100, 24);
     assert_snapshot!("ssh_startup_warning_screen", rendered);
-
-    if let Some(value) = old_ssh_connection {
-        std::env::set_var("SSH_CONNECTION", value);
-    } else {
-        std::env::remove_var("SSH_CONNECTION");
-    }
-    if let Some(value) = old_ssh_tty {
-        std::env::set_var("SSH_TTY", value);
-    } else {
-        std::env::remove_var("SSH_TTY");
-    }
 }
 
 #[test]
@@ -622,10 +616,7 @@ fn openai_model_picker_renders_profile_manager_not_endpoint_presets() {
         path: temp.path().join("config.json"),
     })
     .expect("build tui app");
-    app.provider_picker_idx = crate::tui::state::PROVIDER_FAMILIES
-        .iter()
-        .position(|(family, _, _)| *family == ProviderFamily::OpenAiCompatible)
-        .expect("openai-compatible family present");
+    app.provider_picker_idx = provider_family_idx(ProviderFamily::OpenAiCompatible);
     app.config.select_openai_profile(
         "openrouter-main",
         "OpenRouter Main",
@@ -649,16 +640,38 @@ fn openai_model_picker_renders_profile_manager_not_endpoint_presets() {
 }
 
 #[test]
+fn deepseek_model_picker_renders_catalog_models_and_refresh_hint() {
+    let temp = tempdir().expect("tempdir");
+    let mut app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("build tui app");
+    app.provider_picker_idx = provider_family_idx(ProviderFamily::DeepSeek);
+    app.config
+        .select_openai_profile("deepseek-default", "DeepSeek", OpenAiEndpointKind::Deepseek);
+    app.config.set_api_key("sk-deepseek");
+    app.set_deepseek_model_options(vec![
+        "deepseek-chat".to_string(),
+        "deepseek-reasoner".to_string(),
+    ]);
+    app.open_overlay(Overlay::ModelPicker);
+
+    let rendered = render_screen_text(&app, 100, 24);
+    assert!(rendered.contains("Provider: DeepSeek"));
+    assert!(rendered.contains("deepseek-chat"));
+    assert!(rendered.contains("deepseek-reasoner"));
+    assert!(rendered.contains("R refreshes /models"));
+    assert!(rendered.contains("A api key"));
+}
+
+#[test]
 fn openai_model_picker_renders_profile_defaults_when_fields_are_empty() {
     let temp = tempdir().expect("tempdir");
     let mut app = TuiApp::new(ConfigManager {
         path: temp.path().join("config.json"),
     })
     .expect("build tui app");
-    app.provider_picker_idx = crate::tui::state::PROVIDER_FAMILIES
-        .iter()
-        .position(|(family, _, _)| *family == ProviderFamily::OpenAiCompatible)
-        .expect("openai-compatible family present");
+    app.provider_picker_idx = provider_family_idx(ProviderFamily::OpenAiCompatible);
     app.config.select_openai_profile(
         "custom-defaults",
         "Custom Defaults",
@@ -724,10 +737,7 @@ fn api_key_editor_renders_full_prompt_on_standard_terminal() {
     config.base_url = Some("https://api.deepseek.com".into());
     config.model = Some("deepseek-chat".into());
     app.config = config;
-    app.provider_picker_idx = crate::tui::state::PROVIDER_FAMILIES
-        .iter()
-        .position(|(family, _, _)| *family == ProviderFamily::OpenAiCompatible)
-        .expect("openai-compatible family present");
+    app.provider_picker_idx = provider_family_idx(ProviderFamily::OpenAiCompatible);
     app.open_overlay(Overlay::ApiKeyEditor);
 
     let rendered = render_screen_text(&app, 100, 24);

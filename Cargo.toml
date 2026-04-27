@@ -1,5 +1,11 @@
 [workspace]
-members = [".", "crates/config", "crates/instructions", "crates/skills"]
+members = [
+    ".",
+    "crates/config",
+    "crates/instructions",
+    "crates/provider-catalog",
+    "crates/skills",
+]
 resolver = "2"
 
 [workspace.package]
@@ -40,6 +46,7 @@ sha2 = "0.10"
 secrecy = { version = "0.10", features = ["serde"] }
 rara-config = { path = "crates/config" }
 rara-instructions = { path = "crates/instructions" }
+rara-provider-catalog = { path = "crates/provider-catalog" }
 rara-skills = { path = "crates/skills" }
 urlencoding = "2.1"
 url = "2.5"

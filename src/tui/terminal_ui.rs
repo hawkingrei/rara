@@ -79,3 +79,54 @@ fn viewport_area(width: u16, height: u16, viewport_height: u16) -> Rect {
 pub(crate) fn is_ssh_session() -> bool {
     std::env::var_os("SSH_CONNECTION").is_some() || std::env::var_os("SSH_TTY").is_some()
 }
+
+#[cfg(test)]
+pub(crate) mod test_env {
+    use std::ffi::OsString;
+    use std::sync::{LazyLock, Mutex, MutexGuard};
+
+    static SSH_ENV_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+
+    pub(crate) struct SshEnvGuard {
+        old_ssh_connection: Option<OsString>,
+        old_ssh_tty: Option<OsString>,
+        _lock: MutexGuard<'static, ()>,
+    }
+
+    pub(crate) fn set_ssh_session(enabled: bool) -> SshEnvGuard {
+        let lock = SSH_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let old_ssh_connection = std::env::var_os("SSH_CONNECTION");
+        let old_ssh_tty = std::env::var_os("SSH_TTY");
+
+        if enabled {
+            std::env::set_var("SSH_CONNECTION", "test");
+            std::env::remove_var("SSH_TTY");
+        } else {
+            std::env::remove_var("SSH_CONNECTION");
+            std::env::remove_var("SSH_TTY");
+        }
+
+        SshEnvGuard {
+            old_ssh_connection,
+            old_ssh_tty,
+            _lock: lock,
+        }
+    }
+
+    impl Drop for SshEnvGuard {
+        fn drop(&mut self) {
+            if let Some(value) = self.old_ssh_connection.as_ref() {
+                std::env::set_var("SSH_CONNECTION", value);
+            } else {
+                std::env::remove_var("SSH_CONNECTION");
+            }
+            if let Some(value) = self.old_ssh_tty.as_ref() {
+                std::env::set_var("SSH_TTY", value);
+            } else {
+                std::env::remove_var("SSH_TTY");
+            }
+        }
+    }
+}

@@ -51,10 +51,9 @@ pub(super) fn map_key_to_event(key: KeyEvent, app: &TuiApp) -> AppEvent {
             KeyCode::Esc => AppEvent::CloseOverlay,
             KeyCode::Up | KeyCode::Char('k') => AppEvent::MoveProviderSelection(-1),
             KeyCode::Down | KeyCode::Char('j') => AppEvent::MoveProviderSelection(1),
-            KeyCode::Char('1') => AppEvent::SetProviderSelection(0),
-            KeyCode::Char('2') => AppEvent::SetProviderSelection(1),
-            KeyCode::Char('3') => AppEvent::SetProviderSelection(2),
-            KeyCode::Char('4') => AppEvent::SetProviderSelection(3),
+            KeyCode::Char(ch) if ('1'..='9').contains(&ch) => {
+                AppEvent::SetProviderSelection(ch as usize - '1' as usize)
+            }
             KeyCode::Enter => AppEvent::ApplyOverlaySelection,
             _ => AppEvent::Noop,
         },
@@ -91,6 +90,12 @@ pub(super) fn map_key_to_event(key: KeyEvent, app: &TuiApp) -> AppEvent {
             KeyCode::Char('9') => AppEvent::SetModelSelection(8),
             KeyCode::Char('b') if app.selected_provider_family() == ProviderFamily::Ollama => {
                 AppEvent::OpenOverlay(Overlay::BaseUrlEditor)
+            }
+            KeyCode::Char('r') if app.selected_provider_family() == ProviderFamily::DeepSeek => {
+                AppEvent::RefreshDeepSeekModels
+            }
+            KeyCode::Char('a') if app.selected_provider_family() == ProviderFamily::DeepSeek => {
+                AppEvent::OpenOverlay(Overlay::ApiKeyEditor)
             }
             KeyCode::Char('e')
                 if matches!(

@@ -1,13 +1,20 @@
 use super::{
     input_requests_command_palette, parse_repo_slug, state_db_status_error,
     ActivePendingInteractionKind, InteractionKind, Overlay, PendingInteractionSnapshot,
-    ProviderFamily, RuntimeSnapshot, TranscriptEntry, TranscriptTurn, TuiApp,
+    ProviderFamily, RuntimeSnapshot, TranscriptEntry, TranscriptTurn, TuiApp, PROVIDER_FAMILIES,
 };
 use crate::codex_model_catalog::{CodexModelOption, CodexReasoningOption};
 use crate::config::{ConfigManager, OpenAiEndpointKind, RaraConfig};
 use crate::config::{DEFAULT_CODEX_BASE_URL, DEFAULT_CODEX_MODEL};
 use crate::state_db::{PersistedCompactState, PersistedPromptRuntimeState, StateDb};
 use tempfile::tempdir;
+
+fn provider_family_idx(family: ProviderFamily) -> usize {
+    PROVIDER_FAMILIES
+        .iter()
+        .position(|(candidate, _, _)| *candidate == family)
+        .expect("provider family present")
+}
 
 #[test]
 fn detects_slash_command_input() {
@@ -200,7 +207,7 @@ fn openai_compatible_preset_sets_default_connection_fields() {
     };
     let mut app = TuiApp::new(cm).expect("app");
 
-    app.provider_picker_idx = 1;
+    app.provider_picker_idx = provider_family_idx(ProviderFamily::OpenAiCompatible);
     assert_eq!(
         app.selected_provider_family(),
         ProviderFamily::OpenAiCompatible
@@ -231,7 +238,7 @@ fn openai_compatible_preset_preserves_custom_model_name() {
 
     app.config.set_provider("openai-compatible");
     app.config.set_model(Some("custom-model".to_string()));
-    app.provider_picker_idx = 1;
+    app.provider_picker_idx = provider_family_idx(ProviderFamily::OpenAiCompatible);
 
     app.select_local_model(0);
 
@@ -240,15 +247,15 @@ fn openai_compatible_preset_preserves_custom_model_name() {
 }
 
 #[test]
-fn openai_compatible_presets_switch_active_endpoint_kind() {
+fn deepseek_family_selects_deepseek_profile_and_model() {
     let dir = tempdir().expect("tempdir");
     let cm = ConfigManager {
         path: dir.path().join("config.json"),
     };
     let mut app = TuiApp::new(cm).expect("app");
 
-    app.provider_picker_idx = 1;
-    app.select_local_model(1);
+    app.provider_picker_idx = provider_family_idx(ProviderFamily::DeepSeek);
+    app.select_local_model(0);
     assert_eq!(
         app.config.active_openai_profile_kind(),
         Some(OpenAiEndpointKind::Deepseek)
@@ -258,15 +265,34 @@ fn openai_compatible_presets_switch_active_endpoint_kind() {
         Some("https://api.deepseek.com/v1")
     );
     assert_eq!(app.config.model.as_deref(), Some("deepseek-chat"));
+}
 
-    app.select_local_model(3);
+#[test]
+fn deepseek_catalog_options_keep_current_custom_model_selectable() {
+    let dir = tempdir().expect("tempdir");
+    let cm = ConfigManager {
+        path: dir.path().join("config.json"),
+    };
+    let mut app = TuiApp::new(cm).expect("app");
+
+    app.provider_picker_idx = provider_family_idx(ProviderFamily::DeepSeek);
+    app.config
+        .select_openai_profile("deepseek-default", "DeepSeek", OpenAiEndpointKind::Deepseek);
+    app.config
+        .set_model(Some("deepseek-v4-preview".to_string()));
+
+    app.set_deepseek_model_options(vec!["deepseek-chat".to_string()]);
+
+    assert!(app
+        .deepseek_model_options
+        .iter()
+        .any(|model| model == "deepseek-v4-preview"));
+    assert_eq!(app.model_picker_idx, app.selected_preset_idx());
     assert_eq!(
-        app.config.active_openai_profile_kind(),
-        Some(OpenAiEndpointKind::Openrouter)
-    );
-    assert_eq!(
-        app.config.base_url.as_deref(),
-        Some("https://openrouter.ai/api/v1")
+        app.deepseek_model_options
+            .get(app.model_picker_idx)
+            .map(String::as_str),
+        Some("deepseek-v4-preview")
     );
 }
 
@@ -315,7 +341,7 @@ fn opening_openai_compatible_model_picker_restores_provider_scoped_state() {
     app.config.set_provider("codex");
     app.config.set_model(Some("codex".to_string()));
 
-    app.provider_picker_idx = 1;
+    app.provider_picker_idx = provider_family_idx(ProviderFamily::OpenAiCompatible);
     app.open_overlay(Overlay::ModelPicker);
 
     assert_eq!(app.config.provider, "openai-compatible");
@@ -327,7 +353,7 @@ fn opening_openai_compatible_model_picker_restores_provider_scoped_state() {
 }
 
 #[test]
-fn opening_openai_compatible_model_picker_keeps_active_profile_kind() {
+fn opening_openai_compatible_model_picker_excludes_deepseek_profile_kind() {
     let dir = tempdir().expect("tempdir");
     let cm = ConfigManager {
         path: dir.path().join("config.json"),
@@ -337,15 +363,15 @@ fn opening_openai_compatible_model_picker_keeps_active_profile_kind() {
     app.config
         .select_openai_profile("deepseek-default", "DeepSeek", OpenAiEndpointKind::Deepseek);
     app.config.set_model(Some("deepseek-reasoner".to_string()));
-    app.provider_picker_idx = 1;
+    app.provider_picker_idx = provider_family_idx(ProviderFamily::OpenAiCompatible);
 
     app.open_overlay(Overlay::ModelPicker);
 
     assert_eq!(
         app.config.active_openai_profile_kind(),
-        Some(OpenAiEndpointKind::Deepseek)
+        Some(OpenAiEndpointKind::Custom)
     );
-    assert_eq!(app.config.model.as_deref(), Some("deepseek-reasoner"));
+    assert_eq!(app.config.model.as_deref(), Some("gpt-4o-mini"));
 }
 
 #[test]
@@ -356,7 +382,7 @@ fn openai_compatible_model_picker_selects_profile_rows() {
     };
     let mut app = TuiApp::new(cm).expect("app");
 
-    app.provider_picker_idx = 1;
+    app.provider_picker_idx = provider_family_idx(ProviderFamily::OpenAiCompatible);
     app.open_overlay(Overlay::ModelPicker);
 
     assert_eq!(app.current_model_picker_len(), 1);
@@ -390,7 +416,7 @@ fn openai_compatible_model_picker_deletes_active_profile_and_keeps_next() {
     };
     let mut app = TuiApp::new(cm).expect("app");
 
-    app.provider_picker_idx = 1;
+    app.provider_picker_idx = provider_family_idx(ProviderFamily::OpenAiCompatible);
     app.config.select_openai_profile(
         "custom-default",
         "Custom endpoint",
@@ -427,7 +453,7 @@ fn openai_profile_active_state_survives_switching_to_codex_and_ollama() {
     };
     let mut app = TuiApp::new(cm).expect("app");
 
-    app.provider_picker_idx = 1;
+    app.provider_picker_idx = provider_family_idx(ProviderFamily::OpenAiCompatible);
     app.config.select_openai_profile(
         "openrouter-main",
         "OpenRouter Main",
@@ -446,12 +472,12 @@ fn openai_profile_active_state_survives_switching_to_codex_and_ollama() {
     app.select_local_model(0);
     assert_eq!(app.config.provider, "codex");
 
-    app.provider_picker_idx = 3;
+    app.provider_picker_idx = provider_family_idx(ProviderFamily::Ollama);
     app.open_overlay(Overlay::ModelPicker);
     app.select_local_model(0);
     assert_eq!(app.config.provider, "ollama");
 
-    app.provider_picker_idx = 1;
+    app.provider_picker_idx = provider_family_idx(ProviderFamily::OpenAiCompatible);
     app.open_overlay(Overlay::ModelPicker);
 
     assert_eq!(
@@ -478,7 +504,7 @@ fn opening_openai_profile_picker_prefers_active_profile_of_selected_kind() {
         "OpenRouter Main",
         OpenAiEndpointKind::Openrouter,
     );
-    app.provider_picker_idx = 1;
+    app.provider_picker_idx = provider_family_idx(ProviderFamily::OpenAiCompatible);
     app.model_picker_idx = 3;
 
     app.open_overlay(Overlay::OpenAiProfilePicker);
@@ -498,7 +524,7 @@ fn openai_model_selection_keeps_non_default_profile_for_same_kind() {
     };
     let mut app = TuiApp::new(cm).expect("app");
 
-    app.provider_picker_idx = 1;
+    app.provider_picker_idx = provider_family_idx(ProviderFamily::OpenAiCompatible);
     app.config.select_openai_profile(
         "openrouter-main",
         "OpenRouter Main",
@@ -528,7 +554,7 @@ fn model_name_editor_seeds_from_selected_provider_state() {
     app.config.set_provider("openai-compatible");
     app.config.set_model(Some("custom-model".to_string()));
     app.config.set_provider("codex");
-    app.provider_picker_idx = 1;
+    app.provider_picker_idx = provider_family_idx(ProviderFamily::OpenAiCompatible);
 
     app.open_overlay(Overlay::ModelPicker);
     app.open_overlay(Overlay::ModelNameEditor);

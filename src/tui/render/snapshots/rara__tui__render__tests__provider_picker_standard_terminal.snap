@@ -8,11 +8,13 @@ expression: rendered
 └──────────────────────────────────────────────────────────────────────────────────────────────────┘
 │[1] Codex                                                                                         │
 │  Use Codex with browser login, device-code login, or a Codex API key.                            │
-│[2] OpenAI-compatible                                                                             │
-│  Use OpenAI-compatible endpoint profiles such as Custom, DeepSeek, Kimi, or OpenRouter.          │
-│[3] Candle Local                                                                                  │
+│[2] DeepSeek                                                                                      │
+│  Use DeepSeek with an API key and model list from api.deepseek.com.                              │
+│[3] OpenAI-compatible                                                                             │
+│  Use OpenAI-compatible endpoint profiles such as Custom, Kimi, or OpenRouter.                    │
+│[4] Candle Local                                                                                  │
 │  Run local Candle models directly in-process.                                                    │
-│[4] Ollama                                                                                        │
+│[5] Ollama                                                                                        │
 │  Use an external Ollama server and choose a local tag.                                           │
 │                                                                                                  │
 │                                                                                                  │
@@ -23,6 +25,4 @@ expression: rendered
 │                                                                                                  │
 │                                                                                                  │
 │                                                                                                  │
-│                                                                                                  │
-│                                                                                                  │
-                       1/2/3/4 select  Up/Down move  Enter continue  Esc close
+                         number jump  up/down move  enter choose  esc close

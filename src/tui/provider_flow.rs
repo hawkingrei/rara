@@ -2,6 +2,7 @@ use secrecy::{ExposeSecret, SecretString};
 
 use crate::agent::Agent;
 use crate::codex_model_catalog::load_codex_model_catalog;
+use crate::config::OpenAiEndpointKind;
 use crate::oauth::OAuthManager;
 
 use super::state::{Overlay, ProviderFamily, TuiApp};
@@ -148,6 +149,19 @@ pub(super) async fn open_provider_family_overlay(
     let entering_codex_family = matches!(app.selected_provider_family(), ProviderFamily::Codex);
     if entering_codex_family {
         oauth_manager.invalidate_saved_auth_cache();
+    }
+    if matches!(app.selected_provider_family(), ProviderFamily::DeepSeek) {
+        app.config.select_openai_profile(
+            OpenAiEndpointKind::Deepseek.default_profile_id(),
+            OpenAiEndpointKind::Deepseek.label(),
+            OpenAiEndpointKind::Deepseek,
+        );
+        if !app.config.has_api_key() {
+            app.open_overlay(Overlay::ApiKeyEditor);
+        } else {
+            app.open_overlay(Overlay::ModelPicker);
+        }
+        return Ok(());
     }
     let has_synced_codex_auth = if entering_codex_family {
         sync_codex_credential_from_auth_store(app, oauth_manager)?

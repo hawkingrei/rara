@@ -8577,6 +8577,7 @@ dependencies = [
  "rand 0.8.5",
  "rara-config",
  "rara-instructions",
+ "rara-provider-catalog",
  "rara-skills",
  "ratatui",
  "regex",
@@ -8621,6 +8622,19 @@ dependencies = [
  "anyhow",
  "rara-config",
  "tempfile",
+]
+
+[[package]]
+name = "rara-provider-catalog"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "rara-config",
+ "reqwest",
+ "secrecy",
+ "serde",
+ "serde_json",
+ "url",
 ]
 
 [[package]]
