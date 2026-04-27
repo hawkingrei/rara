@@ -684,7 +684,7 @@ impl TuiApp {
             .filter(|model| !model.is_empty())
         {
             if !options.iter().any(|model| model == current_model) {
-                options.insert(0, current_model.to_string());
+                options.push(current_model.to_string());
             }
         }
         options.sort();

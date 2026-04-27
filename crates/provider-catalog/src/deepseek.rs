@@ -39,14 +39,12 @@ pub fn models_url(base_url: Option<&str>) -> String {
 
 pub fn parse_models(body: &str) -> Result<Vec<String>> {
     let response: ModelsResponse = serde_json::from_str(body)?;
-    let mut models = response
+    let models = response
         .data
         .into_iter()
         .map(|model| model.id.trim().to_string())
         .filter(|id| !id.is_empty())
         .collect::<Vec<_>>();
-    models.sort();
-    models.dedup();
     Ok(models)
 }
 
@@ -97,7 +95,7 @@ mod tests {
     }
 
     #[test]
-    fn parses_deepseek_models_and_deduplicates_ids() {
+    fn parses_deepseek_models_in_provider_order() {
         let models = parse_models(
             r#"{
                 "object": "list",
@@ -111,6 +109,9 @@ mod tests {
         )
         .expect("parse models");
 
-        assert_eq!(models, vec!["deepseek-chat", "deepseek-reasoner"]);
+        assert_eq!(
+            models,
+            vec!["deepseek-reasoner", "deepseek-chat", "deepseek-chat"]
+        );
     }
 }

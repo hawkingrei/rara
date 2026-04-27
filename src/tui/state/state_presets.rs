@@ -24,21 +24,29 @@ pub const OLLAMA_MODEL_PRESETS: [(&str, &str, &str); 3] = [
 ];
 
 pub fn selected_provider_family_idx_for_config(config: &RaraConfig) -> usize {
-    match config.provider.as_str() {
-        "codex" => 0,
-        "deepseek" => 1,
+    let family = match config.provider.as_str() {
+        "codex" => ProviderFamily::Codex,
+        "deepseek" => ProviderFamily::DeepSeek,
         "openai-compatible" => {
             if config.active_openai_profile_kind() == Some(OpenAiEndpointKind::Deepseek) {
-                1
+                ProviderFamily::DeepSeek
             } else {
-                2
+                ProviderFamily::OpenAiCompatible
             }
         }
-        "kimi" | "openrouter" => 2,
-        "ollama" | "ollama-native" | "ollama-openai" => 4,
-        "gemma4" | "qwn3" | "qwen3" => 3,
-        _ => 0,
-    }
+        "kimi" | "openrouter" => ProviderFamily::OpenAiCompatible,
+        "ollama" | "ollama-native" | "ollama-openai" => ProviderFamily::Ollama,
+        "gemma4" | "qwn3" | "qwen3" => ProviderFamily::CandleLocal,
+        _ => ProviderFamily::Codex,
+    };
+    provider_family_index(family)
+}
+
+fn provider_family_index(family: ProviderFamily) -> usize {
+    super::PROVIDER_FAMILIES
+        .iter()
+        .position(|(candidate, _, _)| *candidate == family)
+        .unwrap_or(0)
 }
 
 pub fn current_model_presets(
