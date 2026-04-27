@@ -5,7 +5,7 @@ use super::state::{
     ProviderFamily, TuiApp, PROVIDER_FAMILIES,
 };
 
-pub const COMMAND_SPECS: [CommandSpec; 13] = [
+pub const COMMAND_SPECS: [CommandSpec; 18] = [
     CommandSpec {
         category: "Session",
         name: "help",
@@ -22,10 +22,24 @@ pub const COMMAND_SPECS: [CommandSpec; 13] = [
     },
     CommandSpec {
         category: "Session",
+        name: "runtime",
+        usage: "/runtime",
+        summary: "Alias for /status.",
+        detail: "Open the runtime status modal. This matches the runtime-focused naming used by other agent CLIs.",
+    },
+    CommandSpec {
+        category: "Session",
         name: "context",
         usage: "/context",
         summary: "Inspect the effective runtime context for the current turn.",
         detail: "Open a context modal that explains the effective prompt sources, active sections, workspace/runtime state, plan state, compaction metadata, and pending interaction inputs for the current turn.",
+    },
+    CommandSpec {
+        category: "Session",
+        name: "memory",
+        usage: "/memory",
+        summary: "Alias for /context.",
+        detail: "Open the context modal to inspect the effective assembled context, memory selection, and active runtime state.",
     },
     CommandSpec {
         category: "Session",
@@ -40,6 +54,13 @@ pub const COMMAND_SPECS: [CommandSpec; 13] = [
         usage: "/resume",
         summary: "Pick and restore a recent local thread.",
         detail: "Open the recent thread picker backed by the local thread store and rollout artifacts. This restores committed turns, plan state, and interaction cards for the selected thread.",
+    },
+    CommandSpec {
+        category: "Session",
+        name: "threads",
+        usage: "/threads",
+        summary: "Alias for /resume.",
+        detail: "Open the recent thread picker and choose a local thread to restore.",
     },
     CommandSpec {
         category: "Session",
@@ -85,10 +106,24 @@ pub const COMMAND_SPECS: [CommandSpec; 13] = [
     },
     CommandSpec {
         category: "Setup",
+        name: "auth",
+        usage: "/auth",
+        summary: "Alias for /login.",
+        detail: "Open the provider auth picker for the active provider.",
+    },
+    CommandSpec {
+        category: "Setup",
         name: "logout",
         usage: "/logout",
         summary: "Clear the saved provider credential.",
         detail: "Clear the saved access token or API key from local config for the active provider. If the active provider is codex, RARA rebuilds the backend so the running session no longer uses the old credential.",
+    },
+    CommandSpec {
+        category: "Setup",
+        name: "models",
+        usage: "/models",
+        summary: "Alias for /model.",
+        detail: "Open the guided provider and model switching flow.",
     },
     CommandSpec {
         category: "Session",
@@ -113,15 +148,18 @@ pub fn parse_local_command(input: &str) -> Option<LocalCommand> {
     let kind = match name {
         "help" => LocalCommandKind::Help,
         "status" => LocalCommandKind::Status,
+        "runtime" => LocalCommandKind::Status,
         "context" => LocalCommandKind::Context,
+        "memory" => LocalCommandKind::Context,
         "clear" => LocalCommandKind::Clear,
         "resume" => LocalCommandKind::Resume,
+        "threads" => LocalCommandKind::Resume,
         "plan" => LocalCommandKind::Plan,
         "approval" => LocalCommandKind::Approval,
         "compact" => LocalCommandKind::Compact,
-        "model" => LocalCommandKind::Model,
+        "model" | "models" => LocalCommandKind::Model,
         "base-url" => LocalCommandKind::BaseUrl,
-        "login" => LocalCommandKind::Login,
+        "login" | "auth" => LocalCommandKind::Login,
         "logout" => LocalCommandKind::Logout,
         "quit" | "exit" => LocalCommandKind::Quit,
         _ => return None,
@@ -170,25 +208,14 @@ pub fn recent_command_specs(app: &TuiApp) -> Vec<&'static CommandSpec> {
         .collect()
 }
 
-pub fn palette_commands(app: &TuiApp, query: &str) -> Vec<&'static CommandSpec> {
+pub fn palette_commands(_app: &TuiApp, query: &str) -> Vec<&'static CommandSpec> {
     if !query.trim().is_empty() {
         return matching_commands(query);
     }
 
-    let mut commands = recommended_commands(app);
-    for spec in recent_command_specs(app).into_iter().take(2) {
-        if !commands.iter().any(|existing| existing.name == spec.name) {
-            commands.push(spec);
-        }
-    }
+    let mut commands = COMMAND_SPECS.iter().collect::<Vec<_>>();
     commands.sort_by_key(|spec| spec.name);
-    if commands.is_empty() {
-        let mut commands = COMMAND_SPECS.iter().collect::<Vec<_>>();
-        commands.sort_by_key(|spec| spec.name);
-        commands
-    } else {
-        commands
-    }
+    commands
 }
 
 pub fn palette_command_by_index(
@@ -986,7 +1013,7 @@ mod tests {
     use super::{
         help_text, matching_commands, normalize_command_token, palette_commands,
         parse_local_command, status_context_text, status_prompt_sources_text,
-        status_resources_text, status_runtime_text, LocalCommandKind,
+        status_resources_text, status_runtime_text, LocalCommandKind, COMMAND_SPECS,
     };
     use crate::config::ConfigManager;
     use crate::context::PromptSourceContextEntry;
@@ -1005,6 +1032,24 @@ mod tests {
         let command = parse_local_command("/context").expect("command should parse");
         assert!(matches!(command.kind, LocalCommandKind::Context));
         assert!(command.arg.is_none());
+    }
+
+    #[test]
+    fn parses_alias_commands() {
+        let runtime = parse_local_command("/runtime").expect("runtime should parse");
+        assert!(matches!(runtime.kind, LocalCommandKind::Status));
+
+        let memory = parse_local_command("/memory").expect("memory should parse");
+        assert!(matches!(memory.kind, LocalCommandKind::Context));
+
+        let threads = parse_local_command("/threads").expect("threads should parse");
+        assert!(matches!(threads.kind, LocalCommandKind::Resume));
+
+        let auth = parse_local_command("/auth").expect("auth should parse");
+        assert!(matches!(auth.kind, LocalCommandKind::Login));
+
+        let models = parse_local_command("/models").expect("models should parse");
+        assert!(matches!(models.kind, LocalCommandKind::Model));
     }
 
     #[test]
@@ -1107,7 +1152,7 @@ mod tests {
     }
 
     #[test]
-    fn palette_commands_keep_empty_query_default_list_small() {
+    fn palette_commands_show_full_command_list_for_empty_query() {
         let dir = tempdir().expect("tempdir");
         let app = TuiApp::new(ConfigManager {
             path: dir.path().join("config.json"),
@@ -1118,7 +1163,10 @@ mod tests {
             .into_iter()
             .map(|spec| spec.name)
             .collect::<Vec<_>>();
-        assert_eq!(names, vec!["context", "help", "model", "resume", "status"]);
+        assert_eq!(names.len(), COMMAND_SPECS.len());
+        let mut sorted = names.clone();
+        sorted.sort();
+        assert_eq!(names, sorted);
     }
 
     #[test]

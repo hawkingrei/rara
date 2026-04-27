@@ -32,7 +32,8 @@ pub fn render(f: &mut Frame, app: &TuiApp) {
         .constraints([Constraint::Fill(1), Constraint::Length(bottom_pane_height)])
         .split(f.area());
 
-    render_transcript(f, app, layout[0]);
+    let transcript_area = render_startup_header(f, app, layout[0]);
+    render_transcript(f, app, transcript_area);
     let mut cursor = render_bottom_pane(f, app, layout[1]);
 
     if let Some(overlay) = app.overlay {
@@ -44,13 +45,34 @@ pub fn render(f: &mut Frame, app: &TuiApp) {
     }
 }
 
+fn render_startup_header(f: &mut Frame, app: &TuiApp, area: Rect) -> Rect {
+    if !shows_startup_header(app) {
+        return area;
+    }
+
+    let lines = startup_card_lines(app, area.width);
+    if lines.is_empty() {
+        return area;
+    }
+
+    let header_height = (lines.len() as u16).min(area.height.saturating_sub(1).max(1));
+    let layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(header_height), Constraint::Fill(1)])
+        .split(area);
+    f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), layout[0]);
+    layout[1]
+}
+
+fn shows_startup_header(app: &TuiApp) -> bool {
+    !app.has_any_transcript()
+        && app.active_turn.entries.is_empty()
+        && !app.has_pending_planning_suggestion()
+}
+
 fn render_transcript(f: &mut Frame, app: &TuiApp, area: Rect) {
     let viewport = transcript_viewport(app, area.width, area.height);
     if !app.has_any_transcript() && viewport.lines.is_empty() {
-        if app.startup_card_inserted {
-            f.render_widget(Paragraph::new(Vec::<Line<'static>>::new()), area);
-            return;
-        }
         let lines = vec![
             Line::from(Span::styled(
                 "Ready.",
