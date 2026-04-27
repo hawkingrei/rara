@@ -200,6 +200,68 @@ async fn forces_final_answer_when_tool_loop_exceeds_limit() {
         .contains("Final answer after reviewing the tool results.")));
 }
 
+#[tokio::test]
+async fn returns_local_fallback_when_forced_final_answer_still_calls_tools() {
+    let mut responses = (0..=super::super::MAX_TOOL_ROUNDS_PER_TURN)
+        .map(|idx| LlmResponse {
+            content: vec![ContentBlock::ToolUse {
+                id: format!("tool-{idx}"),
+                name: "stub_tool".to_string(),
+                input: json!({}),
+            }],
+            stop_reason: Some("tool_use".to_string()),
+            usage: Some(TokenUsage::default()),
+        })
+        .collect::<Vec<_>>();
+    responses.push(LlmResponse {
+        content: vec![ContentBlock::ToolUse {
+            id: "tool-final".to_string(),
+            name: "stub_tool".to_string(),
+            input: json!({}),
+        }],
+        stop_reason: Some("tool_use".to_string()),
+        usage: Some(TokenUsage::default()),
+    });
+    let backend = Arc::new(SequencedBackend::new(responses));
+
+    let mut tool_manager = ToolManager::new();
+    tool_manager.register(Box::new(StubTool));
+    let mut agent = Agent::new(
+        tool_manager,
+        backend.clone(),
+        Arc::new(VectorDB::new("data/lancedb")),
+        Arc::new(SessionManager::new().expect("session manager")),
+        Arc::new(WorkspaceMemory::new().expect("workspace memory")),
+    );
+
+    let mut events = Vec::new();
+    agent
+        .query_with_mode_and_events(
+            "loop".to_string(),
+            super::super::AgentOutputMode::Silent,
+            |event| events.push(event),
+        )
+        .await
+        .expect("query should finish with a local fallback answer");
+
+    let observed_tools = backend.observed_tools();
+    assert!(observed_tools.last().is_some_and(|tools| tools.is_empty()));
+    assert!(agent.history.last().is_some_and(|message| message
+        .content
+        .to_string()
+        .contains("Tool loop reached the")));
+    assert!(agent
+        .history
+        .iter()
+        .any(|message| message.content.to_string().contains("tool-final")));
+    assert_no_unresolved_tool_uses(&agent.history);
+    assert!(events.iter().any(|event| matches!(
+        event,
+        super::super::AgentEvent::AssistantText(text)
+            if text.contains("Tool loop reached the")
+    )));
+}
+
 #[test]
 fn strips_continue_inspection_control_tag() {
     let (cleaned, requested) =
@@ -322,4 +384,34 @@ fn completes_only_active_plan_step_on_finish() {
     assert_eq!(agent.current_plan[0].status, PlanStepStatus::Completed);
     assert_eq!(agent.current_plan[1].status, PlanStepStatus::Completed);
     assert_eq!(agent.current_plan[2].status, PlanStepStatus::Pending);
+}
+
+fn assert_no_unresolved_tool_uses(history: &[crate::agent::Message]) {
+    let mut pending = Vec::new();
+    for message in history {
+        if let Some(items) = message.content.as_array() {
+            for item in items {
+                match item.get("type").and_then(serde_json::Value::as_str) {
+                    Some("tool_use") if message.role == "assistant" => {
+                        if let Some(id) = item.get("id").and_then(serde_json::Value::as_str) {
+                            pending.push(id.to_string());
+                        }
+                    }
+                    Some("tool_result") if message.role == "user" => {
+                        if let Some(id) =
+                            item.get("tool_use_id").and_then(serde_json::Value::as_str)
+                        {
+                            if let Some(pos) =
+                                pending.iter().position(|pending_id| pending_id == id)
+                            {
+                                pending.remove(pos);
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    assert!(pending.is_empty(), "unresolved tool uses: {pending:?}");
 }
