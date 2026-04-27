@@ -463,6 +463,7 @@ async fn openai_model_picker_delete_row_removes_active_profile() {
         "Custom endpoint",
         OpenAiEndpointKind::Custom,
     );
+    app.config.set_api_key("sk-custom");
     app.config.select_openai_profile(
         "openrouter-default",
         "OpenRouter",
@@ -491,6 +492,13 @@ async fn openai_model_picker_delete_row_removes_active_profile() {
         Some("custom-default")
     );
     assert!(matches!(app.overlay, Some(Overlay::ModelPicker)));
+    assert!(matches!(
+        app.running_task.as_ref(),
+        Some(task) if matches!(task.kind, TaskKind::Rebuild)
+    ));
+    if let Some(task) = app.running_task.take() {
+        task.handle.abort();
+    }
 }
 
 #[tokio::test]

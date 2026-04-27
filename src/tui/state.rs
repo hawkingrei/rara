@@ -783,14 +783,9 @@ impl TuiApp {
         profiles
     }
 
-    pub fn openai_model_picker_profiles(&self) -> Vec<crate::config::OpenAiEndpointProfile> {
+    pub fn openai_model_picker_profiles(&self) -> Vec<&crate::config::OpenAiEndpointProfile> {
         let active_id = self.config.active_openai_profile_id();
-        let mut profiles = self
-            .config
-            .openai_profiles
-            .values()
-            .cloned()
-            .collect::<Vec<_>>();
+        let mut profiles = self.config.openai_profiles.values().collect::<Vec<_>>();
         profiles.sort_by(|left, right| {
             let left_active = Some(left.id.as_str()) == active_id;
             let right_active = Some(right.id.as_str()) == active_id;
@@ -815,7 +810,7 @@ impl TuiApp {
         }
         self.openai_model_picker_profiles()
             .get(self.model_picker_idx.checked_sub(1)?)
-            .cloned()
+            .map(|profile| (*profile).clone())
     }
 
     pub fn select_openai_model_picker_profile(&mut self) -> Option<String> {
@@ -834,10 +829,14 @@ impl TuiApp {
             return None;
         }
         let active_id = self.config.active_openai_profile_id()?.to_string();
-        let deleted = self.config.openai_profiles.remove(active_id.as_str())?;
-        let next = self.openai_model_picker_profiles().into_iter().next()?;
+        let next = self
+            .openai_model_picker_profiles()
+            .into_iter()
+            .find(|profile| profile.id != active_id)?
+            .clone();
         self.config
             .select_openai_profile(next.id, next.label, next.kind);
+        let deleted = self.config.openai_profiles.remove(active_id.as_str())?;
         self.model_picker_idx = 1;
         Some(deleted.label)
     }
