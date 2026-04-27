@@ -688,6 +688,7 @@ impl RuntimeContinuationPhase {
                 "The tool loop reached the execution limit for this turn.",
                 "Do not call any more tools.",
                 "Synthesize the result from the repository context and tool results already in the conversation.",
+                "If another tool call would be useful, state the limitation in the final answer instead of emitting a tool call.",
                 "Provide the final answer now.",
                 "Do not ask the user to continue.",
             ],

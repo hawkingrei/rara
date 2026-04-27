@@ -94,6 +94,7 @@ struct TurnOutput {
     plan_updated: bool,
     continue_inspection: bool,
     had_text_response: bool,
+    text_response: Option<String>,
 }
 
 pub struct Agent {
@@ -287,6 +288,7 @@ impl Agent {
         let mut plan_updated = false;
         let mut continue_inspection = false;
         let mut had_text_response = false;
+        let mut text_parts = Vec::new();
         let mut sanitized_content = Vec::new();
         for block in &response.content {
             match block {
@@ -296,6 +298,7 @@ impl Agent {
                     continue_inspection |= block_requests_continue;
                     if !clean_text.trim().is_empty() {
                         had_text_response = true;
+                        text_parts.push(clean_text.clone());
                         sanitized_content.push(ContentBlock::Text {
                             text: clean_text.clone(),
                         });
@@ -349,6 +352,7 @@ impl Agent {
             plan_updated,
             continue_inspection,
             had_text_response,
+            text_response: (!text_parts.is_empty()).then(|| text_parts.join("\n\n")),
         })
     }
 
@@ -445,6 +449,9 @@ impl Agent {
             }
             *tool_rounds += 1;
             if *tool_rounds > MAX_TOOL_ROUNDS_PER_TURN {
+                let skipped_results =
+                    self.tool_loop_limit_result_messages(&turn_output.tool_calls, report);
+                self.extend_history_messages(skipped_results);
                 report(AgentEvent::Status(
                     "Tool loop reached the limit. Requesting a final answer without more tool calls."
                         .to_string(),
@@ -457,12 +464,25 @@ impl Agent {
                     .run_model_turn_with_tools(output_mode, report, &[])
                     .await?;
                 self.last_query_plan_updated = final_turn.plan_updated;
-                self.push_history_message(final_turn.assistant_message);
-                if !final_turn.tool_calls.is_empty() || !final_turn.had_text_response {
-                    return Err(anyhow::anyhow!(
-                        "Tool loop exceeded {} rounds and the model still did not provide a final answer",
-                        MAX_TOOL_ROUNDS_PER_TURN
+                if final_turn.tool_calls.is_empty() && final_turn.had_text_response {
+                    self.push_history_message(final_turn.assistant_message);
+                } else {
+                    if !final_turn.tool_calls.is_empty() {
+                        self.push_history_message(final_turn.assistant_message);
+                        let skipped_results =
+                            self.tool_loop_limit_result_messages(&final_turn.tool_calls, report);
+                        self.extend_history_messages(skipped_results);
+                    }
+                    let fallback_text = self.tool_loop_limit_fallback_text();
+                    report(AgentEvent::Status(
+                        "Tool loop reached the limit. Returning a bounded final response without more tool calls."
+                            .to_string(),
                     ));
+                    report(AgentEvent::AssistantText(fallback_text.clone()));
+                    if matches!(output_mode, AgentOutputMode::Terminal) {
+                        println!("Agent: {}", fallback_text);
+                    }
+                    self.push_history_message(assistant_text_message(fallback_text));
                 }
                 self.complete_active_plan_step();
                 break;
@@ -478,6 +498,58 @@ impl Agent {
             self.extend_history_for_next_turn(tool_results, report, *tool_rounds);
         }
         Ok(())
+    }
+
+    fn tool_loop_limit_result_messages<F>(
+        &self,
+        tool_calls: &[ToolCall],
+        report: &mut F,
+    ) -> Vec<Message>
+    where
+        F: FnMut(AgentEvent) + Send,
+    {
+        tool_calls
+            .iter()
+            .map(|tool_call| {
+                let content = format!(
+                    "Error: tool call '{}' was not executed because this turn reached the {} tool-round limit.",
+                    tool_call.name, MAX_TOOL_ROUNDS_PER_TURN
+                );
+                report(AgentEvent::ToolResult {
+                    name: tool_call.name.clone(),
+                    content: content.clone(),
+                    is_error: true,
+                });
+                tool_result_message(&tool_call.id, content, true)
+            })
+            .collect()
+    }
+
+    fn tool_loop_limit_fallback_text(&self) -> String {
+        let mut lines = vec![
+            format!(
+                "Tool loop reached the {MAX_TOOL_ROUNDS_PER_TURN}-round limit before a clean final answer was produced."
+            ),
+            "I stopped additional tool execution, recorded any skipped tool calls as error results, and preserved the transcript for the next turn.".to_string(),
+        ];
+        if !self.current_plan.is_empty() {
+            lines.push(String::new());
+            lines.push("Current plan state:".to_string());
+            lines.extend(
+                self.current_plan.iter().map(|step| {
+                    format!("- [{}] {}", plan_step_status_label(&step.status), step.step)
+                }),
+            );
+        }
+        if let Some(explanation) = self
+            .plan_explanation
+            .as_deref()
+            .filter(|explanation| !explanation.trim().is_empty())
+        {
+            lines.push(String::new());
+            lines.push(explanation.trim().to_string());
+        }
+        lines.join("\n")
     }
 
     async fn execute_tool_calls<F>(
@@ -610,6 +682,21 @@ impl Agent {
             }
         }
         Ok(tool_results)
+    }
+}
+
+fn assistant_text_message(text: String) -> Message {
+    Message {
+        role: "assistant".to_string(),
+        content: json!([{"type": "text", "text": text}]),
+    }
+}
+
+fn plan_step_status_label(status: &PlanStepStatus) -> &'static str {
+    match status {
+        PlanStepStatus::Pending => "pending",
+        PlanStepStatus::InProgress => "in_progress",
+        PlanStepStatus::Completed => "completed",
     }
 }
 
