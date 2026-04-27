@@ -1,4 +1,4 @@
-use crate::sandbox::{sandbox_failure_hint, SandboxManager};
+use crate::sandbox::{sandbox_failure_hint, SandboxManager, WrappedCommand};
 use crate::tool::{Tool, ToolError, ToolOutputStream, ToolProgressEvent};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -132,6 +132,17 @@ fn sandbox_command_env(overrides: &HashMap<String, String>) -> HashMap<String, S
     env_map
 }
 
+fn command_env_for_wrapped(
+    wrapped: &WrappedCommand,
+    overrides: &HashMap<String, String>,
+) -> HashMap<String, String> {
+    if wrapped.sandboxed {
+        sandbox_command_env(overrides)
+    } else {
+        overrides.clone()
+    }
+}
+
 #[async_trait]
 impl Tool for BashTool {
     fn name(&self) -> &str {
@@ -185,7 +196,6 @@ impl Tool for BashTool {
     ) -> Result<Value, ToolError> {
         let request = BashCommandInput::from_value(i)?;
         let cwd = request.working_dir()?;
-        let command_env = sandbox_command_env(&request.env);
         let wrapped = if let Some(command) = request.command.as_deref() {
             self.sandbox
                 .wrap_shell_command(command, &cwd, request.allow_net)
@@ -204,8 +214,11 @@ impl Tool for BashTool {
                     ToolError::ExecutionFailed(format!("{} {}", e, sandbox_failure_hint()))
                 })?
         };
+        let command_env = command_env_for_wrapped(&wrapped, &request.env);
 
-        ensure_sandbox_home_dirs().await?;
+        if wrapped.sandboxed {
+            ensure_sandbox_home_dirs().await?;
+        }
 
         let mut command = Command::new(&wrapped.program);
         command
@@ -215,11 +228,18 @@ impl Tool for BashTool {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         let mut child = command.spawn().map_err(|err| {
-            ToolError::ExecutionFailed(format!(
-                "failed to launch sandbox '{}': {err}. {}",
-                wrapped.program,
-                sandbox_failure_hint()
-            ))
+            if wrapped.sandboxed {
+                ToolError::ExecutionFailed(format!(
+                    "failed to launch sandbox '{}': {err}. {}",
+                    wrapped.program,
+                    sandbox_failure_hint()
+                ))
+            } else {
+                ToolError::ExecutionFailed(format!(
+                    "failed to launch command '{}': {err}",
+                    wrapped.program
+                ))
+            }
         })?;
 
         let stdout = child
@@ -267,8 +287,10 @@ impl Tool for BashTool {
         if let Some(path) = wrapped.cleanup_path.as_ref() {
             let _ = fs::remove_file(path).await;
         }
-        if let Some(hint) = sandbox_output_hint(&stderr_text) {
-            stderr_text.push_str(hint);
+        if wrapped.sandboxed {
+            if let Some(hint) = sandbox_output_hint(&stderr_text) {
+                stderr_text.push_str(hint);
+            }
         }
 
         Ok(json!({
@@ -338,9 +360,10 @@ async fn ensure_sandbox_home_dirs() -> Result<(), ToolError> {
 #[cfg(test)]
 mod tests {
     use super::{
-        sandbox_command_env, sandbox_output_hint, BashCommandInput, BashTool, SANDBOX_HOME,
+        command_env_for_wrapped, sandbox_command_env, sandbox_output_hint, BashCommandInput,
+        BashTool, SANDBOX_HOME,
     };
-    use crate::sandbox::SandboxManager;
+    use crate::sandbox::{SandboxManager, WrappedCommand};
     use crate::tool::{Tool, ToolOutputStream, ToolProgressEvent};
     use serde_json::{json, Value};
     use std::collections::HashMap;
@@ -429,6 +452,26 @@ mod tests {
 
         assert!(hint.contains("Prefer direct file tools"));
         assert!(hint.contains("replace_lines"));
+    }
+
+    #[test]
+    fn direct_wrapped_command_keeps_caller_environment_overrides_only() {
+        let wrapped = WrappedCommand {
+            program: "sh".to_string(),
+            args: vec!["-c".to_string(), "pwd".to_string()],
+            cleanup_path: None,
+            sandboxed: false,
+        };
+        let env_map = command_env_for_wrapped(
+            &wrapped,
+            &HashMap::from([("HOME".to_string(), "/real/home".to_string())]),
+        );
+
+        assert_eq!(env_map.get("HOME").map(String::as_str), Some("/real/home"));
+        assert!(
+            !env_map.contains_key("XDG_CONFIG_HOME"),
+            "direct fallback should not apply sandbox-only XDG roots"
+        );
     }
 
     #[tokio::test]

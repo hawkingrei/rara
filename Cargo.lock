@@ -8578,6 +8578,7 @@ dependencies = [
  "rara-config",
  "rara-instructions",
  "rara-provider-catalog",
+ "rara-sandbox",
  "rara-skills",
  "ratatui",
  "regex",
@@ -8635,6 +8636,17 @@ dependencies = [
  "serde",
  "serde_json",
  "url",
+]
+
+[[package]]
+name = "rara-sandbox"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "rara-config",
+ "tempfile",
+ "url",
+ "uuid",
 ]
 
 [[package]]

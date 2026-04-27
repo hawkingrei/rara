@@ -4,6 +4,7 @@ members = [
     "crates/config",
     "crates/instructions",
     "crates/provider-catalog",
+    "crates/sandbox",
     "crates/skills",
 ]
 resolver = "2"
@@ -47,6 +48,7 @@ secrecy = { version = "0.10", features = ["serde"] }
 rara-config = { path = "crates/config" }
 rara-instructions = { path = "crates/instructions" }
 rara-provider-catalog = { path = "crates/provider-catalog" }
+rara-sandbox = { path = "crates/sandbox" }
 rara-skills = { path = "crates/skills" }
 urlencoding = "2.1"
 url = "2.5"
