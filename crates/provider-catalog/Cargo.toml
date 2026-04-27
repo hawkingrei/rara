@@ -7,7 +7,7 @@ license.workspace = true
 [dependencies]
 anyhow.workspace = true
 rara-config = { path = "../config" }
-reqwest = { version = "0.12", features = ["json"] }
+reqwest = { version = "0.13", features = ["json"] }
 secrecy.workspace = true
 serde.workspace = true
 serde_json.workspace = true

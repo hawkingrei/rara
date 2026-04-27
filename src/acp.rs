@@ -1,41 +1,41 @@
 use crate::llm::LlmBackend;
 use crate::tool::ToolManager;
-use agent_client_protocol::{
-    Agent, AuthenticateRequest, AuthenticateResponse, CancelNotification, Error, Implementation,
+use agent_client_protocol::schema::{
+    AuthenticateRequest, AuthenticateResponse, CancelNotification, Implementation,
     InitializeRequest, InitializeResponse, NewSessionRequest, NewSessionResponse, PromptRequest,
-    PromptResponse, ProtocolVersion,
+    PromptResponse, ProtocolVersion, SessionId, StopReason,
 };
-use async_trait::async_trait;
+use agent_client_protocol::Error;
 
 pub struct RaraAcpAgent {
     pub tool_manager: ToolManager,
     pub backend_builder: Box<dyn Fn() -> Box<dyn LlmBackend> + Send + Sync>,
 }
 
-#[async_trait(?Send)]
-impl Agent for RaraAcpAgent {
-    async fn initialize(&self, _: InitializeRequest) -> Result<InitializeResponse, Error> {
+impl RaraAcpAgent {
+    pub async fn initialize(&self, _: InitializeRequest) -> Result<InitializeResponse, Error> {
         Ok(InitializeResponse::new(ProtocolVersion::V1)
             .agent_info(Implementation::new("rara", "0.1.0")))
     }
 
-    async fn authenticate(&self, _: AuthenticateRequest) -> Result<AuthenticateResponse, Error> {
+    pub async fn authenticate(
+        &self,
+        _: AuthenticateRequest,
+    ) -> Result<AuthenticateResponse, Error> {
         Err(Error::method_not_found())
     }
 
-    async fn new_session(&self, _: NewSessionRequest) -> Result<NewSessionResponse, Error> {
-        Ok(NewSessionResponse::new(
-            agent_client_protocol::SessionId::new("default".to_string()),
-        ))
+    pub async fn new_session(&self, _: NewSessionRequest) -> Result<NewSessionResponse, Error> {
+        Ok(NewSessionResponse::new(SessionId::new(
+            "default".to_string(),
+        )))
     }
 
-    async fn prompt(&self, _: PromptRequest) -> Result<PromptResponse, Error> {
-        Ok(PromptResponse::new(
-            agent_client_protocol::StopReason::EndTurn,
-        ))
+    pub async fn prompt(&self, _: PromptRequest) -> Result<PromptResponse, Error> {
+        Ok(PromptResponse::new(StopReason::EndTurn))
     }
 
-    async fn cancel(&self, _: CancelNotification) -> Result<(), Error> {
+    pub async fn cancel(&self, _: CancelNotification) -> Result<(), Error> {
         Ok(())
     }
 }

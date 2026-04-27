@@ -1,7 +1,8 @@
 use anyhow::Result;
 use codex_login::{AuthCredentialsStoreMode, AuthManager};
+use codex_models_manager::bundled_models_response;
 use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
-use codex_models_manager::manager::{ModelsManager, RefreshStrategy};
+use codex_models_manager::manager::{ModelsManager, RefreshStrategy, StaticModelsManager};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -32,11 +33,11 @@ pub async fn load_codex_model_catalog(
         codex_home.to_path_buf(),
         false,
         AuthCredentialsStoreMode::File,
-    ));
-    let manager = ModelsManager::new(
-        codex_home.to_path_buf(),
-        auth_manager,
         None,
+    ));
+    let manager = StaticModelsManager::new(
+        Some(auth_manager),
+        bundled_models_response()?,
         CollaborationModesConfig::default(),
     );
     let mut models = manager.list_models(refresh_strategy).await;
