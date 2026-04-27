@@ -4,10 +4,12 @@ use ratatui::{
     text::Line,
     widgets::{Block, Borders, List, ListItem, Paragraph, Wrap},
 };
+use secrecy::ExposeSecret;
 use std::path::Path;
 use unicode_width::UnicodeWidthChar;
 
 use super::Frame;
+use crate::config::OpenAiEndpointProfile;
 use crate::tui::auth_mode_picker::build_auth_mode_picker_view;
 use crate::tui::command::api_key_status;
 use crate::tui::is_ssh_session;
@@ -206,12 +208,12 @@ pub(super) fn render_model_picker_modal(f: &mut Frame, app: &TuiApp, area: Rect)
                 .style(style)
             })
             .collect::<Vec<_>>()
+    } else if app.selected_provider_family() == ProviderFamily::OpenAiCompatible {
+        render_openai_profile_manager_items(app)
     } else {
         let presets = current_model_presets(app.provider_picker_idx);
-        let displayed_preset_count = app.openai_model_picker_preset_count();
-        let mut items = presets
+        presets
             .iter()
-            .take(displayed_preset_count)
             .enumerate()
             .map(|(idx, (label, provider, model))| {
                 let style = if idx == app.model_picker_idx {
@@ -221,15 +223,7 @@ pub(super) fn render_model_picker_modal(f: &mut Frame, app: &TuiApp, area: Rect)
                 } else {
                     Style::default()
                 };
-                let current = if provider_label == "OpenAI-compatible" {
-                    if app.config.active_openai_profile_kind()
-                        == Some(crate::tui::state::openai_compatible_preset_kind(idx))
-                    {
-                        " current"
-                    } else {
-                        ""
-                    }
-                } else if app.config.provider == *provider
+                let current = if app.config.provider == *provider
                     && app.config.model.as_deref() == Some(*model)
                 {
                     " current"
@@ -252,44 +246,7 @@ pub(super) fn render_model_picker_modal(f: &mut Frame, app: &TuiApp, area: Rect)
                 ))
                 .style(style)
             })
-            .collect::<Vec<_>>();
-        if provider_label == "OpenAI-compatible" {
-            let mut actions = Vec::new();
-            if app.openai_profile_needs_setup() {
-                actions.push((
-                    "Setup endpoint",
-                    "Guided setup for endpoint URL, API key, and model name.",
-                ));
-            }
-            actions.extend([
-                ("Profiles", "Switch or create endpoint profiles"),
-                ("API key", "Edit the API key for the active profile"),
-                ("Base URL", "Edit the base URL for the active profile"),
-                ("Model name", "Edit the model id for the active profile"),
-            ]);
-            let offset = displayed_preset_count;
-            items.extend(
-                actions
-                    .into_iter()
-                    .enumerate()
-                    .map(|(idx, (label, detail))| {
-                        let absolute_idx = offset + idx;
-                        let style = if absolute_idx == app.model_picker_idx {
-                            Style::default()
-                                .fg(Color::Cyan)
-                                .add_modifier(Modifier::BOLD)
-                        } else {
-                            Style::default()
-                        };
-                        ListItem::new(vec![
-                            Line::from(format!("[{}] {label}", absolute_idx + 1)),
-                            Line::from(format!("  {detail}")),
-                        ])
-                        .style(style)
-                    }),
-            );
-        }
-        items
+            .collect::<Vec<_>>()
     };
     let help = if provider_label == "Codex" && api_key_status(&app.config) == "missing" {
         "Provider: Codex\nAuthentication is required before this preset can be used.\nEnter opens the Codex login guide."
@@ -304,22 +261,18 @@ pub(super) fn render_model_picker_modal(f: &mut Frame, app: &TuiApp, area: Rect)
         )
     } else if provider_label == "OpenAI-compatible" {
         &format!(
-            "Provider: {provider_label}\nEndpoint kind: {}\nEndpoint profile: {}\nBase URL: {}\nModel name: {}\nAPI key: {}\n{}",
-            app.selected_openai_profile_kind()
+            "OpenAI-compatible profiles\nActive: {} ({})\nModel: {}  Key: {}\nBase URL: {}\nCreate or select profiles here. A key  B URL  N model  D delete.",
+            app.config.active_openai_profile_label().unwrap_or("-"),
+            app.config
+                .active_openai_profile_kind()
                 .unwrap_or(crate::config::OpenAiEndpointKind::Custom)
                 .label(),
-            app.config.active_openai_profile_label().unwrap_or("-"),
+            app.current_model_label(),
+            api_key_status(&app.config),
             app.config
                 .base_url
                 .as_deref()
                 .unwrap_or("https://api.openai.com/v1"),
-            app.current_model_label(),
-            api_key_status(&app.config),
-            if app.openai_profile_needs_setup() {
-                "Active profile still needs setup. Press Enter on `Setup endpoint` to choose an endpoint family and walk through the required fields."
-            } else {
-                "The active profile is ready. Choose a preset to rebuild, or use the action rows below to edit the active profile."
-            },
         )
     } else {
         &format!(
@@ -352,17 +305,108 @@ pub(super) fn render_model_picker_modal(f: &mut Frame, app: &TuiApp, area: Rect)
         Paragraph::new(if provider_label == "Codex" {
             "1-9 jump  Up/Down move  Enter choose level  Esc close"
         } else if provider_label == "OpenAI-compatible" {
-            if app.openai_profile_needs_setup() {
-                "1-5 jump  Up/Down move  Enter continue  Esc close"
-            } else {
-                "1-9 jump  Up/Down move  Enter choose  Esc close"
-            }
+            "1-9 jump  Up/Down move  Enter select/create  A/B/N edit  D delete  Esc close"
         } else {
             "1-9 apply directly  Up/Down move  B edit base URL  Enter apply  Esc close"
         })
         .alignment(Alignment::Center),
         chunks[2],
     );
+}
+
+fn render_openai_profile_manager_items(app: &TuiApp) -> Vec<ListItem<'static>> {
+    let profiles = app.openai_model_picker_profiles();
+    let mut items = Vec::with_capacity(profiles.len() + 2);
+    items.push(openai_profile_manager_action_item(
+        app,
+        0,
+        "Create endpoint profile",
+        "Start the endpoint setup wizard.",
+    ));
+    items.extend(
+        profiles
+            .iter()
+            .enumerate()
+            .map(|(idx, profile)| openai_profile_row_item(app, idx + 1, profile)),
+    );
+    if profiles.len() > 1 {
+        items.push(openai_profile_manager_action_item(
+            app,
+            profiles.len() + 1,
+            "Delete active profile",
+            "Remove the active profile from local config.",
+        ));
+    }
+    items
+}
+
+fn openai_profile_manager_action_item(
+    app: &TuiApp,
+    idx: usize,
+    label: &str,
+    detail: &str,
+) -> ListItem<'static> {
+    let style = if idx == app.model_picker_idx {
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default()
+    };
+    ListItem::new(vec![
+        Line::from(format!("[{}] {label}", idx + 1)),
+        Line::from(format!("  {detail}")),
+    ])
+    .style(style)
+}
+
+fn openai_profile_row_item(
+    app: &TuiApp,
+    idx: usize,
+    profile: &OpenAiEndpointProfile,
+) -> ListItem<'static> {
+    let style = if idx == app.model_picker_idx {
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default()
+    };
+    let active = if app.config.active_openai_profile_id() == Some(profile.id.as_str()) {
+        " active"
+    } else {
+        ""
+    };
+    let model = profile.model.as_deref().unwrap_or("-");
+    let base_url = profile.base_url.as_deref().unwrap_or("-");
+    ListItem::new(vec![
+        Line::from(format!(
+            "[{}] {} ({}){}",
+            idx + 1,
+            profile.label,
+            profile.kind.label(),
+            active
+        )),
+        Line::from(format!(
+            "  model={}  key={}  url={}",
+            model,
+            profile_api_key_status(profile),
+            base_url
+        )),
+    ])
+    .style(style)
+}
+
+fn profile_api_key_status(profile: &OpenAiEndpointProfile) -> &'static str {
+    if profile
+        .api_key
+        .as_ref()
+        .is_some_and(|key| !key.expose_secret().trim().is_empty())
+    {
+        "set"
+    } else {
+        "missing"
+    }
 }
 
 pub(super) fn render_openai_profile_picker_modal(f: &mut Frame, app: &TuiApp, area: Rect) {

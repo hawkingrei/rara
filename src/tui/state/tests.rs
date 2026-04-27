@@ -359,25 +359,77 @@ fn openai_compatible_model_picker_includes_explicit_profile_actions() {
     app.provider_picker_idx = 1;
     app.open_overlay(Overlay::ModelPicker);
 
-    assert_eq!(app.current_model_picker_len(), 5);
+    assert_eq!(app.current_model_picker_len(), 2);
+    assert_eq!(app.model_picker_idx, 1);
 
     app.model_picker_idx = 0;
     assert_eq!(
         app.selected_openai_model_picker_action(),
-        Some(crate::tui::state::OpenAiModelPickerAction::Setup)
+        Some(crate::tui::state::OpenAiModelPickerAction::CreateProfile)
     );
 
     app.model_picker_idx = 1;
     assert_eq!(
         app.selected_openai_model_picker_action(),
-        Some(crate::tui::state::OpenAiModelPickerAction::Profiles)
+        Some(crate::tui::state::OpenAiModelPickerAction::SelectProfile)
     );
+
+    app.config.select_openai_profile(
+        "openrouter-default",
+        "OpenRouter",
+        OpenAiEndpointKind::Openrouter,
+    );
+    app.open_overlay(Overlay::ModelPicker);
+    assert_eq!(app.current_model_picker_len(), 4);
 
     app.model_picker_idx = 2;
     assert_eq!(
         app.selected_openai_model_picker_action(),
-        Some(crate::tui::state::OpenAiModelPickerAction::ApiKey)
+        Some(crate::tui::state::OpenAiModelPickerAction::SelectProfile)
     );
+
+    app.model_picker_idx = 3;
+    assert_eq!(
+        app.selected_openai_model_picker_action(),
+        Some(crate::tui::state::OpenAiModelPickerAction::DeleteProfile)
+    );
+}
+
+#[test]
+fn openai_compatible_model_picker_deletes_active_profile_and_keeps_next() {
+    let dir = tempdir().expect("tempdir");
+    let cm = ConfigManager {
+        path: dir.path().join("config.json"),
+    };
+    let mut app = TuiApp::new(cm).expect("app");
+
+    app.provider_picker_idx = 1;
+    app.config.select_openai_profile(
+        "custom-default",
+        "Custom endpoint",
+        OpenAiEndpointKind::Custom,
+    );
+    app.config.select_openai_profile(
+        "openrouter-default",
+        "OpenRouter",
+        OpenAiEndpointKind::Openrouter,
+    );
+    app.open_overlay(Overlay::ModelPicker);
+
+    assert_eq!(
+        app.config.active_openai_profile_id(),
+        Some("openrouter-default")
+    );
+    assert_eq!(
+        app.delete_active_openai_profile().as_deref(),
+        Some("OpenRouter")
+    );
+    assert_eq!(
+        app.config.active_openai_profile_id(),
+        Some("custom-default")
+    );
+    assert_eq!(app.model_picker_idx, 1);
+    assert_eq!(app.current_model_picker_len(), 2);
 }
 
 #[test]
