@@ -58,7 +58,6 @@ pub enum ProviderFamily {
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum OpenAiModelPickerAction {
-    CreateProfile,
     SelectProfile,
     DeleteProfile,
 }
@@ -373,6 +372,7 @@ pub struct TuiApp {
     pub openai_profile_label_cursor_offset: Option<usize>,
     pub openai_profile_label_kind: Option<OpenAiEndpointKind>,
     pub openai_setup_steps: Vec<Overlay>,
+    pub openai_setup_keep_empty_api_key: bool,
     pub codex_model_options: Vec<CodexModelOption>,
     pub recent_commands: Vec<String>,
     pub recent_threads: Vec<ThreadSummary>,

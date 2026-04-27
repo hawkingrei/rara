@@ -194,15 +194,17 @@ impl RaraConfig {
     pub fn set_provider(&mut self, provider: impl Into<String>) {
         self.sync_active_provider_state();
         let provider = provider.into();
-        if let Some(kind) = OpenAiEndpointKind::from_legacy_provider(provider.as_str()) {
-            self.provider = "openai-compatible".to_string();
-            self.reset_provider_scoped_fields();
-            let profile = self.profile_for_kind_or_default(kind);
-            self.active_openai_profile_id = Some(profile.id.clone());
-            self.openai_profiles
-                .insert(profile.id.clone(), profile.clone());
-            self.apply_openai_profile(profile);
-            return;
+        if provider != "openai-compatible" {
+            if let Some(kind) = OpenAiEndpointKind::from_legacy_provider(provider.as_str()) {
+                self.provider = "openai-compatible".to_string();
+                self.reset_provider_scoped_fields();
+                let profile = self.profile_for_kind_or_default(kind);
+                self.active_openai_profile_id = Some(profile.id.clone());
+                self.openai_profiles
+                    .insert(profile.id.clone(), profile.clone());
+                self.apply_openai_profile(profile);
+                return;
+            }
         }
         self.provider = provider;
         self.reset_provider_scoped_fields();
@@ -992,6 +994,29 @@ mod tests {
         );
 
         assert_eq!(config.provider, "openai-compatible");
+        assert_eq!(config.active_openai_profile_id(), Some("openrouter-main"));
+        assert_eq!(config.api_key(), Some("sk-openrouter-main"));
+        assert_eq!(config.model.as_deref(), Some("anthropic/claude-sonnet-4"));
+    }
+
+    #[test]
+    fn switching_away_and_back_to_openai_compatible_keeps_active_profile() {
+        let mut config = RaraConfig::default();
+
+        config.select_openai_profile(
+            "openrouter-main",
+            "OpenRouter main",
+            OpenAiEndpointKind::Openrouter,
+        );
+        config.set_api_key("sk-openrouter-main");
+        config.set_model(Some("anthropic/claude-sonnet-4".to_string()));
+
+        config.set_provider("codex");
+        config.set_model(Some("gpt-5.1-codex".to_string()));
+        config.set_provider("ollama");
+        config.set_model(Some("gemma4".to_string()));
+        config.set_provider("openai-compatible");
+
         assert_eq!(config.active_openai_profile_id(), Some("openrouter-main"));
         assert_eq!(config.api_key(), Some("sk-openrouter-main"));
         assert_eq!(config.model.as_deref(), Some("anthropic/claude-sonnet-4"));

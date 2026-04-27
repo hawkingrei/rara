@@ -2,7 +2,7 @@ use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::Line,
-    widgets::{Block, Borders, List, ListItem, Paragraph, Wrap},
+    widgets::{Block, Borders, Cell, List, ListItem, Paragraph, Row, Table, TableState, Wrap},
 };
 use secrecy::ExposeSecret;
 use std::path::Path;
@@ -174,6 +174,10 @@ pub(super) fn render_resume_picker_modal(f: &mut Frame, app: &TuiApp, area: Rect
 
 pub(super) fn render_model_picker_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
     let provider_label = PROVIDER_FAMILIES[app.provider_picker_idx].1;
+    if app.selected_provider_family() == ProviderFamily::OpenAiCompatible {
+        render_openai_profile_manager_modal(f, app, area);
+        return;
+    }
     let items = if app.selected_provider_family() == ProviderFamily::Codex {
         app.codex_model_options
             .iter()
@@ -208,8 +212,6 @@ pub(super) fn render_model_picker_modal(f: &mut Frame, app: &TuiApp, area: Rect)
                 .style(style)
             })
             .collect::<Vec<_>>()
-    } else if app.selected_provider_family() == ProviderFamily::OpenAiCompatible {
-        render_openai_profile_manager_items(app)
     } else {
         let presets = current_model_presets(app.provider_picker_idx);
         presets
@@ -259,21 +261,6 @@ pub(super) fn render_model_picker_modal(f: &mut Frame, app: &TuiApp, area: Rect)
                 .unwrap_or("https://api.openai.com/v1"),
             app.current_reasoning_effort_label(),
         )
-    } else if provider_label == "OpenAI-compatible" {
-        &format!(
-            "OpenAI-compatible profiles\nActive: {} ({})\nModel: {}  Key: {}\nBase URL: {}\nCreate or select profiles here. A key  B URL  N model  D delete.",
-            app.config.active_openai_profile_label().unwrap_or("-"),
-            app.config
-                .active_openai_profile_kind()
-                .unwrap_or(crate::config::OpenAiEndpointKind::Custom)
-                .label(),
-            app.current_model_label(),
-            api_key_status(&app.config),
-            app.config
-                .base_url
-                .as_deref()
-                .unwrap_or("https://api.openai.com/v1"),
-        )
     } else {
         &format!(
             "Provider: {provider_label}\nBase URL: {}\nSelect a concrete model preset. Enter applies immediately.",
@@ -304,8 +291,6 @@ pub(super) fn render_model_picker_modal(f: &mut Frame, app: &TuiApp, area: Rect)
     f.render_widget(
         Paragraph::new(if provider_label == "Codex" {
             "1-9 jump  Up/Down move  Enter choose level  Esc close"
-        } else if provider_label == "OpenAI-compatible" {
-            "1-9 jump  Up/Down move  Enter select/create  A/B/N edit  D delete  Esc close"
         } else {
             "1-9 apply directly  Up/Down move  B edit base URL  Enter apply  Esc close"
         })
@@ -314,87 +299,118 @@ pub(super) fn render_model_picker_modal(f: &mut Frame, app: &TuiApp, area: Rect)
     );
 }
 
-fn render_openai_profile_manager_items(app: &TuiApp) -> Vec<ListItem<'static>> {
-    let profiles = app.openai_model_picker_profiles();
-    let mut items = Vec::with_capacity(profiles.len() + 2);
-    items.push(openai_profile_manager_action_item(
-        app,
-        0,
-        "Create endpoint profile",
-        "Start the endpoint setup wizard.",
-    ));
-    items.extend(
-        profiles
-            .iter()
-            .enumerate()
-            .map(|(idx, profile)| openai_profile_row_item(app, idx + 1, profile)),
+fn render_openai_profile_manager_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
+    let active_label = app.config.active_openai_profile_label().unwrap_or("-");
+    let active_kind = app
+        .config
+        .active_openai_profile_kind()
+        .unwrap_or(crate::config::OpenAiEndpointKind::Custom)
+        .label();
+    let help = format!(
+        "OpenAI-compatible profiles\nActive: {active_label} ({active_kind})  model={}  key={}",
+        app.current_model_label(),
+        api_key_status(&app.config),
     );
-    if profiles.len() > 1 {
-        items.push(openai_profile_manager_action_item(
-            app,
-            profiles.len() + 1,
-            "Delete active profile",
-            "Remove the active profile from local config.",
-        ));
-    }
-    items
-}
+    let help_height = wrapped_text_height(help.as_str(), area.width);
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(help_height),
+            Constraint::Min(6),
+            Constraint::Length(2),
+        ])
+        .split(area);
+    f.render_widget(
+        Paragraph::new(help)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(" Model Profiles "),
+            )
+            .wrap(Wrap { trim: false }),
+        chunks[0],
+    );
 
-fn openai_profile_manager_action_item(
-    app: &TuiApp,
-    idx: usize,
-    label: &str,
-    detail: &str,
-) -> ListItem<'static> {
-    let style = if idx == app.model_picker_idx {
-        Style::default()
-            .fg(Color::Cyan)
-            .add_modifier(Modifier::BOLD)
-    } else {
-        Style::default()
-    };
-    ListItem::new(vec![
-        Line::from(format!("[{}] {label}", idx + 1)),
-        Line::from(format!("  {detail}")),
+    let profiles = app.openai_model_picker_profiles();
+    let rows = profiles
+        .iter()
+        .map(|profile| openai_profile_table_row(app, profile))
+        .collect::<Vec<_>>();
+    let header = Row::new(vec![
+        Cell::from("Status"),
+        Cell::from("Name"),
+        Cell::from("Type"),
+        Cell::from("Model"),
+        Cell::from("Key"),
+        Cell::from("Base URL"),
     ])
-    .style(style)
-}
-
-fn openai_profile_row_item(
-    app: &TuiApp,
-    idx: usize,
-    profile: &OpenAiEndpointProfile,
-) -> ListItem<'static> {
-    let style = if idx == app.model_picker_idx {
+    .style(Style::default().fg(Color::DarkGray));
+    let table = Table::new(
+        rows,
+        [
+            Constraint::Length(8),
+            Constraint::Length(20),
+            Constraint::Length(14),
+            Constraint::Length(24),
+            Constraint::Length(8),
+            Constraint::Min(18),
+        ],
+    )
+    .header(header)
+    .block(Block::default().borders(Borders::LEFT | Borders::RIGHT))
+    .column_spacing(1)
+    .highlight_symbol("› ")
+    .row_highlight_style(
         Style::default()
             .fg(Color::Cyan)
-            .add_modifier(Modifier::BOLD)
+            .add_modifier(Modifier::BOLD),
+    );
+    let selected = if profiles.is_empty() {
+        None
     } else {
-        Style::default()
+        Some(app.model_picker_idx.min(profiles.len() - 1))
     };
+    let mut table_state = TableState::default().with_selected(selected);
+    f.render_stateful_widget(table, chunks[1], &mut table_state);
+    f.render_widget(
+        Paragraph::new("Space/Enter activate  C create  E edit wizard  D delete active  Esc close")
+            .alignment(Alignment::Center),
+        chunks[2],
+    );
+}
+
+fn openai_profile_table_row<'a>(app: &TuiApp, profile: &'a OpenAiEndpointProfile) -> Row<'a> {
     let active = if app.config.active_openai_profile_id() == Some(profile.id.as_str()) {
-        " active"
+        "active"
     } else {
         ""
     };
-    let model = profile.model.as_deref().unwrap_or("-");
-    let base_url = profile.base_url.as_deref().unwrap_or("-");
-    ListItem::new(vec![
-        Line::from(format!(
-            "[{}] {} ({}){}",
-            idx + 1,
-            profile.label,
-            profile.kind.label(),
-            active
-        )),
-        Line::from(format!(
-            "  model={}  key={}  url={}",
-            model,
-            profile_api_key_status(profile),
-            base_url
-        )),
+    Row::new(vec![
+        Cell::from(active),
+        Cell::from(profile.label.as_str()),
+        Cell::from(profile.kind.label()),
+        Cell::from(profile_model_label(profile)),
+        Cell::from(profile_api_key_status(profile)),
+        Cell::from(profile_base_url_label(profile)),
     ])
-    .style(style)
+}
+
+fn profile_model_label(profile: &OpenAiEndpointProfile) -> &str {
+    profile
+        .model
+        .as_deref()
+        .map(str::trim)
+        .filter(|model| !model.is_empty())
+        .unwrap_or_else(|| profile.kind.default_model())
+}
+
+fn profile_base_url_label(profile: &OpenAiEndpointProfile) -> &str {
+    profile
+        .base_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|base_url| !base_url.is_empty())
+        .unwrap_or_else(|| profile.kind.default_base_url())
 }
 
 fn profile_api_key_status(profile: &OpenAiEndpointProfile) -> &'static str {
