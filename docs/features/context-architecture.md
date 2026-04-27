@@ -225,6 +225,13 @@ RARA should therefore avoid:
 - treating the full transcript as memory;
 - storing every transient turn detail as long-lived memory.
 
+Memory and extension sources should also preserve the stable top-level context
+prefixes. New repository context, skill, hook, agent, or memory inputs should
+attach labels and provenance to structured source objects, not invent ad hoc
+model-facing prefixes. In particular, transient runtime artifacts such as
+orphan tool results should not be serialized back into ordinary user text with
+synthetic labels.
+
 ### Memory Scopes
 
 RARA should distinguish at least two memory scopes.
