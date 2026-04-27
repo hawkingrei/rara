@@ -11,9 +11,15 @@ This path is separate from Codex-auth login. Codex keeps its own auth flow and p
 When the user opens `/model`, the provider picker includes:
 
 - `Codex`
+- `DeepSeek`
 - `OpenAI-compatible`
 - `Candle Local`
 - `Ollama`
+
+`DeepSeek` is shown as its own provider family because its setup and runtime
+contract are provider-specific, but the persisted runtime provider remains
+`openai-compatible` with `endpoint_kind = "deepseek"`. This keeps backend
+construction shared while keeping the TUI surface clear.
 
 When `OpenAI-compatible` is selected, the model picker must allow editing:
 
@@ -22,6 +28,17 @@ When `OpenAI-compatible` is selected, the model picker must allow editing:
 - `model name`
 
 These values are editable directly from the model picker through dedicated shortcuts instead of forcing manual config edits.
+
+When `DeepSeek` is selected, the model picker must:
+
+- expose the active DeepSeek endpoint profile as a dedicated surface, not as a
+  generic custom endpoint preset;
+- show the current API key status;
+- provide an API key action even when a key already exists;
+- open the API key editor before model loading when the key is missing;
+- allow the user to refresh the model catalog after changing the key;
+- keep the selected DeepSeek model visible after switching away to Codex,
+  Ollama, local models, or generic OpenAI-compatible profiles.
 
 ## Defaults
 
@@ -37,6 +54,19 @@ The generic OpenAI-compatible backend is then constructed from:
 - `api_key`
 - `base_url`
 - `model`
+
+Selecting the DeepSeek family sets:
+
+- `provider = "openai-compatible"`
+- `endpoint_kind = "deepseek"`
+- `base_url = "https://api.deepseek.com/v1"` unless a DeepSeek profile override exists
+- `model = "deepseek-chat"` unless a DeepSeek profile override exists
+- `revision = None`
+
+DeepSeek model discovery should call `GET /models` against the DeepSeek API
+root with the active API key. If the model-list request fails, the picker may
+fall back to the built-in DeepSeek model list, but the failure must stay visible
+as a notice or system message.
 
 ## Remembered Provider State
 
@@ -87,8 +117,33 @@ provider surface:
 
 This auth surface is session-stable UI state, not a trigger to reset the current session.
 
+## DeepSeek Chat-Completions Contract
+
+DeepSeek reasoning models may return provider-specific assistant metadata such
+as `reasoning_content`. When RARA sends a later chat-completions request that
+includes that assistant turn in history, it must preserve and pass back the
+provider-required reasoning metadata instead of dropping it during the
+`LlmResponse` -> `Message` -> OpenAI-compatible message conversion.
+
+The DeepSeek endpoint kind must therefore support provider-specific assistant
+fields in addition to standard `content` and `tool_calls`:
+
+- `reasoning_content` must be retained for the next request when DeepSeek
+  returns it;
+- reasoning metadata must not be rendered as ordinary assistant prose in the
+  committed transcript;
+- tool calls must still round-trip with their `id`, `name`, and `arguments`;
+- if a provider requires additional assistant metadata for a follow-up request,
+  RARA should fail explicitly instead of silently converting the assistant turn
+  into an incomplete generic OpenAI-compatible message.
+
+This contract is provider-specific. Generic OpenAI-compatible endpoints should
+continue to send only standard fields unless their endpoint kind declares
+additional required fields.
+
 ## Non-Goals
 
 - This feature does not replace the Codex OAuth flow.
-- This feature does not introduce provider-specific capability discovery.
+- This feature does not introduce broad provider-specific capability discovery
+  beyond explicitly modeled endpoint kinds such as DeepSeek.
 - This feature does not validate arbitrary endpoint compatibility beyond normal backend construction errors.

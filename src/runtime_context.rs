@@ -117,7 +117,7 @@ pub(crate) async fn build_backend_with_progress(
                     "openrouter" => OpenAiEndpointKind::Openrouter,
                     _ => OpenAiEndpointKind::Custom,
                 });
-            Ok(Box::new(OpenAiCompatibleBackend::new(
+            Ok(Box::new(OpenAiCompatibleBackend::new_with_endpoint_kind(
                 config.api_key.clone(),
                 config
                     .base_url
@@ -127,6 +127,7 @@ pub(crate) async fn build_backend_with_progress(
                     .model
                     .clone()
                     .unwrap_or_else(|| kind.default_model().to_string()),
+                kind,
             )?))
         }
         "ollama" | "ollama-native" => Ok(Box::new(OllamaBackend::new(

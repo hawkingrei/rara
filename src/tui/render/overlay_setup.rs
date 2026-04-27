@@ -215,7 +215,8 @@ pub(super) fn render_model_picker_modal(f: &mut Frame, app: &TuiApp, area: Rect)
             })
             .collect::<Vec<_>>()
     } else if app.selected_provider_family() == ProviderFamily::DeepSeek {
-        app.deepseek_model_options
+        let mut items = app
+            .deepseek_model_options
             .iter()
             .enumerate()
             .map(|(idx, model)| {
@@ -236,7 +237,23 @@ pub(super) fn render_model_picker_modal(f: &mut Frame, app: &TuiApp, area: Rect)
                 };
                 ListItem::new(format!("[{}] {}{}", idx + 1, model, current)).style(style)
             })
-            .collect::<Vec<_>>()
+            .collect::<Vec<_>>();
+        let action_idx = app.deepseek_api_key_action_idx();
+        let style = if app.model_picker_idx == action_idx {
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default()
+        };
+        items.push(
+            ListItem::new(format!(
+                "[{}] API key  Edit the active DeepSeek API key",
+                action_idx + 1
+            ))
+            .style(style),
+        );
+        items
     } else {
         let presets = current_model_presets(app.provider_picker_idx);
         presets
@@ -733,22 +750,22 @@ pub(super) fn render_api_key_editor_modal(
     app: &TuiApp,
     area: Rect,
 ) -> Option<(u16, u16)> {
-    let is_openai_compatible = matches!(
-        app.selected_provider_family(),
-        ProviderFamily::OpenAiCompatible
-    );
-    let (intro_text, title, footer_text) = if is_openai_compatible {
-        (
+    let (intro_text, title, footer_text) = match app.selected_provider_family() {
+        ProviderFamily::OpenAiCompatible => (
             "Paste the API key for the selected OpenAI-compatible endpoint profile.",
             " API Key ",
             "Enter save  Esc back to model picker",
-        )
-    } else {
-        (
+        ),
+        ProviderFamily::DeepSeek => (
+            "Paste a DeepSeek API key. It is used to load /models and call the selected DeepSeek model.",
+            " DeepSeek API Key ",
+            "Enter save and load models  Esc back to model picker",
+        ),
+        _ => (
             "Paste a Codex API key. This is the recommended path for SSH/headless sessions.",
             " Codex API Key ",
             "Enter save and rebuild  Esc back to login guide",
-        )
+        ),
     };
     let intro_height = wrapped_text_height(intro_text, area.width);
     let chunks = Layout::default()

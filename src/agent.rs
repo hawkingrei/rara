@@ -326,6 +326,17 @@ impl Agent {
                         input: input.clone(),
                     });
                 }
+                ContentBlock::ProviderMetadata {
+                    provider,
+                    key,
+                    value,
+                } => {
+                    sanitized_content.push(ContentBlock::ProviderMetadata {
+                        provider: provider.clone(),
+                        key: key.clone(),
+                        value: value.clone(),
+                    });
+                }
             }
         }
 

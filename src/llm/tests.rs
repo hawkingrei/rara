@@ -1,6 +1,7 @@
 use serde_json::json;
 
 use crate::agent::Message;
+use crate::config::OpenAiEndpointKind;
 use crate::llm::ContentBlock;
 
 use super::ollama::{
@@ -8,8 +9,9 @@ use super::ollama::{
     suggest_ollama_num_ctx, to_ollama_messages,
 };
 use super::openai_compatible::{
-    apply_codex_stream_event, build_codex_responses_request, parse_codex_response,
-    to_codex_input_items, to_openai_messages,
+    apply_codex_stream_event, build_codex_responses_request, parse_chat_completion_response,
+    parse_codex_response, to_codex_input_items, to_openai_messages,
+    to_openai_messages_for_endpoint,
 };
 use super::shared::{
     extract_message_text, model_context_budget, parse_tool_arguments, should_bypass_proxy,
@@ -41,6 +43,151 @@ fn converts_assistant_tool_history_to_openai_messages() {
     );
     assert_eq!(openai_messages[1]["role"], "tool");
     assert_eq!(openai_messages[1]["tool_call_id"], "tool-1");
+}
+
+#[test]
+fn converts_multiple_tool_results_to_adjacent_openai_tool_messages() {
+    let messages = vec![
+        Message {
+            role: "assistant".to_string(),
+            content: json!([
+                {"type":"tool_use","id":"tool-1","name":"read_file","input":{"path":"Cargo.toml"}},
+                {"type":"tool_use","id":"tool-2","name":"list_files","input":{"path":"src"}}
+            ]),
+        },
+        Message {
+            role: "user".to_string(),
+            content: json!([
+                {"type":"tool_result","tool_use_id":"tool-1","content":"[package]"},
+                {"type":"tool_result","tool_use_id":"tool-2","content":"src/main.rs"}
+            ]),
+        },
+        Message {
+            role: "user".to_string(),
+            content: json!("<agent_runtime>\nphase: tool_results_available\n</agent_runtime>"),
+        },
+    ];
+
+    let openai_messages = to_openai_messages(&messages);
+    assert_eq!(openai_messages[0]["role"], "assistant");
+    assert_eq!(openai_messages[1]["role"], "tool");
+    assert_eq!(openai_messages[1]["tool_call_id"], "tool-1");
+    assert_eq!(openai_messages[2]["role"], "tool");
+    assert_eq!(openai_messages[2]["tool_call_id"], "tool-2");
+    assert_eq!(openai_messages[3]["role"], "user");
+    assert_eq!(
+        openai_messages[3]["content"],
+        "<agent_runtime>\nphase: tool_results_available\n</agent_runtime>"
+    );
+}
+
+#[test]
+fn fills_missing_openai_tool_results_before_follow_up_messages() {
+    let messages = vec![
+        Message {
+            role: "assistant".to_string(),
+            content: json!([
+                {"type":"tool_use","id":"tool-1","name":"read_file","input":{"path":"Cargo.toml"}},
+                {"type":"tool_use","id":"tool-2","name":"list_files","input":{"path":"src"}}
+            ]),
+        },
+        Message {
+            role: "user".to_string(),
+            content: json!([
+                {"type":"tool_result","tool_use_id":"tool-1","content":"[package]"}
+            ]),
+        },
+        Message {
+            role: "user".to_string(),
+            content: json!("continue"),
+        },
+    ];
+
+    let openai_messages = to_openai_messages(&messages);
+    assert_eq!(openai_messages[0]["role"], "assistant");
+    assert_eq!(openai_messages[1]["role"], "tool");
+    assert_eq!(openai_messages[1]["tool_call_id"], "tool-1");
+    assert_eq!(openai_messages[2]["role"], "tool");
+    assert_eq!(openai_messages[2]["tool_call_id"], "tool-2");
+    assert!(openai_messages[2]["content"]
+        .as_str()
+        .is_some_and(|content| content.contains("interrupted before a result was recorded")));
+    assert_eq!(openai_messages[3]["role"], "user");
+    assert_eq!(openai_messages[3]["content"], "continue");
+}
+
+#[test]
+fn rejects_openai_tool_calls_without_required_fields() {
+    let error = parse_chat_completion_response(
+        &json!({
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "tool_calls": [{
+                        "type": "function",
+                        "function": {
+                            "arguments": "{}"
+                        }
+                    }]
+                },
+                "finish_reason": "tool_calls"
+            }]
+        }),
+        OpenAiEndpointKind::Deepseek,
+    )
+    .expect_err("missing tool call id should fail");
+
+    assert!(error.to_string().contains("tool_calls[0] missing id"));
+}
+
+#[test]
+fn deepseek_reasoning_content_roundtrips_as_provider_metadata() {
+    let response = parse_chat_completion_response(
+        &json!({
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "reasoning_content": "private chain summary",
+                    "content": "Visible answer"
+                },
+                "finish_reason": "stop"
+            }],
+            "usage": {
+                "prompt_tokens": 3,
+                "completion_tokens": 4
+            }
+        }),
+        OpenAiEndpointKind::Deepseek,
+    )
+    .expect("parse response");
+
+    assert_eq!(response.content.len(), 2);
+    assert!(matches!(
+        &response.content[0],
+        ContentBlock::Text { text } if text == "Visible answer"
+    ));
+    assert!(matches!(
+        &response.content[1],
+        ContentBlock::ProviderMetadata { provider, key, value }
+            if provider == "deepseek"
+                && key == "reasoning_content"
+                && value == "private chain summary"
+    ));
+
+    let messages = vec![Message {
+        role: "assistant".to_string(),
+        content: serde_json::to_value(&response.content).expect("content json"),
+    }];
+    let deepseek_messages =
+        to_openai_messages_for_endpoint(&messages, OpenAiEndpointKind::Deepseek);
+    assert_eq!(
+        deepseek_messages[0]["reasoning_content"],
+        "private chain summary"
+    );
+    assert_eq!(deepseek_messages[0]["content"], "Visible answer");
+
+    let generic_messages = to_openai_messages(&messages);
+    assert!(generic_messages[0].get("reasoning_content").is_none());
 }
 
 #[test]
