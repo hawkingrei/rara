@@ -105,13 +105,13 @@ pub(super) fn map_key_to_event(key: KeyEvent, app: &TuiApp) -> AppEvent {
             {
                 AppEvent::OpenOverlay(Overlay::ModelNameEditor)
             }
-            KeyCode::Char('p')
+            KeyCode::Char('d')
                 if matches!(
                     app.selected_provider_family(),
                     ProviderFamily::OpenAiCompatible
                 ) =>
             {
-                AppEvent::OpenOverlay(Overlay::OpenAiProfilePicker)
+                AppEvent::DeleteOpenAiProfile
             }
             KeyCode::Enter => AppEvent::ApplyOverlaySelection,
             _ => AppEvent::Noop,

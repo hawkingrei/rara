@@ -445,21 +445,32 @@ fn openai_compatible_model_picker_exposes_connection_edit_shortcuts() {
         AppEvent::OpenOverlay(Overlay::ModelNameEditor)
     ));
     assert!(matches!(
-        map_key_to_event(key(KeyCode::Char('p')), &app),
-        AppEvent::OpenOverlay(Overlay::OpenAiProfilePicker)
+        map_key_to_event(key(KeyCode::Char('d')), &app),
+        AppEvent::DeleteOpenAiProfile
     ));
 }
 
 #[tokio::test]
-async fn openai_model_picker_action_row_opens_api_key_editor() {
+async fn openai_model_picker_delete_row_removes_active_profile() {
     let temp = tempdir().expect("tempdir");
     let mut app = TuiApp::new(ConfigManager {
         path: temp.path().join("config.json"),
     })
     .expect("app");
     app.provider_picker_idx = 1;
+    app.config.select_openai_profile(
+        "custom-default",
+        "Custom endpoint",
+        OpenAiEndpointKind::Custom,
+    );
+    app.config.set_api_key("sk-custom");
+    app.config.select_openai_profile(
+        "openrouter-default",
+        "OpenRouter",
+        OpenAiEndpointKind::Openrouter,
+    );
     app.open_overlay(Overlay::ModelPicker);
-    app.model_picker_idx = 2;
+    app.model_picker_idx = 3;
 
     let oauth_manager = Arc::new(
         crate::oauth::OAuthManager::new_for_config_dir(temp.path().join(".rara"))
@@ -474,13 +485,24 @@ async fn openai_model_picker_action_row_opens_api_key_editor() {
         &oauth_manager,
     )
     .await
-    .expect("apply model selection");
+    .expect("delete profile");
 
-    assert!(matches!(app.overlay, Some(Overlay::ApiKeyEditor)));
+    assert_eq!(
+        app.config.active_openai_profile_id(),
+        Some("custom-default")
+    );
+    assert!(matches!(app.overlay, Some(Overlay::ModelPicker)));
+    assert!(matches!(
+        app.running_task.as_ref(),
+        Some(task) if matches!(task.kind, TaskKind::Rebuild)
+    ));
+    if let Some(task) = app.running_task.take() {
+        task.handle.abort();
+    }
 }
 
 #[tokio::test]
-async fn openai_model_picker_numeric_action_row_opens_profile_picker() {
+async fn openai_model_picker_numeric_profile_row_starts_setup_when_incomplete() {
     let temp = tempdir().expect("tempdir");
     let mut app = TuiApp::new(ConfigManager {
         path: temp.path().join("config.json"),
@@ -504,7 +526,7 @@ async fn openai_model_picker_numeric_action_row_opens_profile_picker() {
     .await
     .expect("set model selection");
 
-    assert!(matches!(app.overlay, Some(Overlay::OpenAiProfilePicker)));
+    assert!(matches!(app.overlay, Some(Overlay::BaseUrlEditor)));
 }
 
 #[tokio::test]
@@ -541,7 +563,7 @@ async fn openai_model_picker_setup_row_opens_endpoint_kind_picker() {
 }
 
 #[tokio::test]
-async fn selecting_custom_endpoint_kind_advances_into_guided_setup() {
+async fn selecting_custom_endpoint_kind_prompts_for_profile_label() {
     let temp = tempdir().expect("tempdir");
     let mut app = TuiApp::new(ConfigManager {
         path: temp.path().join("config.json"),
@@ -566,10 +588,13 @@ async fn selecting_custom_endpoint_kind_advances_into_guided_setup() {
     .await
     .expect("select endpoint kind");
 
-    assert!(matches!(app.overlay, Some(Overlay::BaseUrlEditor)));
+    assert!(matches!(
+        app.overlay,
+        Some(Overlay::OpenAiProfileLabelEditor)
+    ));
     assert_eq!(
-        app.openai_setup_steps,
-        vec![Overlay::ApiKeyEditor, Overlay::ModelNameEditor]
+        app.openai_profile_label_kind,
+        Some(OpenAiEndpointKind::Custom)
     );
 }
 
@@ -668,7 +693,7 @@ async fn saving_openai_profile_label_creates_new_profile_for_selected_kind() {
         .config
         .openai_profiles
         .contains_key("deepseek-deepseek-backup"));
-    assert!(matches!(app.overlay, Some(Overlay::ModelPicker)));
+    assert!(matches!(app.overlay, Some(Overlay::ApiKeyEditor)));
 }
 
 #[tokio::test]

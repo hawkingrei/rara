@@ -319,26 +319,8 @@ async fn dispatch_event(
                 && !app.is_busy()
             {
                 if app.selected_provider_family() == self::state::ProviderFamily::OpenAiCompatible {
-                    match app.selected_openai_model_picker_action() {
-                        Some(OpenAiModelPickerAction::Setup) => {
-                            app.begin_openai_profile_setup();
-                        }
-                        Some(OpenAiModelPickerAction::Profiles) => {
-                            app.open_overlay(Overlay::OpenAiProfilePicker);
-                        }
-                        Some(OpenAiModelPickerAction::ApiKey) => {
-                            app.open_overlay(Overlay::ApiKeyEditor);
-                        }
-                        Some(OpenAiModelPickerAction::BaseUrl) => {
-                            app.open_overlay(Overlay::BaseUrlEditor);
-                        }
-                        Some(OpenAiModelPickerAction::ModelName) => {
-                            app.open_overlay(Overlay::ModelNameEditor);
-                        }
-                        None => {
-                            app.select_local_model(app.model_picker_idx);
-                            start_rebuild_task(app);
-                        }
+                    if let Some(action) = app.selected_openai_model_picker_action() {
+                        apply_openai_model_picker_action(app, action)?;
                     }
                 } else if should_open_codex_auth_guide(app, oauth_manager.as_ref()) {
                     app.select_local_model(app.model_picker_idx);
@@ -548,8 +530,15 @@ async fn dispatch_event(
                     app.config_manager.save(&app.config)?;
                     app.notice = Some(format!("Created endpoint profile: {label}"));
                     app.openai_profile_label_kind = None;
-                    app.overlay = Some(Overlay::ModelPicker);
+                    app.begin_active_openai_profile_setup();
                 }
+            }
+        }
+        AppEvent::DeleteOpenAiProfile => {
+            if app.is_busy() {
+                app.push_notice("Wait for the current task before deleting a profile.");
+            } else {
+                apply_openai_model_picker_action(app, OpenAiModelPickerAction::DeleteProfile)?;
             }
         }
         AppEvent::SelectHelpTab(tab) => {
@@ -652,26 +641,8 @@ async fn dispatch_event(
                     } else if app.selected_provider_family()
                         == self::state::ProviderFamily::OpenAiCompatible
                     {
-                        match app.selected_openai_model_picker_action() {
-                            Some(OpenAiModelPickerAction::Setup) => {
-                                app.begin_openai_profile_setup();
-                            }
-                            Some(OpenAiModelPickerAction::Profiles) => {
-                                app.open_overlay(Overlay::OpenAiProfilePicker);
-                            }
-                            Some(OpenAiModelPickerAction::ApiKey) => {
-                                app.open_overlay(Overlay::ApiKeyEditor);
-                            }
-                            Some(OpenAiModelPickerAction::BaseUrl) => {
-                                app.open_overlay(Overlay::BaseUrlEditor);
-                            }
-                            Some(OpenAiModelPickerAction::ModelName) => {
-                                app.open_overlay(Overlay::ModelNameEditor);
-                            }
-                            None => {
-                                app.select_local_model(app.model_picker_idx);
-                                start_rebuild_task(app);
-                            }
+                        if let Some(action) = app.selected_openai_model_picker_action() {
+                            apply_openai_model_picker_action(app, action)?;
                         }
                     } else {
                         app.select_local_model(app.model_picker_idx);
@@ -858,6 +829,43 @@ async fn handle_submit(
         }
     }
     Ok(false)
+}
+
+fn apply_openai_model_picker_action(
+    app: &mut TuiApp,
+    action: OpenAiModelPickerAction,
+) -> anyhow::Result<()> {
+    match action {
+        OpenAiModelPickerAction::CreateProfile => {
+            app.begin_openai_profile_setup();
+        }
+        OpenAiModelPickerAction::SelectProfile => {
+            if let Some(label) = app.select_openai_model_picker_profile() {
+                app.config_manager.save(&app.config)?;
+                if app.openai_profile_needs_setup() {
+                    app.notice = Some(format!("Selected endpoint profile: {label}"));
+                    app.begin_active_openai_profile_setup();
+                } else {
+                    start_rebuild_task(app);
+                }
+            }
+        }
+        OpenAiModelPickerAction::DeleteProfile => {
+            if let Some(label) = app.delete_active_openai_profile() {
+                app.config_manager.save(&app.config)?;
+                if app.openai_profile_needs_setup() {
+                    app.notice = Some(format!("Deleted endpoint profile: {label}"));
+                    app.begin_active_openai_profile_setup();
+                } else {
+                    app.notice = Some(format!("Deleted endpoint profile: {label}"));
+                    start_rebuild_task(app);
+                }
+            } else {
+                app.push_notice("Cannot delete the only endpoint profile.");
+            }
+        }
+    }
+    Ok(())
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

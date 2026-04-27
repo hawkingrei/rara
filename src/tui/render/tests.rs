@@ -616,6 +616,28 @@ fn provider_picker_renders_as_full_overlay_on_standard_terminal() {
 }
 
 #[test]
+fn openai_model_picker_renders_profile_manager_not_endpoint_presets() {
+    let temp = tempdir().expect("tempdir");
+    let mut app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("build tui app");
+    app.provider_picker_idx = crate::tui::state::PROVIDER_FAMILIES
+        .iter()
+        .position(|(family, _, _)| *family == ProviderFamily::OpenAiCompatible)
+        .expect("openai-compatible family present");
+    app.open_overlay(Overlay::ModelPicker);
+
+    let rendered = render_screen_text(&app, 100, 24);
+    assert!(rendered.contains("OpenAI-compatible profiles"));
+    assert!(rendered.contains("Create endpoint profile"));
+    assert!(rendered.contains("Custom endpoint"));
+    assert!(!rendered.contains("DeepSeek (openai-compatible/deepseek-chat)"));
+    assert!(!rendered.contains("Kimi (openai-compatible/moonshot-v1-8k)"));
+    assert!(!rendered.contains("OpenRouter (openai-compatible/openai/gpt-4o-mini)"));
+}
+
+#[test]
 fn command_palette_query_uses_full_width_without_leaking_bottom_status() {
     let temp = tempdir().expect("tempdir");
     let mut app = TuiApp::new(ConfigManager {

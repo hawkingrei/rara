@@ -58,11 +58,9 @@ pub enum ProviderFamily {
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum OpenAiModelPickerAction {
-    Setup,
-    Profiles,
-    ApiKey,
-    BaseUrl,
-    ModelName,
+    CreateProfile,
+    SelectProfile,
+    DeleteProfile,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
