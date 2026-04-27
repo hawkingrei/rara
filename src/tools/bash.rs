@@ -1,4 +1,4 @@
-use crate::sandbox::SandboxManager;
+use crate::sandbox::{sandbox_failure_hint, SandboxManager};
 use crate::tool::{Tool, ToolError, ToolOutputStream, ToolProgressEvent};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -189,7 +189,9 @@ impl Tool for BashTool {
         let wrapped = if let Some(command) = request.command.as_deref() {
             self.sandbox
                 .wrap_shell_command(command, &cwd, request.allow_net)
-                .map_err(|e| ToolError::ExecutionFailed(e.to_string()))?
+                .map_err(|e| {
+                    ToolError::ExecutionFailed(format!("{} {}", e, sandbox_failure_hint()))
+                })?
         } else {
             let program = request
                 .program
@@ -198,7 +200,9 @@ impl Tool for BashTool {
                 .ok_or_else(|| ToolError::InvalidInput("program".into()))?;
             self.sandbox
                 .wrap_exec_command(program, &request.args, &cwd, request.allow_net)
-                .map_err(|e| ToolError::ExecutionFailed(e.to_string()))?
+                .map_err(|e| {
+                    ToolError::ExecutionFailed(format!("{} {}", e, sandbox_failure_hint()))
+                })?
         };
 
         ensure_sandbox_home_dirs().await?;
@@ -210,7 +214,13 @@ impl Tool for BashTool {
             .envs(&command_env)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        let mut child = command.spawn()?;
+        let mut child = command.spawn().map_err(|err| {
+            ToolError::ExecutionFailed(format!(
+                "failed to launch sandbox '{}': {err}. {}",
+                wrapped.program,
+                sandbox_failure_hint()
+            ))
+        })?;
 
         let stdout = child
             .stdout
@@ -257,6 +267,10 @@ impl Tool for BashTool {
         if let Some(path) = wrapped.cleanup_path.as_ref() {
             let _ = fs::remove_file(path).await;
         }
+        if let Some(hint) = sandbox_output_hint(&stderr_text) {
+            stderr_text.push_str(hint);
+        }
+
         Ok(json!({
             "stdout": stdout_text,
             "stderr": stderr_text,
@@ -287,6 +301,20 @@ where
     Ok(())
 }
 
+fn sandbox_output_hint(stderr: &str) -> Option<&'static str> {
+    let lower = stderr.to_ascii_lowercase();
+    if lower.contains("sandbox: violation")
+        || lower.contains("operation not permitted")
+        || lower.contains("command not found")
+        || lower.contains("no such file or directory")
+        || lower.contains("permission denied")
+    {
+        Some("\n\nhint: Sandboxed bash appears blocked or missing a runtime path. Prefer direct file tools such as read_file, apply_patch, and replace_lines; ask the user only if a real shell command is required.\n")
+    } else {
+        None
+    }
+}
+
 async fn ensure_sandbox_home_dirs() -> Result<(), ToolError> {
     let config_dir = format!("{SANDBOX_HOME}/.config");
     let cache_dir = format!("{SANDBOX_HOME}/.cache");
@@ -309,7 +337,9 @@ async fn ensure_sandbox_home_dirs() -> Result<(), ToolError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{sandbox_command_env, BashCommandInput, BashTool, SANDBOX_HOME};
+    use super::{
+        sandbox_command_env, sandbox_output_hint, BashCommandInput, BashTool, SANDBOX_HOME,
+    };
     use crate::sandbox::SandboxManager;
     use crate::tool::{Tool, ToolOutputStream, ToolProgressEvent};
     use serde_json::{json, Value};
@@ -390,6 +420,15 @@ mod tests {
             env_map.get("XDG_CONFIG_HOME").map(String::as_str),
             Some("/tmp/rara-home/.config")
         );
+    }
+
+    #[test]
+    fn sandbox_output_hint_explains_blocked_shell_paths() {
+        let hint = sandbox_output_hint("sandbox-exec: /bin/sed: Operation not permitted")
+            .expect("sandbox hint");
+
+        assert!(hint.contains("Prefer direct file tools"));
+        assert!(hint.contains("replace_lines"));
     }
 
     #[tokio::test]

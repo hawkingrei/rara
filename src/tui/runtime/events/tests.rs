@@ -4,7 +4,7 @@ use tempfile::tempdir;
 use super::apply_tui_event;
 use super::helpers::{
     format_apply_patch_result, format_apply_patch_use, format_tool_progress, format_tool_result,
-    is_oauth_prompt_message, planning_note_lines, scrub_internal_control_tokens,
+    format_tool_use, is_oauth_prompt_message, planning_note_lines, scrub_internal_control_tokens,
     subagent_request_input,
 };
 use crate::agent::AgentExecutionMode;
@@ -52,6 +52,26 @@ fn scrub_internal_channel_markers_preserves_text_boundaries() {
 }
 
 #[test]
+fn scrub_internal_control_tokens_removes_dsml_tool_blocks() {
+    let cleaned = scrub_internal_control_tokens(
+        "Before\n<｜DSML｜tool_calls>\n<｜DSML｜invoke name=\"apply_patch\">\n<｜DSML｜parameter name=\"path\" string=\"true\">src/lib.rs</｜DSML｜parameter>\n</｜DSML｜invoke>\n</｜DSML｜tool_calls>\nAfter",
+    );
+
+    assert_eq!(cleaned.trim(), "Before\n\nAfter");
+    assert!(!cleaned.contains("DSML"));
+    assert!(!cleaned.contains("apply_patch"));
+}
+
+#[test]
+fn scrub_internal_control_tokens_drops_orphaned_dsml_payload() {
+    let cleaned = scrub_internal_control_tokens(
+        "kind: format!(\"unknown_retrieval_{tool_name}\"),\nlabel: format!(\"Unknown Retrieval ({tool_name})\"),\n}\n<｜DSML｜parameter name=\"path\" string=\"true\">src/context/selection.rs</｜DSML｜parameter>\n</｜DSML｜invoke>\n</｜DSML｜tool_calls>",
+    );
+
+    assert!(cleaned.trim().is_empty());
+}
+
+#[test]
 fn plan_mode_routes_planning_prose_to_planning_not_exploring() {
     let temp = tempdir().expect("tempdir");
     let mut app = TuiApp::new(ConfigManager {
@@ -78,6 +98,58 @@ fn plan_mode_routes_planning_prose_to_planning_not_exploring() {
             "2. Keep the current merge semantics.".to_string()
         ]
     );
+}
+
+#[test]
+fn agent_dsml_only_message_does_not_enter_transcript() {
+    let temp = tempdir().expect("tempdir");
+    let mut app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("app");
+
+    apply_tui_event(
+        &mut app,
+        TuiEvent::Transcript {
+            role: "Agent".into(),
+            message: "<｜DSML｜tool_calls>\n<｜DSML｜invoke name=\"replace\"></｜DSML｜invoke>\n</｜DSML｜tool_calls>".into(),
+        },
+    );
+
+    assert!(app.active_turn.entries.is_empty());
+}
+
+#[test]
+fn bash_rg_tool_use_is_shown_as_exploration() {
+    let temp = tempdir().expect("tempdir");
+    let mut app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("app");
+
+    apply_tui_event(
+        &mut app,
+        TuiEvent::Transcript {
+            role: "Tool".into(),
+            message: "bash rg --files src/tui".into(),
+        },
+    );
+    apply_tui_event(
+        &mut app,
+        TuiEvent::Transcript {
+            role: "Tool".into(),
+            message: "bash cd src && rg -n \"render\" tui".into(),
+        },
+    );
+
+    assert_eq!(
+        app.active_live.exploration_actions,
+        vec![
+            "Find files rg --files src/tui".to_string(),
+            "Search cd src && rg -n \"render\" tui".to_string()
+        ]
+    );
+    assert!(app.active_live.running_actions.is_empty());
 }
 
 #[test]
@@ -109,6 +181,77 @@ fn formats_apply_patch_tool_result_as_diff_summary() {
     assert!(rendered.contains("updated: src/tui/render.rs"));
     assert!(rendered.contains("created: src/tui/render/bottom_pane.rs"));
     assert!(rendered.contains("changes:"));
+}
+
+#[test]
+fn formats_replace_lines_tool_use_as_file_range() {
+    let rendered = format_tool_use(
+        "replace_lines",
+        &json!({
+            "path": "src/context/assembler.rs",
+            "start_line": 426,
+            "end_line": 1263,
+            "new_string": ""
+        }),
+    );
+
+    assert_eq!(rendered, "replace_lines src/context/assembler.rs:426-1263");
+}
+
+#[test]
+fn formats_spawn_agent_tool_use_without_dumping_instruction_json() {
+    let rendered = format_tool_use(
+        "spawn_agent",
+        &json!({
+            "name": "fix-assembler",
+            "instruction": "Fix src/context/assembler.rs by removing the orphaned code block between the two cfg(test) markers.\nRead the file in small chunks and do not use a giant replace old_string payload."
+        }),
+    );
+
+    assert!(rendered.starts_with("spawn_agent fix-assembler: Fix src/context/assembler.rs"));
+    assert!(rendered.ends_with('…'));
+    assert!(!rendered.contains("\"instruction\""));
+    assert!(!rendered.contains('\n'));
+}
+
+#[test]
+fn formats_spawn_agent_tool_result_with_agent_name() {
+    let rendered = format_tool_result(
+        "spawn_agent",
+        &json!({
+            "name": "fix-assembler",
+            "status": "done",
+            "summary": "Removed the orphaned code block."
+        })
+        .to_string(),
+    );
+
+    assert_eq!(
+        rendered,
+        "spawn_agent fix-assembler: Removed the orphaned code block."
+    );
+}
+
+#[test]
+fn formats_replace_lines_tool_result_as_edit_summary() {
+    let rendered = format_tool_result(
+        "replace_lines",
+        &json!({
+            "status": "ok",
+            "path": "src/context/assembler.rs",
+            "start_line": 426,
+            "end_line": 1263,
+            "removed_lines": 838,
+            "inserted_lines": 0,
+            "line_delta": -838
+        })
+        .to_string(),
+    );
+
+    assert_eq!(
+        rendered,
+        "replace_lines src/context/assembler.rs:426-1263\nremoved=838 inserted=0 line_delta=-838"
+    );
 }
 
 #[test]

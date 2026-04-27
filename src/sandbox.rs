@@ -29,6 +29,7 @@ const LINUX_RUNTIME_READ_ROOTS: &[&str] = &[
     "/run/current-system/sw",
 ];
 const SANDBOX_HOME: &str = "/tmp/rara-home";
+const DEFAULT_SHELL: &str = "sh";
 
 impl SandboxManager {
     pub fn new() -> Result<Self> {
@@ -104,6 +105,7 @@ impl SandboxManager {
 (deny default)
 {}
 (allow file-read* (subpath "/usr/bin"))
+(allow file-read* (subpath "/bin"))
 (allow file-read* (subpath "/System"))
 (allow file-read* (subpath (param "CWD")))
 (allow file-write* (subpath (param "CWD")))
@@ -183,6 +185,8 @@ impl SandboxManager {
         cwd: &str,
         allow_net: bool,
     ) -> Result<WrappedCommand> {
+        let shell = shell_program();
+        let shell_flag = shell_command_flag(&shell);
         match self.os.as_str() {
             "macos" => {
                 let profile_path = self.create_profile(allow_net)?;
@@ -193,8 +197,8 @@ impl SandboxManager {
                         format!("CWD={cwd}"),
                         "-f".to_string(),
                         profile_path.display().to_string(),
-                        "sh".to_string(),
-                        "-c".to_string(),
+                        shell,
+                        shell_flag,
                         original_cmd.to_string(),
                     ],
                     cleanup_path: Some(profile_path),
@@ -203,8 +207,8 @@ impl SandboxManager {
             "linux" => {
                 let mut args = self.linux_sandbox_args(cwd, allow_net);
                 args.push("--".to_string());
-                args.push("sh".to_string());
-                args.push("-c".to_string());
+                args.push(shell);
+                args.push(shell_flag);
                 args.push(original_cmd.to_string());
                 Ok(WrappedCommand {
                     program: "bwrap".to_string(),
@@ -270,6 +274,30 @@ impl SandboxManager {
     }
 }
 
+pub fn sandbox_failure_hint() -> &'static str {
+    "Sandboxed bash could not complete this command. Prefer direct file tools such as read_file, apply_patch, and replace_lines; if shell access is required, ask the user to run or approve a shell-specific path."
+}
+
+fn shell_program() -> String {
+    env::var("SHELL")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| DEFAULT_SHELL.to_string())
+}
+
+fn shell_command_flag(shell: &str) -> String {
+    let name = Path::new(shell)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(shell);
+    if matches!(name, "bash" | "zsh" | "ksh") {
+        "-lc".to_string()
+    } else {
+        "-c".to_string()
+    }
+}
+
 fn cleanup_stale_profiles(profile_dir: &Path) -> Result<()> {
     for entry in fs::read_dir(profile_dir)? {
         let entry = entry?;
@@ -286,7 +314,7 @@ fn cleanup_stale_profiles(profile_dir: &Path) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::SandboxManager;
+    use super::{shell_command_flag, SandboxManager};
     use std::path::PathBuf;
     use tempfile::tempdir;
 
@@ -340,6 +368,13 @@ mod tests {
             profile.contains("(deny file-read* (subpath "),
             "profile should deny sensitive home subpaths using explicit paths"
         );
+    }
+
+    #[test]
+    fn shell_command_flag_uses_login_shell_for_common_user_shells() {
+        assert_eq!(shell_command_flag("/bin/zsh"), "-lc");
+        assert_eq!(shell_command_flag("/usr/bin/bash"), "-lc");
+        assert_eq!(shell_command_flag("sh"), "-c");
     }
 
     #[test]

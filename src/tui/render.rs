@@ -262,25 +262,59 @@ pub(crate) fn current_turn_tool_summary(
     _show_live_detail: bool,
     _live_detail: Option<&str>,
 ) -> Option<String> {
-    let actions = current_turn
-        .iter()
-        .filter_map(|entry| {
-            if entry.role != "Tool" {
-                return None;
+    const RESULT_LINE_LIMIT: usize = 10;
+
+    let mut lines = Vec::new();
+    let mut pending_tool = false;
+    for entry in current_turn {
+        match entry.role.as_str() {
+            "Tool" => {
+                if let Some(action) = tool_action_label(&entry.message) {
+                    lines.push(format!("└ {action}"));
+                    pending_tool = true;
+                } else {
+                    pending_tool = false;
+                }
             }
-            tool_action_label(&entry.message)
-        })
-        .collect::<Vec<_>>();
-    if actions.is_empty() {
+            "Tool Result" | "Tool Error" if pending_tool => {
+                lines.extend(
+                    tool_result_summary_lines(&entry.message, RESULT_LINE_LIMIT)
+                        .into_iter()
+                        .map(|line| format!("  {line}")),
+                );
+                pending_tool = false;
+            }
+            _ => {}
+        }
+    }
+
+    if lines.is_empty() {
         return None;
     }
 
-    let lines = actions
-        .into_iter()
-        .map(|action| format!("└ {action}"))
-        .collect::<Vec<_>>();
-
     Some(lines.join("\n"))
+}
+
+fn tool_result_summary_lines(message: &str, max_lines: usize) -> Vec<String> {
+    let result_lines = message
+        .lines()
+        .map(str::trim_end)
+        .filter(|line| !line.trim().is_empty())
+        .filter(|line| line.trim() != "preview available")
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    if result_lines.is_empty() {
+        return Vec::new();
+    }
+
+    let hidden_count = truncated_line_count(result_lines.len(), max_lines);
+    let (head, tail) = head_tail_line_window(result_lines.as_slice(), max_lines);
+    let mut rendered = head.to_vec();
+    if hidden_count > 0 {
+        rendered.push(format!("... {hidden_count} more line(s)"));
+    }
+    rendered.extend(tail.iter().cloned());
+    rendered
 }
 
 pub(crate) fn compact_summary_lines(
@@ -640,6 +674,18 @@ fn tool_action_label(message: &str) -> Option<String> {
                 rest.as_str()
             }
         )),
+        "replace_lines" => Some(format!(
+            "Edit lines {}",
+            if rest.is_empty() {
+                "in file"
+            } else {
+                rest.as_str()
+            }
+        )),
+        "spawn_agent" => Some(format!(
+            "Delegate {}",
+            compact_delegate_rest(&rest).unwrap_or_else(|| "sub-agent".to_string())
+        )),
         "web_fetch" => Some(format!(
             "Fetch {}",
             if rest.is_empty() {
@@ -653,6 +699,44 @@ fn tool_action_label(message: &str) -> Option<String> {
             if rest.is_empty() { other } else { message }
         )),
     }
+}
+
+fn compact_delegate_rest(rest: &str) -> Option<String> {
+    let rest = rest.trim();
+    if rest.is_empty() {
+        return None;
+    }
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(rest) {
+        if let Some(name) = value
+            .get("name")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            let instruction = value
+                .get("instruction")
+                .and_then(serde_json::Value::as_str)
+                .map(compact_instruction)
+                .unwrap_or_else(|| "instruction unavailable".to_string());
+            return Some(format!("{name}: {instruction}"));
+        }
+        return value
+            .get("instruction")
+            .and_then(serde_json::Value::as_str)
+            .map(compact_instruction);
+    }
+    Some(compact_instruction(rest))
+}
+
+fn compact_instruction(instruction: &str) -> String {
+    const MAX_CHARS: usize = 120;
+    let normalized = instruction.split_whitespace().collect::<Vec<_>>().join(" ");
+    if normalized.chars().count() <= MAX_CHARS {
+        return normalized;
+    }
+    let mut truncated = normalized.chars().take(MAX_CHARS).collect::<String>();
+    truncated.push('…');
+    truncated
 }
 
 pub(crate) fn section_span<'a>(title: &'a str, color: Color) -> Span<'a> {

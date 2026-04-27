@@ -347,6 +347,7 @@ impl Agent {
                 "bash"
                     | "write_file"
                     | "replace"
+                    | "replace_lines"
                     | "apply_patch"
                     | "update_project_memory"
                     | "remember_experience"

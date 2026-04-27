@@ -53,4 +53,33 @@ mod tests {
         append_markdown("1. Tight item\n", None, None, &mut out);
         assert_eq!(lines_to_strings(&out), vec!["1. Tight item".to_string()]);
     }
+
+    #[test]
+    fn append_markdown_renders_tables_with_stable_columns() {
+        let mut out = Vec::new();
+        append_markdown(
+            concat!(
+                "| Risk | Mitigation |\n",
+                "| --- | --- |\n",
+                "| assembler.rs split | context tests |\n",
+                "| OpenAI embedding API cost | hash fallback |\n",
+            ),
+            Some(80),
+            None,
+            &mut out,
+        );
+
+        let rendered = lines_to_strings(&out);
+        let pipe_columns = rendered
+            .iter()
+            .filter_map(|line| line.find('|'))
+            .collect::<Vec<_>>();
+
+        assert!(rendered.iter().any(|line| line.contains("Risk")));
+        assert!(rendered
+            .iter()
+            .any(|line| line.contains("OpenAI embedding API cost")));
+        assert!(!pipe_columns.is_empty());
+        assert!(pipe_columns.iter().all(|column| *column == pipe_columns[0]));
+    }
 }

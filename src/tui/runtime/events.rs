@@ -90,6 +90,13 @@ pub(super) fn apply_tui_event(app: &mut TuiApp, event: TuiEvent) {
                 );
             } else if role == "Agent" {
                 let message = scrub_internal_control_tokens(&message);
+                if message.trim().is_empty() {
+                    app.set_runtime_phase(
+                        RuntimePhase::ProcessingResponse,
+                        Some("receiving model output".into()),
+                    );
+                    return;
+                }
                 let planning_mode = matches!(
                     app.agent_execution_mode,
                     crate::agent::AgentExecutionMode::Plan

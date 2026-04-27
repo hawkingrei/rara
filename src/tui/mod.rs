@@ -76,7 +76,7 @@ pub async fn run_tui(
     let initial_size = terminal_size()?;
     let mut app = TuiApp::new(crate::config::ConfigManager::new()?)?;
     app.terminal_width = initial_size.0;
-    let mut viewport_height = desired_viewport_height(&app, initial_size.0, initial_size.1);
+    let viewport_height = desired_viewport_height(&app, initial_size.0, initial_size.1);
     let mut terminal = build_terminal(viewport_height)?;
     let mut agent_slot = Some(agent);
     match StateDb::new() {
@@ -117,13 +117,9 @@ pub async fn run_tui(
         let size = terminal_size()?;
         app.terminal_width = size.0;
         let desired_height = desired_viewport_height(&app, size.0, size.1);
-        if desired_height != viewport_height {
-            match update_terminal_viewport(&mut terminal, desired_height) {
-                Ok(()) => {
-                    viewport_height = desired_height;
-                }
-                Err(err) => app.push_notice(format!("Skipped viewport update: {err}")),
-            }
+        match update_terminal_viewport(&mut terminal, desired_height) {
+            Ok(()) => {}
+            Err(err) => app.push_notice(format!("Skipped viewport update: {err}")),
         }
         flush_committed_history(&mut terminal, &mut app)?;
         terminal.draw(|f| render(f, &app))?;
@@ -145,9 +141,7 @@ pub async fn run_tui(
                             let size = terminal_size()?;
                             let desired_height = desired_viewport_height(&app, size.0, size.1);
                             match update_terminal_viewport(&mut terminal, desired_height) {
-                                Ok(()) => {
-                                    viewport_height = desired_height;
-                                }
+                                Ok(()) => {}
                                 Err(err) => app.push_notice(format!("Skipped viewport redraw update: {err}")),
                             }
                         }

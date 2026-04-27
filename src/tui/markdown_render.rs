@@ -2,11 +2,14 @@ mod local_links;
 
 use std::path::{Path, PathBuf};
 
-use pulldown_cmark::{CodeBlockKind, CowStr, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
+use pulldown_cmark::{
+    Alignment, CodeBlockKind, CowStr, Event, HeadingLevel, Options, Parser, Tag, TagEnd,
+};
 use ratatui::{
     style::Style,
     text::{Line, Span, Text},
 };
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use self::local_links::{
     is_local_path_like_link, render_local_link_target, should_render_link_destination,
@@ -87,15 +90,80 @@ pub(crate) fn render_markdown_text_with_width(input: &str, width: Option<usize>)
 
 pub(crate) fn render_markdown_text_with_width_and_cwd(
     input: &str,
-    _width: Option<usize>,
+    width: Option<usize>,
     cwd: Option<&Path>,
 ) -> Text<'static> {
     let mut options = Options::empty();
     options.insert(Options::ENABLE_STRIKETHROUGH);
+    options.insert(Options::ENABLE_TABLES);
     let parser = Parser::new_ext(input, options);
-    let mut writer = Writer::new(parser, cwd);
+    let mut writer = Writer::new(parser, cwd, width);
     writer.run();
     writer.text
+}
+
+#[derive(Debug)]
+struct TableRenderState {
+    alignments: Vec<Alignment>,
+    rows: Vec<Vec<String>>,
+    current_row: Option<Vec<String>>,
+    current_cell: Option<String>,
+    header_row_count: usize,
+}
+
+impl TableRenderState {
+    fn new(alignments: Vec<Alignment>) -> Self {
+        Self {
+            alignments,
+            rows: Vec::new(),
+            current_row: None,
+            current_cell: None,
+            header_row_count: 0,
+        }
+    }
+
+    fn start_row(&mut self) {
+        self.current_row = Some(Vec::new());
+    }
+
+    fn end_row(&mut self) {
+        if let Some(row) = self.current_row.take() {
+            self.rows.push(row);
+        }
+    }
+
+    fn start_header(&mut self) {
+        if self.current_row.is_none() {
+            self.start_row();
+        }
+    }
+
+    fn end_header(&mut self) {
+        if self.current_cell.is_some() {
+            self.end_cell();
+        }
+        if self.current_row.is_some() {
+            self.end_row();
+        }
+        self.header_row_count = self.rows.len();
+    }
+
+    fn start_cell(&mut self) {
+        self.current_cell = Some(String::new());
+    }
+
+    fn end_cell(&mut self) {
+        let cell = self.current_cell.take().unwrap_or_default();
+        if let Some(row) = self.current_row.as_mut() {
+            row.push(normalize_table_cell(&cell));
+        }
+    }
+
+    fn push_text(&mut self, text: &str) {
+        if let Some(cell) = self.current_cell.as_mut() {
+            cell.push_str(text);
+        }
+    }
 }
 
 struct Writer<'a, I>
@@ -123,13 +191,15 @@ where
     current_subsequent_indent: Vec<Span<'static>>,
     current_line_style: Style,
     current_line_in_code_block: bool,
+    table: Option<TableRenderState>,
+    width: Option<usize>,
 }
 
 impl<'a, I> Writer<'a, I>
 where
     I: Iterator<Item = Event<'a>>,
 {
-    fn new(iter: I, cwd: Option<&Path>) -> Self {
+    fn new(iter: I, cwd: Option<&Path>, width: Option<usize>) -> Self {
         Self {
             iter,
             text: Text::default(),
@@ -152,6 +222,8 @@ where
             current_subsequent_indent: Vec::new(),
             current_line_style: Style::default(),
             current_line_in_code_block: false,
+            table: None,
+            width,
         }
     }
 
@@ -217,16 +289,16 @@ where
             }
             Tag::List(start) => self.start_list(start),
             Tag::Item => self.start_item(),
+            Tag::Table(alignments) => self.start_table(alignments),
+            Tag::TableHead => self.start_table_head(),
+            Tag::TableRow => self.start_table_row(),
+            Tag::TableCell => self.start_table_cell(),
             Tag::Emphasis => self.push_inline_style(self.styles.emphasis),
             Tag::Strong => self.push_inline_style(self.styles.strong),
             Tag::Strikethrough => self.push_inline_style(self.styles.strikethrough),
             Tag::Link { dest_url, .. } => self.push_link(dest_url.to_string()),
             Tag::HtmlBlock
             | Tag::FootnoteDefinition(_)
-            | Tag::Table(_)
-            | Tag::TableHead
-            | Tag::TableRow
-            | Tag::TableCell
             | Tag::Image { .. }
             | Tag::MetadataBlock(_) => {}
         }
@@ -243,14 +315,14 @@ where
                 self.indent_stack.pop();
                 self.pending_marker_line = false;
             }
+            TagEnd::Table => self.end_table(),
+            TagEnd::TableHead => self.end_table_head(),
+            TagEnd::TableRow => self.end_table_row(),
+            TagEnd::TableCell => self.end_table_cell(),
             TagEnd::Emphasis | TagEnd::Strong | TagEnd::Strikethrough => self.pop_inline_style(),
             TagEnd::Link => self.pop_link(),
             TagEnd::HtmlBlock
             | TagEnd::FootnoteDefinition
-            | TagEnd::Table
-            | TagEnd::TableHead
-            | TagEnd::TableRow
-            | TagEnd::TableCell
             | TagEnd::Image
             | TagEnd::MetadataBlock(_) => {}
         }
@@ -310,6 +382,10 @@ where
     }
 
     fn text(&mut self, text: CowStr<'a>) {
+        if self.table.is_some() {
+            self.push_table_text(&text);
+            return;
+        }
         if self.suppressing_local_link_label() {
             return;
         }
@@ -353,6 +429,10 @@ where
     }
 
     fn code(&mut self, code: CowStr<'a>) {
+        if self.table.is_some() {
+            self.push_table_text(&code);
+            return;
+        }
         if self.suppressing_local_link_label() {
             return;
         }
@@ -366,6 +446,10 @@ where
     }
 
     fn html(&mut self, html: CowStr<'a>, inline: bool) {
+        if self.table.is_some() {
+            self.push_table_text(&html);
+            return;
+        }
         if self.suppressing_local_link_label() {
             return;
         }
@@ -386,6 +470,10 @@ where
     }
 
     fn hard_break(&mut self) {
+        if self.table.is_some() {
+            self.push_table_text(" ");
+            return;
+        }
         if self.suppressing_local_link_label() {
             return;
         }
@@ -394,6 +482,10 @@ where
     }
 
     fn soft_break(&mut self) {
+        if self.table.is_some() {
+            self.push_table_text(" ");
+            return;
+        }
         if self.suppressing_local_link_label() {
             return;
         }
@@ -492,6 +584,68 @@ where
         self.needs_newline = true;
         self.in_code_block = false;
         self.indent_stack.pop();
+    }
+
+    fn start_table(&mut self, alignments: Vec<Alignment>) {
+        self.flush_current_line();
+        if self.needs_newline && !self.text.lines.is_empty() {
+            self.push_blank_line();
+        }
+        self.table = Some(TableRenderState::new(alignments));
+        self.needs_newline = false;
+    }
+
+    fn end_table(&mut self) {
+        let Some(table) = self.table.take() else {
+            return;
+        };
+        for line in render_table_lines(&table, self.width) {
+            self.push_line(Line::from(line));
+            self.flush_current_line();
+        }
+        self.needs_newline = true;
+    }
+
+    fn end_table_head(&mut self) {
+        if let Some(table) = self.table.as_mut() {
+            table.end_header();
+        }
+    }
+
+    fn start_table_head(&mut self) {
+        if let Some(table) = self.table.as_mut() {
+            table.start_header();
+        }
+    }
+
+    fn start_table_row(&mut self) {
+        if let Some(table) = self.table.as_mut() {
+            table.start_row();
+        }
+    }
+
+    fn end_table_row(&mut self) {
+        if let Some(table) = self.table.as_mut() {
+            table.end_row();
+        }
+    }
+
+    fn start_table_cell(&mut self) {
+        if let Some(table) = self.table.as_mut() {
+            table.start_cell();
+        }
+    }
+
+    fn end_table_cell(&mut self) {
+        if let Some(table) = self.table.as_mut() {
+            table.end_cell();
+        }
+    }
+
+    fn push_table_text(&mut self, text: &str) {
+        if let Some(table) = self.table.as_mut() {
+            table.push_text(text);
+        }
     }
 
     fn push_inline_style(&mut self, style: Style) {
@@ -629,4 +783,130 @@ where
 
         prefix
     }
+}
+
+fn normalize_table_cell(cell: &str) -> String {
+    cell.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn render_table_lines(table: &TableRenderState, width: Option<usize>) -> Vec<String> {
+    if table.rows.is_empty() {
+        return Vec::new();
+    }
+
+    let column_count = table.rows.iter().map(Vec::len).max().unwrap_or(0);
+    if column_count == 0 {
+        return Vec::new();
+    }
+
+    let mut column_widths = vec![1usize; column_count];
+    for row in &table.rows {
+        for (idx, cell) in row.iter().enumerate() {
+            column_widths[idx] = column_widths[idx].max(UnicodeWidthStr::width(cell.as_str()));
+        }
+    }
+    fit_table_width(&mut column_widths, width);
+
+    let mut lines = Vec::new();
+    for (row_idx, row) in table.rows.iter().enumerate() {
+        lines.push(render_table_row(row, &column_widths, &table.alignments));
+        if row_idx + 1 == table.header_row_count {
+            lines.push(render_table_separator(&column_widths, &table.alignments));
+        }
+    }
+    lines
+}
+
+fn fit_table_width(column_widths: &mut [usize], width: Option<usize>) {
+    let Some(max_width) = width else {
+        return;
+    };
+    if column_widths.is_empty() {
+        return;
+    }
+
+    let separator_width = column_widths.len().saturating_sub(1) * 3;
+    let total_width = column_widths.iter().sum::<usize>() + separator_width;
+    if total_width <= max_width {
+        return;
+    }
+
+    let available_cells = max_width
+        .saturating_sub(separator_width)
+        .max(column_widths.len());
+    let max_column_width = (available_cells / column_widths.len()).max(1);
+    for width in column_widths {
+        *width = (*width).min(max_column_width).max(1);
+    }
+}
+
+fn render_table_row(row: &[String], column_widths: &[usize], alignments: &[Alignment]) -> String {
+    column_widths
+        .iter()
+        .enumerate()
+        .map(|(idx, width)| {
+            let cell = row.get(idx).map(String::as_str).unwrap_or("");
+            pad_table_cell(
+                truncate_to_width(cell, *width).as_str(),
+                *width,
+                alignment_for_column(alignments, idx),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(" | ")
+}
+
+fn render_table_separator(column_widths: &[usize], alignments: &[Alignment]) -> String {
+    column_widths
+        .iter()
+        .enumerate()
+        .map(|(idx, width)| {
+            let dashes = "-".repeat(*width);
+            match alignment_for_column(alignments, idx) {
+                Alignment::Left | Alignment::Center | Alignment::Right | Alignment::None => dashes,
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" | ")
+}
+
+fn alignment_for_column(alignments: &[Alignment], idx: usize) -> Alignment {
+    alignments.get(idx).copied().unwrap_or(Alignment::None)
+}
+
+fn pad_table_cell(cell: &str, width: usize, alignment: Alignment) -> String {
+    let cell_width = UnicodeWidthStr::width(cell);
+    let padding = width.saturating_sub(cell_width);
+    match alignment {
+        Alignment::Right => format!("{}{cell}", " ".repeat(padding)),
+        Alignment::Center => {
+            let left = padding / 2;
+            let right = padding - left;
+            format!("{}{cell}{}", " ".repeat(left), " ".repeat(right))
+        }
+        Alignment::Left | Alignment::None => format!("{cell}{}", " ".repeat(padding)),
+    }
+}
+
+fn truncate_to_width(value: &str, max_width: usize) -> String {
+    if UnicodeWidthStr::width(value) <= max_width {
+        return value.to_string();
+    }
+    if max_width <= 1 {
+        return "…".to_string();
+    }
+
+    let mut out = String::new();
+    let mut used = 0usize;
+    let ellipsis_width = 1usize;
+    for ch in value.chars() {
+        let ch_width = UnicodeWidthChar::width(ch).unwrap_or(0);
+        if used + ch_width + ellipsis_width > max_width {
+            break;
+        }
+        out.push(ch);
+        used += ch_width;
+    }
+    out.push('…');
+    out
 }

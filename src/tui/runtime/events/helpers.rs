@@ -45,6 +45,7 @@ pub(super) fn exploration_action_label(message: &str) -> Option<String> {
                 rest.as_str()
             }
         )),
+        "bash" => bash_rg_exploration_action_label(&rest),
         "explore_agent" => Some(if rest.is_empty() {
             "Delegate repository exploration".to_string()
         } else {
@@ -52,6 +53,26 @@ pub(super) fn exploration_action_label(message: &str) -> Option<String> {
         }),
         _ => None,
     }
+}
+
+fn bash_rg_exploration_action_label(command: &str) -> Option<String> {
+    let command = command.trim();
+    if command.is_empty() || !contains_rg_invocation(command) {
+        return None;
+    }
+
+    if command.split_whitespace().any(|part| part == "--files") {
+        Some(format!("Find files {command}"))
+    } else {
+        Some(format!("Search {command}"))
+    }
+}
+
+fn contains_rg_invocation(command: &str) -> bool {
+    command
+        .split([';', '|', '&'])
+        .map(str::trim)
+        .any(|segment| segment == "rg" || segment.starts_with("rg ") || segment.starts_with("rg\t"))
 }
 
 pub(super) fn planning_action_label(message: &str) -> Option<String> {
@@ -107,6 +128,18 @@ pub(super) fn tool_action_label(message: &str) -> Option<String> {
             } else {
                 rest.as_str()
             }
+        )),
+        "replace_lines" => Some(format!(
+            "Edit lines {}",
+            if rest.is_empty() {
+                "in file"
+            } else {
+                rest.as_str()
+            }
+        )),
+        "spawn_agent" => Some(format!(
+            "Delegate {}",
+            compact_delegate_rest(&rest).unwrap_or_else(|| "sub-agent".to_string())
         )),
         "web_fetch" => Some(format!(
             "Fetch {}",
@@ -192,6 +225,7 @@ pub(super) fn planning_note_lines(message: &str) -> Vec<String> {
 }
 
 pub(super) fn scrub_internal_control_tokens(message: &str) -> String {
+    let message = strip_dsml_control_blocks(message);
     let mut cleaned = String::with_capacity(message.len());
     let mut chars = message.char_indices().peekable();
 
@@ -224,6 +258,59 @@ pub(super) fn scrub_internal_control_tokens(message: &str) -> String {
     }
 
     cleaned
+}
+
+fn strip_dsml_control_blocks(message: &str) -> String {
+    const DSML_OPEN: &str = "<｜DSML｜";
+    const TOOL_CALLS_CLOSE: &str = "</｜DSML｜tool_calls>";
+    const INVOKE_CLOSE: &str = "</｜DSML｜invoke>";
+
+    let mut output = String::new();
+    let mut rest = message;
+    let had_dsml = message.contains("｜DSML｜");
+    while let Some(start) = rest.find(DSML_OPEN) {
+        output.push_str(&rest[..start]);
+        let block = &rest[start..];
+        let skip_len = block
+            .find(TOOL_CALLS_CLOSE)
+            .map(|idx| idx + TOOL_CALLS_CLOSE.len())
+            .or_else(|| block.find(INVOKE_CLOSE).map(|idx| idx + INVOKE_CLOSE.len()))
+            .unwrap_or(block.len());
+        rest = &block[skip_len..];
+        if !output.ends_with('\n') && !rest.trim_start().is_empty() {
+            output.push('\n');
+        }
+    }
+    output.push_str(rest);
+    if had_dsml && looks_like_orphaned_dsml_payload(output.trim()) {
+        String::new()
+    } else {
+        output
+    }
+}
+
+fn looks_like_orphaned_dsml_payload(text: &str) -> bool {
+    let lines = text
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>();
+    if lines.is_empty() {
+        return false;
+    }
+
+    let code_like = lines
+        .iter()
+        .filter(|line| {
+            line.starts_with('}')
+                || line.ends_with('{')
+                || line.ends_with("},")
+                || line.contains(": ")
+                || line.starts_with("let ")
+                || line.starts_with("MemorySelectionCandidate")
+        })
+        .count();
+    code_like * 2 >= lines.len()
 }
 
 fn mentions_mutating_plan_action(line: &str) -> bool {
@@ -272,6 +359,7 @@ pub(super) fn format_tool_use(name: &str, input: &serde_json::Value) -> String {
             .and_then(serde_json::Value::as_str)
             .map(|path| format!("replace {path}"))
             .unwrap_or_else(|| format!("{name} {input}")),
+        "replace_lines" => format_replace_lines_use(input),
         "list_files" => input
             .get("path")
             .and_then(serde_json::Value::as_str)
@@ -304,9 +392,90 @@ pub(super) fn format_tool_use(name: &str, input: &serde_json::Value) -> String {
             .and_then(serde_json::Value::as_str)
             .map(|url| format!("web_fetch {url}"))
             .unwrap_or_else(|| format!("{name} {input}")),
+        "explore_agent" => format_instruction_tool_use("explore_agent", input),
+        "plan_agent" => format_instruction_tool_use("plan_agent", input),
+        "spawn_agent" => format_spawn_agent_use(input),
         "apply_patch" => format_apply_patch_use(input),
         _ => format!("{name} {input}"),
     }
+}
+
+fn format_replace_lines_use(input: &serde_json::Value) -> String {
+    let path = input
+        .get("path")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("<unknown>");
+    let start_line = input
+        .get("start_line")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or_default();
+    let end_line = input
+        .get("end_line")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or_default();
+    format!("replace_lines {path}:{start_line}-{end_line}")
+}
+
+fn format_instruction_tool_use(name: &str, input: &serde_json::Value) -> String {
+    let instruction = input
+        .get("instruction")
+        .and_then(serde_json::Value::as_str)
+        .map(compact_instruction)
+        .unwrap_or_else(|| "instruction unavailable".to_string());
+    format!("{name} {instruction}")
+}
+
+fn format_spawn_agent_use(input: &serde_json::Value) -> String {
+    let agent_name = input
+        .get("name")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("worker");
+    let instruction = input
+        .get("instruction")
+        .and_then(serde_json::Value::as_str)
+        .map(compact_instruction)
+        .unwrap_or_else(|| "instruction unavailable".to_string());
+    format!("spawn_agent {agent_name}: {instruction}")
+}
+
+fn compact_delegate_rest(rest: &str) -> Option<String> {
+    let rest = rest.trim();
+    if rest.is_empty() {
+        return None;
+    }
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(rest) {
+        if let Some(name) = value
+            .get("name")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            let instruction = value
+                .get("instruction")
+                .and_then(serde_json::Value::as_str)
+                .map(compact_instruction)
+                .unwrap_or_else(|| "instruction unavailable".to_string());
+            return Some(format!("{name}: {instruction}"));
+        }
+        return value
+            .get("instruction")
+            .and_then(serde_json::Value::as_str)
+            .map(compact_instruction);
+    }
+    Some(compact_instruction(rest))
+}
+
+fn compact_instruction(instruction: &str) -> String {
+    const MAX_CHARS: usize = 120;
+    let normalized = instruction.split_whitespace().collect::<Vec<_>>().join(" ");
+    if normalized.chars().count() <= MAX_CHARS {
+        return normalized;
+    }
+    let mut truncated = normalized.chars().take(MAX_CHARS).collect::<String>();
+    truncated.push('…');
+    truncated
 }
 
 pub(super) fn format_apply_patch_use(input: &serde_json::Value) -> String {
@@ -341,14 +510,24 @@ fn apply_patch_targets(patch: &str) -> Vec<String> {
 }
 
 pub(super) fn format_tool_result(name: &str, content: &str) -> String {
-    if matches!(name, "explore_agent" | "plan_agent") {
+    if matches!(name, "explore_agent" | "plan_agent" | "spawn_agent") {
         if let Ok(value) = serde_json::from_str::<serde_json::Value>(content) {
             let summary = value
                 .get("summary")
                 .and_then(serde_json::Value::as_str)
                 .filter(|value| !value.trim().is_empty())
                 .unwrap_or_else(|| first_non_empty_line(content));
-            let mut rendered = format!("{name} {summary}");
+            let mut rendered = if name == "spawn_agent" {
+                let agent_name = value
+                    .get("name")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .unwrap_or("worker");
+                format!("{name} {agent_name}: {summary}")
+            } else {
+                format!("{name} {summary}")
+            };
             if let Some(request) = value.get("request_user_input") {
                 if let Some(question) = request.get("question").and_then(serde_json::Value::as_str)
                 {
@@ -380,6 +559,9 @@ pub(super) fn format_tool_result(name: &str, content: &str) -> String {
                 }
             }
             return rendered;
+        }
+        if content.trim_start().starts_with(&format!("{name} ")) {
+            return content.trim().to_string();
         }
         return format!("{name} {}", first_non_empty_line(content));
     }
@@ -437,6 +619,12 @@ pub(super) fn format_tool_result(name: &str, content: &str) -> String {
     if name == "replace" {
         if let Ok(value) = serde_json::from_str::<serde_json::Value>(content) {
             return format_replace_result(&value);
+        }
+    }
+
+    if name == "replace_lines" {
+        if let Ok(value) = serde_json::from_str::<serde_json::Value>(content) {
+            return format_replace_lines_result(&value);
         }
     }
 
@@ -723,6 +911,36 @@ fn format_replace_result(value: &serde_json::Value) -> String {
         lines.push(format!("new: {new_preview}"));
     }
     lines.join("\n")
+}
+
+fn format_replace_lines_result(value: &serde_json::Value) -> String {
+    let path = value
+        .get("path")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("<unknown>");
+    let start_line = value
+        .get("start_line")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or_default();
+    let end_line = value
+        .get("end_line")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or_default();
+    let removed_lines = value
+        .get("removed_lines")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or_default();
+    let inserted_lines = value
+        .get("inserted_lines")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or_default();
+    let line_delta = value
+        .get("line_delta")
+        .and_then(serde_json::Value::as_i64)
+        .unwrap_or_default();
+    format!(
+        "replace_lines {path}:{start_line}-{end_line}\nremoved={removed_lines} inserted={inserted_lines} line_delta={line_delta}"
+    )
 }
 
 pub(super) fn exploration_result_note(message: &str) -> Option<String> {

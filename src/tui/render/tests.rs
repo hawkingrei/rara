@@ -3,6 +3,7 @@ use std::path::Path;
 use insta::assert_snapshot;
 use ratatui::text::Line;
 use ratatui::{buffer::Buffer, layout::Rect};
+use serde_json::json;
 use tempfile::tempdir;
 
 use crate::config::{ConfigManager, OpenAiEndpointKind, RaraConfig};
@@ -97,6 +98,41 @@ fn overlay_viewport_uses_full_height_on_empty_transcript() {
 }
 
 #[test]
+fn transcript_render_stays_above_bottom_pane() {
+    let temp = tempdir().expect("tempdir");
+    let mut app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("build tui app");
+    app.committed_turns.push(TranscriptTurn {
+        entries: vec![
+            TranscriptEntry {
+                role: "You".into(),
+                message: "Show output".into(),
+            },
+            TranscriptEntry {
+                role: "Agent".into(),
+                message: "TRANSCRIPT_SENTINEL".into(),
+            },
+        ],
+    });
+    app.input = "composer text".into();
+
+    let width = 80;
+    let height = 14;
+    let rendered = render_screen_text(&app, width, height);
+    let lines = rendered.lines().collect::<Vec<_>>();
+    let bottom_height = usize::from(desired_bottom_pane_height(&app, width, height));
+    let transcript_end = usize::from(height).saturating_sub(bottom_height);
+    let transcript = lines[..transcript_end].join("\n");
+    let bottom = lines[transcript_end..].join("\n");
+
+    assert!(transcript.contains("TRANSCRIPT_SENTINEL"));
+    assert!(!bottom.contains("TRANSCRIPT_SENTINEL"));
+    assert!(bottom.contains("composer text"));
+}
+
+#[test]
 fn tool_summary_includes_apply_patch_target_files() {
     let entries = vec![TranscriptEntry {
         role: "Tool".into(),
@@ -106,6 +142,49 @@ fn tool_summary_includes_apply_patch_target_files() {
 
     let rendered = current_turn_tool_summary(&refs, false, None).expect("tool summary");
     assert!(rendered.contains("Apply patch src/tui/render.rs, src/tui/runtime/events.rs"));
+}
+
+#[test]
+fn tool_summary_includes_bash_result_status_and_output_tail() {
+    let entries = vec![
+        TranscriptEntry {
+            role: "Tool".into(),
+            message: "bash cd /Users/vl/Code/rara && cargo build 2>&1".into(),
+        },
+        TranscriptEntry {
+            role: "Tool Result".into(),
+            message: "bash failed with exit code 101\nstdout:\n   Compiling rara v0.1.0\nstderr:\nerror[E0425]: cannot find value `foo` in this scope".into(),
+        },
+    ];
+    let refs = entries.iter().collect::<Vec<_>>();
+
+    let rendered = current_turn_tool_summary(&refs, false, None).expect("tool summary");
+    assert!(rendered.contains("Run cd /Users/vl/Code/rara && cargo build 2>&1"));
+    assert!(rendered.contains("bash failed with exit code 101"));
+    assert!(rendered.contains("stdout:"));
+    assert!(rendered.contains("Compiling rara v0.1.0"));
+    assert!(rendered.contains("error[E0425]"));
+}
+
+#[test]
+fn tool_summary_compacts_spawn_agent_instruction_json() {
+    let entries = vec![TranscriptEntry {
+        role: "Tool".into(),
+        message: format!(
+            "spawn_agent {}",
+            json!({
+                "name": "fix-assembler",
+                "instruction": "Fix the file src/context/assembler.rs by removing the orphaned code block between the two cfg(test) markers. Read in small chunks and avoid one giant replacement payload."
+            })
+        ),
+    }];
+    let refs = entries.iter().collect::<Vec<_>>();
+
+    let rendered = current_turn_tool_summary(&refs, false, None).expect("tool summary");
+    assert!(rendered.contains("Delegate fix-assembler: Fix the file src/context/assembler.rs"));
+    assert!(rendered.contains('…'));
+    assert!(!rendered.contains("\"instruction\""));
+    assert!(!rendered.contains("avoid one giant replacement payload"));
 }
 
 #[test]
