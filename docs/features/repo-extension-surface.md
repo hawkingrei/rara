@@ -7,6 +7,8 @@ ecosystems without immediately coupling discovery to execution.
 
 The initial target is compatibility with:
 
+- repo context files that describe local project rules, conventions, and active
+  workspace facts;
 - native RARA skills under `.agents/skills/`;
 - Claude-style agent definitions under `.claude/agents/`;
 - Claude-style lifecycle hooks under `.claude/hooks/`.
@@ -52,6 +54,58 @@ Later follow-up phases may include:
 
 - `SubagentStop`
 - `PreCompact`
+
+## Related Codex Capabilities
+
+Codex has a different extension shape, but the same compatibility pressure:
+repository guidance, local skills, runtime memory, and tool/result context must
+compose without making the model-facing prompt unstable across releases.
+
+RARA should therefore treat Codex-style inputs as additional normalized context
+sources instead of as a reason to rename or reshuffle the primary prompt
+sections.
+
+The Codex-related behaviors to preserve are:
+
+- repository instructions and repo-local skills participate in the same source
+  discovery pipeline as other workspace prompt sources;
+- durable memory and recalled thread/workspace facts enter through
+  `MemorySelection`;
+- tool results and runtime state stay structured runtime inputs instead of
+  being converted into ad hoc user-text prefixes;
+- visible `/context` and `/status` surfaces explain the same source objects that
+  were used for model assembly.
+
+## Prefix Stability Contract
+
+Repository context, skills, hooks, imported agents, and memory are expected
+long-term inputs for RARA, but their addition must not churn the stable
+model-facing prompt/context prefix layout.
+
+The main prefix names and top-level assembly order should stay stable unless a
+breaking context-format migration is explicitly planned.
+
+New capabilities should normally enter through one of these owned extension
+points:
+
+- a new source object under existing workspace prompt-source discovery;
+- a normalized extension object surfaced by this repository extension contract;
+- a memory or retrieval candidate produced for `MemorySelection`;
+- a lifecycle event handled behind the hook runtime boundary;
+- a child-thread or imported-agent profile executed through the thread domain.
+
+They should not:
+
+- inject raw repo files directly into the system prompt with new top-level
+  prefixes;
+- rename existing stable prompt sections just to match an external ecosystem;
+- serialize hook, skill, or agent metadata as ordinary user text;
+- add synthetic context prefixes for transient runtime artifacts such as orphan
+  tool results.
+
+If a new source needs a label for explainability, that label should be attached
+to the structured source object and rendered by `/context` or `/status`, not
+invented as an unowned prompt prefix.
 
 ## Non-Goals
 
@@ -266,6 +320,8 @@ That means:
 
 - imported Claude agents still run through RARA sub-agent/thread contracts;
 - imported hooks still operate through RARA lifecycle events;
+- repo context and repo-local skills still enter through source discovery and
+  context assembly instead of bypassing prompt ownership;
 - context injection still flows through `ContextAssembler` and
   `MemorySelection`;
 - thread persistence still flows through `ThreadStore` / `ThreadRecorder`.
