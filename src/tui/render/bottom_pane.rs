@@ -17,6 +17,7 @@ use super::super::state::{ActivePendingInteractionKind, TaskKind, TuiApp};
 use super::badge;
 
 const COMPOSER_TAB_WIDTH: usize = 4;
+const BOTTOM_PANE_BG: Color = Color::Rgb(18, 20, 24);
 
 pub(crate) fn desired_viewport_height(app: &TuiApp, width: u16, rows: u16) -> u16 {
     if app.overlay.is_some() {
@@ -56,6 +57,7 @@ pub(crate) fn desired_bottom_pane_height(app: &TuiApp, width: u16, rows: u16) ->
 }
 
 pub(super) fn render_bottom_pane(f: &mut Frame, app: &TuiApp, area: Rect) -> Option<(u16, u16)> {
+    f.render_widget(Block::default().style(bottom_pane_style()), area);
     let composer_height = area.height.saturating_sub(2).max(3);
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -93,7 +95,7 @@ fn render_activity_bar(f: &mut Frame, app: &TuiApp, area: Rect) {
         spans.push(Span::raw("  "));
         spans.push(Span::styled(detail, Style::default().fg(Color::DarkGray)));
     }
-    let status = Paragraph::new(Line::from(spans));
+    let status = Paragraph::new(Line::from(spans)).style(bottom_pane_style());
     f.render_widget(status, area);
 }
 
@@ -267,12 +269,17 @@ fn render_composer(f: &mut Frame, app: &TuiApp, area: Rect) -> Option<(u16, u16)
     f.render_widget(
         Paragraph::new(composer_lines)
             .block(Block::default())
-            .style(Style::default().bg(Color::Rgb(18, 20, 24)))
+            .style(bottom_pane_style())
             .wrap(Wrap { trim: false }),
         chunks[0],
     );
     let hint = composer_hint_line(app);
-    f.render_widget(Paragraph::new(hint).alignment(Alignment::Left), chunks[1]);
+    f.render_widget(
+        Paragraph::new(hint)
+            .style(bottom_pane_style())
+            .alignment(Alignment::Left),
+        chunks[1],
+    );
     Some(composer_cursor_position(
         app.input.as_str(),
         app.composer_cursor_offset(),
@@ -403,7 +410,7 @@ fn render_footer(f: &mut Frame, app: &TuiApp, area: Rect) {
         app.overlay,
         Some(super::super::state::Overlay::CommandPalette)
     ) {
-        f.render_widget(Paragraph::new(""), area);
+        f.render_widget(Paragraph::new("").style(bottom_pane_style()), area);
         return;
     }
     let summary = footer_summary_text(app);
@@ -412,9 +419,14 @@ fn render_footer(f: &mut Frame, app: &TuiApp, area: Rect) {
             summary,
             Style::default().fg(Color::DarkGray),
         )))
+        .style(bottom_pane_style())
         .alignment(Alignment::Right),
         area,
     );
+}
+
+fn bottom_pane_style() -> Style {
+    Style::default().bg(BOTTOM_PANE_BG)
 }
 
 fn footer_summary_text(app: &TuiApp) -> String {

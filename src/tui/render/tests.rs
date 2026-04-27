@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use insta::assert_snapshot;
+use ratatui::style::Color;
 use ratatui::text::Line;
 use ratatui::{buffer::Buffer, layout::Rect};
 use serde_json::json;
@@ -130,6 +131,35 @@ fn transcript_render_stays_above_bottom_pane() {
     assert!(transcript.contains("TRANSCRIPT_SENTINEL"));
     assert!(!bottom.contains("TRANSCRIPT_SENTINEL"));
     assert!(bottom.contains("composer text"));
+}
+
+#[test]
+fn bottom_pane_background_covers_hint_and_footer_rows() {
+    let temp = tempdir().expect("tempdir");
+    let mut app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("build tui app");
+    app.notice = Some("Prompt finished.".into());
+    app.repo_slug = Some("hawkingrei/rara".into());
+    app.snapshot.branch = "main".into();
+
+    let width = 100;
+    let height = 14;
+    let buffer = render_screen_buffer(&app, width, height);
+    let bottom_height = desired_bottom_pane_height(&app, width, height);
+    let bottom_start = height.saturating_sub(bottom_height);
+    let expected_bg = Color::Rgb(18, 20, 24);
+
+    for y in bottom_start..height {
+        for x in 0..width {
+            assert_eq!(
+                buffer[(x, y)].bg,
+                expected_bg,
+                "bottom pane background missing at ({x}, {y})"
+            );
+        }
+    }
 }
 
 #[test]
@@ -848,14 +878,7 @@ fn deepseek_api_key_editor_uses_deepseek_copy() {
 }
 
 fn render_screen_text(app: &TuiApp, width: u16, height: u16) -> String {
-    let area = Rect::new(0, 0, width, height);
-    let mut buffer = Buffer::empty(area);
-    let mut frame = Frame {
-        cursor_position: None,
-        viewport_area: area,
-        buffer: &mut buffer,
-    };
-    super::render(&mut frame, app);
+    let buffer = render_screen_buffer(app, width, height);
 
     (0..height)
         .map(|y| {
@@ -867,6 +890,18 @@ fn render_screen_text(app: &TuiApp, width: u16, height: u16) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+fn render_screen_buffer(app: &TuiApp, width: u16, height: u16) -> Buffer {
+    let area = Rect::new(0, 0, width, height);
+    let mut buffer = Buffer::empty(area);
+    let mut frame = Frame {
+        cursor_position: None,
+        viewport_area: area,
+        buffer: &mut buffer,
+    };
+    super::render(&mut frame, app);
+    buffer
 }
 
 #[test]
