@@ -319,9 +319,7 @@ async fn dispatch_event(
                 && !app.is_busy()
             {
                 if app.selected_provider_family() == self::state::ProviderFamily::OpenAiCompatible {
-                    if let Some(action) = app.selected_openai_model_picker_action() {
-                        apply_openai_model_picker_action(app, action)?;
-                    }
+                    return Ok(true);
                 } else if should_open_codex_auth_guide(app, oauth_manager.as_ref()) {
                     app.select_local_model(app.model_picker_idx);
                     app.open_overlay(Overlay::AuthModePicker);
@@ -455,6 +453,9 @@ async fn dispatch_event(
                 app.push_notice("Wait for the current task before saving the API key.");
             } else if value.is_empty() && app.config.provider == "codex" {
                 app.push_notice("Enter a Codex API key or press Esc to go back.");
+            } else if value.is_empty() && app.openai_setup_keep_empty_api_key {
+                app.notice = Some("Kept existing API key for the current profile.".into());
+                app.advance_openai_profile_setup();
             } else if value.is_empty() {
                 app.config.clear_api_key();
                 if app.config.provider == "codex" {
@@ -530,7 +531,28 @@ async fn dispatch_event(
                     app.config_manager.save(&app.config)?;
                     app.notice = Some(format!("Created endpoint profile: {label}"));
                     app.openai_profile_label_kind = None;
-                    app.begin_active_openai_profile_setup();
+                    app.begin_created_openai_profile_setup();
+                }
+            }
+        }
+        AppEvent::CreateOpenAiProfile => {
+            if app.is_busy() {
+                app.push_notice("Wait for the current task before creating a profile.");
+            } else if app.selected_provider_family()
+                == self::state::ProviderFamily::OpenAiCompatible
+            {
+                app.begin_openai_profile_setup();
+            }
+        }
+        AppEvent::EditOpenAiProfile => {
+            if app.is_busy() {
+                app.push_notice("Wait for the current task before editing a profile.");
+            } else if app.selected_provider_family()
+                == self::state::ProviderFamily::OpenAiCompatible
+            {
+                if app.select_openai_model_picker_profile().is_some() {
+                    app.config_manager.save(&app.config)?;
+                    app.begin_edit_openai_profile_setup();
                 }
             }
         }
@@ -836,9 +858,6 @@ fn apply_openai_model_picker_action(
     action: OpenAiModelPickerAction,
 ) -> anyhow::Result<()> {
     match action {
-        OpenAiModelPickerAction::CreateProfile => {
-            app.begin_openai_profile_setup();
-        }
         OpenAiModelPickerAction::SelectProfile => {
             if let Some(label) = app.select_openai_model_picker_profile() {
                 app.config_manager.save(&app.config)?;

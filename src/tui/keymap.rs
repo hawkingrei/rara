@@ -72,6 +72,14 @@ pub(super) fn map_key_to_event(key: KeyEvent, app: &TuiApp) -> AppEvent {
             KeyCode::Esc => AppEvent::CloseOverlay,
             KeyCode::Up | KeyCode::Char('k') => AppEvent::MoveModelSelection(-1),
             KeyCode::Down | KeyCode::Char('j') => AppEvent::MoveModelSelection(1),
+            KeyCode::Char(' ')
+                if matches!(
+                    app.selected_provider_family(),
+                    ProviderFamily::OpenAiCompatible
+                ) =>
+            {
+                AppEvent::ApplyOverlaySelection
+            }
             KeyCode::Char('1') => AppEvent::SetModelSelection(0),
             KeyCode::Char('2') => AppEvent::SetModelSelection(1),
             KeyCode::Char('3') => AppEvent::SetModelSelection(2),
@@ -81,29 +89,24 @@ pub(super) fn map_key_to_event(key: KeyEvent, app: &TuiApp) -> AppEvent {
             KeyCode::Char('7') => AppEvent::SetModelSelection(6),
             KeyCode::Char('8') => AppEvent::SetModelSelection(7),
             KeyCode::Char('9') => AppEvent::SetModelSelection(8),
-            KeyCode::Char('b')
-                if matches!(
-                    app.selected_provider_family(),
-                    ProviderFamily::OpenAiCompatible | ProviderFamily::Ollama
-                ) =>
-            {
+            KeyCode::Char('b') if app.selected_provider_family() == ProviderFamily::Ollama => {
                 AppEvent::OpenOverlay(Overlay::BaseUrlEditor)
             }
-            KeyCode::Char('a')
+            KeyCode::Char('e')
                 if matches!(
                     app.selected_provider_family(),
                     ProviderFamily::OpenAiCompatible
                 ) =>
             {
-                AppEvent::OpenOverlay(Overlay::ApiKeyEditor)
+                AppEvent::EditOpenAiProfile
             }
-            KeyCode::Char('n')
+            KeyCode::Char('c')
                 if matches!(
                     app.selected_provider_family(),
                     ProviderFamily::OpenAiCompatible
                 ) =>
             {
-                AppEvent::OpenOverlay(Overlay::ModelNameEditor)
+                AppEvent::CreateOpenAiProfile
             }
             KeyCode::Char('d')
                 if matches!(

@@ -5,7 +5,7 @@ use ratatui::text::Line;
 use ratatui::{buffer::Buffer, layout::Rect};
 use tempfile::tempdir;
 
-use crate::config::{ConfigManager, RaraConfig};
+use crate::config::{ConfigManager, OpenAiEndpointKind, RaraConfig};
 use crate::tui::custom_terminal::Frame;
 use crate::tui::state::{Overlay, ProviderFamily, TranscriptEntry, TranscriptTurn, TuiApp};
 
@@ -626,12 +626,23 @@ fn openai_model_picker_renders_profile_manager_not_endpoint_presets() {
         .iter()
         .position(|(family, _, _)| *family == ProviderFamily::OpenAiCompatible)
         .expect("openai-compatible family present");
+    app.config.select_openai_profile(
+        "openrouter-main",
+        "OpenRouter Main",
+        OpenAiEndpointKind::Openrouter,
+    );
+    app.config
+        .set_model(Some("anthropic/claude-3.7-sonnet".to_string()));
+    app.config.set_api_key("sk-openrouter");
     app.open_overlay(Overlay::ModelPicker);
 
     let rendered = render_screen_text(&app, 100, 24);
     assert!(rendered.contains("OpenAI-compatible profiles"));
-    assert!(rendered.contains("Create endpoint profile"));
-    assert!(rendered.contains("Custom endpoint"));
+    assert!(rendered.contains("Status"));
+    assert!(rendered.contains("OpenRouter Main"));
+    assert!(rendered.contains("anthropic/claude-3.7-sonnet"));
+    assert!(rendered.contains("active"));
+    assert!(rendered.contains("C create"));
     assert!(!rendered.contains("DeepSeek (openai-compatible/deepseek-chat)"));
     assert!(!rendered.contains("Kimi (openai-compatible/moonshot-v1-8k)"));
     assert!(!rendered.contains("OpenRouter (openai-compatible/openai/gpt-4o-mini)"));

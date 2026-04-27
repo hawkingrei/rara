@@ -36,6 +36,8 @@ pub enum AppEvent {
     SaveApiKeyInput,
     SaveModelNameInput,
     SaveOpenAiProfileLabelInput,
+    CreateOpenAiProfile,
+    EditOpenAiProfile,
     DeleteOpenAiProfile,
     SelectHelpTab(HelpTab),
     ApplyOverlaySelection,

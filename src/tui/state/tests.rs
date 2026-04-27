@@ -349,7 +349,7 @@ fn opening_openai_compatible_model_picker_keeps_active_profile_kind() {
 }
 
 #[test]
-fn openai_compatible_model_picker_includes_explicit_profile_actions() {
+fn openai_compatible_model_picker_selects_profile_rows() {
     let dir = tempdir().expect("tempdir");
     let cm = ConfigManager {
         path: dir.path().join("config.json"),
@@ -359,16 +359,9 @@ fn openai_compatible_model_picker_includes_explicit_profile_actions() {
     app.provider_picker_idx = 1;
     app.open_overlay(Overlay::ModelPicker);
 
-    assert_eq!(app.current_model_picker_len(), 2);
-    assert_eq!(app.model_picker_idx, 1);
+    assert_eq!(app.current_model_picker_len(), 1);
+    assert_eq!(app.model_picker_idx, 0);
 
-    app.model_picker_idx = 0;
-    assert_eq!(
-        app.selected_openai_model_picker_action(),
-        Some(crate::tui::state::OpenAiModelPickerAction::CreateProfile)
-    );
-
-    app.model_picker_idx = 1;
     assert_eq!(
         app.selected_openai_model_picker_action(),
         Some(crate::tui::state::OpenAiModelPickerAction::SelectProfile)
@@ -380,18 +373,12 @@ fn openai_compatible_model_picker_includes_explicit_profile_actions() {
         OpenAiEndpointKind::Openrouter,
     );
     app.open_overlay(Overlay::ModelPicker);
-    assert_eq!(app.current_model_picker_len(), 4);
+    assert_eq!(app.current_model_picker_len(), 2);
 
-    app.model_picker_idx = 2;
+    app.model_picker_idx = 1;
     assert_eq!(
         app.selected_openai_model_picker_action(),
         Some(crate::tui::state::OpenAiModelPickerAction::SelectProfile)
-    );
-
-    app.model_picker_idx = 3;
-    assert_eq!(
-        app.selected_openai_model_picker_action(),
-        Some(crate::tui::state::OpenAiModelPickerAction::DeleteProfile)
     );
 }
 
@@ -428,8 +415,54 @@ fn openai_compatible_model_picker_deletes_active_profile_and_keeps_next() {
         app.config.active_openai_profile_id(),
         Some("custom-default")
     );
-    assert_eq!(app.model_picker_idx, 1);
-    assert_eq!(app.current_model_picker_len(), 2);
+    assert_eq!(app.model_picker_idx, 0);
+    assert_eq!(app.current_model_picker_len(), 1);
+}
+
+#[test]
+fn openai_profile_active_state_survives_switching_to_codex_and_ollama() {
+    let dir = tempdir().expect("tempdir");
+    let cm = ConfigManager {
+        path: dir.path().join("config.json"),
+    };
+    let mut app = TuiApp::new(cm).expect("app");
+
+    app.provider_picker_idx = 1;
+    app.config.select_openai_profile(
+        "openrouter-main",
+        "OpenRouter Main",
+        OpenAiEndpointKind::Openrouter,
+    );
+    app.config
+        .set_model(Some("anthropic/claude-3.7-sonnet".to_string()));
+    app.config.set_api_key("sk-openrouter");
+    assert_eq!(
+        app.config.active_openai_profile_id(),
+        Some("openrouter-main")
+    );
+
+    app.provider_picker_idx = 0;
+    app.open_overlay(Overlay::ModelPicker);
+    app.select_local_model(0);
+    assert_eq!(app.config.provider, "codex");
+
+    app.provider_picker_idx = 3;
+    app.open_overlay(Overlay::ModelPicker);
+    app.select_local_model(0);
+    assert_eq!(app.config.provider, "ollama");
+
+    app.provider_picker_idx = 1;
+    app.open_overlay(Overlay::ModelPicker);
+
+    assert_eq!(
+        app.config.active_openai_profile_id(),
+        Some("openrouter-main")
+    );
+    assert_eq!(
+        app.config.model.as_deref(),
+        Some("anthropic/claude-3.7-sonnet")
+    );
+    assert_eq!(app.model_picker_idx, 0);
 }
 
 #[test]
