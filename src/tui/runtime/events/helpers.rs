@@ -1,6 +1,9 @@
+use std::borrow::Cow;
+
 use crate::tool::ToolOutputStream;
 use crate::tools::bash::BashCommandInput;
 use crate::tui::state::TuiApp;
+use crate::tui::tool_text::{compact_delegate_rest, compact_instruction};
 
 pub(super) fn is_oauth_prompt_message(message: &str) -> bool {
     let lower = message.to_ascii_lowercase();
@@ -225,7 +228,15 @@ pub(super) fn planning_note_lines(message: &str) -> Vec<String> {
 }
 
 pub(super) fn scrub_internal_control_tokens(message: &str) -> String {
-    let message = strip_dsml_control_blocks(message);
+    let message = if message.contains("｜DSML｜") {
+        strip_dsml_control_blocks(message)
+    } else {
+        Cow::Borrowed(message)
+    };
+    if !message.contains('<') {
+        return message.into_owned();
+    }
+
     let mut cleaned = String::with_capacity(message.len());
     let mut chars = message.char_indices().peekable();
 
@@ -260,32 +271,39 @@ pub(super) fn scrub_internal_control_tokens(message: &str) -> String {
     cleaned
 }
 
-fn strip_dsml_control_blocks(message: &str) -> String {
+fn strip_dsml_control_blocks(message: &str) -> Cow<'_, str> {
     const DSML_OPEN: &str = "<｜DSML｜";
     const TOOL_CALLS_CLOSE: &str = "</｜DSML｜tool_calls>";
     const INVOKE_CLOSE: &str = "</｜DSML｜invoke>";
 
+    if !message.contains("｜DSML｜") {
+        return Cow::Borrowed(message);
+    }
+
     let mut output = String::new();
     let mut rest = message;
-    let had_dsml = message.contains("｜DSML｜");
     while let Some(start) = rest.find(DSML_OPEN) {
         output.push_str(&rest[..start]);
         let block = &rest[start..];
-        let skip_len = block
+        let Some(skip_len) = block
             .find(TOOL_CALLS_CLOSE)
             .map(|idx| idx + TOOL_CALLS_CLOSE.len())
             .or_else(|| block.find(INVOKE_CLOSE).map(|idx| idx + INVOKE_CLOSE.len()))
-            .unwrap_or(block.len());
+        else {
+            output.push_str(block);
+            rest = "";
+            break;
+        };
         rest = &block[skip_len..];
         if !output.ends_with('\n') && !rest.trim_start().is_empty() {
             output.push('\n');
         }
     }
     output.push_str(rest);
-    if had_dsml && looks_like_orphaned_dsml_payload(output.trim()) {
-        String::new()
+    if looks_like_orphaned_dsml_payload(output.trim()) {
+        Cow::Owned(String::new())
     } else {
-        output
+        Cow::Owned(output)
     }
 }
 
@@ -438,44 +456,6 @@ fn format_spawn_agent_use(input: &serde_json::Value) -> String {
         .map(compact_instruction)
         .unwrap_or_else(|| "instruction unavailable".to_string());
     format!("spawn_agent {agent_name}: {instruction}")
-}
-
-fn compact_delegate_rest(rest: &str) -> Option<String> {
-    let rest = rest.trim();
-    if rest.is_empty() {
-        return None;
-    }
-    if let Ok(value) = serde_json::from_str::<serde_json::Value>(rest) {
-        if let Some(name) = value
-            .get("name")
-            .and_then(serde_json::Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        {
-            let instruction = value
-                .get("instruction")
-                .and_then(serde_json::Value::as_str)
-                .map(compact_instruction)
-                .unwrap_or_else(|| "instruction unavailable".to_string());
-            return Some(format!("{name}: {instruction}"));
-        }
-        return value
-            .get("instruction")
-            .and_then(serde_json::Value::as_str)
-            .map(compact_instruction);
-    }
-    Some(compact_instruction(rest))
-}
-
-fn compact_instruction(instruction: &str) -> String {
-    const MAX_CHARS: usize = 120;
-    let normalized = instruction.split_whitespace().collect::<Vec<_>>().join(" ");
-    if normalized.chars().count() <= MAX_CHARS {
-        return normalized;
-    }
-    let mut truncated = normalized.chars().take(MAX_CHARS).collect::<String>();
-    truncated.push('…');
-    truncated
 }
 
 pub(super) fn format_apply_patch_use(input: &serde_json::Value) -> String {

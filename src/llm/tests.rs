@@ -268,6 +268,37 @@ fn parses_dsml_tool_calls_from_text_content() {
 }
 
 #[test]
+fn ignores_dsml_tool_calls_for_generic_openai_compatible_endpoint() {
+    let response = parse_chat_completion_response(
+        &json!({
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": concat!(
+                        "Visible text\n",
+                        "<｜DSML｜tool_calls>\n",
+                        "<｜DSML｜invoke name=\"apply_patch\">\n",
+                        "<｜DSML｜parameter name=\"patch\" string=\"true\">*** Begin Patch\n*** End Patch</｜DSML｜parameter>\n",
+                        "</｜DSML｜invoke>\n",
+                        "</｜DSML｜tool_calls>"
+                    )
+                },
+                "finish_reason": "stop"
+            }]
+        }),
+        OpenAiEndpointKind::Custom,
+    )
+    .expect("parse response");
+
+    assert_eq!(response.content.len(), 1);
+    assert!(matches!(
+        &response.content[0],
+        ContentBlock::Text { text }
+            if text.contains("Visible text") && text.contains("<｜DSML｜tool_calls>")
+    ));
+}
+
+#[test]
 fn converts_history_to_codex_responses_input_items() {
     let messages = vec![
         Message {

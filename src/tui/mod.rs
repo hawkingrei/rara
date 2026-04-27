@@ -21,6 +21,7 @@ mod state;
 mod terminal_ui;
 #[cfg(test)]
 mod tests;
+mod tool_text;
 
 use std::sync::Arc;
 

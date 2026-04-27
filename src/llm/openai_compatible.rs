@@ -360,10 +360,14 @@ pub(super) fn parse_chat_completion_response(
     let mut content = Vec::new();
     let mut parsed_dsml_tool_calls = Vec::new();
     if let Some(text) = extract_message_text(choice.get("content")) {
-        let (visible_text, dsml_tool_calls) = extract_dsml_tool_calls_from_text(&text);
-        parsed_dsml_tool_calls = dsml_tool_calls;
-        if !visible_text.trim().is_empty() {
-            content.push(ContentBlock::Text { text: visible_text });
+        if endpoint_kind == OpenAiEndpointKind::Deepseek {
+            let (visible_text, dsml_tool_calls) = extract_dsml_tool_calls_from_text(&text);
+            parsed_dsml_tool_calls = dsml_tool_calls;
+            if !visible_text.trim().is_empty() {
+                content.push(ContentBlock::Text { text: visible_text });
+            }
+        } else if !text.trim().is_empty() {
+            content.push(ContentBlock::Text { text });
         }
     }
     if endpoint_kind == OpenAiEndpointKind::Deepseek {
@@ -409,7 +413,8 @@ pub(super) fn parse_chat_completion_response(
             });
         }
     }
-    if !parsed_dsml_tool_calls.is_empty()
+    if endpoint_kind == OpenAiEndpointKind::Deepseek
+        && !parsed_dsml_tool_calls.is_empty()
         && !content
             .iter()
             .any(|block| matches!(block, ContentBlock::ToolUse { .. }))

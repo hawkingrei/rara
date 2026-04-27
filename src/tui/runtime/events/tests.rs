@@ -72,6 +72,17 @@ fn scrub_internal_control_tokens_drops_orphaned_dsml_payload() {
 }
 
 #[test]
+fn scrub_internal_control_tokens_preserves_malformed_dsml_remainder() {
+    let cleaned = scrub_internal_control_tokens(
+        "Before\n<｜DSML｜tool_calls>\n<｜DSML｜invoke name=\"replace\">\nAfter normal text",
+    );
+
+    assert!(cleaned.contains("Before"));
+    assert!(cleaned.contains("<｜DSML｜tool_calls>"));
+    assert!(cleaned.contains("After normal text"));
+}
+
+#[test]
 fn plan_mode_routes_planning_prose_to_planning_not_exploring() {
     let temp = tempdir().expect("tempdir");
     let mut app = TuiApp::new(ConfigManager {

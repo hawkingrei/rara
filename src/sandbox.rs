@@ -29,7 +29,7 @@ const LINUX_RUNTIME_READ_ROOTS: &[&str] = &[
     "/run/current-system/sw",
 ];
 const SANDBOX_HOME: &str = "/tmp/rara-home";
-const DEFAULT_SHELL: &str = "sh";
+const DEFAULT_SHELL: &str = "/bin/sh";
 
 impl SandboxManager {
     pub fn new() -> Result<Self> {
@@ -281,9 +281,27 @@ pub fn sandbox_failure_hint() -> &'static str {
 fn shell_program() -> String {
     env::var("SHELL")
         .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
+        .and_then(|value| sanitize_shell_program(value.as_str()))
         .unwrap_or_else(|| DEFAULT_SHELL.to_string())
+}
+
+fn sanitize_shell_program(value: &str) -> Option<String> {
+    let shell = value.split_whitespace().next()?.trim();
+    if matches!(
+        shell,
+        "/bin/sh"
+            | "/bin/bash"
+            | "/bin/zsh"
+            | "/bin/ksh"
+            | "/usr/bin/sh"
+            | "/usr/bin/bash"
+            | "/usr/bin/zsh"
+            | "/usr/bin/ksh"
+    ) {
+        Some(shell.to_string())
+    } else {
+        None
+    }
 }
 
 fn shell_command_flag(shell: &str) -> String {
@@ -314,7 +332,7 @@ fn cleanup_stale_profiles(profile_dir: &Path) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{shell_command_flag, SandboxManager};
+    use super::{sanitize_shell_program, shell_command_flag, SandboxManager, DEFAULT_SHELL};
     use std::path::PathBuf;
     use tempfile::tempdir;
 
@@ -375,6 +393,21 @@ mod tests {
         assert_eq!(shell_command_flag("/bin/zsh"), "-lc");
         assert_eq!(shell_command_flag("/usr/bin/bash"), "-lc");
         assert_eq!(shell_command_flag("sh"), "-c");
+    }
+
+    #[test]
+    fn sanitize_shell_program_rejects_args_and_unmounted_shells() {
+        assert_eq!(
+            sanitize_shell_program("/bin/zsh"),
+            Some("/bin/zsh".to_string())
+        );
+        assert_eq!(
+            sanitize_shell_program("/bin/zsh -i"),
+            Some("/bin/zsh".to_string())
+        );
+        assert_eq!(sanitize_shell_program("/opt/homebrew/bin/fish"), None);
+        assert_eq!(sanitize_shell_program("zsh"), None);
+        assert_eq!(DEFAULT_SHELL, "/bin/sh");
     }
 
     #[test]

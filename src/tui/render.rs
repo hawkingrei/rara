@@ -24,6 +24,7 @@ use self::viewport::TranscriptViewport;
 use super::custom_terminal::Frame;
 use super::line_utils::prefix_lines;
 use super::state::{TranscriptEntry, TuiApp};
+use super::tool_text::compact_delegate_rest;
 
 pub fn render(f: &mut Frame, app: &TuiApp) {
     let bottom_pane_height = desired_bottom_pane_height(app, f.area().width, f.area().height);
@@ -699,44 +700,6 @@ fn tool_action_label(message: &str) -> Option<String> {
             if rest.is_empty() { other } else { message }
         )),
     }
-}
-
-fn compact_delegate_rest(rest: &str) -> Option<String> {
-    let rest = rest.trim();
-    if rest.is_empty() {
-        return None;
-    }
-    if let Ok(value) = serde_json::from_str::<serde_json::Value>(rest) {
-        if let Some(name) = value
-            .get("name")
-            .and_then(serde_json::Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        {
-            let instruction = value
-                .get("instruction")
-                .and_then(serde_json::Value::as_str)
-                .map(compact_instruction)
-                .unwrap_or_else(|| "instruction unavailable".to_string());
-            return Some(format!("{name}: {instruction}"));
-        }
-        return value
-            .get("instruction")
-            .and_then(serde_json::Value::as_str)
-            .map(compact_instruction);
-    }
-    Some(compact_instruction(rest))
-}
-
-fn compact_instruction(instruction: &str) -> String {
-    const MAX_CHARS: usize = 120;
-    let normalized = instruction.split_whitespace().collect::<Vec<_>>().join(" ");
-    if normalized.chars().count() <= MAX_CHARS {
-        return normalized;
-    }
-    let mut truncated = normalized.chars().take(MAX_CHARS).collect::<String>();
-    truncated.push('…');
-    truncated
 }
 
 pub(crate) fn section_span<'a>(title: &'a str, color: Color) -> Span<'a> {
