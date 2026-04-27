@@ -649,6 +649,37 @@ fn openai_model_picker_renders_profile_manager_not_endpoint_presets() {
 }
 
 #[test]
+fn openai_model_picker_renders_profile_defaults_when_fields_are_empty() {
+    let temp = tempdir().expect("tempdir");
+    let mut app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("build tui app");
+    app.provider_picker_idx = crate::tui::state::PROVIDER_FAMILIES
+        .iter()
+        .position(|(family, _, _)| *family == ProviderFamily::OpenAiCompatible)
+        .expect("openai-compatible family present");
+    app.config.select_openai_profile(
+        "custom-defaults",
+        "Custom Defaults",
+        OpenAiEndpointKind::Custom,
+    );
+    let profile = app
+        .config
+        .openai_profiles
+        .get_mut("custom-defaults")
+        .expect("custom profile present");
+    profile.model = None;
+    profile.base_url = None;
+    app.open_overlay(Overlay::ModelPicker);
+
+    let rendered = render_screen_text(&app, 100, 24);
+    assert!(rendered.contains("Custom Defaults"));
+    assert!(rendered.contains(OpenAiEndpointKind::Custom.default_model()));
+    assert!(rendered.contains("https://api.openai"));
+}
+
+#[test]
 fn command_palette_query_uses_full_width_without_leaking_bottom_status() {
     let temp = tempdir().expect("tempdir");
     let mut app = TuiApp::new(ConfigManager {

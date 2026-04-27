@@ -389,10 +389,28 @@ fn openai_profile_table_row<'a>(app: &TuiApp, profile: &'a OpenAiEndpointProfile
         Cell::from(active),
         Cell::from(profile.label.as_str()),
         Cell::from(profile.kind.label()),
-        Cell::from(profile.model.as_deref().unwrap_or("-")),
+        Cell::from(profile_model_label(profile)),
         Cell::from(profile_api_key_status(profile)),
-        Cell::from(profile.base_url.as_deref().unwrap_or("-")),
+        Cell::from(profile_base_url_label(profile)),
     ])
+}
+
+fn profile_model_label(profile: &OpenAiEndpointProfile) -> &str {
+    profile
+        .model
+        .as_deref()
+        .map(str::trim)
+        .filter(|model| !model.is_empty())
+        .unwrap_or_else(|| profile.kind.default_model())
+}
+
+fn profile_base_url_label(profile: &OpenAiEndpointProfile) -> &str {
+    profile
+        .base_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|base_url| !base_url.is_empty())
+        .unwrap_or_else(|| profile.kind.default_base_url())
 }
 
 fn profile_api_key_status(profile: &OpenAiEndpointProfile) -> &'static str {
