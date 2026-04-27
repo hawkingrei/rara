@@ -236,6 +236,69 @@ fn deepseek_reasoning_content_roundtrips_as_provider_metadata() {
 }
 
 #[test]
+fn parses_dsml_tool_calls_from_text_content() {
+    let response = parse_chat_completion_response(
+        &json!({
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": concat!(
+                        "<｜DSML｜tool_calls>\n",
+                        "<｜DSML｜invoke name=\"apply_patch\">\n",
+                        "<｜DSML｜parameter name=\"patch\" string=\"true\">*** Begin Patch\n*** Update File: src/lib.rs\n@@\n-old\n+new\n*** End Patch</｜DSML｜parameter>\n",
+                        "</｜DSML｜invoke>\n",
+                        "</｜DSML｜tool_calls>"
+                    )
+                },
+                "finish_reason": "tool_calls"
+            }]
+        }),
+        OpenAiEndpointKind::Deepseek,
+    )
+    .expect("parse response");
+
+    assert_eq!(response.content.len(), 1);
+    assert!(matches!(
+        &response.content[0],
+        ContentBlock::ToolUse { id, name, input }
+            if id == "dsml-tool-1"
+                && name == "apply_patch"
+                && input["patch"].as_str().is_some_and(|patch| patch.contains("*** Begin Patch"))
+    ));
+}
+
+#[test]
+fn ignores_dsml_tool_calls_for_generic_openai_compatible_endpoint() {
+    let response = parse_chat_completion_response(
+        &json!({
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": concat!(
+                        "Visible text\n",
+                        "<｜DSML｜tool_calls>\n",
+                        "<｜DSML｜invoke name=\"apply_patch\">\n",
+                        "<｜DSML｜parameter name=\"patch\" string=\"true\">*** Begin Patch\n*** End Patch</｜DSML｜parameter>\n",
+                        "</｜DSML｜invoke>\n",
+                        "</｜DSML｜tool_calls>"
+                    )
+                },
+                "finish_reason": "stop"
+            }]
+        }),
+        OpenAiEndpointKind::Custom,
+    )
+    .expect("parse response");
+
+    assert_eq!(response.content.len(), 1);
+    assert!(matches!(
+        &response.content[0],
+        ContentBlock::Text { text }
+            if text.contains("Visible text") && text.contains("<｜DSML｜tool_calls>")
+    ));
+}
+
+#[test]
 fn converts_history_to_codex_responses_input_items() {
     let messages = vec![
         Message {

@@ -307,7 +307,9 @@ fn default_system_prompt_sections() -> Vec<PromptSection> {
                     "Do not ask the user to paste local file contents or name local files when tools can read them directly.",
                     "For repository review or architecture analysis, inspect the workspace proactively with tools before asking follow-up questions.",
                     "For repository review, avoid repeating the same discovery tool call with the same arguments unless the workspace changed.",
+                    "When searching text or files through a shell, prefer 'rg' for text search and 'rg --files' for file discovery because it is faster than grep/find. If 'rg' is unavailable, fall back to other tools.",
                     "Prefer source directories and key project files over build artifacts or cache directories when inspecting a repository.",
+                    "Never print raw provider-specific tool markup such as DSML tags. When a tool is needed, call the provided tool directly.",
                 ],
             ),
         ),
@@ -330,7 +332,14 @@ fn default_system_prompt_sections() -> Vec<PromptSection> {
             section(
                 "Tool Use And Safety",
                 &[
-                    "Prefer 'apply_patch' for editing existing files and use 'write_file' only for new files or full rewrites.",
+                    "Before modifying an existing file, inspect the relevant current contents with 'read_file' or repository search unless you already read the exact target in this turn.",
+                    "Prefer 'apply_patch' for editing existing files because it is diff-shaped and reviewable.",
+                    "Use 'replace' only for one exact, unique snippet that you have verified from the current file contents.",
+                    "Use 'replace_lines' only for large deletions or replacements when you have verified exact line numbers from the current file contents; do not pass hundreds of lines through 'replace.old_string'.",
+                    "Use 'write_file' only for new files or intentional full-file rewrites after reading the current file when it already exists.",
+                    "Do not use shell redirection, sed, perl, or ad-hoc scripts to edit files when direct edit tools or 'apply_patch' can do the job.",
+                    "If a 'read_file' result is truncated, retry with narrower start_line/end_line ranges instead of asking the user to paste the file.",
+                    "If sandboxed bash is unavailable or blocked, continue with direct file tools such as read_file, apply_patch, and replace_lines before asking the user for help.",
                     "Use 'remember_experience' for global vector memory.",
                     "Use 'update_project_memory' to record facts into memory.md.",
                     "Use 'retrieve_session_context' to recall past conversations.",
@@ -564,6 +573,13 @@ mod tests {
         let prompt = super::default_system_prompt();
         assert!(prompt.contains("prompt injection"));
         assert!(prompt.contains("Conversation history may be compacted"));
+        assert!(prompt.contains("prefer 'rg' for text search"));
+        assert!(prompt.contains("rg --files"));
+        assert!(prompt.contains("Before modifying an existing file"));
+        assert!(prompt.contains("Prefer 'apply_patch' for editing existing files"));
+        assert!(prompt.contains("Use 'replace' only for one exact, unique snippet"));
+        assert!(prompt.contains("Use 'write_file' only for new files"));
+        assert!(prompt.contains("Do not use shell redirection"));
     }
 
     #[test]

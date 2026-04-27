@@ -36,6 +36,10 @@ impl ToolResultStore {
             "apply_patch" => compact_apply_patch(result),
             "write_file" => compact_write_file(result),
             "replace" => compact_replace(result),
+            "replace_lines" => compact_replace_lines(result),
+            "spawn_agent" | "explore_agent" | "plan_agent" => {
+                compact_subagent_result(tool_name, result)
+            }
             "list_files" => compact_list_files(input, result),
             "read_file" => compact_read_file(input, result),
             "glob" => compact_glob(result),
@@ -374,6 +378,117 @@ fn compact_replace(result: &Value) -> String {
     )
 }
 
+fn compact_replace_lines(result: &Value) -> String {
+    let path = result
+        .get("path")
+        .and_then(Value::as_str)
+        .unwrap_or("<unknown>");
+    let start_line = result
+        .get("start_line")
+        .and_then(Value::as_u64)
+        .unwrap_or_default();
+    let end_line = result
+        .get("end_line")
+        .and_then(Value::as_u64)
+        .unwrap_or_default();
+    let removed_lines = result
+        .get("removed_lines")
+        .and_then(Value::as_u64)
+        .unwrap_or_default();
+    let inserted_lines = result
+        .get("inserted_lines")
+        .and_then(Value::as_u64)
+        .unwrap_or_default();
+    let line_delta = result
+        .get("line_delta")
+        .and_then(Value::as_i64)
+        .unwrap_or_default();
+    format!(
+        "replace_lines {path}:{start_line}-{end_line}\nremoved={removed_lines} inserted={inserted_lines} line_delta={line_delta}"
+    )
+}
+
+fn compact_subagent_result(tool_name: &str, result: &Value) -> String {
+    let summary = result
+        .get("summary")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("Sub-agent finished.");
+    let mut rendered = match tool_name {
+        "spawn_agent" => {
+            let name = result
+                .get("name")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .unwrap_or("worker");
+            format!("spawn_agent {name}: {summary}")
+        }
+        "explore_agent" => format!("explore_agent {summary}"),
+        "plan_agent" => format!("plan_agent {summary}"),
+        _ => format!("{tool_name} {summary}"),
+    };
+
+    append_request_user_input(&mut rendered, result.get("request_user_input"));
+    rendered
+}
+
+fn append_request_user_input(rendered: &mut String, request: Option<&Value>) {
+    let Some(request) = request else {
+        return;
+    };
+    if request.is_null() {
+        return;
+    }
+    if let Some(question) = request
+        .get("question")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        rendered.push_str(&format!("\nrequest_user_input: {question}"));
+    }
+    if let Some(options) = request.get("options").and_then(Value::as_array) {
+        for option in options {
+            let Some((label, description)) = parse_request_option(option) else {
+                continue;
+            };
+            rendered.push_str(&format!("\noption: {label} | {description}"));
+        }
+    }
+    if let Some(note) = request
+        .get("note")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        rendered.push_str(&format!("\nnote: {note}"));
+    }
+}
+
+fn parse_request_option(option: &Value) -> Option<(String, String)> {
+    if let Some(pair) = option.as_array() {
+        let label = pair.first()?.as_str()?.trim();
+        let description = pair.get(1).and_then(Value::as_str).unwrap_or("").trim();
+        return Some((label.to_string(), description.to_string()));
+    }
+    if let Some(object) = option.as_object() {
+        let label = object
+            .get("label")
+            .or_else(|| object.get("name"))
+            .and_then(Value::as_str)?
+            .trim();
+        let description = object
+            .get("description")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim();
+        return Some((label.to_string(), description.to_string()));
+    }
+    None
+}
+
 fn summarize_tool_result(tool_name: &str, input: &Value, result: &Value) -> String {
     match tool_name {
         "list_files" => {
@@ -487,6 +602,30 @@ fn summarize_tool_result(tool_name: &str, input: &Value, result: &Value) -> Stri
                 .unwrap_or_default();
             format!("Replace in {path}: {replacements} replacement(s).")
         }
+        "replace_lines" => {
+            let path = result
+                .get("path")
+                .and_then(Value::as_str)
+                .or_else(|| input.get("path").and_then(Value::as_str))
+                .unwrap_or("<unknown>");
+            let start_line = result
+                .get("start_line")
+                .and_then(Value::as_u64)
+                .or_else(|| input.get("start_line").and_then(Value::as_u64))
+                .unwrap_or_default();
+            let end_line = result
+                .get("end_line")
+                .and_then(Value::as_u64)
+                .or_else(|| input.get("end_line").and_then(Value::as_u64))
+                .unwrap_or_default();
+            let inserted_lines = result
+                .get("inserted_lines")
+                .and_then(Value::as_u64)
+                .unwrap_or_default();
+            format!(
+                "Replaced lines {start_line}-{end_line} in {path}: {inserted_lines} inserted line(s)."
+            )
+        }
         _ => {
             let keys = result
                 .as_object()
@@ -514,8 +653,8 @@ pub fn default_tool_result_store_dir() -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::{
-        compact_read_file, default_tool_result_store_dir, repair_tool_result_history,
-        ToolResultStore,
+        compact_read_file, compact_subagent_result, default_tool_result_store_dir,
+        repair_tool_result_history, ToolResultStore,
     };
     use crate::agent::Message;
     use serde_json::json;
@@ -566,5 +705,33 @@ mod tests {
         assert!(default_tool_result_store_dir()
             .expect("default tool result dir")
             .ends_with(std::path::Path::new("tool-results")));
+    }
+
+    #[test]
+    fn compacts_subagent_results_without_full_payload() {
+        let compacted = compact_subagent_result(
+            "spawn_agent",
+            &json!({
+                "name": "fix-assembler",
+                "status": "done",
+                "summary": "Removed the orphaned test block and kept one cfg(test) module.",
+                "request_user_input": {
+                    "question": "Proceed?",
+                    "options": [
+                        ["Yes", "Apply the cleanup."],
+                        { "label": "No", "description": "Leave the file unchanged." }
+                    ],
+                    "note": "The line range was verified."
+                }
+            }),
+        );
+
+        assert!(compacted.starts_with("spawn_agent fix-assembler: Removed"));
+        assert!(compacted.contains("request_user_input: Proceed?"));
+        assert!(compacted.contains("option: Yes | Apply the cleanup."));
+        assert!(compacted.contains("option: No | Leave the file unchanged."));
+        assert!(compacted.contains("note: The line range was verified."));
+        assert!(!compacted.contains("\"summary\""));
+        assert!(!compacted.contains("\"request_user_input\""));
     }
 }

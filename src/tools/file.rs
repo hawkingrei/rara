@@ -13,15 +13,15 @@ impl Tool for ReadFileTool {
         "read_file"
     }
     fn description(&self) -> &str {
-        "Read the content of a file"
+        "Read a file, optionally with 1-based inclusive line ranges for large files"
     }
     fn input_schema(&self) -> Value {
         json!({
             "type": "object",
             "properties": {
-                "path": { "type": "string" },
-                "start_line": { "type": "integer", "minimum": 1 },
-                "end_line": { "type": "integer", "minimum": 1 }
+                "path": { "type": "string", "description": "Path to read." },
+                "start_line": { "type": "integer", "minimum": 1, "description": "Optional 1-based first line to include." },
+                "end_line": { "type": "integer", "minimum": 1, "description": "Optional 1-based last line to include." }
             },
             "required": ["path"]
         })
@@ -83,14 +83,14 @@ impl Tool for WriteFileTool {
         "write_file"
     }
     fn description(&self) -> &str {
-        "Write content to a file"
+        "Create a new file or intentionally rewrite a whole file. For existing files, read the file first and prefer apply_patch for partial edits."
     }
     fn input_schema(&self) -> Value {
         json!({
             "type": "object",
             "properties": {
-                "path": { "type": "string" },
-                "content": { "type": "string" }
+                "path": { "type": "string", "description": "Path to create or fully rewrite." },
+                "content": { "type": "string", "description": "Complete new file contents. Do not use for small edits to existing files." }
             },
             "required": ["path", "content"]
         })
@@ -128,15 +128,15 @@ impl Tool for ReplaceTool {
         "replace"
     }
     fn description(&self) -> &str {
-        "Replace a specific string in a file"
+        "Replace one exact, unique string in a file. Read the file first and prefer apply_patch for structured multi-line edits."
     }
     fn input_schema(&self) -> Value {
         json!({
             "type": "object",
             "properties": {
-                "path": { "type": "string" },
-                "old_string": { "type": "string" },
-                "new_string": { "type": "string" }
+                "path": { "type": "string", "description": "Path to edit." },
+                "old_string": { "type": "string", "description": "Exact text to replace. It must appear exactly once in the file." },
+                "new_string": { "type": "string", "description": "Replacement text." }
             },
             "required": ["path", "old_string", "new_string"]
         })
@@ -166,6 +166,101 @@ impl Tool for ReplaceTool {
             "old_bytes": o.len(),
             "new_bytes": n.len(),
             "line_delta": updated.lines().count() as i64 - c.lines().count() as i64,
+        }))
+    }
+}
+
+pub struct ReplaceLinesTool;
+#[async_trait]
+impl Tool for ReplaceLinesTool {
+    fn name(&self) -> &str {
+        "replace_lines"
+    }
+    fn description(&self) -> &str {
+        "Replace an inclusive line range in a file. Use only after reading the target range and verifying the current line numbers."
+    }
+    fn input_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "path": { "type": "string", "description": "Path to edit." },
+                "start_line": { "type": "integer", "minimum": 1, "description": "1-based first line to replace." },
+                "end_line": { "type": "integer", "minimum": 1, "description": "1-based last line to replace, inclusive." },
+                "new_string": {
+                    "type": "string",
+                    "description": "Replacement text for the inclusive line range. Use an empty string to delete the range."
+                }
+            },
+            "required": ["path", "start_line", "end_line", "new_string"]
+        })
+    }
+    async fn call(&self, i: Value) -> Result<Value, ToolError> {
+        let path = i["path"]
+            .as_str()
+            .ok_or(ToolError::InvalidInput("path".into()))?;
+        let start_line = i["start_line"]
+            .as_u64()
+            .ok_or(ToolError::InvalidInput("start_line".into()))? as usize;
+        let end_line = i["end_line"]
+            .as_u64()
+            .ok_or(ToolError::InvalidInput("end_line".into()))? as usize;
+        let new_string = i["new_string"]
+            .as_str()
+            .ok_or(ToolError::InvalidInput("new_string".into()))?;
+        if start_line == 0 || end_line == 0 {
+            return Err(ToolError::InvalidInput(
+                "start_line/end_line must be >= 1".into(),
+            ));
+        }
+        if start_line > end_line {
+            return Err(ToolError::InvalidInput(
+                "start_line must be <= end_line".into(),
+            ));
+        }
+
+        let original = fs::read_to_string(path)?;
+        let had_trailing_newline = original.ends_with('\n');
+        let mut lines = original
+            .lines()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>();
+        let total_lines = lines.len();
+        if total_lines == 0 {
+            return Err(ToolError::ExecutionFailed(format!(
+                "Cannot replace lines in empty file {path}"
+            )));
+        }
+        if end_line > total_lines {
+            return Err(ToolError::ExecutionFailed(format!(
+                "Line range {start_line}-{end_line} exceeds file length {total_lines}"
+            )));
+        }
+
+        let replacement_lines = if new_string.is_empty() {
+            Vec::new()
+        } else {
+            new_string
+                .lines()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+        };
+        let removed_line_count = end_line - start_line + 1;
+        lines.splice(start_line - 1..end_line, replacement_lines.iter().cloned());
+
+        let mut updated = lines.join("\n");
+        if had_trailing_newline && !updated.is_empty() {
+            updated.push('\n');
+        }
+        fs::write(path, updated)?;
+
+        Ok(json!({
+            "status": "ok",
+            "path": path,
+            "start_line": start_line,
+            "end_line": end_line,
+            "removed_lines": removed_line_count,
+            "inserted_lines": replacement_lines.len(),
+            "line_delta": replacement_lines.len() as i64 - removed_line_count as i64,
         }))
     }
 }
@@ -256,7 +351,7 @@ fn existing_file_summary(path: &str) -> Result<Option<(u64, usize)>, ToolError> 
 
 #[cfg(test)]
 mod tests {
-    use super::{ListFilesTool, ReadFileTool, ReplaceTool, WriteFileTool};
+    use super::{ListFilesTool, ReadFileTool, ReplaceLinesTool, ReplaceTool, WriteFileTool};
     use crate::tool::Tool;
     use serde_json::json;
 
@@ -354,5 +449,46 @@ mod tests {
         assert_eq!(result["old_preview"], "old value");
         assert_eq!(result["new_preview"], "new\\nvalue");
         assert_eq!(result["line_delta"], 1);
+    }
+
+    #[tokio::test]
+    async fn replace_lines_replaces_inclusive_range_without_old_string() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("sample.txt");
+        std::fs::write(&path, "one\ntwo\nthree\nfour\n").expect("write sample");
+
+        let tool = ReplaceLinesTool;
+        let result = tool
+            .call(json!({
+                "path": path.display().to_string(),
+                "start_line": 2,
+                "end_line": 3,
+                "new_string": "middle"
+            }))
+            .await
+            .expect("replace lines");
+
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "one\nmiddle\nfour\n"
+        );
+        assert_eq!(result["removed_lines"], 2);
+        assert_eq!(result["inserted_lines"], 1);
+        assert_eq!(result["line_delta"], -1);
+    }
+
+    #[test]
+    fn file_tool_descriptions_encode_safe_edit_contract() {
+        let write_tool = WriteFileTool;
+        let replace_tool = ReplaceTool;
+        let replace_lines_tool = ReplaceLinesTool;
+
+        assert!(write_tool.description().contains("Create a new file"));
+        assert!(write_tool.description().contains("read the file first"));
+        assert!(replace_tool.description().contains("exact, unique string"));
+        assert!(replace_tool.description().contains("Read the file first"));
+        assert!(replace_lines_tool
+            .description()
+            .contains("verifying the current line numbers"));
     }
 }

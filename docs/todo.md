@@ -11,6 +11,7 @@ From higher-leverage structural work toward later UX parity work:
 3. Workspace / skill observability and cache correctness
 4. Memory / retrieval / thread persistence
 5. TUI transcript parity and command-surface polish
+6. Terminal-Bench evaluation readiness
 
 ## Phase 1: Architecture Closure
 
@@ -107,6 +108,11 @@ Priority order for this phase:
 - [ ] Rework token accounting in `src/agent.rs` so repeated checks do not need to re-encode full history every time.
 - [ ] Replace the fixed 100ms TUI event polling loop in `src/tui/mod.rs` with a more event-driven wakeup model when the app is idle.
 - [ ] Add stronger terminal panic/teardown guards so alternate-screen/raw-mode cleanup is robust on unexpected failures.
+
+## Evaluation / Benchmarks
+
+- [ ] Make Terminal-Bench compatibility an explicit product-quality target: add a headless Harbor/Terminal-Bench adapter, preserve structured trajectories, and keep benchmark data out of prompts, memories, fixtures, and training-oriented artifacts. See `docs/features/terminal-bench-evaluation.md`.
+- [ ] Add a small Terminal-Bench smoke run target before attempting full benchmark runs, with recorded RARA revision, dataset version, provider/model, sandbox mode, and failure taxonomy.
 
 ## Code Organization / Docs
 
