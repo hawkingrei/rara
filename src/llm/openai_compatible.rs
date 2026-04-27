@@ -202,15 +202,6 @@ pub(super) fn to_openai_messages_for_endpoint(
                             &tool_use_id,
                             &tool_content,
                         ));
-                    } else {
-                        flush_missing_tool_results(
-                            &mut openai_messages,
-                            &mut pending_tool_call_ids,
-                        );
-                        openai_messages.push(json!({
-                            "role": "user",
-                            "content": format!("tool_result {tool_use_id}: {tool_content}"),
-                        }));
                     }
                 }
                 if let Some(user_content) = user_content {
@@ -238,6 +229,7 @@ fn render_openai_assistant_message(content: &Value, endpoint_kind: OpenAiEndpoin
     let (text_parts, assistant_tool_uses) = collect_assistant_content(content);
     let tool_calls = assistant_tool_uses
         .into_iter()
+        .filter(|tool_use| !tool_use.id.trim().is_empty() && !tool_use.name.trim().is_empty())
         .map(|tool_use| {
             json!({
                 "id": tool_use.id,

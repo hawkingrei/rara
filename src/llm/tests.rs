@@ -117,6 +117,51 @@ fn fills_missing_openai_tool_results_before_follow_up_messages() {
 }
 
 #[test]
+fn drops_orphan_openai_tool_results_without_context_prefix() {
+    let messages = vec![
+        Message {
+            role: "user".to_string(),
+            content: json!([
+                {"type":"tool_result","tool_use_id":"orphan","content":"stale result"}
+            ]),
+        },
+        Message {
+            role: "user".to_string(),
+            content: json!([
+                {"type":"text","text":"continue"},
+                {"type":"tool_result","tool_use_id":"orphan","content":"stale result"}
+            ]),
+        },
+    ];
+
+    let openai_messages = to_openai_messages(&messages);
+    assert_eq!(openai_messages.len(), 1);
+    assert_eq!(openai_messages[0]["role"], "user");
+    assert_eq!(openai_messages[0]["content"], "continue");
+    assert!(!openai_messages.iter().any(|message| message["content"]
+        .as_str()
+        .is_some_and(|content| content.contains("tool_result orphan:"))));
+}
+
+#[test]
+fn skips_invalid_internal_tool_uses_when_rendering_openai_history() {
+    let messages = vec![Message {
+        role: "assistant".to_string(),
+        content: json!([
+            {"type":"tool_use","id":"","name":"read_file","input":{"path":"Cargo.toml"}},
+            {"type":"tool_use","id":"tool-1","name":"","input":{"path":"src"}},
+            {"type":"text","text":"Need more context."}
+        ]),
+    }];
+
+    let openai_messages = to_openai_messages(&messages);
+    assert_eq!(openai_messages.len(), 1);
+    assert_eq!(openai_messages[0]["role"], "assistant");
+    assert!(openai_messages[0].get("tool_calls").is_none());
+    assert_eq!(openai_messages[0]["content"], "Need more context.");
+}
+
+#[test]
 fn rejects_openai_tool_calls_without_required_fields() {
     let error = parse_chat_completion_response(
         &json!({
