@@ -8,9 +8,13 @@ updates:
       timezone: "Asia/Shanghai"
     open-pull-requests-limit: 8
     groups:
-      rust-dependencies:
+      rust-minor-patch-dependencies:
+        applies-to: "version-updates"
         patterns:
           - "*"
+        update-types:
+          - "minor"
+          - "patch"
     commit-message:
       prefix: "chore"
       include: "scope"

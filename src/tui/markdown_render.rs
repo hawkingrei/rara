@@ -267,6 +267,7 @@ where
             }
             Event::Html(html) => self.html(html, false),
             Event::InlineHtml(html) => self.html(html, true),
+            Event::InlineMath(math) | Event::DisplayMath(math) => self.code(math),
             Event::FootnoteReference(_) | Event::TaskListMarker(_) => {}
         }
     }
@@ -275,7 +276,7 @@ where
         match tag {
             Tag::Paragraph => self.start_paragraph(),
             Tag::Heading { level, .. } => self.start_heading(level),
-            Tag::BlockQuote => self.start_blockquote(),
+            Tag::BlockQuote(_) => self.start_blockquote(),
             Tag::CodeBlock(kind) => {
                 let indent = match kind {
                     CodeBlockKind::Fenced(_) => None,
@@ -298,6 +299,11 @@ where
             Tag::Strikethrough => self.push_inline_style(self.styles.strikethrough),
             Tag::Link { dest_url, .. } => self.push_link(dest_url.to_string()),
             Tag::HtmlBlock
+            | Tag::DefinitionList
+            | Tag::DefinitionListTitle
+            | Tag::DefinitionListDefinition
+            | Tag::Superscript
+            | Tag::Subscript
             | Tag::FootnoteDefinition(_)
             | Tag::Image { .. }
             | Tag::MetadataBlock(_) => {}
@@ -308,7 +314,7 @@ where
         match tag {
             TagEnd::Paragraph => self.end_paragraph(),
             TagEnd::Heading(_) => self.end_heading(),
-            TagEnd::BlockQuote => self.end_blockquote(),
+            TagEnd::BlockQuote(_) => self.end_blockquote(),
             TagEnd::CodeBlock => self.end_codeblock(),
             TagEnd::List(_) => self.end_list(),
             TagEnd::Item => {
@@ -322,6 +328,11 @@ where
             TagEnd::Emphasis | TagEnd::Strong | TagEnd::Strikethrough => self.pop_inline_style(),
             TagEnd::Link => self.pop_link(),
             TagEnd::HtmlBlock
+            | TagEnd::DefinitionList
+            | TagEnd::DefinitionListTitle
+            | TagEnd::DefinitionListDefinition
+            | TagEnd::Superscript
+            | TagEnd::Subscript
             | TagEnd::FootnoteDefinition
             | TagEnd::Image
             | TagEnd::MetadataBlock(_) => {}
