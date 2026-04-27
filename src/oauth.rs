@@ -542,7 +542,9 @@ mod tests {
         )
         .expect("save official auth");
 
-        let saved = manager.load_saved_credential().expect("load preferred auth");
+        let saved = manager
+            .load_saved_credential()
+            .expect("load preferred auth");
         assert_eq!(saved.expose_secret(), "sk-official");
     }
 

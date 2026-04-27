@@ -1,11 +1,7 @@
 use std::io;
 
 use anyhow::Result;
-use crossterm::{
-    cursor::Show,
-    execute,
-    terminal::disable_raw_mode,
-};
+use crossterm::{cursor::Show, execute, terminal::disable_raw_mode};
 use ratatui::{backend::CrosstermBackend, layout::Rect, text::Line};
 
 use super::custom_terminal::Terminal;

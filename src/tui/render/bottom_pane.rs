@@ -177,7 +177,11 @@ fn activity_status_line(app: &TuiApp) -> (&'static str, Color, String) {
         );
     }
 
-    if let Some(warning) = app.notice.as_deref().filter(|value| value.starts_with("Warning:")) {
+    if let Some(warning) = app
+        .notice
+        .as_deref()
+        .filter(|value| value.starts_with("Warning:"))
+    {
         return ("Warning", Color::Yellow, warning.to_string());
     }
 

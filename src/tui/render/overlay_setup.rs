@@ -56,8 +56,7 @@ pub(super) fn render_provider_picker_modal(f: &mut Frame, app: &TuiApp, area: Re
             .style(style)
         })
         .collect::<Vec<_>>();
-    let intro =
-        "Choose a provider family first, then continue into model selection or setup.";
+    let intro = "Choose a provider family first, then continue into model selection or setup.";
     let intro_height = wrapped_text_height(intro, area.width);
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -69,12 +68,12 @@ pub(super) fn render_provider_picker_modal(f: &mut Frame, app: &TuiApp, area: Re
         .split(area);
     f.render_widget(
         Paragraph::new(intro)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(" Provider Menu "),
-        )
-        .wrap(Wrap { trim: false }),
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(" Provider Menu "),
+            )
+            .wrap(Wrap { trim: false }),
         chunks[0],
     );
     f.render_widget(
@@ -492,12 +491,12 @@ pub(super) fn render_openai_endpoint_kind_picker_modal(f: &mut Frame, app: &TuiA
         .split(area);
     f.render_widget(
         Paragraph::new(intro)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(" Endpoint Kind "),
-        )
-        .wrap(Wrap { trim: false }),
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(" Endpoint Kind "),
+            )
+            .wrap(Wrap { trim: false }),
         chunks[0],
     );
     f.render_widget(
@@ -702,8 +701,8 @@ pub(super) fn render_model_name_editor_modal(
         ])
         .split(area);
     let intro = Paragraph::new(intro_text)
-    .block(Block::default().borders(Borders::ALL).title(" Model Name "))
-    .wrap(Wrap { trim: false });
+        .block(Block::default().borders(Borders::ALL).title(" Model Name "))
+        .wrap(Wrap { trim: false });
     let editor = Paragraph::new(app.model_name_input.as_str())
         .block(Block::default().borders(Borders::ALL).title(" Value "));
     let footer =
@@ -740,12 +739,12 @@ pub(super) fn render_openai_profile_label_editor_modal(
         ])
         .split(area);
     let intro = Paragraph::new(intro_text)
-    .block(
-        Block::default()
-            .borders(Borders::ALL)
-            .title(" New Endpoint Profile "),
-    )
-    .wrap(Wrap { trim: false });
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" New Endpoint Profile "),
+        )
+        .wrap(Wrap { trim: false });
     let editor = Paragraph::new(app.openai_profile_label_input.as_str())
         .block(Block::default().borders(Borders::ALL).title(" Label "));
     let footer = Paragraph::new("Enter create  Esc back to profiles").alignment(Alignment::Center);

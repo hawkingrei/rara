@@ -533,7 +533,10 @@ async fn openai_model_picker_setup_row_opens_endpoint_kind_picker() {
     .await
     .expect("open endpoint kind picker");
 
-    assert!(matches!(app.overlay, Some(Overlay::OpenAiEndpointKindPicker)));
+    assert!(matches!(
+        app.overlay,
+        Some(Overlay::OpenAiEndpointKindPicker)
+    ));
     assert_eq!(app.openai_endpoint_kind_picker_idx, 0);
 }
 
@@ -622,11 +625,8 @@ async fn saving_openai_profile_label_creates_new_profile_for_selected_kind() {
     })
     .expect("app");
     app.provider_picker_idx = 1;
-    app.config.select_openai_profile(
-        "deepseek-default",
-        "DeepSeek",
-        OpenAiEndpointKind::Deepseek,
-    );
+    app.config
+        .select_openai_profile("deepseek-default", "DeepSeek", OpenAiEndpointKind::Deepseek);
     app.open_overlay(Overlay::OpenAiProfilePicker);
     app.openai_profile_picker_idx = 0;
 

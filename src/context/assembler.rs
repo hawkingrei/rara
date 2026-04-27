@@ -936,7 +936,8 @@ fn select_memory_candidates(
         } else if let (Some(remaining), Some(cost)) =
             (remaining_budget, candidate.budget_impact_tokens)
         {
-            (cost > remaining).then(|| format!("{BUDGET_DROP_REASON_PREFIX} ({cost} > {remaining})"))
+            (cost > remaining)
+                .then(|| format!("{BUDGET_DROP_REASON_PREFIX} ({cost} > {remaining})"))
         } else {
             None
         };
