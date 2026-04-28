@@ -173,10 +173,14 @@ impl LlmBackend for OpenAiCompatibleBackend {
 
         while let Some(event) = stream.next().await {
             let event = event.map_err(|error| anyhow!("Failed to decode SSE event: {error}"))?;
-            if event.data.trim().is_empty() || event.data == "[DONE]" {
+            let data = event.data.trim();
+            if data.is_empty() {
                 continue;
             }
-            let payload: Value = serde_json::from_str(&event.data)
+            if data == "[DONE]" {
+                break;
+            }
+            let payload: Value = serde_json::from_str(data)
                 .map_err(|error| anyhow!("Failed to parse SSE payload: {error}"))?;
 
             if let Some(choice) = payload
@@ -196,7 +200,7 @@ impl LlmBackend for OpenAiCompatibleBackend {
                         streamed_reasoning_content.push_str(reasoning);
                     }
                     if let Some(tool_deltas) = delta.get("tool_calls").and_then(Value::as_array) {
-                        merge_streaming_tool_calls(&mut streamed_tool_calls, tool_deltas);
+                        merge_streaming_tool_calls(&mut streamed_tool_calls, tool_deltas)?;
                     }
                 }
                 if let Some(finish) = choice.get("finish_reason").and_then(Value::as_str) {
@@ -210,65 +214,12 @@ impl LlmBackend for OpenAiCompatibleBackend {
             }
         }
 
-        let mut content = Vec::new();
-        let mut parsed_dsml_tool_calls = Vec::new();
-
-        if self.endpoint_kind == OpenAiEndpointKind::Deepseek {
-            let (visible_text, dsml_tool_calls) = extract_dsml_tool_calls_from_text(&streamed_text);
-            parsed_dsml_tool_calls = dsml_tool_calls;
-            if !visible_text.trim().is_empty() {
-                content.push(ContentBlock::Text { text: visible_text });
-            }
-        } else if !streamed_text.trim().is_empty() {
-            content.push(ContentBlock::Text {
-                text: streamed_text,
-            });
-        }
-
-        if self.endpoint_kind == OpenAiEndpointKind::Deepseek {
-            if !streamed_reasoning_content.trim().is_empty() {
-                content.push(ContentBlock::ProviderMetadata {
-                    provider: "deepseek".to_string(),
-                    key: "reasoning_content".to_string(),
-                    value: Value::String(streamed_reasoning_content),
-                });
-            }
-        }
-
-        for (idx, tc) in streamed_tool_calls.iter().enumerate() {
-            let id = tc
-                .get("id")
-                .and_then(Value::as_str)
-                .filter(|id| !id.trim().is_empty())
-                .map(|id| id.to_string())
-                .unwrap_or_else(|| format!("stream-tool-{}", idx + 1));
-            let name = tc
-                .get("function")
-                .and_then(|f| f.get("name"))
-                .and_then(Value::as_str)
-                .filter(|name| !name.trim().is_empty())
-                .ok_or_else(|| {
-                    anyhow!("OpenAI-compatible stream tool_calls[{idx}] missing name")
-                })?;
-            let arguments = tc
-                .get("function")
-                .and_then(|f| f.get("arguments"))
-                .unwrap_or(&Value::Null);
-            content.push(ContentBlock::ToolUse {
-                id,
-                name: name.to_string(),
-                input: parse_tool_arguments(arguments)?,
-            });
-        }
-
-        if self.endpoint_kind == OpenAiEndpointKind::Deepseek
-            && !parsed_dsml_tool_calls.is_empty()
-            && !content
-                .iter()
-                .any(|block| matches!(block, ContentBlock::ToolUse { .. }))
-        {
-            content.extend(parsed_dsml_tool_calls);
-        }
+        let content = build_streaming_response_content(
+            self.endpoint_kind,
+            streamed_text,
+            streamed_reasoning_content,
+            &streamed_tool_calls,
+        )?;
 
         Ok(LlmResponse {
             content,
@@ -401,8 +352,8 @@ fn apply_deepseek_thinking_options(
         return;
     }
 
-    // Only send thinking controls when the user explicitly opts in.
-    // Official DeepSeek API does not accept these parameters and returns 400.
+    // Only send thinking controls when the user explicitly opts in, keeping
+    // the default body compatible with standard OpenAI-style endpoints.
     match thinking {
         Some(true) => {
             body["thinking"] = json!({ "type": "enabled" });
@@ -808,9 +759,79 @@ fn extract_dsml_attr(tag: &str, name: &str) -> Option<String> {
     Some(value[..end].to_string())
 }
 
-fn merge_streaming_tool_calls(accumulated: &mut Vec<Value>, deltas: &[Value]) {
-    for delta in deltas {
-        let index = delta.get("index").and_then(Value::as_u64).unwrap_or(0) as usize;
+pub(super) fn build_streaming_response_content(
+    endpoint_kind: OpenAiEndpointKind,
+    streamed_text: String,
+    streamed_reasoning_content: String,
+    streamed_tool_calls: &[Value],
+) -> Result<Vec<ContentBlock>> {
+    let mut content = Vec::new();
+    let mut parsed_dsml_tool_calls = Vec::new();
+
+    if endpoint_kind == OpenAiEndpointKind::Deepseek {
+        let (visible_text, dsml_tool_calls) = extract_dsml_tool_calls_from_text(&streamed_text);
+        parsed_dsml_tool_calls = dsml_tool_calls;
+        if !visible_text.trim().is_empty() {
+            content.push(ContentBlock::Text { text: visible_text });
+        }
+    } else if !streamed_text.trim().is_empty() {
+        content.push(ContentBlock::Text {
+            text: streamed_text,
+        });
+    }
+
+    if endpoint_kind == OpenAiEndpointKind::Deepseek && !streamed_reasoning_content.is_empty() {
+        content.push(ContentBlock::ProviderMetadata {
+            provider: "deepseek".to_string(),
+            key: "reasoning_content".to_string(),
+            value: Value::String(streamed_reasoning_content),
+        });
+    }
+
+    for (idx, tc) in streamed_tool_calls.iter().enumerate() {
+        let id = tc
+            .get("id")
+            .and_then(Value::as_str)
+            .filter(|id| !id.trim().is_empty())
+            .map(|id| id.to_string())
+            .unwrap_or_else(|| format!("stream-tool-{}", idx + 1));
+        let name = tc
+            .get("function")
+            .and_then(|f| f.get("name"))
+            .and_then(Value::as_str)
+            .filter(|name| !name.trim().is_empty())
+            .ok_or_else(|| anyhow!("OpenAI-compatible stream tool_calls[{idx}] missing name"))?;
+        let arguments = tc
+            .get("function")
+            .and_then(|f| f.get("arguments"))
+            .unwrap_or(&Value::Null);
+        content.push(ContentBlock::ToolUse {
+            id,
+            name: name.to_string(),
+            input: parse_tool_arguments(arguments)?,
+        });
+    }
+
+    if endpoint_kind == OpenAiEndpointKind::Deepseek
+        && !parsed_dsml_tool_calls.is_empty()
+        && !content
+            .iter()
+            .any(|block| matches!(block, ContentBlock::ToolUse { .. }))
+    {
+        content.extend(parsed_dsml_tool_calls);
+    }
+
+    Ok(content)
+}
+
+pub(super) fn merge_streaming_tool_calls(
+    accumulated: &mut Vec<Value>,
+    deltas: &[Value],
+) -> Result<()> {
+    for (delta_idx, delta) in deltas.iter().enumerate() {
+        let index = delta.get("index").and_then(Value::as_u64).ok_or_else(|| {
+            anyhow!("OpenAI-compatible stream tool_calls[{delta_idx}] missing index")
+        })? as usize;
         while accumulated.len() <= index {
             accumulated.push(json!({}));
         }
@@ -825,21 +846,31 @@ fn merge_streaming_tool_calls(accumulated: &mut Vec<Value>, deltas: &[Value]) {
             existing["type"] = json!(type_);
         }
         if let Some(function) = delta.get("function") {
+            if !existing.get("function").is_some_and(Value::is_object) {
+                existing["function"] = json!({});
+            }
+            let function_obj = existing["function"]
+                .as_object_mut()
+                .expect("streaming tool call function must be an object");
             if let Some(name) = function.get("name").and_then(Value::as_str) {
                 if !name.is_empty() {
-                    existing["function"]["name"] = json!(name);
+                    function_obj.insert("name".to_string(), json!(name));
                 }
             }
             if let Some(arguments) = function.get("arguments").and_then(Value::as_str) {
-                let existing_args = existing
-                    .get("function")
-                    .and_then(|f| f.get("arguments"))
+                let existing_args = function_obj
+                    .get("arguments")
                     .and_then(Value::as_str)
                     .unwrap_or("");
-                existing["function"]["arguments"] = json!(format!("{existing_args}{arguments}"));
+                function_obj.insert(
+                    "arguments".to_string(),
+                    json!(format!("{existing_args}{arguments}")),
+                );
             }
         }
     }
+
+    Ok(())
 }
 
 fn render_openai_tool_result_message(tool_use_id: &str, tool_content: &str) -> Value {
