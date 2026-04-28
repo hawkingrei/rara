@@ -59,7 +59,7 @@ use self::terminal_ui::{
     update_terminal_viewport,
 };
 use crate::agent::AgentExecutionMode;
-use crate::agent::BashApprovalMode;
+use crate::agent::BashApprovalDecision;
 
 #[derive(Debug, Clone)]
 pub enum StartupResumeTarget {
@@ -399,9 +399,10 @@ async fn dispatch_event(
                     self::state::ActivePendingInteractionKind::ShellApproval => {
                         if let Some(agent) = agent_slot.take() {
                             let selection = match idx {
-                                0 => BashApprovalMode::Once,
-                                1 => BashApprovalMode::Always,
-                                _ => BashApprovalMode::Suggestion,
+                                0 => BashApprovalDecision::Once,
+                                1 => BashApprovalDecision::Prefix,
+                                2 => BashApprovalDecision::Always,
+                                _ => BashApprovalDecision::Suggestion,
                             };
                             start_pending_approval_task(app, selection, agent);
                         }

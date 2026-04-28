@@ -152,6 +152,259 @@ impl BashCommandInput {
     pub fn to_value(&self) -> Value {
         serde_json::to_value(self).expect("bash command input should serialize")
     }
+
+    pub fn is_read_only(&self) -> bool {
+        if self.allow_net || self.run_in_background || !self.env.is_empty() {
+            return false;
+        }
+        if let Some(command) = self
+            .command
+            .as_ref()
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
+        {
+            return shell_command_is_read_only(command);
+        }
+        self.program
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+            .is_some_and(|program| argv_is_read_only(program, &self.args))
+    }
+
+    pub fn approval_prefix(&self) -> Option<String> {
+        if let Some(command) = self
+            .command
+            .as_ref()
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
+        {
+            let segments = split_shell_segments(command)?;
+            if segments.len() != 1 {
+                return None;
+            }
+            let tokens = tokenize_shell_segment(&segments[0])?;
+            return prefix_from_tokens(&tokens);
+        }
+
+        let program = self
+            .program
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())?;
+        let mut tokens = Vec::with_capacity(self.args.len() + 1);
+        tokens.push(program.to_string());
+        tokens.extend(self.args.iter().cloned());
+        prefix_from_tokens(&tokens)
+    }
+
+    pub fn matches_approval_prefix(&self, prefix: &str) -> bool {
+        let summary = self.summary();
+        summary == prefix
+            || summary
+                .strip_prefix(prefix)
+                .is_some_and(|suffix| suffix.starts_with(char::is_whitespace))
+    }
+}
+
+fn prefix_from_tokens(tokens: &[String]) -> Option<String> {
+    let program = tokens.first()?;
+    let program = Path::new(program)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(program);
+    if let Some(subcommand) = tokens.get(1) {
+        Some(format!("{program} {subcommand}"))
+    } else {
+        Some(program.to_string())
+    }
+}
+
+fn shell_command_is_read_only(command: &str) -> bool {
+    if command.contains('\n')
+        || command.contains('`')
+        || command.contains("$(")
+        || command.contains('>')
+    {
+        return false;
+    }
+    split_shell_segments(command)
+        .filter(|segments| !segments.is_empty())
+        .is_some_and(|segments| {
+            segments.into_iter().all(|segment| {
+                tokenize_shell_segment(&segment).is_some_and(|tokens| {
+                    if tokens.is_empty() {
+                        return false;
+                    }
+                    argv_is_read_only(&tokens[0], &tokens[1..])
+                })
+            })
+        })
+}
+
+fn argv_is_read_only(program: &str, args: &[String]) -> bool {
+    let program = Path::new(program)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(program);
+    match program {
+        "pwd" | "ls" | "tree" | "cat" | "head" | "tail" | "wc" | "stat" | "file" | "du" | "df"
+        | "which" | "type" | "whereis" | "uname" => true,
+        "rg" | "grep" => !args
+            .iter()
+            .any(|arg| matches!(arg.as_str(), "--files-with-matches=")),
+        "sed" => !args.iter().any(|arg| {
+            arg == "-i"
+                || arg.starts_with("-i.")
+                || arg == "--in-place"
+                || arg.starts_with("--in-place=")
+        }),
+        "find" => !args.iter().any(|arg| {
+            matches!(
+                arg.as_str(),
+                "-delete" | "-exec" | "-execdir" | "-ok" | "-okdir"
+            )
+        }),
+        "fd" | "fdfind" => !args.iter().any(|arg| {
+            matches!(
+                arg.as_str(),
+                "-x" | "--exec" | "-X" | "--exec-batch" | "--list-details"
+            )
+        }),
+        "git" => git_args_are_read_only(args),
+        "docker" => docker_args_are_read_only(args),
+        "pyright" => !args
+            .iter()
+            .any(|arg| matches!(arg.as_str(), "--watch" | "-w")),
+        _ => false,
+    }
+}
+
+fn git_args_are_read_only(args: &[String]) -> bool {
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--no-pager" | "--no-optional-locks" => index += 1,
+            "-C" | "-c" | "--git-dir" | "--work-tree" => return false,
+            value if value.starts_with('-') => return false,
+            _ => break,
+        }
+    }
+    let Some(subcommand) = args.get(index).map(String::as_str) else {
+        return false;
+    };
+    let rest = &args[index + 1..];
+    match subcommand {
+        "diff" | "log" | "show" | "shortlog" | "status" | "blame" | "ls-files" | "merge-base"
+        | "rev-parse" | "rev-list" | "describe" | "cat-file" | "for-each-ref" | "grep" => true,
+        "stash" => rest.first().is_some_and(|value| value == "list"),
+        "remote" => rest.is_empty() || rest == ["-v"] || rest == ["--verbose"],
+        "config" => rest.first().is_some_and(|value| value == "--get"),
+        "reflog" => !rest
+            .iter()
+            .any(|value| matches!(value.as_str(), "expire" | "delete" | "exists")),
+        "branch" => {
+            rest.is_empty()
+                || rest.iter().all(|value| {
+                    matches!(
+                        value.as_str(),
+                        "--list" | "-l" | "-a" | "--all" | "-r" | "--remotes" | "-v" | "-vv"
+                    )
+                })
+        }
+        _ => false,
+    }
+}
+
+fn docker_args_are_read_only(args: &[String]) -> bool {
+    args.first()
+        .is_some_and(|value| matches!(value.as_str(), "ps" | "images" | "logs" | "inspect"))
+}
+
+fn split_shell_segments(command: &str) -> Option<Vec<String>> {
+    let mut segments = Vec::new();
+    let mut current = String::new();
+    let mut chars = command.chars().peekable();
+    let mut quote: Option<char> = None;
+    while let Some(ch) = chars.next() {
+        if let Some(active_quote) = quote {
+            if ch == active_quote {
+                quote = None;
+            }
+            current.push(ch);
+            continue;
+        }
+        match ch {
+            '\'' | '"' => {
+                quote = Some(ch);
+                current.push(ch);
+            }
+            ';' | '|' => {
+                push_shell_segment(&mut segments, &mut current);
+            }
+            '&' if chars.peek() == Some(&'&') => {
+                chars.next();
+                push_shell_segment(&mut segments, &mut current);
+            }
+            '&' => return None,
+            _ => current.push(ch),
+        }
+    }
+    if quote.is_some() {
+        return None;
+    }
+    push_shell_segment(&mut segments, &mut current);
+    Some(segments)
+}
+
+fn push_shell_segment(segments: &mut Vec<String>, current: &mut String) {
+    let segment = current.trim();
+    if !segment.is_empty() {
+        segments.push(segment.to_string());
+    }
+    current.clear();
+}
+
+fn tokenize_shell_segment(segment: &str) -> Option<Vec<String>> {
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+    let mut chars = segment.chars().peekable();
+    let mut quote: Option<char> = None;
+    while let Some(ch) = chars.next() {
+        match quote {
+            Some(active_quote) => {
+                if ch == active_quote {
+                    quote = None;
+                } else if ch == '\\' && active_quote == '"' {
+                    if let Some(next) = chars.next() {
+                        current.push(next);
+                    }
+                } else {
+                    current.push(ch);
+                }
+            }
+            None => match ch {
+                '\'' | '"' => quote = Some(ch),
+                '\\' => {
+                    if let Some(next) = chars.next() {
+                        current.push(next);
+                    }
+                }
+                '<' => return None,
+                value if value.is_whitespace() => {
+                    if !current.is_empty() {
+                        tokens.push(std::mem::take(&mut current));
+                    }
+                }
+                _ => current.push(ch),
+            },
+        }
+    }
+    if quote.is_some() {
+        return None;
+    }
+    if !current.is_empty() {
+        tokens.push(current);
+    }
+    Some(tokens)
 }
 
 impl BackgroundTaskStore {
@@ -897,6 +1150,69 @@ mod tests {
 
         assert!(input.run_in_background);
         assert_eq!(input.summary(), "cargo test");
+    }
+
+    #[test]
+    fn classifies_read_only_commands_for_approval_policy() {
+        for command in [
+            "git status --short",
+            "git diff -- src/tools/bash.rs",
+            "git log --oneline -n 5",
+            "rg -n read_only src",
+            "find src -name '*.rs'",
+            "sed -n '1,20p' src/tools/bash.rs",
+            "cat Cargo.toml | grep '^name'",
+            "docker inspect rara-dev",
+            "pyright --outputjson",
+        ] {
+            let input =
+                BashCommandInput::from_value(json!({ "command": command })).expect("bash payload");
+            assert!(input.is_read_only(), "{command} should be read-only");
+        }
+    }
+
+    #[test]
+    fn keeps_write_network_background_and_complex_commands_under_approval() {
+        for payload in [
+            json!({ "command": "git push origin main" }),
+            json!({ "command": "rm -rf target" }),
+            json!({ "command": "sed -i '' 's/a/b/' Cargo.toml" }),
+            json!({ "command": "find . -name '*.tmp' -delete" }),
+            json!({ "command": "cat Cargo.toml > /tmp/out" }),
+            json!({ "command": "git status", "allow_net": true }),
+            json!({ "command": "rg TODO", "run_in_background": true }),
+            json!({ "program": "rg", "args": ["TODO"], "env": { "PATH": "/tmp/bin" } }),
+        ] {
+            let input = BashCommandInput::from_value(payload).expect("bash payload");
+            assert!(
+                !input.is_read_only(),
+                "{} should require approval",
+                input.summary()
+            );
+        }
+    }
+
+    #[test]
+    fn classifies_structured_read_only_programs() {
+        let input = BashCommandInput::from_value(json!({
+            "program": "/usr/bin/git",
+            "args": ["status", "--short"]
+        }))
+        .expect("structured payload");
+
+        assert!(input.is_read_only());
+    }
+
+    #[test]
+    fn derives_and_matches_codex_style_approval_prefix() {
+        let input = BashCommandInput::from_value(json!({
+            "command": "git push origin main"
+        }))
+        .expect("bash payload");
+
+        assert_eq!(input.approval_prefix().as_deref(), Some("git push"));
+        assert!(input.matches_approval_prefix("git push"));
+        assert!(!input.matches_approval_prefix("git pull"));
     }
 
     #[test]

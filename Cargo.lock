@@ -8617,6 +8617,7 @@ name = "rara-config"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "codex-execpolicy",
  "dirs",
  "secrecy",
  "serde",

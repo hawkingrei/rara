@@ -12,6 +12,7 @@ use std::sync::{Arc, Mutex};
 use tempfile::tempdir;
 
 pub(super) struct StubTool;
+pub(super) struct StubBashTool;
 
 #[async_trait]
 impl Tool for StubTool {
@@ -26,6 +27,22 @@ impl Tool for StubTool {
     }
     async fn call(&self, _input: Value) -> Result<Value, ToolError> {
         Ok(json!({ "status": "ok", "value": 42 }))
+    }
+}
+
+#[async_trait]
+impl Tool for StubBashTool {
+    fn name(&self) -> &str {
+        "bash"
+    }
+    fn description(&self) -> &str {
+        "Return a simple bash result"
+    }
+    fn input_schema(&self) -> Value {
+        json!({"type":"object"})
+    }
+    async fn call(&self, _input: Value) -> Result<Value, ToolError> {
+        Ok(json!({ "stdout": "ok\n", "stderr": "", "exit_code": 0 }))
     }
 }
 

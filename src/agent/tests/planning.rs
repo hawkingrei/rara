@@ -8,8 +8,8 @@ use crate::agent::planning::{
     parse_plan_block, parse_request_user_input_block, strip_continue_inspection_control,
 };
 use crate::agent::{
-    Agent, AgentExecutionMode, ContentBlock, PendingUserInput, PlanStep, PlanStepStatus,
-    RuntimeContinuationPhase,
+    Agent, AgentExecutionMode, BashApprovalDecision, ContentBlock, PendingUserInput, PlanStep,
+    PlanStepStatus, RuntimeContinuationPhase,
 };
 use crate::llm::{LlmBackend, LlmResponse, TokenUsage};
 use crate::session::SessionManager;
@@ -18,7 +18,7 @@ use crate::tool_result::ToolResultStore;
 use crate::vectordb::VectorDB;
 use crate::workspace::WorkspaceMemory;
 
-use super::support::{test_runtime_storage, SequencedBackend, StubTool};
+use super::support::{test_runtime_storage, SequencedBackend, StubBashTool, StubTool};
 
 struct CheckpointObserverBackend {
     session_manager: Arc<SessionManager>,
@@ -109,6 +109,164 @@ async fn appends_continuation_after_tool_result() {
     assert!(second_round
         .iter()
         .any(|message| { message.content.to_string().contains("tool_result") }));
+}
+
+#[tokio::test]
+async fn suggestion_mode_auto_allows_read_only_bash_commands() {
+    let backend = Arc::new(SequencedBackend::new(vec![
+        LlmResponse {
+            content: vec![ContentBlock::ToolUse {
+                id: "tool-readonly-bash".to_string(),
+                name: "bash".to_string(),
+                input: json!({ "command": "git status --short" }),
+            }],
+            stop_reason: Some("tool_use".to_string()),
+            usage: Some(TokenUsage::default()),
+        },
+        LlmResponse {
+            content: vec![ContentBlock::Text {
+                text: "done".to_string(),
+            }],
+            stop_reason: Some("end_turn".to_string()),
+            usage: Some(TokenUsage::default()),
+        },
+    ]));
+    let mut tool_manager = ToolManager::new();
+    tool_manager.register(Box::new(StubBashTool));
+    let (_temp, session_manager, workspace, rara_dir) = test_runtime_storage();
+    let mut agent = Agent::new(
+        tool_manager,
+        backend.clone(),
+        Arc::new(VectorDB::new(&rara_dir.join("lancedb").to_string_lossy())),
+        session_manager,
+        workspace,
+    );
+    agent.bash_approval_mode = crate::agent::BashApprovalMode::Suggestion;
+
+    agent
+        .query_with_mode(
+            "inspect git state".to_string(),
+            super::super::AgentOutputMode::Silent,
+        )
+        .await
+        .expect("query should auto-allow read-only bash");
+
+    assert!(agent.pending_approval.is_none());
+    assert_eq!(backend.observed_messages().len(), 2);
+}
+
+#[tokio::test]
+async fn suggestion_mode_keeps_write_bash_commands_pending_approval() {
+    let backend = Arc::new(SequencedBackend::new(vec![LlmResponse {
+        content: vec![ContentBlock::ToolUse {
+            id: "tool-write-bash".to_string(),
+            name: "bash".to_string(),
+            input: json!({ "command": "git push origin main" }),
+        }],
+        stop_reason: Some("tool_use".to_string()),
+        usage: Some(TokenUsage::default()),
+    }]));
+    let mut tool_manager = ToolManager::new();
+    tool_manager.register(Box::new(StubBashTool));
+    let (_temp, session_manager, workspace, rara_dir) = test_runtime_storage();
+    let mut agent = Agent::new(
+        tool_manager,
+        backend.clone(),
+        Arc::new(VectorDB::new(&rara_dir.join("lancedb").to_string_lossy())),
+        session_manager,
+        workspace,
+    );
+    agent.bash_approval_mode = crate::agent::BashApprovalMode::Suggestion;
+
+    agent
+        .query_with_mode(
+            "push changes".to_string(),
+            super::super::AgentOutputMode::Silent,
+        )
+        .await
+        .expect("query should pause on write bash approval");
+
+    assert!(agent.pending_approval.is_some());
+    assert_eq!(backend.observed_messages().len(), 1);
+}
+
+#[tokio::test]
+async fn approved_bash_prefix_auto_allows_later_matching_commands() {
+    let backend = Arc::new(SequencedBackend::new(vec![
+        LlmResponse {
+            content: vec![ContentBlock::ToolUse {
+                id: "tool-first-push".to_string(),
+                name: "bash".to_string(),
+                input: json!({ "command": "git push origin main" }),
+            }],
+            stop_reason: Some("tool_use".to_string()),
+            usage: Some(TokenUsage::default()),
+        },
+        LlmResponse {
+            content: vec![ContentBlock::Text {
+                text: "first push done".to_string(),
+            }],
+            stop_reason: Some("end_turn".to_string()),
+            usage: Some(TokenUsage::default()),
+        },
+        LlmResponse {
+            content: vec![ContentBlock::ToolUse {
+                id: "tool-second-push".to_string(),
+                name: "bash".to_string(),
+                input: json!({ "command": "git push origin feature" }),
+            }],
+            stop_reason: Some("tool_use".to_string()),
+            usage: Some(TokenUsage::default()),
+        },
+        LlmResponse {
+            content: vec![ContentBlock::Text {
+                text: "second push done".to_string(),
+            }],
+            stop_reason: Some("end_turn".to_string()),
+            usage: Some(TokenUsage::default()),
+        },
+    ]));
+    let mut tool_manager = ToolManager::new();
+    tool_manager.register(Box::new(StubBashTool));
+    let (_temp, session_manager, workspace, rara_dir) = test_runtime_storage();
+    let mut agent = Agent::new(
+        tool_manager,
+        backend.clone(),
+        Arc::new(VectorDB::new(&rara_dir.join("lancedb").to_string_lossy())),
+        session_manager,
+        workspace,
+    );
+    agent.bash_approval_mode = crate::agent::BashApprovalMode::Suggestion;
+
+    agent
+        .query_with_mode(
+            "push once".to_string(),
+            super::super::AgentOutputMode::Silent,
+        )
+        .await
+        .expect("first query should pause on approval");
+    assert!(agent.pending_approval.is_some());
+
+    agent
+        .answer_pending_approval_with_events(
+            BashApprovalDecision::Prefix,
+            super::super::AgentOutputMode::Silent,
+            |_| {},
+        )
+        .await
+        .expect("prefix approval should execute pending command");
+    assert_eq!(agent.approved_bash_prefixes, vec!["git push".to_string()]);
+
+    agent
+        .query_with_mode(
+            "push matching prefix".to_string(),
+            super::super::AgentOutputMode::Silent,
+        )
+        .await
+        .expect("matching prefix should auto-allow bash");
+
+    assert!(agent.pending_approval.is_none());
+    assert_eq!(backend.observed_messages().len(), 4);
 }
 
 #[tokio::test]

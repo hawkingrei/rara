@@ -43,6 +43,14 @@ pub enum BashApprovalMode {
     Suggestion,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BashApprovalDecision {
+    Once,
+    Prefix,
+    Always,
+    Suggestion,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct Message {
     pub role: String,
@@ -112,6 +120,7 @@ pub struct Agent {
     pub pending_approval: Option<PendingApproval>,
     pub completed_user_input: Option<CompletedInteraction>,
     pub completed_approval: Option<CompletedInteraction>,
+    pub approved_bash_prefixes: Vec<String>,
     pub compact_state: CompactState,
     inspection_progress: InspectionProgress,
     last_query_plan_updated: bool,
@@ -149,6 +158,7 @@ impl Agent {
             pending_approval: None,
             completed_user_input: None,
             completed_approval: None,
+            approved_bash_prefixes: Vec::new(),
             compact_state: CompactState::default(),
             inspection_progress: InspectionProgress::default(),
             last_query_plan_updated: false,
@@ -501,36 +511,53 @@ impl Agent {
                                 .unwrap_or(false),
                         }
                     });
-                let summary = request.summary();
-                self.pending_approval = Some(PendingApproval {
-                    tool_use_id: tool_id.clone(),
-                    request: request.clone(),
-                });
-                self.pending_user_input = Some(PendingUserInput {
-                    question: "Bash command needs approval. What should RARA do?".to_string(),
-                    options: vec![
-                        (
-                            "Run once".to_string(),
-                            "Execute this command now and then return to suggestion mode."
-                                .to_string(),
-                        ),
-                        (
-                            "Always allow bash".to_string(),
-                            "Execute now and keep bash approval open for later commands."
-                                .to_string(),
-                        ),
-                        (
-                            "Suggestion only".to_string(),
-                            "Do not run the command automatically. Continue with a safer path."
-                                .to_string(),
-                        ),
-                    ],
-                    note: Some(format!("command: {}", summary)),
-                });
-                report(AgentEvent::Status(
-                    "Bash approval required. Waiting for a structured user decision.".to_string(),
-                ));
-                break;
+                if request.is_read_only() || self.is_bash_prefix_approved(&request) {
+                    report(AgentEvent::Status(format!(
+                        "Shell command allowed by policy: {}",
+                        request.summary()
+                    )));
+                } else {
+                    let summary = request.summary();
+                    self.pending_approval = Some(PendingApproval {
+                        tool_use_id: tool_id.clone(),
+                        request: request.clone(),
+                    });
+                    self.pending_user_input = Some(PendingUserInput {
+                        question: "Bash command needs approval. What should RARA do?".to_string(),
+                        options: vec![
+                            (
+                                "Run once".to_string(),
+                                "Execute this command now and then return to suggestion mode."
+                                    .to_string(),
+                            ),
+                            (
+                                "Allow matching prefix".to_string(),
+                                format!(
+                                    "Execute now and auto-allow later commands that start with '{}'.",
+                                    request
+                                        .approval_prefix()
+                                        .unwrap_or_else(|| request.summary())
+                                ),
+                            ),
+                            (
+                                "Always allow bash".to_string(),
+                                "Execute now and keep bash approval open for later commands."
+                                    .to_string(),
+                            ),
+                            (
+                                "Suggestion only".to_string(),
+                                "Do not run the command automatically. Continue with a safer path."
+                                    .to_string(),
+                            ),
+                        ],
+                        note: Some(format!("command: {}", summary)),
+                    });
+                    report(AgentEvent::Status(
+                        "Bash approval required. Waiting for a structured user decision."
+                            .to_string(),
+                    ));
+                    break;
+                }
             }
             if !self.is_tool_allowed_in_current_mode(&tool_name) {
                 let error_text = format!(

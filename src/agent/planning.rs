@@ -160,6 +160,12 @@ impl Agent {
         self.bash_approval_mode = mode;
     }
 
+    pub fn is_bash_prefix_approved(&self, request: &BashCommandInput) -> bool {
+        self.approved_bash_prefixes
+            .iter()
+            .any(|prefix| request.matches_approval_prefix(prefix))
+    }
+
     pub fn clear_completed_interactions(&mut self) {
         self.completed_user_input = None;
         self.completed_approval = None;
@@ -176,7 +182,7 @@ impl Agent {
 
     pub async fn answer_pending_approval_with_events<F>(
         &mut self,
-        selection: BashApprovalMode,
+        selection: BashApprovalDecision,
         output_mode: AgentOutputMode,
         mut report: F,
     ) -> Result<()>
@@ -193,7 +199,7 @@ impl Agent {
         self.completed_approval = None;
 
         match selection {
-            BashApprovalMode::Once => {
+            BashApprovalDecision::Once => {
                 self.completed_approval = Some(CompletedInteraction {
                     title: "Bash approval".to_string(),
                     summary: format!("Approved once for command: {}", pending.request.summary()),
@@ -201,7 +207,28 @@ impl Agent {
                 self.execute_pending_bash(pending, false, output_mode, &mut report)
                     .await?;
             }
-            BashApprovalMode::Always => {
+            BashApprovalDecision::Prefix => {
+                if let Some(prefix) = pending.request.approval_prefix() {
+                    if !self.approved_bash_prefixes.contains(&prefix) {
+                        self.approved_bash_prefixes.push(prefix.clone());
+                    }
+                    self.completed_approval = Some(CompletedInteraction {
+                        title: "Bash approval".to_string(),
+                        summary: format!("Approved prefix for session: {}", prefix),
+                    });
+                } else {
+                    self.completed_approval = Some(CompletedInteraction {
+                        title: "Bash approval".to_string(),
+                        summary: format!(
+                            "Approved once for command: {}",
+                            pending.request.summary()
+                        ),
+                    });
+                }
+                self.execute_pending_bash(pending, false, output_mode, &mut report)
+                    .await?;
+            }
+            BashApprovalDecision::Always => {
                 self.bash_approval_mode = BashApprovalMode::Always;
                 self.completed_approval = Some(CompletedInteraction {
                     title: "Bash approval".to_string(),
@@ -210,7 +237,7 @@ impl Agent {
                 self.execute_pending_bash(pending, true, output_mode, &mut report)
                     .await?;
             }
-            BashApprovalMode::Suggestion => {
+            BashApprovalDecision::Suggestion => {
                 self.completed_approval = Some(CompletedInteraction {
                     title: "Bash approval".to_string(),
                     summary: format!("Kept as suggestion only: {}", pending.request.summary()),

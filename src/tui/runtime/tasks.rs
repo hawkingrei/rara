@@ -15,7 +15,7 @@ use rara_provider_catalog::{
 };
 use tokio::sync::mpsc;
 
-use crate::agent::{Agent, AgentOutputMode, BashApprovalMode};
+use crate::agent::{Agent, AgentOutputMode, BashApprovalDecision};
 use crate::redaction::sanitize_url_for_display;
 
 use super::super::state::{
@@ -43,6 +43,7 @@ fn merge_rebuilt_agent(mut rebuilt: Agent, previous: Agent) -> Agent {
     rebuilt.tool_result_store = previous.tool_result_store;
     rebuilt.execution_mode = previous.execution_mode;
     rebuilt.bash_approval_mode = previous.bash_approval_mode;
+    rebuilt.approved_bash_prefixes = previous.approved_bash_prefixes;
     rebuilt.current_plan = previous.current_plan;
     rebuilt.plan_explanation = previous.plan_explanation;
     rebuilt.pending_user_input = previous.pending_user_input;
@@ -94,6 +95,25 @@ fn try_start_queued_follow_up(app: &mut TuiApp, agent_slot: &mut Option<Agent>) 
     start_query_task(app, prompt, agent);
 }
 
+fn sync_bash_prefixes_from_config(app: &TuiApp, agent: &mut Agent) {
+    let Ok(prefixes) = app.config_manager.load_allowed_command_prefixes() else {
+        return;
+    };
+    for prefix in prefixes {
+        if !agent.approved_bash_prefixes.contains(&prefix) {
+            agent.approved_bash_prefixes.push(prefix);
+        }
+    }
+}
+
+fn sync_bash_prefixes_to_config(app: &mut TuiApp, agent: &Agent) -> anyhow::Result<()> {
+    if !agent.approved_bash_prefixes.is_empty() {
+        app.config_manager
+            .save_allowed_command_prefixes(&agent.approved_bash_prefixes)?;
+    }
+    Ok(())
+}
+
 pub(super) fn start_query_task(app: &mut TuiApp, prompt: String, mut agent: Agent) {
     let (sender, receiver) = mpsc::unbounded_channel();
     let cancellation_token = Arc::new(AtomicBool::new(false));
@@ -102,6 +122,7 @@ pub(super) fn start_query_task(app: &mut TuiApp, prompt: String, mut agent: Agen
     app.begin_running_turn();
     agent.set_execution_mode(app.agent_execution_mode);
     agent.set_bash_approval_mode(app.bash_approval_mode);
+    sync_bash_prefixes_from_config(app, &mut agent);
     app.notice = Some("Running prompt.".into());
     app.set_runtime_phase(RuntimePhase::SendingPrompt, Some("sending prompt".into()));
     app.push_entry("You", prompt.clone());
@@ -229,21 +250,23 @@ pub(super) fn start_compact_task(app: &mut TuiApp, mut agent: Agent) {
 
 pub(super) fn start_pending_approval_task(
     app: &mut TuiApp,
-    selection: BashApprovalMode,
+    selection: BashApprovalDecision,
     mut agent: Agent,
 ) {
     let (sender, receiver) = mpsc::unbounded_channel();
     let cancellation_token = Arc::new(AtomicBool::new(false));
     let selection_label = match selection {
-        BashApprovalMode::Once => "run once",
-        BashApprovalMode::Always => "always allow bash",
-        BashApprovalMode::Suggestion => "suggestion only",
+        BashApprovalDecision::Once => "run once",
+        BashApprovalDecision::Prefix => "allow matching prefix",
+        BashApprovalDecision::Always => "always allow bash",
+        BashApprovalDecision::Suggestion => "suggestion only",
     };
     app.notice = Some(format!("Answering approval request: {selection_label}."));
     app.set_runtime_phase(
         RuntimePhase::ProcessingResponse,
         Some("resuming after approval".into()),
     );
+    sync_bash_prefixes_from_config(app, &mut agent);
     agent.set_cancellation_token(Some(cancellation_token.clone()));
 
     let handle = tokio::spawn(async move {
@@ -476,6 +499,12 @@ pub(super) async fn finish_running_task_if_ready(
     match completion {
         TaskCompletion::Query { agent, result } => {
             let mut agent = agent;
+            if let Err(err) = sync_bash_prefixes_to_config(app, &agent) {
+                app.push_notice(format!(
+                    "Failed to persist bash approval rules: {}",
+                    format_error_chain(&err)
+                ));
+            }
             match result {
                 Ok(_) => {
                     let finished_plan_turn = matches!(
