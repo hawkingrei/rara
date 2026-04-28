@@ -15,6 +15,7 @@ use tokio::fs;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 use tokio::process::{Child, Command};
 use tokio::sync::mpsc;
+use tokio::sync::oneshot;
 use uuid::Uuid;
 
 pub struct BashTool {
@@ -26,10 +27,19 @@ pub struct BackgroundTaskStatusTool {
     pub background_tasks: Arc<BackgroundTaskStore>,
 }
 
+pub struct BackgroundTaskListTool {
+    pub background_tasks: Arc<BackgroundTaskStore>,
+}
+
+pub struct BackgroundTaskStopTool {
+    pub background_tasks: Arc<BackgroundTaskStore>,
+}
+
 #[derive(Debug, Clone)]
 pub struct BackgroundTaskStore {
     dir: PathBuf,
     tasks: Arc<Mutex<HashMap<String, BackgroundTaskRecord>>>,
+    stop_signals: Arc<Mutex<HashMap<String, oneshot::Sender<()>>>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -49,6 +59,7 @@ pub enum BackgroundTaskStatus {
     Running,
     Completed,
     Failed,
+    Killed,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -149,6 +160,7 @@ impl BackgroundTaskStore {
         Ok(Self {
             dir,
             tasks: Arc::new(Mutex::new(HashMap::new())),
+            stop_signals: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 
@@ -157,7 +169,7 @@ impl BackgroundTaskStore {
         command: String,
         sandboxed: bool,
         sandbox_backend: String,
-    ) -> Result<BackgroundTaskRecord, ToolError> {
+    ) -> Result<(BackgroundTaskRecord, oneshot::Receiver<()>), ToolError> {
         let id = format!("bash-{}", Uuid::new_v4());
         let output_path = self.dir.join(format!("{id}.log"));
         let record = BackgroundTaskRecord {
@@ -169,11 +181,16 @@ impl BackgroundTaskStore {
             sandboxed,
             sandbox_backend,
         };
+        let (stop_tx, stop_rx) = oneshot::channel();
         self.tasks
             .lock()
             .expect("background task store lock")
-            .insert(id, record.clone());
-        Ok(record)
+            .insert(id.clone(), record.clone());
+        self.stop_signals
+            .lock()
+            .expect("background task stop signal lock")
+            .insert(id, stop_tx);
+        Ok((record, stop_rx))
     }
 
     fn finish(&self, id: &str, status: BackgroundTaskStatus, exit_code: Option<i32>) {
@@ -183,9 +200,15 @@ impl BackgroundTaskStore {
             .expect("background task store lock")
             .get_mut(id)
         {
-            record.status = status;
+            if !matches!(record.status, BackgroundTaskStatus::Killed) {
+                record.status = status;
+            }
             record.exit_code = exit_code;
         }
+        self.stop_signals
+            .lock()
+            .expect("background task stop signal lock")
+            .remove(id);
     }
 
     fn get(&self, id: &str) -> Option<BackgroundTaskRecord> {
@@ -194,6 +217,53 @@ impl BackgroundTaskStore {
             .expect("background task store lock")
             .get(id)
             .cloned()
+    }
+
+    fn list(&self) -> Vec<BackgroundTaskRecord> {
+        let mut records = self
+            .tasks
+            .lock()
+            .expect("background task store lock")
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+        records.sort_by(|left, right| left.id.cmp(&right.id));
+        records
+    }
+
+    fn stop(&self, id: &str) -> Result<BackgroundTaskRecord, ToolError> {
+        let mut tasks = self.tasks.lock().expect("background task store lock");
+        let record = tasks
+            .get_mut(id)
+            .ok_or_else(|| ToolError::InvalidInput(format!("unknown task id: {id}")))?;
+        if !matches!(record.status, BackgroundTaskStatus::Running) {
+            return Ok(record.clone());
+        }
+        record.status = BackgroundTaskStatus::Killed;
+        let stopped = record.clone();
+        drop(tasks);
+
+        if let Some(stop) = self
+            .stop_signals
+            .lock()
+            .expect("background task stop signal lock")
+            .remove(id)
+        {
+            let _ = stop.send(());
+        }
+        Ok(stopped)
+    }
+
+    fn stop_all(&self) -> Vec<BackgroundTaskRecord> {
+        let ids = self
+            .list()
+            .into_iter()
+            .filter(|record| matches!(record.status, BackgroundTaskStatus::Running))
+            .map(|record| record.id)
+            .collect::<Vec<_>>();
+        ids.into_iter()
+            .filter_map(|id| self.stop(&id).ok())
+            .collect()
     }
 }
 
@@ -353,7 +423,7 @@ impl Tool for BashTool {
         })?;
 
         if request.run_in_background {
-            let record = self.background_tasks.start_record(
+            let (record, stop_rx) = self.background_tasks.start_record(
                 request.summary(),
                 wrapped.sandboxed,
                 wrapped.sandbox_backend.clone(),
@@ -363,6 +433,7 @@ impl Tool for BashTool {
                 wrapped,
                 record.clone(),
                 self.background_tasks.clone(),
+                stop_rx,
             );
             return Ok(json!({
                 "stdout": "",
@@ -449,6 +520,30 @@ impl Tool for BashTool {
 }
 
 #[async_trait]
+impl Tool for BackgroundTaskListTool {
+    fn name(&self) -> &str {
+        "background_task_list"
+    }
+
+    fn description(&self) -> &str {
+        "List background bash tasks"
+    }
+
+    fn input_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {}
+        })
+    }
+
+    async fn call(&self, _input: Value) -> Result<Value, ToolError> {
+        Ok(json!({
+            "tasks": self.background_tasks.list(),
+        }))
+    }
+}
+
+#[async_trait]
 impl Tool for BackgroundTaskStatusTool {
     fn name(&self) -> &str {
         "background_task_status"
@@ -505,14 +600,46 @@ impl Tool for BackgroundTaskStatusTool {
     }
 }
 
+#[async_trait]
+impl Tool for BackgroundTaskStopTool {
+    fn name(&self) -> &str {
+        "background_task_stop"
+    }
+
+    fn description(&self) -> &str {
+        "Stop one background bash task, or all running background bash tasks when task_id is omitted"
+    }
+
+    fn input_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "task_id": {
+                    "type": "string",
+                    "description": "Background task id returned by bash run_in_background. Omit to stop all running background bash tasks."
+                }
+            }
+        })
+    }
+
+    async fn call(&self, input: Value) -> Result<Value, ToolError> {
+        if let Some(task_id) = input.get("task_id").and_then(Value::as_str) {
+            let task = self.background_tasks.stop(task_id)?;
+            return Ok(json!({ "stopped": [task] }));
+        }
+        Ok(json!({ "stopped": self.background_tasks.stop_all() }))
+    }
+}
+
 fn spawn_background_bash_task(
     mut child: Child,
     wrapped: WrappedCommand,
     record: BackgroundTaskRecord,
     store: Arc<BackgroundTaskStore>,
+    stop_rx: oneshot::Receiver<()>,
 ) {
     tokio::spawn(async move {
-        let result = run_background_bash_task(&mut child, wrapped, &record).await;
+        let result = run_background_bash_task(&mut child, wrapped, &record, stop_rx).await;
         let (status, exit_code) = match result {
             Ok(code) => {
                 if code == Some(0) {
@@ -539,6 +666,7 @@ async fn run_background_bash_task(
     child: &mut Child,
     wrapped: WrappedCommand,
     record: &BackgroundTaskRecord,
+    mut stop_rx: oneshot::Receiver<()>,
 ) -> Result<Option<i32>, ToolError> {
     if let Some(parent) = record.output_path.parent() {
         fs::create_dir_all(parent).await?;
@@ -574,14 +702,28 @@ async fn run_background_bash_task(
         .append(true)
         .open(&record.output_path)
         .await?;
-    while let Some((stream, chunk)) = rx.recv().await {
-        if !chunk.is_empty() {
-            match stream {
-                BashStreamKind::Stdout => output_file.write_all(chunk.as_bytes()).await?,
-                BashStreamKind::Stderr => {
-                    output_file.write_all(b"[stderr] ").await?;
-                    output_file.write_all(chunk.as_bytes()).await?;
+    let mut stop_requested = false;
+    loop {
+        tokio::select! {
+            chunk = rx.recv() => {
+                let Some((stream, chunk)) = chunk else {
+                    break;
+                };
+                if !chunk.is_empty() {
+                    match stream {
+                        BashStreamKind::Stdout => output_file.write_all(chunk.as_bytes()).await?,
+                        BashStreamKind::Stderr => {
+                            output_file.write_all(b"[stderr] ").await?;
+                            output_file.write_all(chunk.as_bytes()).await?;
+                        }
+                    }
                 }
+            }
+            _ = &mut stop_rx, if !stop_requested => {
+                stop_requested = true;
+                child.start_kill()
+                    .map_err(|err| ToolError::ExecutionFailed(format!("stop background task: {err}")))?;
+                output_file.write_all(b"[stderr] background task stop requested\n").await?;
             }
         }
     }
@@ -693,8 +835,9 @@ async fn ensure_sandbox_home_dirs(sandbox_home: &Path) -> Result<(), ToolError> 
 mod tests {
     use super::{
         command_env_for_wrapped, read_output_tail, sandbox_command_env, sandbox_output_hint,
-        unsandboxed_execution_warning, BackgroundTaskStatus, BackgroundTaskStatusTool,
-        BackgroundTaskStore, BashCommandInput, BashTool,
+        unsandboxed_execution_warning, BackgroundTaskListTool, BackgroundTaskStatus,
+        BackgroundTaskStatusTool, BackgroundTaskStopTool, BackgroundTaskStore, BashCommandInput,
+        BashTool,
     };
     use crate::sandbox::{SandboxManager, WrappedCommand};
     use crate::tool::{Tool, ToolOutputStream, ToolProgressEvent};
@@ -991,6 +1134,67 @@ mod tests {
             Some(&json!(BackgroundTaskStatus::Running))
         );
         assert!(last.get("output_path").and_then(Value::as_str).is_some());
+    }
+
+    #[tokio::test]
+    async fn background_tasks_can_be_listed_and_stopped_without_count_limit() {
+        let temp = tempdir().expect("tempdir");
+        let sandbox = SandboxManager::new_for_rara_dir(temp.path().join(".rara")).expect("sandbox");
+        let Ok(wrapped) = sandbox.wrap_exec_command(
+            "sh",
+            &["-c".to_string(), "sleep 30".to_string()],
+            temp.path().to_string_lossy().as_ref(),
+            false,
+        ) else {
+            return;
+        };
+        if !binary_exists(&wrapped.program) {
+            return;
+        }
+
+        let background_tasks = Arc::new(
+            BackgroundTaskStore::new(temp.path().join(".rara/background-tasks"))
+                .expect("background task store"),
+        );
+        let tool = BashTool {
+            sandbox: Arc::new(sandbox),
+            background_tasks: background_tasks.clone(),
+        };
+        let list_tool = BackgroundTaskListTool {
+            background_tasks: background_tasks.clone(),
+        };
+        let stop_tool = BackgroundTaskStopTool {
+            background_tasks: background_tasks.clone(),
+        };
+
+        let started = tool
+            .call(json!({
+                "program": "sh",
+                "args": ["-c", "sleep 30"],
+                "run_in_background": true,
+            }))
+            .await
+            .expect("background start");
+        let task_id = started
+            .get("background_task_id")
+            .and_then(Value::as_str)
+            .expect("task id")
+            .to_string();
+
+        let listed = list_tool.call(json!({})).await.expect("list tasks");
+        assert_eq!(
+            listed.get("tasks").and_then(Value::as_array).map(Vec::len),
+            Some(1)
+        );
+
+        let stopped = stop_tool
+            .call(json!({ "task_id": task_id }))
+            .await
+            .expect("stop task");
+        assert_eq!(
+            stopped.pointer("/stopped/0/status"),
+            Some(&json!(BackgroundTaskStatus::Killed))
+        );
     }
 
     #[tokio::test]

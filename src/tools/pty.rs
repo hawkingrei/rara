@@ -22,11 +22,23 @@ pub struct PtyReadTool {
     pub sessions: Arc<PtySessionStore>,
 }
 
+pub struct PtyListTool {
+    pub sessions: Arc<PtySessionStore>,
+}
+
+pub struct PtyStatusTool {
+    pub sessions: Arc<PtySessionStore>,
+}
+
 pub struct PtyWriteTool {
     pub sessions: Arc<PtySessionStore>,
 }
 
 pub struct PtyKillTool {
+    pub sessions: Arc<PtySessionStore>,
+}
+
+pub struct PtyStopTool {
     pub sessions: Arc<PtySessionStore>,
 }
 
@@ -182,6 +194,18 @@ impl PtySessionStore {
             .map(PtySessionRecord::snapshot)
     }
 
+    fn list(&self) -> Vec<PtySessionSnapshot> {
+        let mut snapshots = self
+            .sessions
+            .lock()
+            .expect("pty session store lock")
+            .values()
+            .map(PtySessionRecord::snapshot)
+            .collect::<Vec<_>>();
+        snapshots.sort_by(|left, right| left.id.cmp(&right.id));
+        snapshots
+    }
+
     fn write(&self, id: &str, input: &str) -> Result<PtySessionSnapshot, ToolError> {
         let writer = {
             let sessions = self.sessions.lock().expect("pty session store lock");
@@ -219,6 +243,18 @@ impl PtySessionStore {
         snapshot.status = PtySessionStatus::Killed;
         Ok(snapshot)
     }
+
+    fn kill_all(&self) -> Vec<PtySessionSnapshot> {
+        let ids = self
+            .list()
+            .into_iter()
+            .filter(|snapshot| matches!(snapshot.status, PtySessionStatus::Running))
+            .map(|snapshot| snapshot.id)
+            .collect::<Vec<_>>();
+        ids.into_iter()
+            .filter_map(|id| self.kill(&id).ok())
+            .collect()
+    }
 }
 
 struct PtySessionSnapshot {
@@ -244,6 +280,17 @@ impl PtySessionRecord {
 }
 
 impl PtySessionSnapshot {
+    fn metadata_json(self) -> Value {
+        json!({
+            "session_id": self.id,
+            "command": self.command,
+            "status": self.status.as_str(),
+            "output_path": self.output_path,
+            "sandboxed": self.sandboxed,
+            "sandbox_backend": self.sandbox_backend,
+        })
+    }
+
     async fn into_json(self, tail_bytes: usize) -> Result<Value, ToolError> {
         let output = read_output_tail(&self.output_path, tail_bytes).await?;
         Ok(json!({
@@ -364,6 +411,64 @@ impl Tool for PtyReadTool {
 }
 
 #[async_trait]
+impl Tool for PtyListTool {
+    fn name(&self) -> &str {
+        "pty_list"
+    }
+
+    fn description(&self) -> &str {
+        "List PTY sessions"
+    }
+
+    fn input_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {}
+        })
+    }
+
+    async fn call(&self, _input: Value) -> Result<Value, ToolError> {
+        let sessions = self
+            .sessions
+            .list()
+            .into_iter()
+            .map(PtySessionSnapshot::metadata_json)
+            .collect::<Vec<_>>();
+        Ok(json!({ "sessions": sessions }))
+    }
+}
+
+#[async_trait]
+impl Tool for PtyStatusTool {
+    fn name(&self) -> &str {
+        "pty_status"
+    }
+
+    fn description(&self) -> &str {
+        "Inspect a PTY session and read the tail of its output"
+    }
+
+    fn input_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "session_id": { "type": "string" },
+                "tail_bytes": { "type": "integer", "default": 12000, "minimum": 1 }
+            },
+            "required": ["session_id"]
+        })
+    }
+
+    async fn call(&self, input: Value) -> Result<Value, ToolError> {
+        PtyReadTool {
+            sessions: self.sessions.clone(),
+        }
+        .call(input)
+        .await
+    }
+}
+
+#[async_trait]
 impl Tool for PtyWriteTool {
     fn name(&self) -> &str {
         "pty_write"
@@ -423,6 +528,43 @@ impl Tool for PtyKillTool {
             .as_str()
             .ok_or_else(|| ToolError::InvalidInput("session_id".into()))?;
         self.sessions.kill(session_id)?.into_json(12_000).await
+    }
+}
+
+#[async_trait]
+impl Tool for PtyStopTool {
+    fn name(&self) -> &str {
+        "pty_stop"
+    }
+
+    fn description(&self) -> &str {
+        "Stop one PTY session, or all running PTY sessions when session_id is omitted"
+    }
+
+    fn input_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "session_id": {
+                    "type": "string",
+                    "description": "PTY session id returned by pty_start. Omit to stop all running PTY sessions."
+                }
+            }
+        })
+    }
+
+    async fn call(&self, input: Value) -> Result<Value, ToolError> {
+        if let Some(session_id) = input.get("session_id").and_then(Value::as_str) {
+            let session = self.sessions.kill(session_id)?;
+            return Ok(json!({ "stopped": [session.metadata_json()] }));
+        }
+        let stopped = self
+            .sessions
+            .kill_all()
+            .into_iter()
+            .map(PtySessionSnapshot::metadata_json)
+            .collect::<Vec<_>>();
+        Ok(json!({ "stopped": stopped }))
     }
 }
 
@@ -580,6 +722,72 @@ mod tests {
         assert!(
             output.contains("got:hello from pty"),
             "last pty output did not contain expected marker: {last}"
+        );
+    }
+
+    #[tokio::test]
+    async fn pty_sessions_can_be_listed_statused_and_stopped() {
+        let temp = tempdir().expect("tempdir");
+        let sessions = Arc::new(PtySessionStore::new(temp.path().join("pty")).expect("pty store"));
+        let list = PtyListTool {
+            sessions: sessions.clone(),
+        };
+        let status = PtyStatusTool {
+            sessions: sessions.clone(),
+        };
+        let stop = PtyStopTool {
+            sessions: sessions.clone(),
+        };
+
+        let command = "sleep 30".to_string();
+        let started = sessions
+            .start(
+                command.clone(),
+                WrappedCommand {
+                    program: "/bin/sh".to_string(),
+                    args: vec!["-c".to_string(), command],
+                    cleanup_path: None,
+                    sandboxed: false,
+                    sandbox_backend: "direct".to_string(),
+                    sandbox_home: None,
+                },
+                temp.path().display().to_string(),
+                HashMap::new(),
+                24,
+                120,
+            )
+            .expect("start pty")
+            .into_json(12_000)
+            .await
+            .expect("pty json");
+        let session_id = started
+            .get("session_id")
+            .and_then(Value::as_str)
+            .expect("session id")
+            .to_string();
+
+        let listed = list.call(json!({})).await.expect("list ptys");
+        assert_eq!(
+            listed
+                .get("sessions")
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(1)
+        );
+
+        let inspected = status
+            .call(json!({ "session_id": session_id }))
+            .await
+            .expect("pty status");
+        assert_eq!(
+            inspected.get("status").and_then(Value::as_str),
+            Some("running")
+        );
+
+        let stopped = stop.call(json!({})).await.expect("stop all ptys");
+        assert_eq!(
+            stopped.pointer("/stopped/0/status").and_then(Value::as_str),
+            Some("killed")
         );
     }
 }
