@@ -20,7 +20,7 @@ pub use self::types::{
     LocalCommand, LocalCommandKind, OAuthLoginMode, OpenAiModelPickerAction, Overlay,
     PendingApprovalSnapshot, PendingInteractionSnapshot, ProviderFamily, RebuildSuccess,
     RunningTask, RuntimePhase, RuntimeSnapshot, TaskCompletion, TaskKind, TranscriptEntry,
-    TranscriptTurn, TuiApp, TuiEvent, PROVIDER_FAMILIES,
+    TranscriptEntryPayload, TranscriptTurn, TuiApp, TuiEvent, PROVIDER_FAMILIES,
 };
 
 const OPENAI_PROFILE_SETUP_KINDS: [OpenAiEndpointKind; 3] = [
@@ -411,7 +411,7 @@ impl TuiApp {
         if !exists {
             self.active_turn
                 .entries
-                .push(TranscriptEntry { role, message });
+                .push(TranscriptEntry::new(role, message));
         }
     }
 

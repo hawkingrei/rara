@@ -140,6 +140,7 @@ fn finalize_agent_stream_keeps_manual_transcript_scroll_position() {
     app.active_turn.entries.push(TranscriptEntry {
         role: "Agent".into(),
         message: "draft".into(),
+        payload: None,
     });
 
     app.finalize_agent_stream(Some("final answer".into()));
@@ -645,10 +646,12 @@ fn finalize_agent_stream_updates_latest_committed_turn_when_final_text_arrives_l
             TranscriptEntry {
                 role: "You".into(),
                 message: "你好".into(),
+                payload: None,
             },
             TranscriptEntry {
                 role: "Agent".into(),
                 message: "你好！".into(),
+                payload: None,
             },
         ],
     });
@@ -685,18 +688,22 @@ fn finalize_agent_stream_replaces_earlier_agent_entries_in_active_turn() {
             TranscriptEntry {
                 role: "You".into(),
                 message: "你好".into(),
+                payload: None,
             },
             TranscriptEntry {
                 role: "Agent".into(),
                 message: "你好".into(),
+                payload: None,
             },
             TranscriptEntry {
                 role: "System".into(),
                 message: "temporary runtime detail".into(),
+                payload: None,
             },
             TranscriptEntry {
                 role: "Agent".into(),
                 message: "你好！".into(),
+                payload: None,
             },
         ],
     };

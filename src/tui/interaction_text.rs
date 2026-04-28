@@ -25,7 +25,7 @@ pub fn pending_interaction_card_title(kind: ActivePendingInteractionKind) -> &'s
 pub fn pending_interaction_hint_text(kind: ActivePendingInteractionKind) -> &'static str {
     match kind {
         ActivePendingInteractionKind::PlanApproval => "type reply  1 yes  2 plan",
-        ActivePendingInteractionKind::ShellApproval => "type reply  1 yes  2 on  3 no",
+        ActivePendingInteractionKind::ShellApproval => "type reply  1 yes  2 prefix  3 on  4 no",
         ActivePendingInteractionKind::PlanningQuestion
         | ActivePendingInteractionKind::ExplorationQuestion
         | ActivePendingInteractionKind::SubAgentQuestion
@@ -41,7 +41,7 @@ pub fn status_plan_approval_text(app: &TuiApp) -> String {
 pub fn pending_interaction_shortcut_text(kind: ActivePendingInteractionKind) -> &'static str {
     match kind {
         ActivePendingInteractionKind::PlanApproval => "1 yes  2 plan",
-        ActivePendingInteractionKind::ShellApproval => "1 yes  2 on  3 no",
+        ActivePendingInteractionKind::ShellApproval => "1 yes  2 prefix  3 on  4 no",
         ActivePendingInteractionKind::PlanningQuestion
         | ActivePendingInteractionKind::ExplorationQuestion
         | ActivePendingInteractionKind::SubAgentQuestion
@@ -126,9 +126,13 @@ pub fn status_command_approval_text(app: &TuiApp) -> String {
         .filter(|value| !value.trim().is_empty())
         .unwrap_or(".");
     let env_count = approval.payload.env.len();
+    let prefix = approval
+        .payload
+        .approval_prefix()
+        .unwrap_or_else(|| approval.command.clone());
 
     format!(
-        "command:\n{}\n\ncwd:\n{}\n\nnetwork:\n{}\n\nenv:\n{} override(s)\n\n1. yes\n2. on\n3. no",
+        "command:\n{}\n\ncwd:\n{}\n\nnetwork:\n{}\n\nenv:\n{} override(s)\n\nmatching prefix:\n{}\n\n1. yes\n2. prefix\n3. on\n4. no",
         approval.command,
         cwd,
         if approval.allow_net {
@@ -137,6 +141,7 @@ pub fn status_command_approval_text(app: &TuiApp) -> String {
             "disabled"
         },
         env_count,
+        prefix,
     )
 }
 
@@ -175,7 +180,7 @@ mod tests {
             pending_interaction_hint_text(
                 crate::tui::state::ActivePendingInteractionKind::ShellApproval
             ),
-            "type reply  1 yes  2 on  3 no"
+            "type reply  1 yes  2 prefix  3 on  4 no"
         );
     }
 }

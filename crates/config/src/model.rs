@@ -1,4 +1,5 @@
 use anyhow::Result;
+use codex_execpolicy::{blocking_append_allow_prefix_rule, PolicyParser};
 use dirs::home_dir;
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
@@ -654,6 +655,48 @@ impl ConfigManager {
         Ok(())
     }
 
+    pub fn rules_path(&self) -> PathBuf {
+        self.path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join("rules")
+            .join("default.rules")
+    }
+
+    pub fn load_allowed_command_prefixes(&self) -> Result<Vec<String>> {
+        let path = self.rules_path();
+        let content = match fs::read_to_string(&path) {
+            Ok(content) => content,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(err) => return Err(err.into()),
+        };
+        let mut parser = PolicyParser::new();
+        parser.parse(&path.display().to_string(), &content)?;
+        let policy = parser.build();
+        Ok(policy
+            .get_allowed_prefixes()
+            .into_iter()
+            .map(|prefix| prefix.join(" "))
+            .collect())
+    }
+
+    pub fn save_allowed_command_prefixes(&self, prefixes: &[String]) -> Result<()> {
+        let path = self.rules_path();
+        let mut requested = Vec::new();
+        for prefix in prefixes {
+            if requested.contains(prefix) {
+                continue;
+            }
+            let tokens: Vec<String> = prefix.split_whitespace().map(str::to_string).collect();
+            if tokens.is_empty() {
+                continue;
+            }
+            blocking_append_allow_prefix_rule(&path, &tokens)?;
+            requested.push(prefix.clone());
+        }
+        Ok(())
+    }
+
     fn default_config() -> RaraConfig {
         RaraConfig {
             provider: "mock".to_string(),
@@ -1050,6 +1093,56 @@ mod tests {
         assert_eq!(
             config.provider_states["codex"].reasoning_summary.as_deref(),
             Some(DEFAULT_REASONING_SUMMARY)
+        );
+    }
+
+    #[test]
+    fn saves_and_loads_allowed_command_prefix_rules() {
+        let dir = tempdir().expect("tempdir");
+        let manager =
+            ConfigManager::new_for_rara_home(dir.path().join(".rara")).expect("config manager");
+
+        manager
+            .save_allowed_command_prefixes(&[
+                "git push".to_string(),
+                "cargo test".to_string(),
+                "git push".to_string(),
+            ])
+            .expect("save rules");
+        let loaded = manager.load_allowed_command_prefixes().expect("load rules");
+
+        assert_eq!(
+            loaded,
+            vec!["cargo test".to_string(), "git push".to_string()]
+        );
+        assert_eq!(
+            fs::read_to_string(manager.rules_path()).expect("read rules"),
+            "prefix_rule(pattern=[\"git\", \"push\"], decision=\"allow\")\n\
+prefix_rule(pattern=[\"cargo\", \"test\"], decision=\"allow\")\n"
+        );
+    }
+
+    #[test]
+    fn loads_codex_style_allowed_command_prefix_rules() {
+        let dir = tempdir().expect("tempdir");
+        let manager =
+            ConfigManager::new_for_rara_home(dir.path().join(".rara")).expect("config manager");
+        fs::create_dir_all(manager.rules_path().parent().unwrap()).expect("create rules dir");
+        fs::write(
+            manager.rules_path(),
+            r#"
+prefix_rule(
+    pattern=["git", "push"],
+)
+prefix_rule(pattern=["cargo","test"], decision="allow")
+prefix_rule(pattern=["rm", "-rf"], decision="prompt")
+"#,
+        )
+        .expect("write rules");
+
+        assert_eq!(
+            manager.load_allowed_command_prefixes().expect("load rules"),
+            vec!["cargo test".to_string(), "git push".to_string()]
         );
     }
 

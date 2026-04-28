@@ -10,6 +10,7 @@ use self::helpers::{
 };
 use super::super::state::{contains_structured_planning_output, RuntimePhase, TuiApp, TuiEvent};
 use crate::agent::AgentEvent;
+use crate::tui::terminal_event::{TerminalEvent, TerminalTarget};
 
 const TOOL_PROGRESS_LINE_LIMIT: usize = 16;
 
@@ -190,6 +191,36 @@ pub(super) fn apply_tui_event(app: &mut TuiApp, event: TuiEvent) {
             }
             app.push_entry(role, message)
         }
+        TuiEvent::Terminal(TerminalEvent::OutputDelta(event)) => {
+            let name = match event.target {
+                TerminalTarget::Pty => "pty",
+                TerminalTarget::BackgroundTask => "background task",
+            };
+            if !append_tool_progress(app, name, event.stream.into(), &event.chunk) {
+                return;
+            }
+            app.set_runtime_phase(
+                RuntimePhase::RunningTool,
+                Some(format!("streaming {name} output")),
+            );
+        }
+        TuiEvent::Terminal(event) => {
+            let role = event.transcript_role();
+            let message = event.to_transcript_message();
+            if role == "Tool" {
+                if let Some(action) = tool_action_label(&message) {
+                    app.record_running_action(action);
+                }
+            }
+            if matches!(role, "Tool Result" | "Tool Error") {
+                app.advance_running_tool_boundary();
+            }
+            app.set_runtime_phase(
+                RuntimePhase::RunningTool,
+                Some(message.lines().next().unwrap_or(role).trim().to_string()),
+            );
+            app.push_terminal_event(event);
+        }
         TuiEvent::ToolProgress {
             name,
             stream,
@@ -220,10 +251,15 @@ pub(super) fn convert_agent_event(event: AgentEvent) -> Option<TuiEvent> {
             role: "Agent Delta",
             message: text,
         }),
-        AgentEvent::ToolUse { name, input } => Some(TuiEvent::Transcript {
-            role: "Tool",
-            message: format_tool_use(&name, &input),
-        }),
+        AgentEvent::ToolUse { name, input } => {
+            if let Some(event) = TerminalEvent::from_tool_use(&name, &input) {
+                return Some(TuiEvent::Terminal(event));
+            }
+            Some(TuiEvent::Transcript {
+                role: "Tool",
+                message: format_tool_use(&name, &input),
+            })
+        }
         AgentEvent::ToolResult {
             name,
             content,
@@ -231,6 +267,9 @@ pub(super) fn convert_agent_event(event: AgentEvent) -> Option<TuiEvent> {
         } => {
             if is_exploration_tool_name(&name) {
                 return None;
+            }
+            if let Some(event) = TerminalEvent::from_tool_result(&name, &content, is_error) {
+                return Some(TuiEvent::Terminal(event));
             }
             Some(TuiEvent::Transcript {
                 role: if is_error {
@@ -245,11 +284,15 @@ pub(super) fn convert_agent_event(event: AgentEvent) -> Option<TuiEvent> {
             name,
             stream,
             chunk,
-        } => Some(TuiEvent::ToolProgress {
-            name,
-            stream,
-            chunk,
-        }),
+        } => TerminalEvent::from_tool_progress(&name, stream, &chunk)
+            .map(TuiEvent::Terminal)
+            .or_else(|| {
+                Some(TuiEvent::ToolProgress {
+                    name,
+                    stream,
+                    chunk,
+                })
+            }),
     }
 }
 

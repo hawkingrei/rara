@@ -120,6 +120,7 @@ fn merge_rebuilt_agent_preserves_session_and_turn_state() {
     previous.total_output_tokens = 45;
     previous.execution_mode = AgentExecutionMode::Plan;
     previous.bash_approval_mode = BashApprovalMode::Suggestion;
+    previous.approved_bash_prefixes = vec!["git push".to_string()];
     previous.current_plan = vec![PlanStep {
         step: "Keep session continuity".into(),
         status: PlanStepStatus::InProgress,
@@ -165,6 +166,7 @@ fn merge_rebuilt_agent_preserves_session_and_turn_state() {
     assert_eq!(merged.total_output_tokens, 45);
     assert_eq!(merged.execution_mode, AgentExecutionMode::Plan);
     assert_eq!(merged.bash_approval_mode, BashApprovalMode::Suggestion);
+    assert_eq!(merged.approved_bash_prefixes, vec!["git push".to_string()]);
     assert_eq!(merged.current_plan.len(), 1);
     assert_eq!(merged.compact_state.estimated_history_tokens, 1_200);
     assert_eq!(merged.compact_state.compaction_count, 2);

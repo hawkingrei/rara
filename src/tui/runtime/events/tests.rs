@@ -1,16 +1,18 @@
 use serde_json::json;
 use tempfile::tempdir;
 
-use super::apply_tui_event;
 use super::helpers::{
     format_apply_patch_result, format_apply_patch_use, format_tool_progress, format_tool_result,
     format_tool_use, is_oauth_prompt_message, planning_note_lines, scrub_internal_control_tokens,
     subagent_request_input,
 };
-use crate::agent::AgentExecutionMode;
+use super::{apply_tui_event, convert_agent_event};
+use crate::agent::{AgentEvent, AgentExecutionMode};
 use crate::config::ConfigManager;
 use crate::tool::ToolOutputStream;
+use crate::tui::state::TranscriptEntryPayload;
 use crate::tui::state::{RuntimePhase, TuiApp, TuiEvent};
+use crate::tui::terminal_event::{TerminalEvent, TerminalTarget};
 
 #[test]
 fn parses_delegated_request_input_from_subagent_result() {
@@ -300,6 +302,180 @@ fn formats_live_bash_tool_result_without_duplicate_tail() {
     assert!(rendered.contains("bash finished with exit code 0"));
     assert!(rendered.contains("output streamed above"));
     assert!(!rendered.contains("stdout:"));
+}
+
+#[test]
+fn formats_background_bash_start_as_task_summary() {
+    let rendered = format_tool_result(
+        "bash",
+        &json!({
+            "exit_code": null,
+            "live_streamed": false,
+            "background_task_id": "bash-123",
+            "output_path": "/tmp/rara/background-tasks/bash-123.log",
+            "status": "running"
+        })
+        .to_string(),
+    );
+
+    assert_eq!(
+        rendered,
+        "background task bash-123 running\noutput: /tmp/rara/background-tasks/bash-123.log"
+    );
+}
+
+#[test]
+fn formats_pty_result_with_sanitized_output_tail() {
+    let rendered = format_tool_result(
+        "pty_status",
+        &json!({
+            "session_id": "pty-123",
+            "command": "npm run dev",
+            "status": "running",
+            "output": "\u{1b}[32mready\u{1b}[0m\r\nline 2\nline 3\nline 4\nline 5\nline 6\nline 7\n"
+        })
+        .to_string(),
+    );
+
+    assert!(rendered.starts_with("pty pty-123 running: npm run dev"));
+    assert!(rendered.contains("output:"));
+    assert!(rendered.contains("line 7"));
+    assert!(rendered.contains("line 2"));
+    assert!(!rendered.contains("ready"));
+    assert!(!rendered.contains('\u{1b}'));
+}
+
+#[test]
+fn formats_background_task_status_with_output_tail() {
+    let rendered = format_tool_result(
+        "background_task_status",
+        &json!({
+            "task_id": "bash-123",
+            "command": "cargo test",
+            "status": "completed",
+            "exit_code": 0,
+            "output": "build\nrunning\nok\n"
+        })
+        .to_string(),
+    );
+
+    assert_eq!(
+        rendered,
+        "background task bash-123 completed: cargo test\nexit_code: 0\noutput:\nbuild\nrunning\nok"
+    );
+}
+
+#[test]
+fn formats_terminal_list_and_stop_results() {
+    let listed = format_tool_result(
+        "pty_list",
+        &json!({
+            "sessions": [
+                {
+                    "session_id": "pty-1",
+                    "command": "python repl.py",
+                    "status": "running"
+                }
+            ]
+        })
+        .to_string(),
+    );
+    assert_eq!(
+        listed,
+        "pty sessions: 1\n  pty pty-1 running: python repl.py"
+    );
+
+    let stopped = format_tool_result(
+        "background_task_stop",
+        &json!({
+            "stopped": [
+                {
+                    "id": "bash-1",
+                    "command": "sleep 10",
+                    "status": "killed"
+                }
+            ]
+        })
+        .to_string(),
+    );
+    assert_eq!(
+        stopped,
+        "background task stopped: 1\n  background task bash-1 killed: sleep 10"
+    );
+}
+
+#[test]
+fn formats_terminal_tool_use_without_dumping_json() {
+    let rendered = format_tool_use(
+        "pty_write",
+        &json!({
+            "session_id": "pty-123",
+            "input": "hello\n"
+        }),
+    );
+
+    assert_eq!(rendered, "pty_write pty-123: hello\\n");
+}
+
+#[test]
+fn converts_terminal_tool_result_to_typed_event() {
+    let event = convert_agent_event(AgentEvent::ToolResult {
+        name: "pty_status".to_string(),
+        content: json!({
+            "session_id": "pty-123",
+            "command": "cargo test",
+            "status": "completed",
+            "output": "ok\n"
+        })
+        .to_string(),
+        is_error: false,
+    })
+    .expect("tui event");
+
+    match event {
+        TuiEvent::Terminal(TerminalEvent::End(command)) => {
+            assert_eq!(command.target, TerminalTarget::Pty);
+            assert_eq!(command.id.as_deref(), Some("pty-123"));
+            assert_eq!(command.status, "completed");
+            assert_eq!(command.command.as_deref(), Some("cargo test"));
+            assert_eq!(command.output, vec!["ok".to_string()]);
+        }
+        _ => panic!("unexpected event"),
+    }
+}
+
+#[test]
+fn applies_terminal_begin_event_as_running_action() {
+    let temp = tempdir().expect("tempdir");
+    let mut app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("app");
+
+    let event = convert_agent_event(AgentEvent::ToolUse {
+        name: "bash".to_string(),
+        input: json!({
+            "command": "cargo test",
+            "run_in_background": true
+        }),
+    })
+    .expect("tui event");
+
+    apply_tui_event(&mut app, event);
+
+    assert_eq!(
+        app.active_live.running_actions,
+        vec!["Run cargo test".to_string()]
+    );
+    assert_eq!(app.active_turn.entries.len(), 1);
+    assert_eq!(app.active_turn.entries[0].role, "Terminal Event");
+    match app.active_turn.entries[0].payload.as_ref() {
+        Some(TranscriptEntryPayload::Terminal(TerminalEvent::Begin(command))) => {
+            assert_eq!(command.target, TerminalTarget::BackgroundTask);
+            assert_eq!(command.command.as_deref(), Some("cargo test"));
+        }
+        other => panic!("unexpected event: {other:?}"),
+    }
 }
 
 #[test]

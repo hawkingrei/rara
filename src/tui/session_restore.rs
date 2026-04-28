@@ -184,10 +184,7 @@ pub(super) fn restore_thread_by_id(
                 let entries = turn
                     .entries
                     .into_iter()
-                    .map(|entry| TranscriptEntry {
-                        role: entry.role,
-                        message: entry.message,
-                    })
+                    .map(|entry| TranscriptEntry::new(entry.role, entry.message))
                     .collect::<Vec<_>>();
                 turns.push(TranscriptTurn { entries });
             }

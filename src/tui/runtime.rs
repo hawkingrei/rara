@@ -4,7 +4,7 @@ mod tasks;
 
 use std::sync::Arc;
 
-use crate::agent::{Agent, BashApprovalMode};
+use crate::agent::{Agent, BashApprovalDecision};
 use crate::oauth::OAuthManager;
 
 use super::state::{LocalCommand, OAuthLoginMode, TuiApp};
@@ -30,7 +30,11 @@ pub fn should_suggest_planning_mode(app: &TuiApp, prompt: &str) -> bool {
     tasks::should_suggest_planning_mode(app, prompt)
 }
 
-pub fn start_pending_approval_task(app: &mut TuiApp, selection: BashApprovalMode, agent: Agent) {
+pub fn start_pending_approval_task(
+    app: &mut TuiApp,
+    selection: BashApprovalDecision,
+    agent: Agent,
+) {
     tasks::start_pending_approval_task(app, selection, agent);
 }
 
