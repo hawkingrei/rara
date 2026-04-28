@@ -210,13 +210,14 @@ pub(super) fn build_chat_completion_request_body(
     if !openai_tools.is_empty() {
         body["tools"] = json!(openai_tools);
     }
+    let strong_reasoning = !openai_tools.is_empty() || is_plan_mode_request(messages);
     apply_deepseek_thinking_options(
         &mut body,
         model,
         endpoint_kind,
         reasoning_effort,
         thinking,
-        !openai_tools.is_empty(),
+        strong_reasoning,
     );
     body
 }
@@ -227,7 +228,7 @@ fn apply_deepseek_thinking_options(
     endpoint_kind: OpenAiEndpointKind,
     reasoning_effort: Option<&str>,
     thinking: Option<bool>,
-    has_tools: bool,
+    strong_reasoning: bool,
 ) {
     if endpoint_kind != OpenAiEndpointKind::Deepseek || !deepseek_supports_thinking(model) {
         return;
@@ -240,9 +241,16 @@ fn apply_deepseek_thinking_options(
     if thinking_enabled {
         body["reasoning_effort"] = Value::String(normalize_deepseek_reasoning_effort(
             reasoning_effort,
-            has_tools,
+            strong_reasoning,
         ));
     }
+}
+
+fn is_plan_mode_request(messages: &[Message]) -> bool {
+    messages.iter().any(|message| {
+        message.role == "system"
+            && render_openai_message_content(&message.content).contains("Planning mode is active.")
+    })
 }
 
 fn deepseek_supports_thinking(model: &str) -> bool {
@@ -250,19 +258,22 @@ fn deepseek_supports_thinking(model: &str) -> bool {
     model.contains("v4") || model.contains("reasoner")
 }
 
-fn normalize_deepseek_reasoning_effort(reasoning_effort: Option<&str>, has_tools: bool) -> String {
+fn normalize_deepseek_reasoning_effort(
+    reasoning_effort: Option<&str>,
+    strong_reasoning: bool,
+) -> String {
     let Some(reasoning_effort) = reasoning_effort
         .map(str::trim)
         .filter(|value| !value.is_empty())
     else {
-        return if has_tools { "max" } else { "high" }.to_string();
+        return if strong_reasoning { "max" } else { "high" }.to_string();
     };
 
     match reasoning_effort.to_ascii_lowercase().as_str() {
         "max" | "xhigh" => "max".to_string(),
         "low" | "medium" | "high" => "high".to_string(),
         _ => {
-            if has_tools {
+            if strong_reasoning {
                 "max".to_string()
             } else {
                 "high".to_string()

@@ -320,6 +320,33 @@ fn deepseek_v4_request_enables_thinking_and_uses_max_effort_for_tools() {
 }
 
 #[test]
+fn deepseek_plan_mode_uses_max_effort_without_tools() {
+    let body = build_chat_completion_request_body(
+        "deepseek-v4-pro",
+        &[
+            Message {
+                role: "system".to_string(),
+                content: json!(
+                    "## Current Execution Mode\n- Planning mode is active.\n- This pass is read-only."
+                ),
+            },
+            Message {
+                role: "user".to_string(),
+                content: json!("Plan the implementation."),
+            },
+        ],
+        &[],
+        OpenAiEndpointKind::Deepseek,
+        None,
+        None,
+    );
+
+    assert_eq!(body["thinking"]["type"], "enabled");
+    assert_eq!(body["reasoning_effort"], "max");
+    assert!(body.get("tools").is_none());
+}
+
+#[test]
 fn deepseek_reasoning_effort_uses_documented_high_max_values() {
     let medium_body = build_chat_completion_request_body(
         "deepseek-v4-flash",
