@@ -475,19 +475,13 @@ async fn read_output_tail(path: &Path, max_bytes: usize) -> Result<String, ToolE
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sandbox::WrappedCommand;
     use tempfile::tempdir;
 
     #[tokio::test]
     async fn pty_session_accepts_input_and_exposes_output() {
         let temp = tempdir().expect("tempdir");
         let sessions = Arc::new(PtySessionStore::new(temp.path().join("pty")).expect("pty store"));
-        let sandbox = Arc::new(
-            SandboxManager::new_for_rara_dir(temp.path().join(".rara")).expect("sandbox manager"),
-        );
-        let start = PtyStartTool {
-            sessions: sessions.clone(),
-            sandbox,
-        };
         let write = PtyWriteTool {
             sessions: sessions.clone(),
         };
@@ -495,13 +489,27 @@ mod tests {
             sessions: sessions.clone(),
         };
 
-        let started = start
-            .call(json!({
-                "command": "read line; printf \"got:%s\\n\" \"$line\"",
-                "cwd": temp.path(),
-            }))
+        let command = "read line; printf \"got:%s\\n\" \"$line\"".to_string();
+        let started = sessions
+            .start(
+                command.clone(),
+                WrappedCommand {
+                    program: "/bin/sh".to_string(),
+                    args: vec!["-c".to_string(), command],
+                    cleanup_path: None,
+                    sandboxed: false,
+                    sandbox_backend: "direct".to_string(),
+                    sandbox_home: None,
+                },
+                temp.path().display().to_string(),
+                HashMap::new(),
+                24,
+                120,
+            )
+            .expect("start pty")
+            .into_json(12_000)
             .await
-            .expect("start pty");
+            .expect("pty json");
         let session_id = started
             .get("session_id")
             .and_then(Value::as_str)
