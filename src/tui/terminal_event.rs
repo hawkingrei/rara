@@ -1,3 +1,5 @@
+use std::collections::VecDeque;
+
 use serde::{Deserialize, Serialize};
 
 use crate::tool::ToolOutputStream;
@@ -132,7 +134,7 @@ impl TerminalEvent {
         let value = serde_json::from_str::<serde_json::Value>(content).ok()?;
         match name {
             "bash" => background_bash_start_event(&value, is_error).map(Self::End),
-            "pty_start" | "pty_read" | "pty_status" | "pty_kill" => {
+            "pty_start" | "pty_read" | "pty_status" | "pty_write" | "pty_kill" => {
                 Some(Self::End(pty_command_event(&value, is_error)))
             }
             "pty_list" => Some(Self::List(collection_event(
@@ -419,26 +421,25 @@ fn collection_item_event(
 }
 
 pub(crate) fn output_tail_preview(output: &str) -> Option<Vec<String>> {
-    let lines = output
-        .lines()
-        .map(sanitize_terminal_output_line)
-        .filter(|line| !line.trim().is_empty())
-        .collect::<Vec<_>>();
+    const TAIL_LIMIT: usize = 6;
+
+    let mut lines = VecDeque::with_capacity(TAIL_LIMIT);
+    for line in output.lines() {
+        let sanitized = sanitize_terminal_output_line(line);
+        if sanitized.trim().is_empty() {
+            continue;
+        }
+        if lines.len() == TAIL_LIMIT {
+            lines.pop_front();
+        }
+        lines.push_back(sanitized);
+    }
+
     if lines.is_empty() {
         return None;
     }
 
-    Some(
-        lines
-            .iter()
-            .rev()
-            .take(6)
-            .cloned()
-            .collect::<Vec<_>>()
-            .into_iter()
-            .rev()
-            .collect::<Vec<_>>(),
-    )
+    Some(lines.into_iter().collect())
 }
 
 pub(crate) fn sanitize_terminal_output_line(line: &str) -> String {
@@ -488,7 +489,7 @@ fn strip_ansi_control_sequences(input: &str) -> String {
 mod tests {
     use serde_json::json;
 
-    use super::{TerminalEvent, TerminalTarget};
+    use super::{output_tail_preview, TerminalEvent, TerminalTarget};
 
     #[test]
     fn builds_background_start_event_from_bash_result() {
@@ -529,6 +530,55 @@ mod tests {
         assert_eq!(
             event.to_transcript_message(),
             "pty pty-1 completed: cargo test\noutput:\nred\nok"
+        );
+    }
+
+    #[test]
+    fn builds_pty_write_result_as_terminal_event() {
+        let event = TerminalEvent::from_tool_result(
+            "pty_write",
+            &json!({
+                "session_id": "pty-1",
+                "status": "running",
+                "command": "cargo test",
+                "output": "line 1\nline 2\n"
+            })
+            .to_string(),
+            false,
+        )
+        .expect("terminal event");
+
+        match event {
+            TerminalEvent::End(command) => {
+                assert_eq!(command.target, TerminalTarget::Pty);
+                assert_eq!(command.id.as_deref(), Some("pty-1"));
+                assert_eq!(command.status, "running");
+                assert_eq!(
+                    command.output,
+                    vec!["line 1".to_string(), "line 2".to_string()]
+                );
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn output_tail_preview_keeps_only_last_non_empty_lines() {
+        let output = (1..=10)
+            .map(|index| format!("line {index}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert_eq!(
+            output_tail_preview(&output),
+            Some(vec![
+                "line 5".to_string(),
+                "line 6".to_string(),
+                "line 7".to_string(),
+                "line 8".to_string(),
+                "line 9".to_string(),
+                "line 10".to_string(),
+            ])
         );
     }
 
