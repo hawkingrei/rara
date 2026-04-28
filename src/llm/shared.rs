@@ -21,9 +21,55 @@ pub struct ContextBudget {
     pub compact_threshold_tokens: usize,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LlmExecutionMode {
+    Execute,
+    Plan,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LlmTurnMetadata {
+    execution_mode: LlmExecutionMode,
+}
+
+impl Default for LlmTurnMetadata {
+    fn default() -> Self {
+        Self {
+            execution_mode: LlmExecutionMode::Execute,
+        }
+    }
+}
+
+impl LlmTurnMetadata {
+    pub fn execute() -> Self {
+        Self {
+            execution_mode: LlmExecutionMode::Execute,
+        }
+    }
+
+    pub fn plan() -> Self {
+        Self {
+            execution_mode: LlmExecutionMode::Plan,
+        }
+    }
+
+    pub fn prefers_strong_reasoning(self) -> bool {
+        matches!(self.execution_mode, LlmExecutionMode::Plan)
+    }
+}
+
 #[async_trait]
 pub trait LlmBackend: Send + Sync {
     async fn ask(&self, messages: &[Message], tools: &[Value]) -> Result<LlmResponse>;
+    async fn ask_with_context(
+        &self,
+        messages: &[Message],
+        tools: &[Value],
+        _metadata: LlmTurnMetadata,
+    ) -> Result<LlmResponse> {
+        self.ask(messages, tools).await
+    }
+
     async fn ask_streaming(
         &self,
         messages: &[Message],
@@ -32,6 +78,16 @@ pub trait LlmBackend: Send + Sync {
     ) -> Result<LlmResponse> {
         self.ask(messages, tools).await
     }
+    async fn ask_streaming_with_context(
+        &self,
+        messages: &[Message],
+        tools: &[Value],
+        _metadata: LlmTurnMetadata,
+        on_text_delta: &mut (dyn FnMut(String) + Send),
+    ) -> Result<LlmResponse> {
+        self.ask_streaming(messages, tools, on_text_delta).await
+    }
+
     async fn embed(&self, text: &str) -> Result<Vec<f32>>;
     async fn summarize(&self, messages: &[Message], instruction: &str) -> Result<String>;
     fn context_budget(&self, _messages: &[Message], _tools: &[Value]) -> Option<ContextBudget> {

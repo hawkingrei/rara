@@ -117,18 +117,22 @@ pub(crate) async fn build_backend_with_progress(
                     "openrouter" => OpenAiEndpointKind::Openrouter,
                     _ => OpenAiEndpointKind::Custom,
                 });
-            Ok(Box::new(OpenAiCompatibleBackend::new_with_endpoint_kind(
-                config.api_key.clone(),
-                config
-                    .base_url
-                    .clone()
-                    .unwrap_or_else(|| kind.default_base_url().to_string()),
-                config
-                    .model
-                    .clone()
-                    .unwrap_or_else(|| kind.default_model().to_string()),
-                kind,
-            )?))
+            Ok(Box::new(
+                OpenAiCompatibleBackend::new_with_endpoint_kind_and_reasoning(
+                    config.api_key.clone(),
+                    config
+                        .base_url
+                        .clone()
+                        .unwrap_or_else(|| kind.default_base_url().to_string()),
+                    config
+                        .model
+                        .clone()
+                        .unwrap_or_else(|| kind.default_model().to_string()),
+                    kind,
+                    config.reasoning_effort.clone(),
+                    config.thinking,
+                )?,
+            ))
         }
         "ollama" | "ollama-native" => Ok(Box::new(OllamaBackend::new(
             config

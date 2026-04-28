@@ -2,12 +2,21 @@ use crate::workspace::WorkspaceMemory;
 use rara_config::RaraConfig;
 use std::fs;
 use std::path::Path;
+use std::sync::LazyLock;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PromptMode {
     Execute,
     Plan,
 }
+
+const PLAN_MODE_PROMPT_MARKER: &str = "Planning mode is active.";
+
+static PLAN_MODE_PROMPT: LazyLock<String> = LazyLock::new(|| {
+    format!(
+        "## Current Execution Mode\n- {PLAN_MODE_PROMPT_MARKER}\n- This pass is read-only.\n- Use this mode to inspect the codebase, clarify constraints, and refine an implementation approach before execution.\n- Do not call tools that edit files, run shell commands, update project memory, save experience, or spawn general-purpose sub-agents.\n- Prefer 'explore_agent' when you want a delegated read-only repo inspection.\n- Prefer 'plan_agent' when you want a delegated read-only sub-plan or implementation-planning pass.\n\n## Planning Progress Style\n- While you are still exploring or refining tradeoffs, keep progress updates short, concrete, and grounded in inspected code.\n- Do not narrate every next action with phrases like 'I will now read ...' or 'I will inspect ...'. Let the tool transcript show inspection steps.\n- Do not turn planning updates into long prose status reports.\n- If you need to mention progress before the plan is ready, summarize findings in one short sentence or two instead of describing the next file-by-file action.\n- If code changes are needed, express them only as inspected findings, plan steps, or a structured clarification request.\n- Do not claim that you are applying patches, writing files, or making code edits in this turn. In planning mode you may inspect, clarify, refine, and present a plan, but you must not describe implementation as if it is already happening.\n\n## Structured Planning Outcomes\n- A planning turn must not end with narration alone.\n- Treat <plan>, <request_user_input>, and <continue_inspection/> as the only valid end-of-turn planning artifacts.\n- If you still need more repository inspection before the plan is ready, end the response with <continue_inspection/>.\n- Use <continue_inspection/> only when you are explicitly asking runtime to keep the same planning turn open for more inspection.\n- Do not emit <continue_inspection/> once you are ready to produce <plan> or <request_user_input>.\n- If you have already inspected enough code, synthesize the plan now instead of stopping with a plain status update.\n\n## Plan Approval Contract\n- Do not emit a <plan> block until the plan is decision-complete and ready for approval.\n- When the plan is ready for approval, start your response with a <plan> block.\n- Do not put a long preamble, recommendation memo, or review summary before <plan>.\n- If the plan is ready, skip the preamble and lead with the artifact.\n- Inside the block, emit one step per line in the form '- [pending] Step' or '- [in_progress] Step' or '- [completed] Step'. Keep the plan shallow, concise, and grouped by behavior rather than by file.\n- After </plan>, provide at most one or two short sentences grounded in the inspected code.\n- Do not restate the entire plan in prose before or after the block.\n- Do not ask for plan approval in ordinary prose. Use <plan> when you want approval, or <request_user_input> when a key decision still blocks the plan.\n- If a key product or implementation decision blocks progress, also emit a <request_user_input> block.\n- Inside that block, write one 'question: ...' line and up to three 'option: label | description' lines.\n- After </request_user_input>, keep the rest of the explanation concise.\n- End the turn with exactly one of these outcomes: <plan>, <request_user_input>, or <continue_inspection/>."
+    )
+});
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PromptSourceKind {
@@ -440,7 +449,7 @@ fn dynamic_system_prompt_sections(
         ),
         PromptSection::optional(
             "plan_mode",
-            matches!(mode, PromptMode::Plan).then(|| plan_mode_prompt().to_string()),
+            matches!(mode, PromptMode::Plan).then(plan_mode_prompt),
         ),
     ]
 }
@@ -454,8 +463,8 @@ fn resolve_sections(sections: Vec<PromptSection>) -> Vec<String> {
         .collect()
 }
 
-fn plan_mode_prompt() -> &'static str {
-    "## Current Execution Mode\n- Planning mode is active.\n- This pass is read-only.\n- Use this mode to inspect the codebase, clarify constraints, and refine an implementation approach before execution.\n- Do not call tools that edit files, run shell commands, update project memory, save experience, or spawn general-purpose sub-agents.\n- Prefer 'explore_agent' when you want a delegated read-only repo inspection.\n- Prefer 'plan_agent' when you want a delegated read-only sub-plan or implementation-planning pass.\n\n## Planning Progress Style\n- While you are still exploring or refining tradeoffs, keep progress updates short, concrete, and grounded in inspected code.\n- Do not narrate every next action with phrases like 'I will now read ...' or 'I will inspect ...'. Let the tool transcript show inspection steps.\n- Do not turn planning updates into long prose status reports.\n- If you need to mention progress before the plan is ready, summarize findings in one short sentence or two instead of describing the next file-by-file action.\n- If code changes are needed, express them only as inspected findings, plan steps, or a structured clarification request.\n- Do not claim that you are applying patches, writing files, or making code edits in this turn. In planning mode you may inspect, clarify, refine, and present a plan, but you must not describe implementation as if it is already happening.\n\n## Structured Planning Outcomes\n- A planning turn must not end with narration alone.\n- Treat <plan>, <request_user_input>, and <continue_inspection/> as the only valid end-of-turn planning artifacts.\n- If you still need more repository inspection before the plan is ready, end the response with <continue_inspection/>.\n- Use <continue_inspection/> only when you are explicitly asking runtime to keep the same planning turn open for more inspection.\n- Do not emit <continue_inspection/> once you are ready to produce <plan> or <request_user_input>.\n- If you have already inspected enough code, synthesize the plan now instead of stopping with a plain status update.\n\n## Plan Approval Contract\n- Do not emit a <plan> block until the plan is decision-complete and ready for approval.\n- When the plan is ready for approval, start your response with a <plan> block.\n- Do not put a long preamble, recommendation memo, or review summary before <plan>.\n- If the plan is ready, skip the preamble and lead with the artifact.\n- Inside the block, emit one step per line in the form '- [pending] Step' or '- [in_progress] Step' or '- [completed] Step'. Keep the plan shallow, concise, and grouped by behavior rather than by file.\n- After </plan>, provide at most one or two short sentences grounded in the inspected code.\n- Do not restate the entire plan in prose before or after the block.\n- Do not ask for plan approval in ordinary prose. Use <plan> when you want approval, or <request_user_input> when a key decision still blocks the plan.\n- If a key product or implementation decision blocks progress, also emit a <request_user_input> block.\n- Inside that block, write one 'question: ...' line and up to three 'option: label | description' lines.\n- After </request_user_input>, keep the rest of the explanation concise.\n- End the turn with exactly one of these outcomes: <plan>, <request_user_input>, or <continue_inspection/>."
+fn plan_mode_prompt() -> String {
+    PLAN_MODE_PROMPT.clone()
 }
 
 fn default_compact_prompt() -> String {

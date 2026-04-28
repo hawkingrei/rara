@@ -78,6 +78,10 @@ Priority order for this phase:
 
 - [ ] Extend the local `ThreadStore` / `ThreadRecorder` boundary from a façade over `SessionManager` + `StateDb` into a true structured thread store with explicit thread metadata and rollout-item ownership.
 - [ ] Complete the thread lifecycle surface around the new thread boundary: stable `threads`/`thread`/`resume --last`/`fork` flows now exist, but richer lineage metadata and a clearer `latest thread` contract still need to land.
+- [ ] Add durable in-turn checkpoints for long-running agent tasks, aligned with Codex-style turn/item status tracking and Claude-style JSONL transcript replay:
+  - persist after the user message is accepted, after each assistant message, after each tool-result batch, after runtime continuation messages, and before waiting for pending user approval;
+  - make `SessionManager::save_session` crash-tolerant by writing through a temporary file and atomic rename instead of overwriting `history.json` directly;
+  - separate resumable transcript history from transient TUI task state so interrupted turns can resume with a clear `in progress` / `interrupted` / `failed` boundary rather than only an end-of-turn save.
 - [ ] Make compaction a first-class runtime lifecycle event with persisted summaries, token counters, and boundary metadata ownership aligned with the thread domain.
 - [ ] Define thread-scoped and workspace-scoped `MemoryRecord` storage plus promotion rules so durable findings are not mixed with transient turn context.
 - [ ] Replace the current placeholder retrieval path with real vector retrieval over Lance/LanceDB, including metadata-aware ranking for thread and workspace memory selection.
@@ -87,6 +91,7 @@ Priority order for this phase:
 ## TUI / UX Parity
 
 - [ ] Continue improving transcript rendering stability across long and streaming sessions: reduce scroll jumps and flicker, strengthen bottom anchoring, and prevent stale transient sections from reappearing after their live phase ends.
+- [ ] Improve long-running task progress reporting so the TUI heartbeat reflects the active phase (`sending prompt`, `streaming response`, `running tool`, `waiting for approval`, `checkpointing`) instead of resetting to a generic prompt-sending notice during long tool execution.
 - [ ] Rework long `Exploring` / `Explored` handling to follow Codex more closely: keep live exploration compact and summarize committed exploration into a source-aware digest instead of dumping long raw traces.
 - [ ] Decouple setup/help/model overlays from transcript layout so overlays behave as a pure top layer and do not perturb history viewport sizing.
 - [ ] After exit, print a Codex/Claude-style resume hint that tells the user how to restore the current thread quickly (for example the exact `rara resume <THREAD_ID>` or `rara resume --last` command to use).
