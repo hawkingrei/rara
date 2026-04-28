@@ -211,6 +211,20 @@ impl LlmBackend for OpenAiCompatibleBackend {
         }
 
         let mut content = Vec::new();
+        let mut parsed_dsml_tool_calls = Vec::new();
+
+        if self.endpoint_kind == OpenAiEndpointKind::Deepseek {
+            let (visible_text, dsml_tool_calls) = extract_dsml_tool_calls_from_text(&streamed_text);
+            parsed_dsml_tool_calls = dsml_tool_calls;
+            if !visible_text.trim().is_empty() {
+                content.push(ContentBlock::Text { text: visible_text });
+            }
+        } else if !streamed_text.trim().is_empty() {
+            content.push(ContentBlock::Text {
+                text: streamed_text,
+            });
+        }
+
         if self.endpoint_kind == OpenAiEndpointKind::Deepseek {
             if !streamed_reasoning_content.trim().is_empty() {
                 content.push(ContentBlock::ProviderMetadata {
@@ -219,21 +233,6 @@ impl LlmBackend for OpenAiCompatibleBackend {
                     value: Value::String(streamed_reasoning_content),
                 });
             }
-            let (visible_text, dsml_tool_calls) = extract_dsml_tool_calls_from_text(&streamed_text);
-            if !visible_text.trim().is_empty() {
-                content.push(ContentBlock::Text { text: visible_text });
-            }
-            if !dsml_tool_calls.is_empty()
-                && !content
-                    .iter()
-                    .any(|block| matches!(block, ContentBlock::ToolUse { .. }))
-            {
-                content.extend(dsml_tool_calls);
-            }
-        } else if !streamed_text.trim().is_empty() {
-            content.push(ContentBlock::Text {
-                text: streamed_text,
-            });
         }
 
         for (idx, tc) in streamed_tool_calls.iter().enumerate() {
@@ -260,6 +259,15 @@ impl LlmBackend for OpenAiCompatibleBackend {
                 name: name.to_string(),
                 input: parse_tool_arguments(arguments)?,
             });
+        }
+
+        if self.endpoint_kind == OpenAiEndpointKind::Deepseek
+            && !parsed_dsml_tool_calls.is_empty()
+            && !content
+                .iter()
+                .any(|block| matches!(block, ContentBlock::ToolUse { .. }))
+        {
+            content.extend(parsed_dsml_tool_calls);
         }
 
         Ok(LlmResponse {

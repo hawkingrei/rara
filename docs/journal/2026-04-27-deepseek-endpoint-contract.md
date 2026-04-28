@@ -35,9 +35,9 @@ provider-specific runtime metadata and a clearer `/model` management surface.
 
 - `cargo test deepseek_reasoning_content_roundtrips_as_provider_metadata -- --nocapture`
 - `cargo test deepseek_tool_call_reasoning_content_roundtrips_without_trimming -- --nocapture`
-- `cargo test deepseek_v4_request_enables_thinking_and_uses_max_effort_for_tools -- --nocapture`
-- `cargo test deepseek_plan_metadata_uses_max_effort_without_tools_or_prompt_marker -- --nocapture`
-- `cargo test deepseek_reasoning_effort_uses_documented_high_max_values -- --nocapture`
+- `cargo test deepseek_v4_explicit_thinking_enables_controls_for_tools -- --nocapture`
+- `cargo test deepseek_reasoner_plan_with_explicit_thinking_uses_max_effort -- --nocapture`
+- `cargo test deepseek_reasoner_explicit_thinking_normalizes_reasoning_effort -- --nocapture`
 - `cargo test deepseek_model_picker -- --nocapture`
 - `cargo test deepseek_api_key_editor_uses_deepseek_copy -- --nocapture`
 - `cargo test llm::tests -- --nocapture`

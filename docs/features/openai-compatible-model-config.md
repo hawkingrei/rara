@@ -71,14 +71,10 @@ as a notice or system message.
 For thinking-capable DeepSeek models, RARA sends DeepSeek's documented
 thinking-mode controls on chat-completions requests:
 
-- `thinking.type = enabled` unless the runtime config explicitly disables
-  thinking;
-- `reasoning_effort = high` for ordinary requests;
-- `reasoning_effort = max` for planning-mode or tool-enabled agent requests
-  unless the user has configured a reasoning effort explicitly; planning mode
-  is supplied through structured turn metadata, not inferred from prompt text;
-- Codex-style `low` and `medium` efforts are normalized to `high`, while
-  `xhigh` is normalized to `max`.
+- when thinking is explicitly enabled, send `thinking.type = enabled`, and use
+  `reasoning_effort = max` for planning-mode or tool-enabled agent requests,
+  with Codex-style `low` / `medium` / `xhigh` values normalized to
+  DeepSeek's documented `high` / `max` values.
 
 When DeepSeek returns `reasoning_content`, RARA stores it as provider metadata
 and replays it only for the DeepSeek endpoint. Assistant messages that contain
