@@ -529,6 +529,65 @@ async fn enter_plan_mode_tool_switches_to_read_only_planning() {
 }
 
 #[tokio::test]
+async fn enter_plan_mode_prevents_earlier_mutating_tool_in_same_batch() {
+    let backend = Arc::new(SequencedBackend::new(vec![
+        LlmResponse {
+            content: vec![
+                ContentBlock::ToolUse {
+                    id: "write-before-plan".to_string(),
+                    name: "bash".to_string(),
+                    input: json!({ "command": "git push origin main" }),
+                },
+                ContentBlock::ToolUse {
+                    id: "enter-plan".to_string(),
+                    name: "enter_plan_mode".to_string(),
+                    input: json!({}),
+                },
+            ],
+            stop_reason: Some("tool_use".to_string()),
+            usage: Some(TokenUsage::default()),
+        },
+        LlmResponse {
+            content: vec![ContentBlock::Text {
+                text: "I will inspect first.".to_string(),
+            }],
+            stop_reason: Some("end_turn".to_string()),
+            usage: Some(TokenUsage::default()),
+        },
+    ]));
+
+    let mut tool_manager = ToolManager::new();
+    tool_manager.register(Box::new(StubBashTool));
+    tool_manager.register(Box::new(EnterPlanModeTool));
+    let (_temp, session_manager, workspace, rara_dir) = test_runtime_storage();
+    let mut agent = Agent::new(
+        tool_manager,
+        backend.clone(),
+        Arc::new(VectorDB::new(&rara_dir.join("lancedb").to_string_lossy())),
+        session_manager,
+        workspace,
+    );
+
+    agent
+        .query_with_mode(
+            "review then maybe implement".to_string(),
+            super::super::AgentOutputMode::Silent,
+        )
+        .await
+        .expect("query should enter plan mode before executing batch tools");
+
+    let history = agent
+        .history
+        .iter()
+        .map(|message| message.content.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_eq!(agent.execution_mode, AgentExecutionMode::Plan);
+    assert!(history.contains("bash is read-only in plan mode"));
+    assert!(!history.contains("\"stdout\":\"ok"));
+}
+
+#[tokio::test]
 async fn continues_tool_loop_without_fixed_turn_cap() {
     let tool_turns = 205;
     let mut responses = (0..tool_turns)

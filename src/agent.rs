@@ -458,10 +458,39 @@ impl Agent {
         F: FnMut(AgentEvent) + Send,
     {
         let mut tool_results = Vec::new();
+        let entering_plan_mode = tool_calls
+            .iter()
+            .any(|tool_call| tool_call.name == "enter_plan_mode");
+        if entering_plan_mode && !matches!(self.execution_mode, AgentExecutionMode::Plan) {
+            self.execution_mode = AgentExecutionMode::Plan;
+            report(AgentEvent::Status(
+                "Entered read-only planning mode.".to_string(),
+            ));
+        }
         for tool_call in tool_calls {
             let tool_name = tool_call.name.clone();
             let tool_id = tool_call.id.clone();
             let tool_input = tool_call.input.clone();
+            if tool_name == "enter_plan_mode" {
+                let result_text = json!({
+                    "status": "entered_plan_mode",
+                    "instructions": [
+                        "Inspect the repository with read-only tools.",
+                        "Return a normal final answer for research, review, or planning-advice tasks.",
+                        "Use a <proposed_plan> block only when you are requesting approval to implement a concrete plan.",
+                        "Use <request_user_input> only when a blocking decision needs user input.",
+                        "Use <continue_inspection/> only when another read-only inspection pass is required."
+                    ]
+                })
+                .to_string();
+                report(AgentEvent::ToolResult {
+                    name: tool_name,
+                    content: result_text.clone(),
+                    is_error: false,
+                });
+                tool_results.push(tool_result_message(&tool_id, result_text, false));
+                continue;
+            }
             if tool_call.name == "bash" && matches!(self.execution_mode, AgentExecutionMode::Plan) {
                 let request =
                     BashCommandInput::from_value(tool_call.input.clone()).unwrap_or_else(|_| {
@@ -589,12 +618,6 @@ impl Agent {
                 });
                 tool_results.push(tool_result_message(&tool_id, error_text, true));
                 continue;
-            }
-            if tool_name == "enter_plan_mode" {
-                self.execution_mode = AgentExecutionMode::Plan;
-                report(AgentEvent::Status(
-                    "Entered read-only planning mode.".to_string(),
-                ));
             }
             if let Some(tool) = self.tool_manager.get_tool(&tool_name) {
                 self.inspection_progress
