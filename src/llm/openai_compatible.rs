@@ -106,7 +106,7 @@ impl LlmBackend for OpenAiCompatibleBackend {
             self.endpoint_kind,
             self.reasoning_effort.as_deref(),
             self.thinking,
-            metadata,
+            metadata.clone(),
         );
 
         let completions_url = self.endpoint_url("chat/completions");
@@ -143,7 +143,7 @@ impl LlmBackend for OpenAiCompatibleBackend {
             self.endpoint_kind,
             self.reasoning_effort.as_deref(),
             self.thinking,
-            metadata,
+            metadata.clone(),
         );
         body["stream"] = json!(true);
 
@@ -172,6 +172,7 @@ impl LlmBackend for OpenAiCompatibleBackend {
         let mut usage = None;
 
         while let Some(event) = stream.next().await {
+            metadata.ensure_not_cancelled()?;
             let event = event.map_err(|error| anyhow!("Failed to decode SSE event: {error}"))?;
             let data = event.data.trim();
             if data.is_empty() {

@@ -79,6 +79,8 @@ async fn busy_submit_queues_follow_up_message() {
         }),
         started_at: Instant::now(),
         next_heartbeat_after_secs: 2,
+        cancellation_token: None,
+        cancellation_requested: false,
     });
 
     let mut agent_slot = None;
@@ -110,6 +112,38 @@ async fn busy_submit_queues_follow_up_message() {
 }
 
 #[tokio::test]
+async fn esc_cancels_busy_query_without_overlay() {
+    let temp = tempdir().expect("tempdir");
+    let mut app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("app");
+
+    let (_sender, receiver) = mpsc::unbounded_channel();
+    app.running_task = Some(RunningTask {
+        kind: TaskKind::Query,
+        receiver,
+        handle: tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(60)).await;
+            unreachable!()
+        }),
+        started_at: Instant::now(),
+        next_heartbeat_after_secs: 2,
+        cancellation_token: None,
+        cancellation_requested: false,
+    });
+
+    assert!(matches!(
+        map_key_to_event(key(KeyCode::Esc), &app),
+        AppEvent::CancelRunningTask
+    ));
+
+    if let Some(task) = app.running_task.take() {
+        task.handle.abort();
+    }
+}
+
+#[tokio::test]
 async fn busy_submit_allows_quit_command() {
     let temp = tempdir().expect("tempdir");
     let mut app = TuiApp::new(ConfigManager {
@@ -128,6 +162,8 @@ async fn busy_submit_allows_quit_command() {
         }),
         started_at: Instant::now(),
         next_heartbeat_after_secs: u64::MAX,
+        cancellation_token: None,
+        cancellation_requested: false,
     });
 
     let mut agent_slot = None;

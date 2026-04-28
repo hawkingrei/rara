@@ -1,4 +1,7 @@
-use std::sync::Arc;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 use std::time::{Duration, Instant};
 
 use tempfile::tempdir;
@@ -20,8 +23,8 @@ use crate::workspace::WorkspaceMemory;
 use serde_json::json;
 
 use super::{
-    emit_query_heartbeat, merge_rebuilt_agent, should_suggest_planning_mode, start_oauth_task,
-    try_start_queued_follow_up,
+    emit_query_heartbeat, merge_rebuilt_agent, request_running_task_cancellation,
+    should_suggest_planning_mode, start_oauth_task, try_start_queued_follow_up,
 };
 
 #[test]
@@ -256,6 +259,8 @@ async fn query_heartbeat_preserves_running_tool_phase() {
         handle,
         started_at: Instant::now() - Duration::from_secs(3),
         next_heartbeat_after_secs: 0,
+        cancellation_token: None,
+        cancellation_requested: false,
     });
     app.set_runtime_phase(
         RuntimePhase::RunningTool,
@@ -269,6 +274,44 @@ async fn query_heartbeat_preserves_running_tool_phase() {
         app.runtime_phase_detail.as_deref(),
         Some("streaming bash output · 3s elapsed")
     );
+    if let Some(task) = app.running_task.take() {
+        task.handle.abort();
+    }
+}
+
+#[tokio::test]
+async fn query_cancellation_sets_running_task_token() {
+    let temp = tempdir().unwrap();
+    let mut app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("build tui app");
+    let (_sender, receiver) = mpsc::unbounded_channel();
+    let token = Arc::new(AtomicBool::new(false));
+    let handle = tokio::spawn(std::future::pending::<TaskCompletion>());
+    app.running_task = Some(RunningTask {
+        kind: TaskKind::Query,
+        receiver,
+        handle,
+        started_at: Instant::now(),
+        next_heartbeat_after_secs: 2,
+        cancellation_token: Some(token.clone()),
+        cancellation_requested: false,
+    });
+
+    request_running_task_cancellation(&mut app);
+
+    assert!(token.load(Ordering::SeqCst));
+    assert!(app
+        .running_task
+        .as_ref()
+        .is_some_and(|task| task.cancellation_requested));
+    assert_eq!(app.runtime_phase, RuntimePhase::ProcessingResponse);
+    assert_eq!(
+        app.runtime_phase_detail.as_deref(),
+        Some("cancelling query")
+    );
+
     if let Some(task) = app.running_task.take() {
         task.handle.abort();
     }

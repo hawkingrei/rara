@@ -42,4 +42,5 @@ pub enum AppEvent {
     RefreshDeepSeekModels,
     SelectHelpTab(HelpTab),
     ApplyOverlaySelection,
+    CancelRunningTask,
 }

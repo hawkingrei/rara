@@ -19,7 +19,7 @@ use crate::workspace::WorkspaceMemory;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::sync::Arc;
+use std::sync::{atomic::AtomicBool, Arc};
 use uuid::Uuid;
 
 pub use self::compact::{latest_compact_boundary_metadata, CompactBoundaryMetadata, CompactState};
@@ -116,6 +116,7 @@ pub struct Agent {
     inspection_progress: InspectionProgress,
     last_query_plan_updated: bool,
     prompt_config: PromptRuntimeConfig,
+    cancellation_token: Option<Arc<AtomicBool>>,
 }
 
 impl Agent {
@@ -152,6 +153,7 @@ impl Agent {
             inspection_progress: InspectionProgress::default(),
             last_query_plan_updated: false,
             prompt_config: PromptRuntimeConfig::default(),
+            cancellation_token: None,
         }
     }
 
@@ -251,6 +253,7 @@ impl Agent {
     {
         report(AgentEvent::Status("Sending prompt to model.".to_string()));
         let turn_metadata = self.llm_turn_metadata();
+        turn_metadata.ensure_not_cancelled()?;
         let mut messages = self
             .history
             .iter()
@@ -352,9 +355,14 @@ impl Agent {
     }
 
     fn llm_turn_metadata(&self) -> LlmTurnMetadata {
-        match self.execution_mode {
+        let metadata = match self.execution_mode {
             AgentExecutionMode::Execute => LlmTurnMetadata::execute(),
             AgentExecutionMode::Plan => LlmTurnMetadata::plan(),
+        };
+        if let Some(token) = self.cancellation_token.as_ref() {
+            metadata.with_cancellation(token.clone())
+        } else {
+            metadata
         }
     }
 

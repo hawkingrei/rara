@@ -23,6 +23,10 @@ PTY sessions.
   - `pty_stop`
 - Background task and PTY management intentionally adds observability and stop
   controls without adding task-count or session-count caps.
+- Running TUI query tasks now carry a cooperative cancellation token. Pressing
+  `Esc` with no overlay open requests cancellation for the active model query,
+  and OpenAI-compatible, Codex Responses, and Ollama streaming loops check that
+  token while reading provider output.
 
 ## Why
 
@@ -37,6 +41,8 @@ stoppable so long-running tasks are manageable.
 - `cargo test tools::agent::tests -- --nocapture`
 - `cargo test background_tasks_can_be_listed_and_stopped_without_count_limit -- --nocapture`
 - `cargo test tools::pty::tests -- --nocapture`
+- `cargo test esc_cancels_busy_query_without_overlay -- --nocapture`
+- `cargo test query_cancellation_sets_running_task_token -- --nocapture`
 - `cargo check`
 
 ## Notes

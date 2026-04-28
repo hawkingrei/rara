@@ -56,6 +56,16 @@ The transcript should move toward Codex/Claude-style tool visibility:
   - `Messages to be submitted after next tool call`
   - `Queued follow-up messages`
 
+### Running query cancellation
+
+- When no overlay is open and a model query is running, `Esc` requests
+  cancellation for the current query.
+- Cancellation is cooperative: provider streaming loops should check the query
+  cancellation token and return a local cancellation error instead of leaving the
+  TUI stuck in `streaming model output`.
+- Cancellation must preserve the current agent state so the user can continue
+  from the same thread after the task exits.
+
 ## Non-Goals
 
 - This does not yet implement the full Codex "interrupt and send immediately" steer path.

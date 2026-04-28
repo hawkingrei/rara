@@ -4,7 +4,10 @@ mod oauth;
 mod tests;
 
 use secrecy::ExposeSecret;
-use std::sync::Arc;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 use std::time::Instant;
 
 use rara_provider_catalog::{
@@ -96,6 +99,7 @@ fn try_start_queued_follow_up(app: &mut TuiApp, agent_slot: &mut Option<Agent>) 
 
 pub(super) fn start_query_task(app: &mut TuiApp, prompt: String, mut agent: Agent) {
     let (sender, receiver) = mpsc::unbounded_channel();
+    let cancellation_token = Arc::new(AtomicBool::new(false));
     app.clear_pending_planning_suggestion();
     app.clear_active_live_sections();
     app.begin_running_turn();
@@ -104,6 +108,7 @@ pub(super) fn start_query_task(app: &mut TuiApp, prompt: String, mut agent: Agen
     app.notice = Some("Running prompt.".into());
     app.set_runtime_phase(RuntimePhase::SendingPrompt, Some("sending prompt".into()));
     app.push_entry("You", prompt.clone());
+    agent.set_cancellation_token(Some(cancellation_token.clone()));
 
     let handle = tokio::spawn(async move {
         let tx = sender.clone();
@@ -123,6 +128,8 @@ pub(super) fn start_query_task(app: &mut TuiApp, prompt: String, mut agent: Agen
         handle,
         started_at: Instant::now(),
         next_heartbeat_after_secs: 2,
+        cancellation_token: Some(cancellation_token),
+        cancellation_requested: false,
     });
 }
 
@@ -218,6 +225,8 @@ pub(super) fn start_compact_task(app: &mut TuiApp, mut agent: Agent) {
         handle,
         started_at: Instant::now(),
         next_heartbeat_after_secs: 2,
+        cancellation_token: None,
+        cancellation_requested: false,
     });
 }
 
@@ -227,6 +236,7 @@ pub(super) fn start_pending_approval_task(
     mut agent: Agent,
 ) {
     let (sender, receiver) = mpsc::unbounded_channel();
+    let cancellation_token = Arc::new(AtomicBool::new(false));
     let selection_label = match selection {
         BashApprovalMode::Once => "run once",
         BashApprovalMode::Always => "always allow bash",
@@ -237,6 +247,7 @@ pub(super) fn start_pending_approval_task(
         RuntimePhase::ProcessingResponse,
         Some("resuming after approval".into()),
     );
+    agent.set_cancellation_token(Some(cancellation_token.clone()));
 
     let handle = tokio::spawn(async move {
         let tx = sender.clone();
@@ -256,6 +267,8 @@ pub(super) fn start_pending_approval_task(
         handle,
         started_at: Instant::now(),
         next_heartbeat_after_secs: 2,
+        cancellation_token: Some(cancellation_token),
+        cancellation_requested: false,
     });
 }
 
@@ -265,6 +278,7 @@ pub(super) fn start_plan_approval_resume_task(
     mut agent: Agent,
 ) {
     let (sender, receiver) = mpsc::unbounded_channel();
+    let cancellation_token = Arc::new(AtomicBool::new(false));
     app.clear_active_live_sections();
     app.set_pending_plan_approval(false);
     app.record_completed_interaction(
@@ -297,6 +311,7 @@ pub(super) fn start_plan_approval_resume_task(
         crate::agent::AgentExecutionMode::Execute
     });
     app.set_agent_execution_mode(agent.execution_mode);
+    agent.set_cancellation_token(Some(cancellation_token.clone()));
 
     let handle = tokio::spawn(async move {
         let tx = sender.clone();
@@ -320,6 +335,8 @@ pub(super) fn start_plan_approval_resume_task(
         handle,
         started_at: Instant::now(),
         next_heartbeat_after_secs: 2,
+        cancellation_token: Some(cancellation_token),
+        cancellation_requested: false,
     });
 }
 
@@ -353,6 +370,8 @@ pub(super) fn start_rebuild_task(app: &mut TuiApp) {
         handle,
         started_at: Instant::now(),
         next_heartbeat_after_secs: u64::MAX,
+        cancellation_token: None,
+        cancellation_requested: false,
     });
 }
 
@@ -393,7 +412,36 @@ pub(super) fn start_deepseek_model_list_task(app: &mut TuiApp) {
         handle,
         started_at: Instant::now(),
         next_heartbeat_after_secs: u64::MAX,
+        cancellation_token: None,
+        cancellation_requested: false,
     });
+}
+
+pub(super) fn request_running_task_cancellation(app: &mut TuiApp) {
+    let Some(task) = app.running_task.as_mut() else {
+        return;
+    };
+    if !matches!(task.kind, TaskKind::Query) {
+        app.notice = Some("Only running model queries can be cancelled from the TUI.".into());
+        return;
+    }
+    if task.cancellation_requested {
+        app.notice =
+            Some("Cancellation already requested. Waiting for the provider stream to stop.".into());
+        return;
+    }
+    if let Some(token) = task.cancellation_token.as_ref() {
+        token.store(true, Ordering::SeqCst);
+        task.cancellation_requested = true;
+        task.next_heartbeat_after_secs = 0;
+        app.notice = Some("Cancellation requested.".into());
+        app.set_runtime_phase(
+            RuntimePhase::ProcessingResponse,
+            Some("cancelling query".into()),
+        );
+    } else {
+        app.notice = Some("This running task does not expose cancellation.".into());
+    }
 }
 
 pub(super) async fn finish_running_task_if_ready(
@@ -467,6 +515,8 @@ pub(super) async fn finish_running_task_if_ready(
                     }
                 }
                 Err(err) => {
+                    let error_message = format_error_chain(&err);
+                    let cancelled = error_message.contains("cancelled by user");
                     restore_execute_mode_after_plan_turn(app, &mut agent);
                     app.clear_active_live_sections();
                     app.set_pending_plan_approval(false);
@@ -476,8 +526,14 @@ pub(super) async fn finish_running_task_if_ready(
                     }
                     app.release_pending_follow_ups();
                     app.finalize_agent_stream(None);
+                    if cancelled {
+                        app.finalize_active_turn();
+                        app.notice = Some("Query cancelled.".into());
+                        app.set_runtime_phase(RuntimePhase::Idle, Some("query cancelled".into()));
+                        return Ok(());
+                    }
                     app.set_runtime_phase(RuntimePhase::Failed, Some("query failed".into()));
-                    let mut message = format!("Query failed:\n{}", format_error_chain(&err));
+                    let mut message = format!("Query failed:\n{error_message}");
                     if app.config.provider == "ollama" {
                         let base_url = app
                             .config

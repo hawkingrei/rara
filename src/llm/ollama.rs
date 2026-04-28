@@ -128,6 +128,22 @@ impl LlmBackend for OllamaBackend {
         tools: &[Value],
         on_text_delta: &mut (dyn FnMut(String) + Send),
     ) -> Result<LlmResponse> {
+        self.ask_streaming_with_context(
+            messages,
+            tools,
+            crate::llm::LlmTurnMetadata::default(),
+            on_text_delta,
+        )
+        .await
+    }
+
+    async fn ask_streaming_with_context(
+        &self,
+        messages: &[Message],
+        tools: &[Value],
+        metadata: crate::llm::LlmTurnMetadata,
+        on_text_delta: &mut (dyn FnMut(String) + Send),
+    ) -> Result<LlmResponse> {
         let endpoint = format!("{}/api/chat", self.base_url.trim_end_matches('/'));
         let mut body = json!({
             "model": self.model,
@@ -175,6 +191,7 @@ impl LlmBackend for OllamaBackend {
         let mut saw_done = false;
 
         while let Some(chunk) = stream.next().await {
+            metadata.ensure_not_cancelled()?;
             let chunk = chunk?;
             buffer.extend_from_slice(&chunk);
 
