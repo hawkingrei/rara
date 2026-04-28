@@ -30,9 +30,11 @@ pub use self::planning::{
     CompletedInteraction, PendingApproval, PendingUserInput, PlanStep, PlanStepStatus,
 };
 
-const MAX_TOOL_ROUNDS_PER_TURN: usize = 8;
-const MAX_PLAN_CONTINUATIONS_PER_TURN: usize = 2;
-const MAX_EXECUTE_CONTINUATIONS_PER_TURN: usize = 2;
+// Match Claude Code's long-running sub-agent budget scale: a RARA query can
+// span many model/tool continuations, but still needs a finite runaway guard.
+const MAX_AGENTIC_TURNS_PER_QUERY: usize = 200;
+const MAX_PLAN_CONTINUATIONS_PER_QUERY: usize = 10;
+const MAX_EXECUTE_CONTINUATIONS_PER_QUERY: usize = 10;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AgentExecutionMode {
@@ -183,7 +185,7 @@ impl Agent {
         F: FnMut(AgentEvent) + Send,
     {
         let turn_start_idx = self.history.len();
-        let mut tool_rounds = 0usize;
+        let mut agentic_turns = 0usize;
         let mut plan_continuations = 0usize;
         let mut execute_continuations = 0usize;
         self.inspection_progress = InspectionProgress::default();
@@ -192,6 +194,7 @@ impl Agent {
         let repaired_history = repair_tool_result_history(&self.history);
         if repaired_history != self.history {
             self.replace_history(repaired_history);
+            self.checkpoint_session()?;
         }
         self.clear_completed_interactions();
 
@@ -199,18 +202,18 @@ impl Agent {
             role: "user".to_string(),
             content: json!([{"type": "text", "text": prompt.clone()}]),
         });
+        self.checkpoint_session()?;
 
         self.run_agent_loop_with_limit(
             output_mode,
             &mut report,
-            &mut tool_rounds,
+            &mut agentic_turns,
             &mut plan_continuations,
             &mut execute_continuations,
         )
         .await?;
 
-        self.session_manager
-            .save_session(&self.session_id, &self.history)?;
+        self.checkpoint_session()?;
         let turn_text = format!(
             "User: {}\nAgent Response: {:?}",
             prompt,
@@ -231,6 +234,11 @@ impl Agent {
                 .await;
         }
         Ok(())
+    }
+
+    pub(super) fn checkpoint_session(&self) -> Result<()> {
+        self.session_manager
+            .save_session(&self.session_id, &self.history)
     }
 
     async fn run_model_turn<F>(
@@ -372,13 +380,13 @@ impl Agent {
     where
         F: FnMut(AgentEvent) + Send,
     {
-        let mut tool_rounds = 0usize;
+        let mut agentic_turns = 0usize;
         let mut plan_continuations = 0usize;
         let mut execute_continuations = 0usize;
         self.run_agent_loop_with_limit(
             output_mode,
             report,
-            &mut tool_rounds,
+            &mut agentic_turns,
             &mut plan_continuations,
             &mut execute_continuations,
         )
@@ -389,7 +397,7 @@ impl Agent {
         &mut self,
         output_mode: AgentOutputMode,
         report: &mut F,
-        tool_rounds: &mut usize,
+        agentic_turns: &mut usize,
         plan_continuations: &mut usize,
         execute_continuations: &mut usize,
     ) -> Result<()>
@@ -401,13 +409,14 @@ impl Agent {
             let turn_output = self.run_model_turn(output_mode, report).await?;
             self.last_query_plan_updated = turn_output.plan_updated;
             self.push_history_message(turn_output.assistant_message);
+            self.checkpoint_session()?;
 
             if turn_output.tool_calls.is_empty() {
                 if self.should_continue_plan_without_tools(
                     turn_output.plan_updated,
                     turn_output.continue_inspection,
                     turn_output.had_text_response,
-                    *tool_rounds,
+                    *agentic_turns,
                     *plan_continuations,
                 ) {
                     *plan_continuations += 1;
@@ -432,12 +441,13 @@ impl Agent {
                         RuntimeContinuationPhase::PlanContinuationRequired
                     };
                     self.push_history_message(
-                        self.runtime_continuation_message(phase, *tool_rounds),
+                        self.runtime_continuation_message(phase, *agentic_turns),
                     );
+                    self.checkpoint_session()?;
                     continue;
                 }
                 if self.should_continue_execute_without_tools(
-                    *tool_rounds,
+                    *agentic_turns,
                     *execute_continuations,
                     turn_output.continue_inspection,
                 ) {
@@ -448,42 +458,47 @@ impl Agent {
                     ));
                     self.push_history_message(self.runtime_continuation_message(
                         RuntimeContinuationPhase::ExecutionContinuationRequired,
-                        *tool_rounds,
+                        *agentic_turns,
                     ));
+                    self.checkpoint_session()?;
                     continue;
                 }
                 self.complete_active_plan_step();
                 break;
             }
-            *tool_rounds += 1;
-            if *tool_rounds > MAX_TOOL_ROUNDS_PER_TURN {
+            *agentic_turns += 1;
+            if *agentic_turns > MAX_AGENTIC_TURNS_PER_QUERY {
                 let skipped_results =
                     self.tool_loop_limit_result_messages(&turn_output.tool_calls, report);
                 self.extend_history_messages(skipped_results);
+                self.checkpoint_session()?;
                 report(AgentEvent::Status(
-                    "Tool loop reached the limit. Requesting a final answer without more tool calls."
+                    "Agentic turn budget reached. Requesting a final answer without more tool calls."
                         .to_string(),
                 ));
                 self.push_history_message(self.runtime_continuation_message(
                     RuntimeContinuationPhase::FinalAnswerRequired,
-                    *tool_rounds,
+                    *agentic_turns,
                 ));
+                self.checkpoint_session()?;
                 let final_turn = self
                     .run_model_turn_with_tools(output_mode, report, &[])
                     .await?;
                 self.last_query_plan_updated = final_turn.plan_updated;
                 if final_turn.tool_calls.is_empty() && final_turn.had_text_response {
                     self.push_history_message(final_turn.assistant_message);
+                    self.checkpoint_session()?;
                 } else {
                     if !final_turn.tool_calls.is_empty() {
                         self.push_history_message(final_turn.assistant_message);
                         let skipped_results =
                             self.tool_loop_limit_result_messages(&final_turn.tool_calls, report);
                         self.extend_history_messages(skipped_results);
+                        self.checkpoint_session()?;
                     }
                     let fallback_text = self.tool_loop_limit_fallback_text();
                     report(AgentEvent::Status(
-                        "Tool loop reached the limit. Returning a bounded final response without more tool calls."
+                        "Agentic turn budget reached. Returning a bounded final response without more tool calls."
                             .to_string(),
                     ));
                     report(AgentEvent::AssistantText(fallback_text.clone()));
@@ -491,6 +506,7 @@ impl Agent {
                         println!("Agent: {}", fallback_text);
                     }
                     self.push_history_message(assistant_text_message(fallback_text));
+                    self.checkpoint_session()?;
                 }
                 self.complete_active_plan_step();
                 break;
@@ -500,10 +516,11 @@ impl Agent {
                 .execute_tool_calls(turn_output.tool_calls, report)
                 .await?;
             if self.pending_approval.is_some() {
+                self.checkpoint_session()?;
                 break;
             }
             self.advance_plan_step();
-            self.extend_history_for_next_turn(tool_results, report, *tool_rounds);
+            self.extend_history_for_next_turn(tool_results, report, *agentic_turns)?;
         }
         Ok(())
     }
@@ -520,8 +537,8 @@ impl Agent {
             .iter()
             .map(|tool_call| {
                 let content = format!(
-                    "Error: tool call '{}' was not executed because this turn reached the {} tool-round limit.",
-                    tool_call.name, MAX_TOOL_ROUNDS_PER_TURN
+                    "Error: tool call '{}' was not executed because this query reached the {} agentic-turn budget.",
+                    tool_call.name, MAX_AGENTIC_TURNS_PER_QUERY
                 );
                 report(AgentEvent::ToolResult {
                     name: tool_call.name.clone(),
@@ -536,7 +553,7 @@ impl Agent {
     fn tool_loop_limit_fallback_text(&self) -> String {
         let mut lines = vec![
             format!(
-                "Tool loop reached the {MAX_TOOL_ROUNDS_PER_TURN}-round limit before a clean final answer was produced."
+                "Agentic turn budget reached after {MAX_AGENTIC_TURNS_PER_QUERY} agentic turns before a clean final answer was produced."
             ),
             "I stopped additional tool execution, recorded any skipped tool calls as error results, and preserved the transcript for the next turn.".to_string(),
         ];
@@ -591,6 +608,11 @@ impl Agent {
                             allow_net: tool_call
                                 .input
                                 .get("allow_net")
+                                .and_then(Value::as_bool)
+                                .unwrap_or(false),
+                            run_in_background: tool_call
+                                .input
+                                .get("run_in_background")
                                 .and_then(Value::as_bool)
                                 .unwrap_or(false),
                         }

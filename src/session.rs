@@ -81,7 +81,9 @@ impl SessionManager {
             fs::create_dir_all(parent)?;
         }
         let content = serde_json::to_string(history)?;
-        fs::write(path, content)?;
+        let tmp_path = path.with_extension(format!("json.tmp-{}", uuid::Uuid::new_v4()));
+        fs::write(&tmp_path, content)?;
+        fs::rename(tmp_path, path)?;
         Ok(())
     }
 
@@ -364,6 +366,28 @@ mod tests {
         let canonical_messages: Vec<Message> = serde_json::from_str(&canonical_history)?;
         assert_eq!(canonical_messages.len(), 1);
         assert_eq!(canonical_messages[0].role, "user");
+        Ok(())
+    }
+
+    #[test]
+    fn save_session_writes_history_without_leaving_temp_files() -> Result<()> {
+        let temp = tempdir()?;
+        let session_manager = SessionManager::new_for_rara_dir(temp.path().join(".rara"))?;
+        let history = vec![Message {
+            role: "user".to_string(),
+            content: serde_json::json!([{"type": "text", "text": "hello"}]),
+        }];
+
+        session_manager.save_session("thread-atomic-history", &history)?;
+
+        let path = session_manager.session_history_path("thread-atomic-history");
+        let persisted: Vec<Message> = serde_json::from_str(&fs::read_to_string(&path)?)?;
+        assert_eq!(persisted, history);
+        let leftovers = fs::read_dir(path.parent().expect("history parent"))?
+            .filter_map(std::result::Result::ok)
+            .filter(|entry| entry.file_name().to_string_lossy().contains(".tmp-"))
+            .count();
+        assert_eq!(leftovers, 0);
         Ok(())
     }
 

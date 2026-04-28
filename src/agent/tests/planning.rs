@@ -1,5 +1,7 @@
 use std::sync::Arc;
 
+use anyhow::Result;
+use async_trait::async_trait;
 use serde_json::json;
 
 use crate::agent::planning::{
@@ -9,7 +11,7 @@ use crate::agent::{
     Agent, AgentExecutionMode, ContentBlock, PendingUserInput, PlanStep, PlanStepStatus,
     RuntimeContinuationPhase,
 };
-use crate::llm::{LlmResponse, TokenUsage};
+use crate::llm::{LlmBackend, LlmResponse, TokenUsage};
 use crate::session::SessionManager;
 use crate::tool::ToolManager;
 use crate::tool_result::ToolResultStore;
@@ -17,6 +19,47 @@ use crate::vectordb::VectorDB;
 use crate::workspace::WorkspaceMemory;
 
 use super::support::{test_runtime_storage, SequencedBackend, StubTool};
+
+struct CheckpointObserverBackend {
+    session_manager: Arc<SessionManager>,
+    session_id: String,
+}
+
+#[async_trait]
+impl LlmBackend for CheckpointObserverBackend {
+    async fn ask(
+        &self,
+        _messages: &[crate::agent::Message],
+        _tools: &[serde_json::Value],
+    ) -> Result<LlmResponse> {
+        let persisted = self
+            .session_manager
+            .load_thread_history(&self.session_id)
+            .expect("user message should be checkpointed before model call");
+        assert!(persisted.iter().any(|message| {
+            message.role == "user" && message.content.to_string().contains("checkpoint me")
+        }));
+        Ok(LlmResponse {
+            content: vec![ContentBlock::Text {
+                text: "checkpoint observed".to_string(),
+            }],
+            stop_reason: Some("end_turn".to_string()),
+            usage: Some(TokenUsage::default()),
+        })
+    }
+
+    async fn embed(&self, _text: &str) -> Result<Vec<f32>> {
+        Ok(vec![0.0; 8])
+    }
+
+    async fn summarize(
+        &self,
+        _messages: &[crate::agent::Message],
+        _instruction: &str,
+    ) -> Result<String> {
+        Ok("summary".to_string())
+    }
+}
 
 #[tokio::test]
 async fn appends_continuation_after_tool_result() {
@@ -65,6 +108,36 @@ async fn appends_continuation_after_tool_result() {
     assert!(second_round
         .iter()
         .any(|message| { message.content.to_string().contains("tool_result") }));
+}
+
+#[tokio::test]
+async fn checkpoints_user_message_before_first_model_turn() {
+    let (_temp, session_manager, workspace, rara_dir) = test_runtime_storage();
+    let session_id = "checkpoint-before-model".to_string();
+    let backend = Arc::new(CheckpointObserverBackend {
+        session_manager: session_manager.clone(),
+        session_id: session_id.clone(),
+    });
+    let mut agent = Agent::new(
+        ToolManager::new(),
+        backend,
+        Arc::new(VectorDB::new(
+            &rara_dir.join("lancedb").display().to_string(),
+        )),
+        session_manager,
+        workspace,
+    );
+    agent.session_id = session_id;
+    agent.tool_result_store =
+        ToolResultStore::new(rara_dir.join("tool-results")).expect("tool result store");
+
+    agent
+        .query_with_mode(
+            "checkpoint me".to_string(),
+            super::super::AgentOutputMode::Silent,
+        )
+        .await
+        .expect("query should succeed");
 }
 
 #[tokio::test]
@@ -153,7 +226,7 @@ async fn does_not_append_continuation_without_tools() {
 
 #[tokio::test]
 async fn forces_final_answer_when_tool_loop_exceeds_limit() {
-    let mut responses = (0..=super::super::MAX_TOOL_ROUNDS_PER_TURN)
+    let mut responses = (0..=super::super::MAX_AGENTIC_TURNS_PER_QUERY)
         .map(|idx| LlmResponse {
             content: vec![ContentBlock::ToolUse {
                 id: format!("tool-{idx}"),
@@ -191,7 +264,7 @@ async fn forces_final_answer_when_tool_loop_exceeds_limit() {
     let observed_tools = backend.observed_tools();
     assert_eq!(
         observed_tools.len(),
-        super::super::MAX_TOOL_ROUNDS_PER_TURN + 2
+        super::super::MAX_AGENTIC_TURNS_PER_QUERY + 2
     );
     assert!(observed_tools.last().is_some_and(|tools| tools.is_empty()));
     assert!(agent.history.last().is_some_and(|message| message
@@ -202,7 +275,7 @@ async fn forces_final_answer_when_tool_loop_exceeds_limit() {
 
 #[tokio::test]
 async fn returns_local_fallback_when_forced_final_answer_still_calls_tools() {
-    let mut responses = (0..=super::super::MAX_TOOL_ROUNDS_PER_TURN)
+    let mut responses = (0..=super::super::MAX_AGENTIC_TURNS_PER_QUERY)
         .map(|idx| LlmResponse {
             content: vec![ContentBlock::ToolUse {
                 id: format!("tool-{idx}"),
@@ -258,8 +331,8 @@ async fn returns_local_fallback_when_forced_final_answer_still_calls_tools() {
         .content
         .to_string();
     assert!(fallback_message.contains(&format!(
-        "Tool loop reached the {}-round limit",
-        super::super::MAX_TOOL_ROUNDS_PER_TURN
+        "Agentic turn budget reached after {} agentic turns",
+        super::super::MAX_AGENTIC_TURNS_PER_QUERY
     )));
     assert!(!fallback_message.contains("Partial text before requesting another tool."));
     assert!(agent
@@ -270,7 +343,7 @@ async fn returns_local_fallback_when_forced_final_answer_still_calls_tools() {
     assert!(events.iter().any(|event| matches!(
         event,
         super::super::AgentEvent::AssistantText(text)
-            if text.contains("Tool loop reached the")
+            if text.contains("Agentic turn budget reached")
     )));
 }
 

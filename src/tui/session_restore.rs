@@ -148,6 +148,10 @@ pub(super) fn restore_thread_by_id(
                             .and_then(|payload| payload.get("allow_net"))
                             .and_then(|value| value.as_bool())
                             .unwrap_or(false),
+                        run_in_background: payload
+                            .and_then(|payload| payload.get("run_in_background"))
+                            .and_then(|value| value.as_bool())
+                            .unwrap_or(false),
                     });
                 agent.pending_approval = Some(PendingApproval {
                     tool_use_id: payload
@@ -527,6 +531,7 @@ mod tests {
                 cwd: Some(root.display().to_string()),
                 env: Default::default(),
                 allow_net: false,
+                run_in_background: false,
             },
         });
         original_agent.history.push(Message {

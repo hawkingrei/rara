@@ -75,20 +75,22 @@ fn try_start_queued_follow_up(app: &mut TuiApp, agent_slot: &mut Option<Agent>) 
         return;
     }
 
-    let Some(prompt) = app.pop_queued_follow_up_message() else {
+    let mut prompts = Vec::new();
+    while let Some(p) = app.pop_queued_follow_up_message() {
+        prompts.push(p);
+    }
+    if prompts.is_empty() {
         return;
-    };
+    }
+    let prompt = prompts.join("\n\n");
+
     let Some(agent) = agent_slot.take() else {
+        // If the agent is missing, re-queue the merged prompt
         app.queue_follow_up_message(prompt);
         return;
     };
 
-    let remaining = app.queued_follow_up_count();
-    app.notice = Some(if remaining > 0 {
-        format!("Running queued follow-up. {remaining} more queued.")
-    } else {
-        "Running queued follow-up.".to_string()
-    });
+    app.notice = Some("Running queued follow-up.".to_string());
     start_query_task(app, prompt, agent);
 }
 
@@ -635,30 +637,68 @@ pub(super) async fn finish_running_task_if_ready(
 }
 
 fn emit_query_heartbeat(app: &mut TuiApp) {
-    let Some(task) = app.running_task.as_mut() else {
-        return;
-    };
-    if !matches!(task.kind, TaskKind::Query) {
-        return;
-    }
+    let elapsed = {
+        let Some(task) = app.running_task.as_mut() else {
+            return;
+        };
+        if !matches!(task.kind, TaskKind::Query) {
+            return;
+        }
 
-    let elapsed = task.started_at.elapsed().as_secs();
-    if elapsed < task.next_heartbeat_after_secs {
-        return;
-    }
+        let elapsed = task.started_at.elapsed().as_secs();
+        if elapsed < task.next_heartbeat_after_secs {
+            return;
+        }
+        task.next_heartbeat_after_secs = elapsed.saturating_add(1);
+        elapsed
+    };
 
     let is_local = super::super::command::is_local_provider(&app.config.provider);
-    let detail = if is_local {
-        format!("local model is still generating · {}s elapsed", elapsed)
-    } else {
-        format!("waiting for model response · {}s elapsed", elapsed)
+    let current_detail = app
+        .runtime_phase_detail
+        .as_deref()
+        .map(|detail| detail.split(" · ").next().unwrap_or(detail))
+        .filter(|detail| !detail.trim().is_empty());
+    let (phase, detail, notice) = match app.runtime_phase {
+        RuntimePhase::RunningTool => {
+            let detail = format!(
+                "{} · {}s elapsed",
+                current_detail.unwrap_or("running tool"),
+                elapsed
+            );
+            (
+                RuntimePhase::RunningTool,
+                detail.clone(),
+                format!("Running tool · {}s elapsed", elapsed),
+            )
+        }
+        RuntimePhase::ProcessingResponse => {
+            let detail = format!(
+                "{} · {}s elapsed",
+                current_detail.unwrap_or("processing response"),
+                elapsed
+            );
+            (
+                RuntimePhase::ProcessingResponse,
+                detail.clone(),
+                format!("Processing response · {}s elapsed", elapsed),
+            )
+        }
+        _ => {
+            let detail = if is_local {
+                format!("local model is still generating · {}s elapsed", elapsed)
+            } else {
+                format!("waiting for model response · {}s elapsed", elapsed)
+            };
+            let notice = if is_local {
+                format!("Working locally · {}s elapsed", elapsed)
+            } else {
+                format!("Waiting on {} · {}s elapsed", app.config.provider, elapsed)
+            };
+            (RuntimePhase::SendingPrompt, detail, notice)
+        }
     };
-    task.next_heartbeat_after_secs = elapsed.saturating_add(1);
 
-    app.set_runtime_phase(RuntimePhase::SendingPrompt, Some(detail.clone()));
-    app.notice = Some(if is_local {
-        format!("Working locally · {}s elapsed", elapsed)
-    } else {
-        format!("Waiting on {} · {}s elapsed", app.config.provider, elapsed)
-    });
+    app.set_runtime_phase(phase, Some(detail));
+    app.notice = Some(notice);
 }

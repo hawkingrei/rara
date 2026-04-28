@@ -1,6 +1,8 @@
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use tempfile::tempdir;
+use tokio::sync::mpsc;
 
 use crate::agent::{
     Agent, AgentExecutionMode, BashApprovalMode, Message, PlanStep, PlanStepStatus,
@@ -10,12 +12,15 @@ use crate::oauth::OAuthManager;
 use crate::prompt::PromptRuntimeConfig;
 use crate::session::SessionManager;
 use crate::tool::ToolManager;
-use crate::tui::state::{OAuthLoginMode, TuiApp};
+use crate::tui::state::{OAuthLoginMode, RunningTask, RuntimePhase, TaskKind, TuiApp};
 use crate::vectordb::VectorDB;
 use crate::workspace::WorkspaceMemory;
 use serde_json::json;
 
-use super::{merge_rebuilt_agent, should_suggest_planning_mode, start_oauth_task};
+use super::{
+    emit_query_heartbeat, merge_rebuilt_agent, should_suggest_planning_mode, start_oauth_task,
+    try_start_queued_follow_up,
+};
 
 #[test]
 fn suggests_planning_for_repo_review_requests() {
@@ -181,4 +186,88 @@ fn merge_rebuilt_agent_preserves_session_and_turn_state() {
         merged.prompt_config().warnings,
         vec!["missing custom prompt".to_string()]
     );
+}
+
+#[tokio::test]
+async fn queued_follow_ups_start_as_one_multiline_turn() {
+    let temp = tempdir().unwrap();
+    let workspace_root = temp.path().join("workspace");
+    let rara_dir = workspace_root.join(".rara");
+    std::fs::create_dir_all(rara_dir.join("rollouts")).expect("rollouts");
+    std::fs::create_dir_all(rara_dir.join("sessions")).expect("sessions");
+    std::fs::create_dir_all(rara_dir.join("tool-results")).expect("tool results");
+
+    let mut app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("build tui app");
+    app.queue_follow_up_message("first line");
+    app.queue_follow_up_message("second line");
+
+    let workspace = Arc::new(WorkspaceMemory::from_paths(
+        workspace_root.clone(),
+        rara_dir.clone(),
+    ));
+    let session_manager = Arc::new(SessionManager {
+        storage_dir: rara_dir.join("rollouts"),
+        legacy_storage_dir: rara_dir.join("sessions"),
+    });
+    let agent = Agent::new(
+        ToolManager::new(),
+        Arc::new(crate::llm::MockLlm),
+        Arc::new(VectorDB::new(
+            &rara_dir.join("lancedb").display().to_string(),
+        )),
+        session_manager,
+        workspace,
+    );
+    let mut agent_slot = Some(agent);
+
+    try_start_queued_follow_up(&mut app, &mut agent_slot);
+
+    assert_eq!(app.queued_follow_up_count(), 0);
+    assert!(app.running_task.is_some());
+    assert_eq!(app.active_turn.entries.len(), 1);
+    assert_eq!(app.active_turn.entries[0].role, "You");
+    assert_eq!(
+        app.active_turn.entries[0].message,
+        "first line\n\nsecond line"
+    );
+
+    if let Some(task) = app.running_task.take() {
+        task.handle.abort();
+    }
+}
+
+#[tokio::test]
+async fn query_heartbeat_preserves_running_tool_phase() {
+    let temp = tempdir().unwrap();
+    let mut app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("build tui app");
+    let (_sender, receiver) = mpsc::unbounded_channel();
+    let handle = tokio::spawn(std::future::pending());
+    app.running_task = Some(RunningTask {
+        kind: TaskKind::Query,
+        receiver,
+        handle,
+        started_at: Instant::now() - Duration::from_secs(3),
+        next_heartbeat_after_secs: 0,
+    });
+    app.set_runtime_phase(
+        RuntimePhase::RunningTool,
+        Some("streaming bash output".into()),
+    );
+
+    emit_query_heartbeat(&mut app);
+
+    assert_eq!(app.runtime_phase, RuntimePhase::RunningTool);
+    assert_eq!(
+        app.runtime_phase_detail.as_deref(),
+        Some("streaming bash output · 3s elapsed")
+    );
+    if let Some(task) = app.running_task.take() {
+        task.handle.abort();
+    }
 }

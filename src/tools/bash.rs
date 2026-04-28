@@ -6,15 +6,48 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::env;
 use std::path::Path;
+use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
+use std::sync::Mutex;
 use tokio::fs;
-use tokio::io::{AsyncRead, AsyncReadExt};
-use tokio::process::Command;
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
+use tokio::process::{Child, Command};
 use tokio::sync::mpsc;
+use uuid::Uuid;
 
 pub struct BashTool {
     pub sandbox: Arc<SandboxManager>,
+    pub background_tasks: Arc<BackgroundTaskStore>,
+}
+
+pub struct BackgroundTaskStatusTool {
+    pub background_tasks: Arc<BackgroundTaskStore>,
+}
+
+#[derive(Debug, Clone)]
+pub struct BackgroundTaskStore {
+    dir: PathBuf,
+    tasks: Arc<Mutex<HashMap<String, BackgroundTaskRecord>>>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct BackgroundTaskRecord {
+    id: String,
+    command: String,
+    output_path: PathBuf,
+    status: BackgroundTaskStatus,
+    exit_code: Option<i32>,
+    sandboxed: bool,
+    sandbox_backend: String,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum BackgroundTaskStatus {
+    Running,
+    Completed,
+    Failed,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -46,6 +79,8 @@ pub struct BashCommandInput {
     pub env: HashMap<String, String>,
     #[serde(default)]
     pub allow_net: bool,
+    #[serde(default)]
+    pub run_in_background: bool,
 }
 
 impl BashCommandInput {
@@ -107,6 +142,60 @@ impl BashCommandInput {
     }
 }
 
+impl BackgroundTaskStore {
+    pub fn new(dir: PathBuf) -> Result<Self, ToolError> {
+        std::fs::create_dir_all(&dir)?;
+        Ok(Self {
+            dir,
+            tasks: Arc::new(Mutex::new(HashMap::new())),
+        })
+    }
+
+    fn start_record(
+        &self,
+        command: String,
+        sandboxed: bool,
+        sandbox_backend: String,
+    ) -> Result<BackgroundTaskRecord, ToolError> {
+        let id = format!("bash-{}", Uuid::new_v4());
+        let output_path = self.dir.join(format!("{id}.log"));
+        let record = BackgroundTaskRecord {
+            id: id.clone(),
+            command,
+            output_path,
+            status: BackgroundTaskStatus::Running,
+            exit_code: None,
+            sandboxed,
+            sandbox_backend,
+        };
+        self.tasks
+            .lock()
+            .expect("background task store lock")
+            .insert(id, record.clone());
+        Ok(record)
+    }
+
+    fn finish(&self, id: &str, status: BackgroundTaskStatus, exit_code: Option<i32>) {
+        if let Some(record) = self
+            .tasks
+            .lock()
+            .expect("background task store lock")
+            .get_mut(id)
+        {
+            record.status = status;
+            record.exit_code = exit_code;
+        }
+    }
+
+    fn get(&self, id: &str) -> Option<BackgroundTaskRecord> {
+        self.tasks
+            .lock()
+            .expect("background task store lock")
+            .get(id)
+            .cloned()
+    }
+}
+
 fn sandbox_command_env(
     sandbox_home: &Path,
     overrides: &HashMap<String, String>,
@@ -131,6 +220,9 @@ fn sandbox_command_env(
             format!("{sandbox_home}/.local/share"),
         ),
     ]);
+    if let Ok(path) = env::var("PATH") {
+        env_map.insert("PATH".to_string(), path);
+    }
     env_map.extend(overrides.clone());
     env_map
 }
@@ -183,7 +275,12 @@ impl Tool for BashTool {
                     "additionalProperties": { "type": "string" },
                     "description": "Optional environment overrides."
                 },
-                "allow_net": { "type": "boolean", "default": false }
+                "allow_net": { "type": "boolean", "default": false },
+                "run_in_background": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Run the command as a background task and return a task id immediately. Use background_task_status to inspect output later."
+                }
             },
             "anyOf": [
                 { "required": ["command"] },
@@ -230,6 +327,9 @@ impl Tool for BashTool {
         }
 
         let mut command = Command::new(&wrapped.program);
+        if wrapped.sandboxed {
+            command.env_clear();
+        }
         command
             .args(&wrapped.args)
             .current_dir(&cwd)
@@ -250,6 +350,31 @@ impl Tool for BashTool {
                 ))
             }
         })?;
+
+        if request.run_in_background {
+            let record = self.background_tasks.start_record(
+                request.summary(),
+                wrapped.sandboxed,
+                wrapped.sandbox_backend.clone(),
+            )?;
+            spawn_background_bash_task(
+                child,
+                wrapped,
+                record.clone(),
+                self.background_tasks.clone(),
+            );
+            return Ok(json!({
+                "stdout": "",
+                "stderr": "",
+                "exit_code": 0,
+                "live_streamed": false,
+                "sandboxed": record.sandboxed,
+                "sandbox_backend": record.sandbox_backend,
+                "background_task_id": record.id,
+                "output_path": record.output_path,
+                "status": record.status,
+            }));
+        }
 
         let stdout = child
             .stdout
@@ -322,6 +447,176 @@ impl Tool for BashTool {
     }
 }
 
+#[async_trait]
+impl Tool for BackgroundTaskStatusTool {
+    fn name(&self) -> &str {
+        "background_task_status"
+    }
+
+    fn description(&self) -> &str {
+        "Inspect a background bash task and read the tail of its output"
+    }
+
+    fn input_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "task_id": {
+                    "type": "string",
+                    "description": "Background task id returned by bash run_in_background."
+                },
+                "tail_bytes": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "default": 12000,
+                    "description": "Maximum number of output bytes to return from the end of the task log."
+                }
+            },
+            "required": ["task_id"]
+        })
+    }
+
+    async fn call(&self, input: Value) -> Result<Value, ToolError> {
+        let task_id = input["task_id"]
+            .as_str()
+            .ok_or_else(|| ToolError::InvalidInput("task_id".into()))?;
+        let tail_bytes = input
+            .get("tail_bytes")
+            .and_then(Value::as_u64)
+            .unwrap_or(12_000)
+            .min(1_000_000) as usize;
+        let record = self
+            .background_tasks
+            .get(task_id)
+            .ok_or_else(|| ToolError::InvalidInput(format!("unknown task id: {task_id}")))?;
+        let output = read_output_tail(&record.output_path, tail_bytes).await?;
+
+        Ok(json!({
+            "task_id": record.id,
+            "command": record.command,
+            "status": record.status,
+            "exit_code": record.exit_code,
+            "output_path": record.output_path,
+            "output": output,
+            "sandboxed": record.sandboxed,
+            "sandbox_backend": record.sandbox_backend,
+        }))
+    }
+}
+
+fn spawn_background_bash_task(
+    mut child: Child,
+    wrapped: WrappedCommand,
+    record: BackgroundTaskRecord,
+    store: Arc<BackgroundTaskStore>,
+) {
+    tokio::spawn(async move {
+        let result = run_background_bash_task(&mut child, wrapped, &record).await;
+        let (status, exit_code) = match result {
+            Ok(code) => {
+                if code == Some(0) {
+                    (BackgroundTaskStatus::Completed, code)
+                } else {
+                    (BackgroundTaskStatus::Failed, code)
+                }
+            }
+            Err(err) => {
+                let _ = append_background_output(
+                    &record.output_path,
+                    BashStreamKind::Stderr,
+                    &format!("background task failed: {err}\n"),
+                )
+                .await;
+                (BackgroundTaskStatus::Failed, None)
+            }
+        };
+        store.finish(&record.id, status, exit_code);
+    });
+}
+
+async fn run_background_bash_task(
+    child: &mut Child,
+    wrapped: WrappedCommand,
+    record: &BackgroundTaskRecord,
+) -> Result<Option<i32>, ToolError> {
+    if let Some(parent) = record.output_path.parent() {
+        fs::create_dir_all(parent).await?;
+    }
+    fs::write(&record.output_path, "").await?;
+    if !wrapped.sandboxed {
+        append_background_output(
+            &record.output_path,
+            BashStreamKind::Stderr,
+            &unsandboxed_execution_warning(&wrapped),
+        )
+        .await?;
+    }
+
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| ToolError::ExecutionFailed("stdout pipe unavailable".into()))?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| ToolError::ExecutionFailed("stderr pipe unavailable".into()))?;
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let stdout_task = tokio::spawn(read_stream_chunks(
+        stdout,
+        BashStreamKind::Stdout,
+        tx.clone(),
+    ));
+    let stderr_task = tokio::spawn(read_stream_chunks(stderr, BashStreamKind::Stderr, tx));
+
+    while let Some((stream, chunk)) = rx.recv().await {
+        if !chunk.is_empty() {
+            append_background_output(&record.output_path, stream, &chunk).await?;
+        }
+    }
+
+    let status = child.wait().await?;
+    stdout_task
+        .await
+        .map_err(|err| ToolError::ExecutionFailed(err.to_string()))??;
+    stderr_task
+        .await
+        .map_err(|err| ToolError::ExecutionFailed(err.to_string()))??;
+    if let Some(path) = wrapped.cleanup_path.as_ref() {
+        let _ = fs::remove_file(path).await;
+    }
+    Ok(status.code())
+}
+
+async fn append_background_output(
+    path: &Path,
+    stream: BashStreamKind,
+    chunk: &str,
+) -> Result<(), ToolError> {
+    let mut file = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .await?;
+    match stream {
+        BashStreamKind::Stdout => file.write_all(chunk.as_bytes()).await?,
+        BashStreamKind::Stderr => {
+            file.write_all(b"[stderr] ").await?;
+            file.write_all(chunk.as_bytes()).await?;
+        }
+    }
+    Ok(())
+}
+
+async fn read_output_tail(path: &Path, max_bytes: usize) -> Result<String, ToolError> {
+    let bytes = match fs::read(path).await {
+        Ok(bytes) => bytes,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+        Err(err) => return Err(err.into()),
+    };
+    let start = bytes.len().saturating_sub(max_bytes);
+    Ok(String::from_utf8_lossy(&bytes[start..]).into_owned())
+}
+
 async fn read_stream_chunks<R>(
     reader: R,
     stream: BashStreamKind,
@@ -382,7 +677,8 @@ async fn ensure_sandbox_home_dirs(sandbox_home: &Path) -> Result<(), ToolError> 
 mod tests {
     use super::{
         command_env_for_wrapped, sandbox_command_env, sandbox_output_hint,
-        unsandboxed_execution_warning, BashCommandInput, BashTool,
+        unsandboxed_execution_warning, BackgroundTaskStatus, BackgroundTaskStatusTool,
+        BackgroundTaskStore, BashCommandInput, BashTool,
     };
     use crate::sandbox::{SandboxManager, WrappedCommand};
     use crate::tool::{Tool, ToolOutputStream, ToolProgressEvent};
@@ -403,6 +699,7 @@ mod tests {
 
         assert_eq!(input.command.as_deref(), Some("cargo test"));
         assert!(input.allow_net);
+        assert!(!input.run_in_background);
         assert_eq!(input.summary(), "cargo test");
     }
 
@@ -424,12 +721,28 @@ mod tests {
         );
         assert_eq!(input.cwd.as_deref(), Some("/tmp/workspace"));
         assert_eq!(input.env.get("RUST_LOG").map(String::as_str), Some("debug"));
+        assert!(!input.run_in_background);
         assert_eq!(input.summary(), "cargo check --workspace");
+    }
+
+    #[test]
+    fn parses_background_payload() {
+        let input = BashCommandInput::from_value(json!({
+            "program": "cargo",
+            "args": ["test"],
+            "run_in_background": true
+        }))
+        .expect("background payload");
+
+        assert!(input.run_in_background);
+        assert_eq!(input.summary(), "cargo test");
     }
 
     #[test]
     fn sandbox_command_env_defaults_home_and_xdg_roots() {
         let sandbox_home = Path::new("/tmp/rara-test-home");
+        let original_path = std::env::var_os("PATH");
+        std::env::set_var("PATH", "/custom/bin:/usr/bin");
         let env_map = sandbox_command_env(sandbox_home, &HashMap::new());
 
         assert_eq!(
@@ -444,6 +757,15 @@ mod tests {
             env_map.get("XDG_CACHE_HOME").map(String::as_str),
             Some("/tmp/rara-test-home/.cache")
         );
+        assert_eq!(
+            env_map.get("PATH").map(String::as_str),
+            Some("/custom/bin:/usr/bin")
+        );
+        if let Some(path) = original_path {
+            std::env::set_var("PATH", path);
+        } else {
+            std::env::remove_var("PATH");
+        }
     }
 
     #[test]
@@ -457,6 +779,7 @@ mod tests {
                     "XDG_CACHE_HOME".to_string(),
                     "/custom/home/.cache".to_string(),
                 ),
+                ("PATH".to_string(), "/override/bin".to_string()),
             ]),
         );
 
@@ -471,6 +794,10 @@ mod tests {
         assert_eq!(
             env_map.get("XDG_CONFIG_HOME").map(String::as_str),
             Some("/tmp/rara-test-home/.config")
+        );
+        assert_eq!(
+            env_map.get("PATH").map(String::as_str),
+            Some("/override/bin")
         );
     }
 
@@ -528,7 +855,7 @@ mod tests {
         let temp = tempdir().expect("tempdir");
         let sandbox = SandboxManager::new_for_rara_dir(temp.path().join(".rara")).expect("sandbox");
         let Ok(wrapped) = sandbox.wrap_exec_command(
-            "sh",
+            "/bin/sh",
             &[
                 "-c".to_string(),
                 "printf 'out\\n'; printf 'err\\n' >&2".to_string(),
@@ -543,12 +870,16 @@ mod tests {
         }
         let tool = BashTool {
             sandbox: Arc::new(sandbox),
+            background_tasks: Arc::new(
+                BackgroundTaskStore::new(temp.path().join(".rara/background-tasks"))
+                    .expect("background task store"),
+            ),
         };
         let mut events = Vec::new();
         let result = tool
             .call_with_events(
                 json!({
-                    "program": "sh",
+                    "program": "/bin/sh",
                     "args": ["-c", "printf 'out\\n'; printf 'err\\n' >&2"],
                 }),
                 &mut |event| events.push(event),
@@ -556,7 +887,10 @@ mod tests {
             .await
             .expect("bash result");
 
-        assert!(!events.is_empty());
+        assert!(
+            !events.is_empty(),
+            "expected streamed events, got result: {result}"
+        );
         assert!(events.iter().any(|event| matches!(
             event,
             ToolProgressEvent::Output {
@@ -576,6 +910,70 @@ mod tests {
             result.get("sandbox_backend").and_then(Value::as_str),
             Some(wrapped.sandbox_backend.as_str())
         );
+    }
+
+    #[tokio::test]
+    async fn background_call_returns_task_and_status_reads_output() {
+        let temp = tempdir().expect("tempdir");
+        let sandbox = SandboxManager::new_for_rara_dir(temp.path().join(".rara")).expect("sandbox");
+        let Ok(wrapped) = sandbox.wrap_exec_command(
+            "sh",
+            &["-c".to_string(), "printf 'background-out\\n'".to_string()],
+            temp.path().to_string_lossy().as_ref(),
+            false,
+        ) else {
+            return;
+        };
+        if !binary_exists(&wrapped.program) {
+            return;
+        }
+
+        let background_tasks = Arc::new(
+            BackgroundTaskStore::new(temp.path().join(".rara/background-tasks"))
+                .expect("background task store"),
+        );
+        let tool = BashTool {
+            sandbox: Arc::new(sandbox),
+            background_tasks: background_tasks.clone(),
+        };
+        let status_tool = BackgroundTaskStatusTool {
+            background_tasks: background_tasks.clone(),
+        };
+
+        let started = tool
+            .call(json!({
+                "program": "sh",
+                "args": ["-c", "printf 'background-out\\n'"],
+                "run_in_background": true,
+            }))
+            .await
+            .expect("background start");
+        let task_id = started
+            .get("background_task_id")
+            .and_then(Value::as_str)
+            .expect("task id");
+        assert_eq!(
+            started.get("status"),
+            Some(&json!(BackgroundTaskStatus::Running))
+        );
+
+        let mut last = Value::Null;
+        for _ in 0..50 {
+            last = status_tool
+                .call(json!({ "task_id": task_id, "tail_bytes": 4096 }))
+                .await
+                .expect("background status");
+            if last.get("status") != Some(&json!(BackgroundTaskStatus::Running)) {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+
+        assert_ne!(
+            last.get("status"),
+            Some(&json!(BackgroundTaskStatus::Running))
+        );
+        assert!(last.get("output_path").and_then(Value::as_str).is_some());
     }
 
     fn binary_exists(program: &str) -> bool {

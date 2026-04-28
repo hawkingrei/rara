@@ -7,12 +7,13 @@ use crate::session::SessionManager;
 use crate::skill::SkillManager;
 use crate::tool::ToolManager;
 use crate::tools::agent::{AgentTool, ExploreAgentTool, PlanAgentTool, TeamCreateTool};
-use crate::tools::bash::BashTool;
+use crate::tools::bash::{BackgroundTaskStatusTool, BackgroundTaskStore, BashTool};
 use crate::tools::context::RetrieveSessionContextTool;
 use crate::tools::file::{
     ListFilesTool, ReadFileTool, ReplaceLinesTool, ReplaceTool, WriteFileTool,
 };
 use crate::tools::patch::ApplyPatchTool;
+use crate::tools::pty::{PtyKillTool, PtyReadTool, PtySessionStore, PtyStartTool, PtyWriteTool};
 use crate::tools::search::{GlobTool, GrepTool};
 use crate::tools::skill::SkillTool;
 use crate::tools::vector::{RememberExperienceTool, RetrieveExperienceTool};
@@ -32,9 +33,31 @@ pub(super) fn create_full_tool_manager(
 ) -> ToolManager {
     let mut tm = ToolManager::new();
     let vector_db_uri = vector_db_uri_for_workspace(&workspace);
+    let background_tasks = Arc::new(
+        BackgroundTaskStore::new(workspace.rara_dir.join("background-tasks"))
+            .expect("background task store"),
+    );
+    let pty_sessions = Arc::new(
+        PtySessionStore::new(workspace.rara_dir.join("pty-sessions")).expect("pty session store"),
+    );
 
     tm.register(Box::new(BashTool {
         sandbox: sandbox.clone(),
+        background_tasks: background_tasks.clone(),
+    }));
+    tm.register(Box::new(BackgroundTaskStatusTool { background_tasks }));
+    tm.register(Box::new(PtyStartTool {
+        sessions: pty_sessions.clone(),
+        sandbox: sandbox.clone(),
+    }));
+    tm.register(Box::new(PtyReadTool {
+        sessions: pty_sessions.clone(),
+    }));
+    tm.register(Box::new(PtyWriteTool {
+        sessions: pty_sessions.clone(),
+    }));
+    tm.register(Box::new(PtyKillTool {
+        sessions: pty_sessions,
     }));
     tm.register(Box::new(ReadFileTool));
     tm.register(Box::new(ApplyPatchTool));
