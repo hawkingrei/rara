@@ -46,7 +46,6 @@ pub(super) struct InspectionProgress {
 #[derive(Clone, Copy)]
 pub(super) enum RuntimeContinuationPhase {
     ToolResultsAvailable,
-    FinalAnswerRequired,
     PlanContinuationRequired,
     PlanStructuredOutcomeRequired,
     ExecutionContinuationRequired,
@@ -417,7 +416,6 @@ impl Agent {
         continue_inspection: bool,
         had_text_response: bool,
         agentic_turns: usize,
-        plan_continuations: usize,
     ) -> bool {
         let shallow_initial_plan =
             plan_updated && agentic_turns == 0 && self.current_plan.len() <= 1;
@@ -439,7 +437,6 @@ impl Agent {
                     && !plan_updated
                     && !continue_inspection
                     && self.pending_user_input.is_none()))
-            && plan_continuations < MAX_PLAN_CONTINUATIONS_PER_QUERY
             && self.pending_user_input.is_none()
             && self.pending_approval.is_none()
             && (continue_inspection
@@ -472,13 +469,11 @@ impl Agent {
     pub(super) fn should_continue_execute_without_tools(
         &self,
         _agentic_turns: usize,
-        execute_continuations: usize,
         continue_inspection: bool,
     ) -> bool {
         let inspection_intent = continue_inspection || self.inspection_progress.has_any_evidence();
         matches!(self.execution_mode, AgentExecutionMode::Execute)
             && inspection_intent
-            && execute_continuations < MAX_EXECUTE_CONTINUATIONS_PER_QUERY
             && self.pending_user_input.is_none()
             && self.pending_approval.is_none()
             && (continue_inspection || !self.inspection_progress.has_minimum_review_evidence())
@@ -675,7 +670,6 @@ impl RuntimeContinuationPhase {
     fn label(self) -> &'static str {
         match self {
             Self::ToolResultsAvailable => "tool_results_available",
-            Self::FinalAnswerRequired => "final_answer_required",
             Self::PlanContinuationRequired => "plan_continuation_required",
             Self::PlanStructuredOutcomeRequired => "plan_structured_outcome_required",
             Self::ExecutionContinuationRequired => "execution_continuation_required",
@@ -691,14 +685,6 @@ impl RuntimeContinuationPhase {
                 "Either call the next tool directly, or provide the final answer.",
                 "Do not ask the user to continue.",
                 "Do not repeat tool results verbatim.",
-            ],
-            Self::FinalAnswerRequired => vec![
-                "The tool loop reached the execution limit for this turn.",
-                "Do not call any more tools.",
-                "Synthesize the result from the repository context and tool results already in the conversation.",
-                "If another tool call would be useful, state the limitation in the final answer instead of emitting a tool call.",
-                "Provide the final answer now.",
-                "Do not ask the user to continue.",
             ],
             Self::PlanContinuationRequired => vec![
                 "Continue planning immediately.",

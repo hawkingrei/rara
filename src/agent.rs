@@ -30,12 +30,6 @@ pub use self::planning::{
     CompletedInteraction, PendingApproval, PendingUserInput, PlanStep, PlanStepStatus,
 };
 
-// Match Claude Code's long-running sub-agent budget scale: a RARA query can
-// span many model/tool continuations, but still needs a finite runaway guard.
-const MAX_AGENTIC_TURNS_PER_QUERY: usize = 200;
-const MAX_PLAN_CONTINUATIONS_PER_QUERY: usize = 10;
-const MAX_EXECUTE_CONTINUATIONS_PER_QUERY: usize = 10;
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AgentExecutionMode {
     Execute,
@@ -186,8 +180,6 @@ impl Agent {
     {
         let turn_start_idx = self.history.len();
         let mut agentic_turns = 0usize;
-        let mut plan_continuations = 0usize;
-        let mut execute_continuations = 0usize;
         self.inspection_progress = InspectionProgress::default();
         self.last_query_plan_updated = false;
         self.compact_if_needed_with_reporter(&mut report).await?;
@@ -204,14 +196,8 @@ impl Agent {
         });
         self.checkpoint_session()?;
 
-        self.run_agent_loop_with_limit(
-            output_mode,
-            &mut report,
-            &mut agentic_turns,
-            &mut plan_continuations,
-            &mut execute_continuations,
-        )
-        .await?;
+        self.run_agent_loop_with_limit(output_mode, &mut report, &mut agentic_turns)
+            .await?;
 
         self.checkpoint_session()?;
         let turn_text = format!(
@@ -381,16 +367,8 @@ impl Agent {
         F: FnMut(AgentEvent) + Send,
     {
         let mut agentic_turns = 0usize;
-        let mut plan_continuations = 0usize;
-        let mut execute_continuations = 0usize;
-        self.run_agent_loop_with_limit(
-            output_mode,
-            report,
-            &mut agentic_turns,
-            &mut plan_continuations,
-            &mut execute_continuations,
-        )
-        .await
+        self.run_agent_loop_with_limit(output_mode, report, &mut agentic_turns)
+            .await
     }
 
     async fn run_agent_loop_with_limit<F>(
@@ -398,8 +376,6 @@ impl Agent {
         output_mode: AgentOutputMode,
         report: &mut F,
         agentic_turns: &mut usize,
-        plan_continuations: &mut usize,
-        execute_continuations: &mut usize,
     ) -> Result<()>
     where
         F: FnMut(AgentEvent) + Send,
@@ -417,9 +393,7 @@ impl Agent {
                     turn_output.continue_inspection,
                     turn_output.had_text_response,
                     *agentic_turns,
-                    *plan_continuations,
                 ) {
-                    *plan_continuations += 1;
                     let phase = if matches!(
                         self.planning_outcome_contract(
                             turn_output.plan_updated,
@@ -448,10 +422,8 @@ impl Agent {
                 }
                 if self.should_continue_execute_without_tools(
                     *agentic_turns,
-                    *execute_continuations,
                     turn_output.continue_inspection,
                 ) {
-                    *execute_continuations += 1;
                     report(AgentEvent::Status(
                         "Repository review needs more code inspection. Continuing the same turn."
                             .to_string(),
@@ -467,50 +439,6 @@ impl Agent {
                 break;
             }
             *agentic_turns += 1;
-            if *agentic_turns > MAX_AGENTIC_TURNS_PER_QUERY {
-                let skipped_results =
-                    self.tool_loop_limit_result_messages(&turn_output.tool_calls, report);
-                self.extend_history_messages(skipped_results);
-                self.checkpoint_session()?;
-                report(AgentEvent::Status(
-                    "Agentic turn budget reached. Requesting a final answer without more tool calls."
-                        .to_string(),
-                ));
-                self.push_history_message(self.runtime_continuation_message(
-                    RuntimeContinuationPhase::FinalAnswerRequired,
-                    *agentic_turns,
-                ));
-                self.checkpoint_session()?;
-                let final_turn = self
-                    .run_model_turn_with_tools(output_mode, report, &[])
-                    .await?;
-                self.last_query_plan_updated = final_turn.plan_updated;
-                if final_turn.tool_calls.is_empty() && final_turn.had_text_response {
-                    self.push_history_message(final_turn.assistant_message);
-                    self.checkpoint_session()?;
-                } else {
-                    if !final_turn.tool_calls.is_empty() {
-                        self.push_history_message(final_turn.assistant_message);
-                        let skipped_results =
-                            self.tool_loop_limit_result_messages(&final_turn.tool_calls, report);
-                        self.extend_history_messages(skipped_results);
-                        self.checkpoint_session()?;
-                    }
-                    let fallback_text = self.tool_loop_limit_fallback_text();
-                    report(AgentEvent::Status(
-                        "Agentic turn budget reached. Returning a bounded final response without more tool calls."
-                            .to_string(),
-                    ));
-                    report(AgentEvent::AssistantText(fallback_text.clone()));
-                    if matches!(output_mode, AgentOutputMode::Terminal) {
-                        println!("Agent: {}", fallback_text);
-                    }
-                    self.push_history_message(assistant_text_message(fallback_text));
-                    self.checkpoint_session()?;
-                }
-                self.complete_active_plan_step();
-                break;
-            }
 
             let tool_results = self
                 .execute_tool_calls(turn_output.tool_calls, report)
@@ -523,58 +451,6 @@ impl Agent {
             self.extend_history_for_next_turn(tool_results, report, *agentic_turns)?;
         }
         Ok(())
-    }
-
-    fn tool_loop_limit_result_messages<F>(
-        &self,
-        tool_calls: &[ToolCall],
-        report: &mut F,
-    ) -> Vec<Message>
-    where
-        F: FnMut(AgentEvent) + Send,
-    {
-        tool_calls
-            .iter()
-            .map(|tool_call| {
-                let content = format!(
-                    "Error: tool call '{}' was not executed because this query reached the {} agentic-turn budget.",
-                    tool_call.name, MAX_AGENTIC_TURNS_PER_QUERY
-                );
-                report(AgentEvent::ToolResult {
-                    name: tool_call.name.clone(),
-                    content: content.clone(),
-                    is_error: true,
-                });
-                tool_result_message(&tool_call.id, content, true)
-            })
-            .collect()
-    }
-
-    fn tool_loop_limit_fallback_text(&self) -> String {
-        let mut lines = vec![
-            format!(
-                "Agentic turn budget reached after {MAX_AGENTIC_TURNS_PER_QUERY} agentic turns before a clean final answer was produced."
-            ),
-            "I stopped additional tool execution, recorded any skipped tool calls as error results, and preserved the transcript for the next turn.".to_string(),
-        ];
-        if !self.current_plan.is_empty() {
-            lines.push(String::new());
-            lines.push("Current plan state:".to_string());
-            lines.extend(
-                self.current_plan.iter().map(|step| {
-                    format!("- [{}] {}", plan_step_status_label(&step.status), step.step)
-                }),
-            );
-        }
-        if let Some(explanation) = self
-            .plan_explanation
-            .as_deref()
-            .filter(|explanation| !explanation.trim().is_empty())
-        {
-            lines.push(String::new());
-            lines.push(explanation.trim().to_string());
-        }
-        lines.join("\n")
     }
 
     async fn execute_tool_calls<F>(
@@ -712,21 +588,6 @@ impl Agent {
             }
         }
         Ok(tool_results)
-    }
-}
-
-fn assistant_text_message(text: String) -> Message {
-    Message {
-        role: "assistant".to_string(),
-        content: json!([{"type": "text", "text": text}]),
-    }
-}
-
-fn plan_step_status_label(status: &PlanStepStatus) -> &'static str {
-    match status {
-        PlanStepStatus::Pending => "pending",
-        PlanStepStatus::InProgress => "in_progress",
-        PlanStepStatus::Completed => "completed",
     }
 }
 
