@@ -21,6 +21,7 @@ use crate::state_db::StateDb;
 use crate::thread_store::ThreadSummary;
 use crate::tool::ToolOutputStream;
 use crate::tools::bash::BashCommandInput;
+use crate::tui::terminal_event::TerminalEvent;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum HelpTab {
@@ -252,6 +253,7 @@ pub enum TuiEvent {
         role: &'static str,
         message: String,
     },
+    Terminal(TerminalEvent),
     ToolProgress {
         name: String,
         stream: ToolOutputStream,

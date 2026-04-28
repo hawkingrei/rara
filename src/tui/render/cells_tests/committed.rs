@@ -204,6 +204,42 @@ fn committed_turn_cell_orders_completion_records_by_interaction_kind() {
 }
 
 #[test]
+fn committed_turn_cell_renders_terminal_result_as_terminal_cell() {
+    let entries = vec![
+        TranscriptEntry {
+            role: "You".into(),
+            message: "Run tests in the background".into(),
+        },
+        TranscriptEntry {
+            role: "Tool".into(),
+            message: "background_task_status bash-123".into(),
+        },
+        TranscriptEntry {
+            role: "Tool Result".into(),
+            message: "background task bash-123 completed: cargo test\nexit_code: 0\noutput:\ncompile\nrunning tests\nok".into(),
+        },
+        TranscriptEntry {
+            role: "Agent".into(),
+            message: "The background test task completed.".into(),
+        },
+    ];
+
+    let rendered = CommittedTurnCell::new(entries.as_slice(), Some(Path::new(".")))
+        .display_lines(100)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(rendered.contains("Ran background cargo test"));
+    assert!(rendered.contains("└ compile"));
+    assert!(rendered.contains("running tests"));
+    assert!(rendered.contains("ok"));
+    assert!(rendered.contains("• The background test task completed."));
+    assert!(!rendered.contains("background_task_status bash-123"));
+}
+
+#[test]
 fn committed_turn_cell_keeps_final_agent_response_when_system_notice_arrives_after_tool_turn() {
     let entries = vec![
         TranscriptEntry {

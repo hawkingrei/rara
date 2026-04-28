@@ -18,6 +18,7 @@ mod render;
 mod runtime;
 mod session_restore;
 mod state;
+mod terminal_event;
 mod terminal_ui;
 #[cfg(test)]
 mod tests;

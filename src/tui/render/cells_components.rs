@@ -186,6 +186,92 @@ impl HistoryCell for RunningCell {
     }
 }
 
+pub(super) struct TerminalCell {
+    command: String,
+    output: Vec<String>,
+    active: bool,
+    success: Option<bool>,
+}
+
+impl TerminalCell {
+    pub(super) fn new(
+        command: impl Into<String>,
+        output: Vec<String>,
+        active: bool,
+        success: Option<bool>,
+    ) -> Self {
+        Self {
+            command: command.into(),
+            output,
+            active,
+            success,
+        }
+    }
+
+    fn bullet(&self) -> Span<'static> {
+        let color = match (self.active, self.success) {
+            (true, _) => Color::Yellow,
+            (false, Some(true)) => Color::LightGreen,
+            (false, Some(false)) => Color::Red,
+            (false, None) => Color::LightYellow,
+        };
+        Span::styled("•", Style::default().fg(color).add_modifier(Modifier::BOLD))
+    }
+
+    fn title(&self) -> &'static str {
+        if self.active {
+            "Running"
+        } else {
+            "Ran"
+        }
+    }
+
+    fn output_lines(&self) -> Vec<String> {
+        const EDGE_LIMIT: usize = 3;
+        if self.output.len() <= EDGE_LIMIT * 2 + 1 {
+            return self.output.clone();
+        }
+
+        let omitted = self.output.len() - EDGE_LIMIT * 2;
+        let mut lines = self
+            .output
+            .iter()
+            .take(EDGE_LIMIT)
+            .cloned()
+            .collect::<Vec<_>>();
+        lines.push(format!("... {omitted} more line(s)"));
+        lines.extend(
+            self.output
+                .iter()
+                .skip(self.output.len() - EDGE_LIMIT)
+                .cloned(),
+        );
+        lines
+    }
+}
+
+impl HistoryCell for TerminalCell {
+    fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
+        let mut lines = vec![Line::from(vec![
+            self.bullet(),
+            Span::raw(" "),
+            Span::styled(self.title(), Style::default().add_modifier(Modifier::BOLD)),
+            Span::raw(" "),
+            Span::raw(self.command.clone()),
+        ])];
+
+        for (idx, output) in self.output_lines().into_iter().enumerate() {
+            let prefix = if idx == 0 { "  └ " } else { "    " };
+            lines.push(Line::from(vec![
+                Span::styled(prefix, Style::default().fg(Color::DarkGray)),
+                Span::styled(output, Style::default().fg(Color::DarkGray)),
+            ]));
+        }
+
+        lines
+    }
+}
+
 struct ApprovalCell {
     title: &'static str,
     color: Color,

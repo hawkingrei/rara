@@ -3,6 +3,9 @@ use std::borrow::Cow;
 use crate::tool::ToolOutputStream;
 use crate::tools::bash::BashCommandInput;
 use crate::tui::state::TuiApp;
+use crate::tui::terminal_event::{
+    output_tail_preview as terminal_output_tail_preview, TerminalEvent,
+};
 use crate::tui::tool_text::{compact_delegate_rest, compact_instruction};
 
 pub(super) fn is_oauth_prompt_message(message: &str) -> bool {
@@ -414,8 +417,55 @@ pub(super) fn format_tool_use(name: &str, input: &serde_json::Value) -> String {
         "plan_agent" => format_instruction_tool_use("plan_agent", input),
         "spawn_agent" => format_spawn_agent_use(input),
         "apply_patch" => format_apply_patch_use(input),
+        "pty_start" => input
+            .get("command")
+            .and_then(serde_json::Value::as_str)
+            .map(|command| format!("pty_start {}", compact_instruction(command)))
+            .unwrap_or_else(|| format!("{name} {input}")),
+        "pty_read" | "pty_status" | "pty_write" | "pty_kill" | "pty_stop" => {
+            format_session_tool_use(name, input, "session_id")
+        }
+        "background_task_status" | "background_task_stop" => {
+            format_session_tool_use(name, input, "task_id")
+        }
+        "background_task_list" | "pty_list" => name.to_string(),
         _ => format!("{name} {input}"),
     }
+}
+
+fn format_session_tool_use(name: &str, input: &serde_json::Value, id_key: &str) -> String {
+    let id = input
+        .get(id_key)
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if name == "pty_write" {
+        let preview = input
+            .get("input")
+            .and_then(serde_json::Value::as_str)
+            .map(summarize_terminal_input);
+        return match (id, preview) {
+            (Some(id), Some(preview)) => format!("{name} {id}: {preview}"),
+            (Some(id), None) => format!("{name} {id}"),
+            _ => format!("{name} {input}"),
+        };
+    }
+    match id {
+        Some(id) => format!("{name} {id}"),
+        None if name == "pty_stop" || name == "background_task_stop" => name.to_string(),
+        None => format!("{name} {input}"),
+    }
+}
+
+fn summarize_terminal_input(input: &str) -> String {
+    const MAX_CHARS: usize = 80;
+    let normalized = input.replace('\n', "\\n").replace('\r', "\\r");
+    if normalized.chars().count() <= MAX_CHARS {
+        return normalized;
+    }
+    let mut truncated = normalized.chars().take(MAX_CHARS).collect::<String>();
+    truncated.push('…');
+    truncated
 }
 
 fn format_replace_lines_use(input: &serde_json::Value) -> String {
@@ -544,6 +594,9 @@ pub(super) fn format_tool_result(name: &str, content: &str) -> String {
             return content.trim().to_string();
         }
         return format!("{name} {}", first_non_empty_line(content));
+    }
+    if let Some(event) = TerminalEvent::from_tool_result(name, content, false) {
+        return event.to_transcript_message();
     }
     if name == "bash" {
         if let Ok(value) = serde_json::from_str::<serde_json::Value>(content) {
@@ -809,25 +862,7 @@ fn append_path_group(lines: &mut Vec<String>, label: &str, value: Option<&serde_
 }
 
 fn output_tail_preview(output: &str) -> Option<String> {
-    let lines = output
-        .lines()
-        .map(str::trim_end)
-        .filter(|line| !line.trim().is_empty())
-        .collect::<Vec<_>>();
-    if lines.is_empty() {
-        return None;
-    }
-
-    let preview = lines
-        .iter()
-        .rev()
-        .take(6)
-        .copied()
-        .collect::<Vec<_>>()
-        .into_iter()
-        .rev()
-        .collect::<Vec<_>>();
-    Some(preview.join("\n"))
+    terminal_output_tail_preview(output).map(|lines| lines.join("\n"))
 }
 
 fn format_write_file_result(value: &serde_json::Value) -> String {

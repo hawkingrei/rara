@@ -17,7 +17,7 @@ pub(crate) use self::components::StartupCardCell;
 use self::components::{
     planning_suggestion_text, CommittedInteractionCell, ExploredCell, ExploringCell, MessageCell,
     PendingInteractionCell, PlanModeCell, PlanSummaryCell, PlanningCell, PlanningSuggestionCell,
-    RanCell, RespondingCell, RunningCell, UserCell,
+    RanCell, RespondingCell, RunningCell, TerminalCell, UserCell,
 };
 use super::{
     compact_progress_summary_lines, compact_recent_first_summary_lines, compact_summary_lines,
@@ -42,6 +42,13 @@ pub(crate) trait ActiveCell {
 enum OrderedActiveSegment<'a> {
     Exploration(Vec<String>),
     Agent(&'a str),
+}
+
+struct TerminalCellData {
+    command: String,
+    output: Vec<String>,
+    active: bool,
+    success: Option<bool>,
 }
 
 fn trim_trailing_empty_lines(lines: &mut Vec<Line<'static>>) {
@@ -252,6 +259,77 @@ fn parse_render_plan_block(message: &str) -> Option<(Vec<(String, String)>, Opti
     ))
 }
 
+fn terminal_cell_from_entries<'a>(
+    entries: impl DoubleEndedIterator<Item = &'a TranscriptEntry>,
+) -> Option<TerminalCell> {
+    let data = entries
+        .filter(|entry| matches!(entry.role.as_str(), "Tool Result" | "Tool Error"))
+        .filter_map(|entry| parse_terminal_tool_result(&entry.message))
+        .next_back()?;
+    Some(TerminalCell::new(
+        data.command,
+        data.output,
+        data.active,
+        data.success,
+    ))
+}
+
+fn parse_terminal_tool_result(message: &str) -> Option<TerminalCellData> {
+    let mut lines = message.lines();
+    let first = lines.next()?.trim();
+
+    let mut output = Vec::new();
+    let mut in_output = false;
+    for line in lines {
+        if line.trim() == "output:" {
+            in_output = true;
+            continue;
+        }
+        if in_output {
+            output.push(line.trim_end().to_string());
+        }
+    }
+
+    if let Some(rest) = first.strip_prefix("pty ") {
+        let (head, command) = rest
+            .split_once(": ")
+            .map(|(head, command)| (head, command.to_string()))
+            .unwrap_or((rest, rest.to_string()));
+        let status = head.split_whitespace().nth(1).unwrap_or("unknown");
+        return Some(TerminalCellData {
+            command: format!("pty {command}"),
+            output,
+            active: status == "running",
+            success: terminal_status_success(status),
+        });
+    }
+
+    if let Some(rest) = first.strip_prefix("background task ") {
+        let (head, command) = rest
+            .split_once(": ")
+            .map(|(head, command)| (head, command.to_string()))
+            .unwrap_or((rest, rest.to_string()));
+        let status = head.split_whitespace().nth(1).unwrap_or("unknown");
+        return Some(TerminalCellData {
+            command: format!("background {command}"),
+            output,
+            active: status == "running",
+            success: terminal_status_success(status),
+        });
+    }
+
+    None
+}
+
+fn terminal_status_success(status: &str) -> Option<bool> {
+    match status {
+        "running" => None,
+        "completed" | "stopped" => Some(true),
+        "failed" | "killed" => Some(false),
+        _ => None,
+    }
+}
+
 fn ordered_exploration_agent_segments<'a>(
     current_turn: &[&'a TranscriptEntry],
 ) -> Option<Vec<OrderedActiveSegment<'a>>> {
@@ -425,7 +503,9 @@ impl HistoryCell for CommittedTurnCell<'_> {
             cells.push(Box::new(PlanningCell::new(summary, false)));
         }
 
-        if let Some(summary) = explicit_running
+        if let Some(cell) = terminal_cell_from_entries(self.entries.iter()) {
+            cells.push(Box::new(cell));
+        } else if let Some(summary) = explicit_running
             .or_else(|| current_turn_tool_summary(entry_refs.as_slice(), false, None))
         {
             cells.push(Box::new(RanCell::new(summary)));
@@ -688,7 +768,9 @@ impl ActiveCell for ActiveTurnCell<'_> {
         };
         let has_running_summary = running_summary.is_some();
         let running_active = turn_live && has_running_summary;
-        if let Some(summary) = running_summary {
+        if let Some(cell) = terminal_cell_from_entries(current_turn.iter().copied()) {
+            cells.push(Box::new(cell));
+        } else if let Some(summary) = running_summary {
             cells.push(Box::new(RunningCell::new(summary, running_active)));
         }
         let compact_live_response =
