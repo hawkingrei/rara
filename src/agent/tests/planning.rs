@@ -15,6 +15,7 @@ use crate::llm::{LlmBackend, LlmResponse, TokenUsage};
 use crate::session::SessionManager;
 use crate::tool::ToolManager;
 use crate::tool_result::ToolResultStore;
+use crate::tools::planning::EnterPlanModeTool;
 use crate::vectordb::VectorDB;
 use crate::workspace::WorkspaceMemory;
 
@@ -381,6 +382,56 @@ async fn does_not_append_continuation_without_tools() {
         .content
         .to_string()
         .contains("\"phase\": \"tool_results_available\"")));
+}
+
+#[tokio::test]
+async fn enter_plan_mode_tool_switches_to_read_only_planning() {
+    let backend = Arc::new(SequencedBackend::new(vec![
+        LlmResponse {
+            content: vec![ContentBlock::ToolUse {
+                id: "enter-plan".to_string(),
+                name: "enter_plan_mode".to_string(),
+                input: json!({}),
+            }],
+            stop_reason: Some("tool_use".to_string()),
+            usage: Some(TokenUsage::default()),
+        },
+        LlmResponse {
+            content: vec![ContentBlock::Text {
+                text: "The main issue is that planning and approval are coupled.".to_string(),
+            }],
+            stop_reason: Some("end_turn".to_string()),
+            usage: Some(TokenUsage::default()),
+        },
+    ]));
+
+    let mut tool_manager = ToolManager::new();
+    tool_manager.register(Box::new(EnterPlanModeTool));
+    let (_temp, session_manager, workspace, rara_dir) = test_runtime_storage();
+    let mut agent = Agent::new(
+        tool_manager,
+        backend.clone(),
+        Arc::new(VectorDB::new(&rara_dir.join("lancedb").to_string_lossy())),
+        session_manager,
+        workspace,
+    );
+
+    agent
+        .query_with_mode(
+            "review the planning implementation".to_string(),
+            super::super::AgentOutputMode::Silent,
+        )
+        .await
+        .expect("query should enter planning mode and return analysis");
+
+    assert_eq!(agent.execution_mode, AgentExecutionMode::Plan);
+    assert!(!agent.last_query_produced_plan());
+    assert!(agent.current_plan.is_empty());
+
+    let observed_tools = backend.observed_tools();
+    assert_eq!(observed_tools.len(), 2);
+    assert!(observed_tools[0].contains(&"enter_plan_mode".to_string()));
+    assert!(!observed_tools[1].contains(&"enter_plan_mode".to_string()));
 }
 
 #[tokio::test]

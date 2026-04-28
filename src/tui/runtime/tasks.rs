@@ -151,69 +151,6 @@ pub(super) fn start_query_task(app: &mut TuiApp, prompt: String, mut agent: Agen
     });
 }
 
-pub(super) fn should_suggest_planning_mode(app: &TuiApp, prompt: &str) -> bool {
-    if app.is_busy()
-        || app.has_pending_plan_approval()
-        || app.has_pending_approval()
-        || app.pending_request_input().is_some()
-        || matches!(
-            app.agent_execution_mode,
-            crate::agent::AgentExecutionMode::Plan
-        )
-    {
-        return false;
-    }
-
-    let trimmed = prompt.trim();
-    if trimmed.is_empty() || trimmed.lines().count() > 20 {
-        return false;
-    }
-
-    let lowered = trimmed.to_ascii_lowercase();
-    let strong_keywords = [
-        "review the code",
-        "review this repo",
-        "inspect the codebase",
-        "implementation plan",
-        "refactor",
-        "architecture",
-        "design proposal",
-        "migration plan",
-        "跨模块",
-        "重构",
-        "架构",
-        "设计方案",
-        "实现方案",
-        "修改建议",
-        "看一下代码",
-        "代码质量",
-    ];
-    if strong_keywords
-        .iter()
-        .any(|keyword| lowered.contains(keyword) || trimmed.contains(keyword))
-    {
-        return true;
-    }
-
-    let asks_for_analysis = lowered.contains("analyze")
-        || lowered.contains("analyse")
-        || lowered.contains("proposal")
-        || lowered.contains("suggest")
-        || lowered.contains("review")
-        || lowered.contains("plan")
-        || lowered.contains("design");
-    let mentions_codebase = lowered.contains("repo")
-        || lowered.contains("repository")
-        || lowered.contains("codebase")
-        || lowered.contains("module")
-        || lowered.contains("system")
-        || trimmed.contains("代码")
-        || trimmed.contains("仓库")
-        || trimmed.contains("项目");
-
-    asks_for_analysis && mentions_codebase
-}
-
 pub(super) fn start_compact_task(app: &mut TuiApp, mut agent: Agent) {
     let (sender, receiver) = mpsc::unbounded_channel();
     agent.set_execution_mode(app.agent_execution_mode);
@@ -507,10 +444,11 @@ pub(super) async fn finish_running_task_if_ready(
             }
             match result {
                 Ok(_) => {
-                    let finished_plan_turn = matches!(
-                        app.agent_execution_mode,
-                        crate::agent::AgentExecutionMode::Plan
-                    );
+                    let finished_plan_turn =
+                        matches!(
+                            app.agent_execution_mode,
+                            crate::agent::AgentExecutionMode::Plan
+                        ) || matches!(agent.execution_mode, crate::agent::AgentExecutionMode::Plan);
                     app.clear_active_live_sections();
                     if finished_plan_turn {
                         restore_execute_mode_after_plan_turn(app, &mut agent);

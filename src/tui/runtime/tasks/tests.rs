@@ -23,43 +23,9 @@ use crate::workspace::WorkspaceMemory;
 use serde_json::json;
 
 use super::{
-    emit_query_heartbeat, merge_rebuilt_agent, request_running_task_cancellation,
-    should_suggest_planning_mode, start_oauth_task, try_start_queued_follow_up,
+    emit_query_heartbeat, merge_rebuilt_agent, request_running_task_cancellation, start_oauth_task,
+    try_start_queued_follow_up,
 };
-
-#[test]
-fn suggests_planning_for_repo_review_requests() {
-    let temp = tempdir().unwrap();
-    let app = TuiApp::new(ConfigManager {
-        path: temp.path().join("config.json"),
-    })
-    .expect("build tui app");
-    assert!(should_suggest_planning_mode(
-        &app,
-        "看一下代码，并提出修改建议"
-    ));
-    assert!(should_suggest_planning_mode(
-        &app,
-        "Review this repository and propose architectural improvements."
-    ));
-}
-
-#[test]
-fn skips_planning_for_simple_requests() {
-    let temp = tempdir().unwrap();
-    let app = TuiApp::new(ConfigManager {
-        path: temp.path().join("config.json"),
-    })
-    .expect("build tui app");
-    assert!(!should_suggest_planning_mode(
-        &app,
-        "Fix the typo in README."
-    ));
-    assert!(!should_suggest_planning_mode(
-        &app,
-        "What does this function do?"
-    ));
-}
 
 #[test]
 fn browser_oauth_is_rejected_before_task_start_in_ssh() {

@@ -11,8 +11,10 @@ RARA planning mode is a read-only collaboration mode for non-trivial tasks.
 ## Contract
 
 - planning mode is read-only;
+- the agent enters planning mode by calling `enter_plan_mode`; the TUI must not infer planning mode from prompt keywords;
 - planning turns may use read-only repository tools and delegated read-only sub-agents;
-- a planning turn must end with exactly one structured artifact:
+- planning turns may end with a normal final answer for research, review, or planning-advice tasks;
+- structured planning artifacts are reserved for explicit runtime actions:
   - `<plan>` when the implementation plan is ready for approval;
   - `<request_user_input>` when a key decision still needs user input;
   - `<continue_inspection/>` when more repository inspection is still required.
@@ -21,8 +23,7 @@ RARA planning mode is a read-only collaboration mode for non-trivial tasks.
 - planning mode must not describe file edits, patches, or implementation steps as if they are already happening.
 - plan approval must not be requested in ordinary prose; the model must use `<plan>` when the plan is ready, or `<request_user_input>` when a key decision still blocks it.
 
-Plain narration or status updates are not valid terminal planning artifacts.
-If the model ends a planning turn with narration alone, runtime must continue the same planning turn instead of treating it as a successful completion.
+Plain narration or status updates are valid only when they are the final answer to a research, review, or planning-advice task. They must not be treated as approval requests.
 
 ## Sub-Agents
 
@@ -41,10 +42,9 @@ If the model ends a planning turn with narration alone, runtime must continue th
 When planning mode needs to continue, runtime records a structured continuation message with one of these phases:
 
 - `plan_continuation_required`
-- `plan_structured_outcome_required`
 - `plan_approved`
 
-`plan_structured_outcome_required` means the previous planning turn ended with narration alone and must continue until it produces a valid planning artifact.
+`plan_continuation_required` means the agent explicitly requested another read-only inspection pass before answering or requesting implementation approval.
 
 ## TUI Expectations
 

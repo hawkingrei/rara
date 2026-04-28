@@ -37,18 +37,6 @@ fn provider_family_idx(family: ProviderFamily) -> usize {
 }
 
 #[test]
-fn pending_plan_approval_treats_generic_continue_as_approval() {
-    assert_eq!(
-        classify_pending_plan_approval_input("继续吧"),
-        Some(PendingPlanApprovalAction::StartImplementation)
-    );
-    assert_eq!(
-        classify_pending_plan_approval_input("ok"),
-        Some(PendingPlanApprovalAction::StartImplementation)
-    );
-}
-
-#[test]
 fn pending_plan_approval_supports_explicit_refine_signal() {
     assert_eq!(
         classify_pending_plan_approval_input("继续规划"),
@@ -57,6 +45,20 @@ fn pending_plan_approval_supports_explicit_refine_signal() {
     assert_eq!(
         classify_pending_plan_approval_input("continue planning"),
         Some(PendingPlanApprovalAction::ContinuePlanning)
+    );
+}
+
+#[test]
+fn pending_plan_approval_requires_explicit_implementation_signal() {
+    assert_eq!(classify_pending_plan_approval_input("继续吧"), None);
+    assert_eq!(classify_pending_plan_approval_input("ok"), None);
+    assert_eq!(
+        classify_pending_plan_approval_input("执行计划"),
+        Some(PendingPlanApprovalAction::StartImplementation)
+    );
+    assert_eq!(
+        classify_pending_plan_approval_input("implement plan"),
+        Some(PendingPlanApprovalAction::StartImplementation)
     );
 }
 

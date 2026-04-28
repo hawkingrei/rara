@@ -23,9 +23,7 @@ use std::sync::{atomic::AtomicBool, Arc};
 use uuid::Uuid;
 
 pub use self::compact::{latest_compact_boundary_metadata, CompactBoundaryMetadata, CompactState};
-use self::planning::{
-    tool_result_message, InspectionProgress, PlanningOutcomeContract, RuntimeContinuationPhase,
-};
+use self::planning::{tool_result_message, InspectionProgress, RuntimeContinuationPhase};
 pub use self::planning::{
     CompletedInteraction, PendingApproval, PendingUserInput, PlanStep, PlanStepStatus,
 };
@@ -98,7 +96,6 @@ struct TurnOutput {
     plan_updated: bool,
     continue_inspection: bool,
     had_text_response: bool,
-    text_response: Option<String>,
 }
 
 pub struct Agent {
@@ -296,7 +293,6 @@ impl Agent {
         let mut plan_updated = false;
         let mut continue_inspection = false;
         let mut had_text_response = false;
-        let mut text_parts = Vec::new();
         let mut sanitized_content = Vec::new();
         for block in &response.content {
             match block {
@@ -306,7 +302,6 @@ impl Agent {
                     continue_inspection |= block_requests_continue;
                     if !clean_text.trim().is_empty() {
                         had_text_response = true;
-                        text_parts.push(clean_text.clone());
                         sanitized_content.push(ContentBlock::Text {
                             text: clean_text.clone(),
                         });
@@ -360,7 +355,6 @@ impl Agent {
             plan_updated,
             continue_inspection,
             had_text_response,
-            text_response: (!text_parts.is_empty()).then(|| text_parts.join("\n\n")),
         })
     }
 
@@ -412,26 +406,11 @@ impl Agent {
                     turn_output.had_text_response,
                     *agentic_turns,
                 ) {
-                    let phase = if matches!(
-                        self.planning_outcome_contract(
-                            turn_output.plan_updated,
-                            turn_output.continue_inspection,
-                            turn_output.had_text_response,
-                        ),
-                        PlanningOutcomeContract::StructuredOutcomeRequired
-                    ) {
-                        report(AgentEvent::Status(
-                            "Planning mode needs a concrete plan, question, or explicit continue signal. Continuing in read-only mode."
-                                .to_string(),
-                        ));
-                        RuntimeContinuationPhase::PlanStructuredOutcomeRequired
-                    } else {
-                        report(AgentEvent::Status(
-                            "Plan needs more repository inspection. Continuing in read-only mode."
-                                .to_string(),
-                        ));
-                        RuntimeContinuationPhase::PlanContinuationRequired
-                    };
+                    report(AgentEvent::Status(
+                        "Plan needs more repository inspection. Continuing in read-only mode."
+                            .to_string(),
+                    ));
+                    let phase = RuntimeContinuationPhase::PlanContinuationRequired;
                     self.push_history_message(
                         self.runtime_continuation_message(phase, *agentic_turns),
                     );
@@ -572,6 +551,12 @@ impl Agent {
                 });
                 tool_results.push(tool_result_message(&tool_id, error_text, true));
                 continue;
+            }
+            if tool_name == "enter_plan_mode" {
+                self.execution_mode = AgentExecutionMode::Plan;
+                report(AgentEvent::Status(
+                    "Entered read-only planning mode.".to_string(),
+                ));
             }
             if let Some(tool) = self.tool_manager.get_tool(&tool_name) {
                 self.inspection_progress
