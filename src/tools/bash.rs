@@ -5,13 +5,14 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::env;
+use std::io::SeekFrom;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
 use std::sync::Mutex;
 use tokio::fs;
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 use tokio::process::{Child, Command};
 use tokio::sync::mpsc;
 use uuid::Uuid;
@@ -366,7 +367,7 @@ impl Tool for BashTool {
             return Ok(json!({
                 "stdout": "",
                 "stderr": "",
-                "exit_code": 0,
+                "exit_code": null,
                 "live_streamed": false,
                 "sandboxed": record.sandboxed,
                 "sandbox_backend": record.sandbox_backend,
@@ -608,13 +609,17 @@ async fn append_background_output(
 }
 
 async fn read_output_tail(path: &Path, max_bytes: usize) -> Result<String, ToolError> {
-    let bytes = match fs::read(path).await {
-        Ok(bytes) => bytes,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+    let mut file = match fs::File::open(path).await {
+        Ok(file) => file,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(String::new()),
         Err(err) => return Err(err.into()),
     };
-    let start = bytes.len().saturating_sub(max_bytes);
-    Ok(String::from_utf8_lossy(&bytes[start..]).into_owned())
+    let file_len = file.metadata().await?.len();
+    let start = file_len.saturating_sub(max_bytes as u64);
+    file.seek(SeekFrom::Start(start)).await?;
+    let mut bytes = Vec::with_capacity(max_bytes.min(file_len as usize));
+    file.read_to_end(&mut bytes).await?;
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
 
 async fn read_stream_chunks<R>(
@@ -676,7 +681,7 @@ async fn ensure_sandbox_home_dirs(sandbox_home: &Path) -> Result<(), ToolError> 
 #[cfg(test)]
 mod tests {
     use super::{
-        command_env_for_wrapped, sandbox_command_env, sandbox_output_hint,
+        command_env_for_wrapped, read_output_tail, sandbox_command_env, sandbox_output_hint,
         unsandboxed_execution_warning, BackgroundTaskStatus, BackgroundTaskStatusTool,
         BackgroundTaskStore, BashCommandInput, BashTool,
     };
@@ -952,6 +957,7 @@ mod tests {
             .get("background_task_id")
             .and_then(Value::as_str)
             .expect("task id");
+        assert_eq!(started.get("exit_code"), Some(&Value::Null));
         assert_eq!(
             started.get("status"),
             Some(&json!(BackgroundTaskStatus::Running))
@@ -974,6 +980,30 @@ mod tests {
             Some(&json!(BackgroundTaskStatus::Running))
         );
         assert!(last.get("output_path").and_then(Value::as_str).is_some());
+    }
+
+    #[tokio::test]
+    async fn read_output_tail_returns_only_requested_suffix() {
+        let temp = tempdir().expect("tempdir");
+        let path = temp.path().join("task.log");
+        tokio::fs::write(&path, b"0123456789tail")
+            .await
+            .expect("write log");
+
+        let output = read_output_tail(&path, 4).await.expect("tail");
+
+        assert_eq!(output, "tail");
+    }
+
+    #[tokio::test]
+    async fn read_output_tail_missing_file_is_empty() {
+        let temp = tempdir().expect("tempdir");
+
+        let output = read_output_tail(&temp.path().join("missing.log"), 4)
+            .await
+            .expect("missing tail");
+
+        assert_eq!(output, "");
     }
 
     fn binary_exists(program: &str) -> bool {

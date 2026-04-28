@@ -6,10 +6,11 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::env;
 use std::fs::OpenOptions;
-use std::io::{Read, Write};
+use std::io::{Read, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::thread;
+use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use uuid::Uuid;
 
 pub struct PtyStartTool {
@@ -104,6 +105,9 @@ impl PtySessionStore {
             cmd.arg(arg);
         }
         cmd.cwd(&cwd);
+        if wrapped.sandboxed {
+            cmd.env_clear();
+        }
         for (key, value) in command_env {
             cmd.env(key, value);
         }
@@ -463,13 +467,17 @@ fn ensure_sandbox_home_dirs(sandbox_home: &Path) -> Result<(), ToolError> {
 }
 
 async fn read_output_tail(path: &Path, max_bytes: usize) -> Result<String, ToolError> {
-    let bytes = match tokio::fs::read(path).await {
-        Ok(bytes) => bytes,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+    let mut file = match tokio::fs::File::open(path).await {
+        Ok(file) => file,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(String::new()),
         Err(err) => return Err(err.into()),
     };
-    let start = bytes.len().saturating_sub(max_bytes);
-    Ok(String::from_utf8_lossy(&bytes[start..]).into_owned())
+    let file_len = file.metadata().await?.len();
+    let start = file_len.saturating_sub(max_bytes as u64);
+    file.seek(SeekFrom::Start(start)).await?;
+    let mut bytes = Vec::with_capacity(max_bytes.min(file_len as usize));
+    file.read_to_end(&mut bytes).await?;
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
 
 #[cfg(test)]
@@ -477,6 +485,19 @@ mod tests {
     use super::*;
     use crate::sandbox::WrappedCommand;
     use tempfile::tempdir;
+
+    #[tokio::test]
+    async fn read_output_tail_returns_only_requested_suffix() {
+        let temp = tempdir().expect("tempdir");
+        let path = temp.path().join("pty.log");
+        tokio::fs::write(&path, b"0123456789tail")
+            .await
+            .expect("write log");
+
+        let output = read_output_tail(&path, 4).await.expect("tail");
+
+        assert_eq!(output, "tail");
+    }
 
     #[tokio::test]
     async fn pty_session_accepts_input_and_exposes_output() {
