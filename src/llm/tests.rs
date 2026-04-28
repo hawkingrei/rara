@@ -295,9 +295,9 @@ fn deepseek_tool_call_reasoning_content_roundtrips_without_trimming() {
 }
 
 #[test]
-fn deepseek_v4_request_enables_thinking_and_uses_max_effort_for_tools() {
+fn deepseek_reasoner_defaults_preserve_standard_body() {
     let body = build_chat_completion_request_body(
-        "deepseek-v4-pro",
+        "deepseek-reasoner",
         &[Message {
             role: "user".to_string(),
             content: json!("Inspect the repository."),
@@ -313,6 +313,32 @@ fn deepseek_v4_request_enables_thinking_and_uses_max_effort_for_tools() {
         LlmTurnMetadata::default(),
     );
 
+    assert!(body.get("thinking").is_none());
+    assert!(body.get("reasoning_effort").is_none());
+    assert!(body["tools"]
+        .as_array()
+        .is_some_and(|tools| tools.len() == 1));
+}
+
+#[test]
+fn deepseek_reasoner_explicit_thinking_enables_controls_for_tools() {
+    let body = build_chat_completion_request_body(
+        "deepseek-reasoner",
+        &[Message {
+            role: "user".to_string(),
+            content: json!("Inspect the repository."),
+        }],
+        &[json!({
+            "name": "read_file",
+            "description": "Read a file",
+            "input_schema": {"type":"object"}
+        })],
+        OpenAiEndpointKind::Deepseek,
+        None,
+        Some(true),
+        LlmTurnMetadata::default(),
+    );
+
     assert_eq!(body["thinking"]["type"], "enabled");
     assert_eq!(body["reasoning_effort"], "max");
     assert!(body["tools"]
@@ -321,9 +347,35 @@ fn deepseek_v4_request_enables_thinking_and_uses_max_effort_for_tools() {
 }
 
 #[test]
-fn deepseek_plan_metadata_uses_max_effort_without_tools_or_prompt_marker() {
+fn deepseek_v4_explicit_thinking_enables_controls_for_tools() {
     let body = build_chat_completion_request_body(
         "deepseek-v4-pro",
+        &[Message {
+            role: "user".to_string(),
+            content: json!("Inspect the repository."),
+        }],
+        &[json!({
+            "name": "read_file",
+            "description": "Read a file",
+            "input_schema": {"type":"object"}
+        })],
+        OpenAiEndpointKind::Deepseek,
+        None,
+        Some(true),
+        LlmTurnMetadata::default(),
+    );
+
+    assert_eq!(body["thinking"]["type"], "enabled");
+    assert_eq!(body["reasoning_effort"], "max");
+    assert!(body["tools"]
+        .as_array()
+        .is_some_and(|tools| tools.len() == 1));
+}
+
+#[test]
+fn deepseek_reasoner_plan_with_explicit_thinking_uses_max_effort() {
+    let body = build_chat_completion_request_body(
+        "deepseek-reasoner",
         &[
             Message {
                 role: "system".to_string(),
@@ -337,7 +389,7 @@ fn deepseek_plan_metadata_uses_max_effort_without_tools_or_prompt_marker() {
         &[],
         OpenAiEndpointKind::Deepseek,
         None,
-        None,
+        Some(true),
         LlmTurnMetadata::plan(),
     );
 
@@ -347,9 +399,9 @@ fn deepseek_plan_metadata_uses_max_effort_without_tools_or_prompt_marker() {
 }
 
 #[test]
-fn deepseek_reasoning_effort_uses_documented_high_max_values() {
+fn deepseek_reasoner_explicit_thinking_normalizes_reasoning_effort() {
     let medium_body = build_chat_completion_request_body(
-        "deepseek-v4-flash",
+        "deepseek-reasoner",
         &[Message {
             role: "user".to_string(),
             content: json!("Explain this code."),
@@ -357,11 +409,11 @@ fn deepseek_reasoning_effort_uses_documented_high_max_values() {
         &[],
         OpenAiEndpointKind::Deepseek,
         Some("medium"),
-        None,
+        Some(true),
         LlmTurnMetadata::default(),
     );
     let xhigh_body = build_chat_completion_request_body(
-        "deepseek-v4-flash",
+        "deepseek-reasoner",
         &[Message {
             role: "user".to_string(),
             content: json!("Explain this code."),
@@ -369,7 +421,7 @@ fn deepseek_reasoning_effort_uses_documented_high_max_values() {
         &[],
         OpenAiEndpointKind::Deepseek,
         Some("xhigh"),
-        None,
+        Some(true),
         LlmTurnMetadata::default(),
     );
 

@@ -2,6 +2,8 @@ mod codex;
 
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
+use eventsource_stream::Eventsource;
+use futures::StreamExt;
 use secrecy::{ExposeSecret, SecretString};
 use serde_json::{json, Value};
 
@@ -132,9 +134,142 @@ impl LlmBackend for OpenAiCompatibleBackend {
         messages: &[Message],
         tools: &[Value],
         metadata: LlmTurnMetadata,
-        _on_text_delta: &mut (dyn FnMut(String) + Send),
+        on_text_delta: &mut (dyn FnMut(String) + Send),
     ) -> Result<LlmResponse> {
-        self.ask_with_context(messages, tools, metadata).await
+        let mut body = build_chat_completion_request_body(
+            &self.model,
+            messages,
+            tools,
+            self.endpoint_kind,
+            self.reasoning_effort.as_deref(),
+            self.thinking,
+            metadata,
+        );
+        body["stream"] = json!(true);
+
+        let completions_url = self.endpoint_url("chat/completions");
+        let mut request = self.client.post(&completions_url);
+        if let Some(api_key) = self.api_key.as_ref().map(SecretString::expose_secret) {
+            if !api_key.is_empty() {
+                request = request.header("Authorization", format!("Bearer {api_key}"));
+            }
+        }
+        let res = request.json(&body).send().await?;
+
+        if !res.status().is_success() {
+            return Err(anyhow!(
+                "API Error at {}: {}",
+                sanitize_url_for_display(&completions_url),
+                redact_secrets(res.text().await?)
+            ));
+        }
+
+        let mut stream = res.bytes_stream().eventsource();
+        let mut streamed_text = String::new();
+        let mut streamed_reasoning_content = String::new();
+        let mut streamed_tool_calls: Vec<Value> = Vec::new();
+        let mut stop_reason = None;
+        let mut usage = None;
+
+        while let Some(event) = stream.next().await {
+            let event = event.map_err(|error| anyhow!("Failed to decode SSE event: {error}"))?;
+            if event.data.trim().is_empty() || event.data == "[DONE]" {
+                continue;
+            }
+            let payload: Value = serde_json::from_str(&event.data)
+                .map_err(|error| anyhow!("Failed to parse SSE payload: {error}"))?;
+
+            if let Some(choice) = payload
+                .get("choices")
+                .and_then(Value::as_array)
+                .and_then(|choices| choices.first())
+            {
+                if let Some(delta) = choice.get("delta") {
+                    if let Some(content) = delta.get("content").and_then(Value::as_str) {
+                        if !content.is_empty() {
+                            on_text_delta(content.to_string());
+                            streamed_text.push_str(content);
+                        }
+                    }
+                    if let Some(reasoning) = delta.get("reasoning_content").and_then(Value::as_str)
+                    {
+                        streamed_reasoning_content.push_str(reasoning);
+                    }
+                    if let Some(tool_deltas) = delta.get("tool_calls").and_then(Value::as_array) {
+                        merge_streaming_tool_calls(&mut streamed_tool_calls, tool_deltas);
+                    }
+                }
+                if let Some(finish) = choice.get("finish_reason").and_then(Value::as_str) {
+                    stop_reason = Some(finish.to_string());
+                }
+            }
+            if let Some(u) = payload.get("usage") {
+                if !u.is_null() {
+                    usage = Some(u.clone());
+                }
+            }
+        }
+
+        let mut content = Vec::new();
+        if self.endpoint_kind == OpenAiEndpointKind::Deepseek {
+            if !streamed_reasoning_content.trim().is_empty() {
+                content.push(ContentBlock::ProviderMetadata {
+                    provider: "deepseek".to_string(),
+                    key: "reasoning_content".to_string(),
+                    value: Value::String(streamed_reasoning_content),
+                });
+            }
+            let (visible_text, dsml_tool_calls) = extract_dsml_tool_calls_from_text(&streamed_text);
+            if !visible_text.trim().is_empty() {
+                content.push(ContentBlock::Text { text: visible_text });
+            }
+            if !dsml_tool_calls.is_empty()
+                && !content
+                    .iter()
+                    .any(|block| matches!(block, ContentBlock::ToolUse { .. }))
+            {
+                content.extend(dsml_tool_calls);
+            }
+        } else if !streamed_text.trim().is_empty() {
+            content.push(ContentBlock::Text {
+                text: streamed_text,
+            });
+        }
+
+        for (idx, tc) in streamed_tool_calls.iter().enumerate() {
+            let id = tc
+                .get("id")
+                .and_then(Value::as_str)
+                .filter(|id| !id.trim().is_empty())
+                .map(|id| id.to_string())
+                .unwrap_or_else(|| format!("stream-tool-{}", idx + 1));
+            let name = tc
+                .get("function")
+                .and_then(|f| f.get("name"))
+                .and_then(Value::as_str)
+                .filter(|name| !name.trim().is_empty())
+                .ok_or_else(|| {
+                    anyhow!("OpenAI-compatible stream tool_calls[{idx}] missing name")
+                })?;
+            let arguments = tc
+                .get("function")
+                .and_then(|f| f.get("arguments"))
+                .unwrap_or(&Value::Null);
+            content.push(ContentBlock::ToolUse {
+                id,
+                name: name.to_string(),
+                input: parse_tool_arguments(arguments)?,
+            });
+        }
+
+        Ok(LlmResponse {
+            content,
+            stop_reason,
+            usage: usage.map(|u| TokenUsage {
+                input_tokens: u["prompt_tokens"].as_u64().unwrap_or(0) as u32,
+                output_tokens: u["completion_tokens"].as_u64().unwrap_or(0) as u32,
+            }),
+        })
     }
 
     async fn embed(&self, text: &str) -> Result<Vec<f32>> {
@@ -258,15 +393,20 @@ fn apply_deepseek_thinking_options(
         return;
     }
 
-    let thinking_enabled = thinking.unwrap_or(true);
-    body["thinking"] = json!({
-        "type": if thinking_enabled { "enabled" } else { "disabled" },
-    });
-    if thinking_enabled {
-        body["reasoning_effort"] = Value::String(normalize_deepseek_reasoning_effort(
-            reasoning_effort,
-            strong_reasoning,
-        ));
+    // Only send thinking controls when the user explicitly opts in.
+    // Official DeepSeek API does not accept these parameters and returns 400.
+    match thinking {
+        Some(true) => {
+            body["thinking"] = json!({ "type": "enabled" });
+            body["reasoning_effort"] = Value::String(normalize_deepseek_reasoning_effort(
+                reasoning_effort,
+                strong_reasoning,
+            ));
+        }
+        Some(false) => {
+            body["thinking"] = json!({ "type": "disabled" });
+        }
+        None => {}
     }
 }
 
@@ -658,6 +798,40 @@ fn extract_dsml_attr(tag: &str, name: &str) -> Option<String> {
     let value = &tag[start..];
     let end = value.find('"')?;
     Some(value[..end].to_string())
+}
+
+fn merge_streaming_tool_calls(accumulated: &mut Vec<Value>, deltas: &[Value]) {
+    for delta in deltas {
+        let index = delta.get("index").and_then(Value::as_u64).unwrap_or(0) as usize;
+        while accumulated.len() <= index {
+            accumulated.push(json!({}));
+        }
+        let existing = &mut accumulated[index];
+
+        if let Some(id) = delta.get("id").and_then(Value::as_str) {
+            if !id.is_empty() {
+                existing["id"] = json!(id);
+            }
+        }
+        if let Some(type_) = delta.get("type").and_then(Value::as_str) {
+            existing["type"] = json!(type_);
+        }
+        if let Some(function) = delta.get("function") {
+            if let Some(name) = function.get("name").and_then(Value::as_str) {
+                if !name.is_empty() {
+                    existing["function"]["name"] = json!(name);
+                }
+            }
+            if let Some(arguments) = function.get("arguments").and_then(Value::as_str) {
+                let existing_args = existing
+                    .get("function")
+                    .and_then(|f| f.get("arguments"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
+                existing["function"]["arguments"] = json!(format!("{existing_args}{arguments}"));
+            }
+        }
+    }
 }
 
 fn render_openai_tool_result_message(tool_use_id: &str, tool_content: &str) -> Value {
