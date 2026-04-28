@@ -14,9 +14,8 @@ results.
   before rendering them into the existing transcript representation.
 - Added `TerminalCell` so committed and active history can render terminal
   activity as a command/result block instead of a generic tool-result row.
-- Added an internal `Terminal Event` transcript role that stores serialized
-  terminal events for the TUI renderer while preserving the existing transcript
-  storage shape.
+- Added an internal transcript payload for terminal events so the TUI renderer
+  can consume typed data directly instead of JSON-encoding internal events.
 - Moved terminal output tailing and ANSI/control-sequence cleanup into the
   terminal event layer so runtime event formatting and TUI rendering share the
   same behavior.
@@ -32,8 +31,8 @@ requiring them to parse UI text.
 ## Current Boundary
 
 - The typed terminal event exists inside the TUI runtime event path.
-- Persistence remains transcript-compatible, but terminal entries now keep the
-  typed event payload in an internal transcript role.
+- Persistence remains transcript-compatible, but live terminal entries now keep
+  the typed event payload alongside the transcript-compatible summary.
 - `TerminalCell` renders typed terminal events first and keeps text-summary
   parsing only as a restore/backward-compatibility fallback. A later
   thread-domain migration can persist typed terminal rollout items directly.

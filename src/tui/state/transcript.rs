@@ -4,6 +4,7 @@ use ratatui::text::Line;
 
 use super::{PendingFollowUpMessage, RuntimePhase, TranscriptEntry, TranscriptTurn, TuiApp};
 use crate::redaction::redact_secrets;
+use crate::tui::terminal_event::TerminalEvent;
 
 impl TuiApp {
     fn replace_turn_agent_message(turn: &mut TranscriptTurn, message: String) -> bool {
@@ -42,10 +43,16 @@ impl TuiApp {
         if role == "You" && !self.active_turn.entries.is_empty() {
             self.commit_active_turn();
         }
-        self.active_turn.entries.push(TranscriptEntry {
-            role: role.to_string(),
-            message,
-        });
+        self.active_turn
+            .entries
+            .push(TranscriptEntry::new(role, message));
+        self.reset_transcript_scroll_if_following_tail();
+    }
+
+    pub fn push_terminal_event(&mut self, event: TerminalEvent) {
+        self.active_turn
+            .entries
+            .push(TranscriptEntry::terminal_event(event));
         self.reset_transcript_scroll_if_following_tail();
     }
 
@@ -217,10 +224,9 @@ impl TuiApp {
             if lines.is_empty() {
                 continue;
             }
-            self.active_turn.entries.push(TranscriptEntry {
-                role: role.to_string(),
-                message: lines.join("\n"),
-            });
+            self.active_turn
+                .entries
+                .push(TranscriptEntry::new(role, lines.join("\n")));
         }
     }
 

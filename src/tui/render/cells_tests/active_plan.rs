@@ -12,6 +12,7 @@ fn active_turn_cell_renders_plan_approval_as_interaction_card() {
         entries: vec![TranscriptEntry {
             role: "You".into(),
             message: "Review the codebase and propose changes".into(),
+            payload: None,
         }],
     };
     app.snapshot.plan_steps = vec![
@@ -52,6 +53,7 @@ fn active_turn_cell_renders_updated_plan_checklist() {
         entries: vec![TranscriptEntry {
             role: "You".into(),
             message: "Improve the plan rendering".into(),
+            payload: None,
         }],
     };
     app.snapshot.plan_steps = vec![
@@ -93,6 +95,7 @@ fn active_turn_cell_hides_stale_updated_plan_after_plan_turn_finishes() {
         entries: vec![TranscriptEntry {
             role: "You".into(),
             message: "Implement the approved fix".into(),
+            payload: None,
         }],
     };
     app.snapshot.plan_steps = vec![("pending".into(), "Inspect the config loading flow".into())];
@@ -122,10 +125,12 @@ fn active_turn_cell_hides_stale_exploring_after_live_phase_finishes() {
             TranscriptEntry {
                 role: "You".into(),
                 message: "Inspect the repository".into(),
+                payload: None,
             },
             TranscriptEntry {
                 role: "Exploring".into(),
                 message: "└ Read src/main.rs".into(),
+                payload: None,
             },
         ],
     };
@@ -152,6 +157,7 @@ fn active_turn_cell_renders_shell_approval_as_interaction_card() {
         entries: vec![TranscriptEntry {
             role: "You".into(),
             message: "Run the migration helper".into(),
+            payload: None,
         }],
     };
     app.snapshot
@@ -203,6 +209,7 @@ fn active_turn_cell_renders_completed_plan_decision() {
         entries: vec![TranscriptEntry {
             role: "You".into(),
             message: "Review the codebase and propose changes".into(),
+            payload: None,
         }],
     };
     app.record_completed_interaction(
@@ -235,10 +242,12 @@ fn active_turn_cell_keeps_streaming_response_without_responding_card() {
             TranscriptEntry {
                 role: "You".into(),
                 message: "你好".into(),
+                payload: None,
             },
             TranscriptEntry {
                 role: "Tool Result".into(),
                 message: "bash stdout: partial".into(),
+                payload: None,
             },
         ],
     };
@@ -273,6 +282,7 @@ fn active_turn_cell_does_not_repeat_stale_plan_decision_from_snapshot() {
         entries: vec![TranscriptEntry {
             role: "You".into(),
             message: "Approve the plan".into(),
+            payload: None,
         }],
     };
     app.record_completed_interaction(
@@ -286,6 +296,7 @@ fn active_turn_cell_does_not_repeat_stale_plan_decision_from_snapshot() {
         entries: vec![TranscriptEntry {
             role: "You".into(),
             message: "Continue with the next task".into(),
+            payload: None,
         }],
     };
 
@@ -310,6 +321,7 @@ fn active_turn_cell_labels_delegated_plan_questions() {
         entries: vec![TranscriptEntry {
             role: "You".into(),
             message: "Review the codebase and propose changes".into(),
+            payload: None,
         }],
     };
     app.record_local_request_input(
@@ -349,6 +361,7 @@ fn active_turn_cell_labels_delegated_completed_questions() {
         entries: vec![TranscriptEntry {
             role: "You".into(),
             message: "Review the codebase and propose changes".into(),
+            payload: None,
         }],
     };
     app.record_completed_interaction(

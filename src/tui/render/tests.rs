@@ -34,6 +34,7 @@ fn committed_turn_does_not_truncate_agent_response() {
         TranscriptEntry {
             role: "You".into(),
             message: "Review the code".into(),
+            payload: None,
         },
         TranscriptEntry {
             role: "Agent".into(),
@@ -41,6 +42,7 @@ fn committed_turn_does_not_truncate_agent_response() {
                 .map(|idx| format!("Line {idx}"))
                 .collect::<Vec<_>>()
                 .join("\n"),
+            payload: None,
         },
     ];
 
@@ -66,6 +68,7 @@ fn keeps_history_reserve_once_transcript_exists() {
         entries: vec![TranscriptEntry {
             role: "You".into(),
             message: "Earlier prompt".into(),
+            payload: None,
         }],
     });
 
@@ -110,10 +113,12 @@ fn transcript_render_stays_above_bottom_pane() {
             TranscriptEntry {
                 role: "You".into(),
                 message: "Show output".into(),
+                payload: None,
             },
             TranscriptEntry {
                 role: "Agent".into(),
                 message: "TRANSCRIPT_SENTINEL".into(),
+                payload: None,
             },
         ],
     });
@@ -167,6 +172,7 @@ fn tool_summary_includes_apply_patch_target_files() {
     let entries = vec![TranscriptEntry {
         role: "Tool".into(),
         message: "apply_patch src/tui/render.rs, src/tui/runtime/events.rs".into(),
+        payload: None,
     }];
     let refs = entries.iter().collect::<Vec<_>>();
 
@@ -177,14 +183,8 @@ fn tool_summary_includes_apply_patch_target_files() {
 #[test]
 fn tool_summary_includes_bash_result_status_and_output_tail() {
     let entries = vec![
-        TranscriptEntry {
-            role: "Tool".into(),
-            message: "bash cd /Users/vl/Code/rara && cargo build 2>&1".into(),
-        },
-        TranscriptEntry {
-            role: "Tool Result".into(),
-            message: "bash failed with exit code 101\nstdout:\n   Compiling rara v0.1.0\nstderr:\nerror[E0425]: cannot find value `foo` in this scope".into(),
-        },
+        TranscriptEntry { role: "Tool".into(), message: "bash cd /Users/vl/Code/rara && cargo build 2>&1".into(), payload: None },
+        TranscriptEntry { role: "Tool Result".into(), message: "bash failed with exit code 101\nstdout:\n   Compiling rara v0.1.0\nstderr:\nerror[E0425]: cannot find value `foo` in this scope".into(), payload: None },
     ];
     let refs = entries.iter().collect::<Vec<_>>();
 
@@ -207,6 +207,7 @@ fn tool_summary_compacts_spawn_agent_instruction_json() {
                 "instruction": "Fix the file src/context/assembler.rs by removing the orphaned code block between the two cfg(test) markers. Read in small chunks and avoid one giant replacement payload."
             })
         ),
+        payload: None,
     }];
     let refs = entries.iter().collect::<Vec<_>>();
 
@@ -229,16 +230,19 @@ fn renderable_transcript_lines_include_committed_and_active_turns() {
             TranscriptEntry {
                 role: "You".into(),
                 message: "Earlier prompt".into(),
+                payload: None,
             },
             TranscriptEntry {
                 role: "Agent".into(),
                 message: "Committed answer".into(),
+                payload: None,
             },
         ],
     });
     app.active_turn.entries.push(TranscriptEntry {
         role: "You".into(),
         message: "Current prompt".into(),
+        payload: None,
     });
 
     let rendered = renderable_transcript_lines(&app, 100)
@@ -264,18 +268,21 @@ fn renderable_transcript_lines_insert_turn_dividers_between_rounds() {
             entries: vec![TranscriptEntry {
                 role: "You".into(),
                 message: "First prompt".into(),
+                payload: None,
             }],
         },
         TranscriptTurn {
             entries: vec![TranscriptEntry {
                 role: "Agent".into(),
                 message: "Second reply".into(),
+                payload: None,
             }],
         },
     ];
     app.active_turn.entries.push(TranscriptEntry {
         role: "You".into(),
         message: "Current prompt".into(),
+        payload: None,
     });
 
     let rendered = renderable_transcript_lines(&app, 24)
@@ -359,6 +366,7 @@ fn renderable_transcript_lines_cache_is_invalidated_when_committed_turns_change(
         entries: vec![TranscriptEntry {
             role: "Agent".into(),
             message: "First answer".into(),
+            payload: None,
         }],
     }]);
 
@@ -373,6 +381,7 @@ fn renderable_transcript_lines_cache_is_invalidated_when_committed_turns_change(
         entries: vec![TranscriptEntry {
             role: "Agent".into(),
             message: "Second answer".into(),
+            payload: None,
         }],
     }]);
 
@@ -397,16 +406,19 @@ fn transcript_viewport_is_independent_from_overlay_state() {
             TranscriptEntry {
                 role: "You".into(),
                 message: "Earlier prompt".into(),
+                payload: None,
             },
             TranscriptEntry {
                 role: "Agent".into(),
                 message: "Committed answer".into(),
+                payload: None,
             },
         ],
     });
     app.active_turn.entries.push(TranscriptEntry {
         role: "You".into(),
         message: "Current prompt".into(),
+        payload: None,
     });
 
     let base = transcript_viewport(&app, 80, 18);
@@ -440,6 +452,7 @@ fn transcript_viewport_keeps_manual_scroll_when_overlay_opens() {
             TranscriptEntry {
                 role: "You".into(),
                 message: "Earlier prompt".into(),
+                payload: None,
             },
             TranscriptEntry {
                 role: "Agent".into(),
@@ -447,6 +460,7 @@ fn transcript_viewport_keeps_manual_scroll_when_overlay_opens() {
                     .map(|idx| format!("Line {idx}"))
                     .collect::<Vec<_>>()
                     .join("\n"),
+                payload: None,
             },
         ],
     });
@@ -572,22 +586,27 @@ fn exploration_summary_only_keeps_read_actions() {
         TranscriptEntry {
             role: "Tool".into(),
             message: "list_files .".into(),
+            payload: None,
         },
         TranscriptEntry {
             role: "Tool".into(),
             message: "glob src/**/*.rs".into(),
+            payload: None,
         },
         TranscriptEntry {
             role: "Tool".into(),
             message: "grep planning mode src".into(),
+            payload: None,
         },
         TranscriptEntry {
             role: "Tool".into(),
             message: "read_file src/main.rs".into(),
+            payload: None,
         },
         TranscriptEntry {
             role: "Agent".into(),
             message: "I will start by listing files and then inspect the main entrypoint.".into(),
+            payload: None,
         },
     ];
     let refs = entries.iter().collect::<Vec<_>>();
@@ -653,6 +672,7 @@ fn exploration_summary_compacts_long_read_lists() {
         .map(|idx| TranscriptEntry {
             role: "Tool".into(),
             message: format!("read_file src/module_{idx}.rs"),
+            payload: None,
         })
         .collect::<Vec<_>>();
     let refs = entries.iter().collect::<Vec<_>>();

@@ -15,14 +15,17 @@ fn active_turn_cell_keeps_sections_in_stable_order() {
             TranscriptEntry {
                 role: "You".into(),
                 message: "Inspect the codebase".into(),
+                payload: None,
             },
             TranscriptEntry {
                 role: "Tool".into(),
                 message: "list_files src".into(),
+                payload: None,
             },
             TranscriptEntry {
                 role: "Tool".into(),
                 message: "bash cargo check".into(),
+                payload: None,
             },
         ],
     };
@@ -71,6 +74,7 @@ fn active_turn_cell_renders_progress_sections_as_compact_stack() {
         entries: vec![TranscriptEntry {
             role: "You".into(),
             message: "Inspect the codebase".into(),
+            payload: None,
         }],
     };
     app.record_exploration_note("Inspect the auth bridge.");
@@ -118,15 +122,18 @@ fn active_turn_cell_renders_terminal_result_as_terminal_cell() {
             TranscriptEntry {
                 role: "You".into(),
                 message: "Start the dev server".into(),
+                payload: None,
             },
             TranscriptEntry {
                 role: "Tool".into(),
                 message: "pty_start npm run dev".into(),
+                payload: None,
             },
             TranscriptEntry {
                 role: "Tool Result".into(),
                 message: "pty pty-123 running: npm run dev\noutput:\nready\nlistening on 3000"
                     .into(),
+                payload: None,
             },
         ],
     };
@@ -157,21 +164,18 @@ fn active_turn_cell_renders_typed_terminal_event_as_terminal_cell() {
             TranscriptEntry {
                 role: "You".into(),
                 message: "Start the dev server".into(),
+                payload: None,
             },
-            TranscriptEntry {
-                role: TERMINAL_EVENT_ROLE.into(),
-                message: serde_json::to_string(&TerminalEvent::End(TerminalCommandEvent {
-                    target: TerminalTarget::Pty,
-                    id: Some("pty-123".into()),
-                    status: "running".into(),
-                    command: Some("npm run dev".into()),
-                    exit_code: None,
-                    output: vec!["ready".into(), "listening on 3000".into()],
-                    output_path: None,
-                    is_error: false,
-                }))
-                .expect("terminal event json"),
-            },
+            TranscriptEntry::terminal_event(TerminalEvent::End(TerminalCommandEvent {
+                target: TerminalTarget::Pty,
+                id: Some("pty-123".into()),
+                status: "running".into(),
+                command: Some("npm run dev".into()),
+                exit_code: None,
+                output: vec!["ready".into(), "listening on 3000".into()],
+                output_path: None,
+                is_error: false,
+            })),
         ],
     };
 
@@ -185,7 +189,7 @@ fn active_turn_cell_renders_typed_terminal_event_as_terminal_cell() {
     assert!(rendered.contains("Running pty npm run dev"));
     assert!(rendered.contains("└ ready"));
     assert!(rendered.contains("listening on 3000"));
-    assert!(!rendered.contains(TERMINAL_EVENT_ROLE));
+    assert!(!rendered.contains("Terminal Event"));
 }
 
 #[test]
@@ -221,19 +225,14 @@ fn active_turn_cell_keeps_exploration_notes_inside_exploring_block() {
     app.runtime_phase_detail = Some("waiting for model response · 12s elapsed".into());
     app.active_turn = TranscriptTurn {
         entries: vec![
-            TranscriptEntry {
-                role: "You".into(),
-                message: "Review this repository".into(),
-            },
-            TranscriptEntry {
-                role: "Tool".into(),
-                message: "read_file src/main.rs".into(),
-            },
+            TranscriptEntry { role: "You".into(), message: "Review this repository".into(), payload: None },
+            TranscriptEntry { role: "Tool".into(), message: "read_file src/main.rs".into(), payload: None },
             TranscriptEntry {
                 role: "Agent".into(),
                 message:
                     "I have inspected the repository structure and will now inspect the core modules."
                         .into(),
+                payload: None,
             },
         ],
     };
@@ -269,6 +268,7 @@ fn active_turn_cell_uses_stateful_live_exploration_sections() {
         entries: vec![TranscriptEntry {
             role: "You".into(),
             message: "Inspect the repository".into(),
+            payload: None,
         }],
     };
     app.record_exploration_action("Read src/tools/vector.rs");
@@ -301,15 +301,9 @@ fn active_turn_cell_compacts_live_response_when_process_sections_exist() {
     app.runtime_phase_detail = Some("waiting for model response".into());
     app.active_turn = TranscriptTurn {
         entries: vec![
-            TranscriptEntry {
-                role: "You".into(),
-                message: "Inspect the repository".into(),
-            },
-            TranscriptEntry {
-                role: "Agent".into(),
-                message: "I have inspected the repository structure.\nI checked the runtime boundary.\nI checked the prompt assembly path.\nNext I will inspect the persistence layer.\nThen I will verify the restore contract."
-                    .into(),
-            },
+            TranscriptEntry { role: "You".into(), message: "Inspect the repository".into(), payload: None },
+            TranscriptEntry { role: "Agent".into(), message: "I have inspected the repository structure.\nI checked the runtime boundary.\nI checked the prompt assembly path.\nNext I will inspect the persistence layer.\nThen I will verify the restore contract."
+                    .into(), payload: None },
         ],
     };
     app.record_exploration_action("Read src/runtime_context.rs");
@@ -341,6 +335,7 @@ fn active_turn_cell_compacts_long_live_exploration_sections() {
         entries: vec![TranscriptEntry {
             role: "You".into(),
             message: "Inspect the repository".into(),
+            payload: None,
         }],
     };
     for idx in 1..=5 {
@@ -380,6 +375,7 @@ fn active_turn_cell_compacts_long_live_planning_sections() {
         entries: vec![TranscriptEntry {
             role: "You".into(),
             message: "Refine the plan".into(),
+            payload: None,
         }],
     };
     for idx in 1..=5 {
@@ -419,6 +415,7 @@ fn active_turn_cell_compacts_long_live_running_sections() {
         entries: vec![TranscriptEntry {
             role: "You".into(),
             message: "Run the checks".into(),
+            payload: None,
         }],
     };
     for idx in 1..=6 {
@@ -455,6 +452,7 @@ fn active_turn_cell_updated_plan_snapshot() {
         entries: vec![TranscriptEntry {
             role: "You".into(),
             message: "Read the local codebase and propose the next refactor".into(),
+            payload: None,
         }],
     };
     app.record_planning_note("The auth flow should reuse codex_login instead of mirroring it.");
@@ -498,14 +496,8 @@ fn active_turn_cell_hides_structured_plan_response_once_plan_card_exists() {
     app.runtime_phase = RuntimePhase::ProcessingResponse;
     app.active_turn = TranscriptTurn {
         entries: vec![
-            TranscriptEntry {
-                role: "You".into(),
-                message: "Plan the next refactor".into(),
-            },
-            TranscriptEntry {
-                role: "Agent".into(),
-                message: "<plan>\n- [completed] Inspect the auth flow\n- [in_progress] Reuse codex_login\n- [pending] Add auth picker snapshots\n</plan>\nPrefer direct auth reuse before expanding more TUI flows.".into(),
-            },
+            TranscriptEntry { role: "You".into(), message: "Plan the next refactor".into(), payload: None },
+            TranscriptEntry { role: "Agent".into(), message: "<plan>\n- [completed] Inspect the auth flow\n- [in_progress] Reuse codex_login\n- [pending] Add auth picker snapshots\n</plan>\nPrefer direct auth reuse before expanding more TUI flows.".into(), payload: None },
         ],
     };
     app.snapshot.plan_steps = vec![
@@ -539,14 +531,8 @@ fn active_turn_cell_prefers_inline_plan_artifact_over_preamble_before_snapshot_s
     app.runtime_phase = RuntimePhase::ProcessingResponse;
     app.active_turn = TranscriptTurn {
         entries: vec![
-            TranscriptEntry {
-                role: "You".into(),
-                message: "Review the codebase and propose changes".into(),
-            },
-            TranscriptEntry {
-                role: "Agent".into(),
-                message: "我基于当前代码的建议如下。\n这里先给一个简短前言。\n<plan>\n- [completed] Inspect the runtime entrypoint\n- [pending] Tighten the render path\n</plan>\nKeep the diff narrow and reviewable.".into(),
-            },
+            TranscriptEntry { role: "You".into(), message: "Review the codebase and propose changes".into(), payload: None },
+            TranscriptEntry { role: "Agent".into(), message: "我基于当前代码的建议如下。\n这里先给一个简短前言。\n<plan>\n- [completed] Inspect the runtime entrypoint\n- [pending] Tighten the render path\n</plan>\nKeep the diff narrow and reviewable.".into(), payload: None },
         ],
     };
 
@@ -579,12 +565,14 @@ fn active_turn_cell_suppresses_planning_chatter_when_exploring() {
             TranscriptEntry {
                 role: "You".into(),
                 message: "Review this repository".into(),
+                payload: None,
             },
             TranscriptEntry {
                 role: "Agent".into(),
                 message:
                     "I will now read crates/instructions/src/prompt.rs to continue the review."
                         .into(),
+                payload: None,
             },
         ],
     };
@@ -617,10 +605,12 @@ fn active_turn_cell_uses_planning_sidecar_for_non_structured_plan_output() {
             TranscriptEntry {
                 role: "You".into(),
                 message: "Read the local codebase and suggest improvements".into(),
+                payload: None,
             },
             TranscriptEntry {
                 role: "Planning".into(),
                 message: "The current discovery is hardcoded to root-level markdown files.".into(),
+                payload: None,
             },
         ],
     };
@@ -650,18 +640,22 @@ fn active_turn_cell_uses_explicit_sidecar_entries_when_live_state_is_empty() {
             TranscriptEntry {
                 role: "You".into(),
                 message: "Inspect and summarize the repository".into(),
+                payload: None,
             },
             TranscriptEntry {
                 role: "Exploring".into(),
                 message: "└ Read crates/instructions/src/workspace.rs".into(),
+                payload: None,
             },
             TranscriptEntry {
                 role: "Planning".into(),
                 message: "The instruction discovery is still root-name based.".into(),
+                payload: None,
             },
             TranscriptEntry {
                 role: "Running".into(),
                 message: "└ waiting for model response".into(),
+                payload: None,
             },
         ],
     };
@@ -694,19 +688,23 @@ fn active_turn_cell_preserves_exploration_agent_exploration_order() {
             TranscriptEntry {
                 role: "You".into(),
                 message: "Inspect the repository".into(),
+                payload: None,
             },
             TranscriptEntry {
                 role: "Tool".into(),
                 message: "read_file src/main.rs".into(),
+                payload: None,
             },
             TranscriptEntry {
                 role: "Agent".into(),
                 message: "The main entrypoint is thin; I will inspect the runtime bootstrap next."
                     .into(),
+                payload: None,
             },
             TranscriptEntry {
                 role: "Tool".into(),
                 message: "read_file src/runtime_context.rs".into(),
+                payload: None,
             },
         ],
     };
@@ -746,14 +744,17 @@ fn active_turn_cell_preserves_agent_then_exploration_order() {
             TranscriptEntry {
                 role: "You".into(),
                 message: "Inspect the bootstrap path".into(),
+                payload: None,
             },
             TranscriptEntry {
                 role: "Agent".into(),
                 message: "I have narrowed this down to the runtime bootstrap path.".into(),
+                payload: None,
             },
             TranscriptEntry {
                 role: "Tool".into(),
                 message: "read_file src/runtime_context.rs".into(),
+                payload: None,
             },
         ],
     };
@@ -788,11 +789,13 @@ fn active_turn_cell_uses_lightweight_busy_response_when_not_streaming() {
             TranscriptEntry {
                 role: "You".into(),
                 message: "Review this repository".into(),
+                payload: None,
             },
             TranscriptEntry {
                 role: "Agent".into(),
                 message: "I have inspected the main module and will continue with the tool layer."
                     .into(),
+                payload: None,
             },
         ],
     };
@@ -825,11 +828,13 @@ fn active_turn_cell_renders_live_response_as_lightweight_message() {
             TranscriptEntry {
                 role: "You".into(),
                 message: "Review this repository".into(),
+                payload: None,
             },
             TranscriptEntry {
                 role: "Agent".into(),
                 message: "I have inspected the main module and will continue with the tool layer."
                     .into(),
+                payload: None,
             },
         ],
     };
@@ -861,10 +866,12 @@ fn active_turn_cell_prefers_responding_over_tool_result_while_processing_respons
             TranscriptEntry {
                 role: "You".into(),
                 message: "Review the repository".into(),
+                payload: None,
             },
             TranscriptEntry {
                 role: "Tool Result".into(),
                 message: "bash stdout: partial output".into(),
+                payload: None,
             },
         ],
     };
@@ -895,10 +902,12 @@ fn active_turn_cell_prefers_responding_over_system_notice_while_sending_prompt()
             TranscriptEntry {
                 role: "You".into(),
                 message: "Review the repository".into(),
+                payload: None,
             },
             TranscriptEntry {
                 role: "System".into(),
                 message: "temporary setup notice".into(),
+                payload: None,
             },
         ],
     };
@@ -927,6 +936,7 @@ fn active_turn_cell_shows_planning_section_for_plan_agent() {
         entries: vec![TranscriptEntry {
             role: "You".into(),
             message: "Plan the refactor".into(),
+            payload: None,
         }],
     };
     app.record_planning_action("Delegate plan refinement: refine the plan");
@@ -955,14 +965,8 @@ fn active_turn_cell_renders_device_code_prompt_system_message() {
     app.runtime_phase_detail = Some("Waiting for device-code confirmation.".into());
     app.active_turn = TranscriptTurn {
         entries: vec![
-            TranscriptEntry {
-                role: "Runtime".into(),
-                message: "Starting Codex device-code login flow.".into(),
-            },
-            TranscriptEntry {
-                role: "System".into(),
-                message: "Open this URL in a browser and enter the one-time code:\nhttps://example.test\n\nCode: ABCD".into(),
-            },
+            TranscriptEntry { role: "Runtime".into(), message: "Starting Codex device-code login flow.".into(), payload: None },
+            TranscriptEntry { role: "System".into(), message: "Open this URL in a browser and enter the one-time code:\nhttps://example.test\n\nCode: ABCD".into(), payload: None },
         ],
     };
 

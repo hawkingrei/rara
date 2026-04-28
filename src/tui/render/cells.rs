@@ -7,11 +7,11 @@ use crate::tui::interaction_text::{
 };
 use crate::tui::plan_display::should_show_updated_plan;
 use crate::tui::state::{
-    contains_structured_planning_output, RuntimePhase, TranscriptEntry, TuiApp,
+    contains_structured_planning_output, RuntimePhase, TranscriptEntry, TranscriptEntryPayload,
+    TuiApp,
 };
 use crate::tui::terminal_event::{
     TerminalCollectionEvent, TerminalCommandEvent, TerminalEvent, TerminalTarget,
-    TERMINAL_EVENT_ROLE,
 };
 
 #[path = "cells_components.rs"]
@@ -278,8 +278,7 @@ fn terminal_cell_from_entries<'a>(
 }
 
 fn terminal_cell_data_from_entry(entry: &TranscriptEntry) -> Option<TerminalCellData> {
-    if entry.role == TERMINAL_EVENT_ROLE {
-        let event = serde_json::from_str::<TerminalEvent>(&entry.message).ok()?;
+    if let Some(TranscriptEntryPayload::Terminal(event)) = entry.payload.as_ref() {
         return terminal_cell_data_from_event(&event);
     }
 
@@ -595,7 +594,7 @@ impl HistoryCell for CommittedTurnCell<'_> {
             matches!(
                 entry.role.as_str(),
                 "Tool" | "Tool Result" | "Tool Error" | "Tool Progress"
-            ) || entry.role == TERMINAL_EVENT_ROLE
+            ) || matches!(entry.payload, Some(TranscriptEntryPayload::Terminal(_)))
         });
         if let Some(summary) = explicit_exploration
             .map(|summary| compact_summary_text(&summary, 4, "more exploration step(s)"))
@@ -722,7 +721,7 @@ impl ActiveCell for ActiveTurnCell<'_> {
             matches!(
                 entry.role.as_str(),
                 "Tool" | "Tool Result" | "Tool Error" | "Tool Progress"
-            ) || entry.role == TERMINAL_EVENT_ROLE
+            ) || matches!(entry.payload, Some(TranscriptEntryPayload::Terminal(_)))
         });
         let user_message = current_turn
             .iter()

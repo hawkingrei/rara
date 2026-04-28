@@ -303,6 +303,30 @@ pub const PROVIDER_FAMILIES: [(ProviderFamily, &str, &str); 5] = [
 pub struct TranscriptEntry {
     pub role: String,
     pub message: String,
+    pub payload: Option<TranscriptEntryPayload>,
+}
+
+#[derive(Clone, Debug)]
+pub enum TranscriptEntryPayload {
+    Terminal(TerminalEvent),
+}
+
+impl TranscriptEntry {
+    pub fn new(role: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            role: role.into(),
+            message: message.into(),
+            payload: None,
+        }
+    }
+
+    pub fn terminal_event(event: TerminalEvent) -> Self {
+        Self {
+            role: "Terminal Event".to_string(),
+            message: event.to_transcript_message(),
+            payload: Some(TranscriptEntryPayload::Terminal(event)),
+        }
+    }
 }
 
 #[derive(Clone, Default)]
