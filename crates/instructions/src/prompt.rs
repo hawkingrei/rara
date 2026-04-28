@@ -9,7 +9,7 @@ pub enum PromptMode {
     Plan,
 }
 
-pub const PLAN_MODE_PROMPT_MARKER: &str = "Planning mode is active.";
+const PLAN_MODE_PROMPT_MARKER: &str = "Planning mode is active.";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PromptSourceKind {

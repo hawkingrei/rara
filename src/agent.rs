@@ -5,7 +5,7 @@ mod prompting;
 #[cfg(test)]
 mod tests;
 
-use crate::llm::{ContentBlock, LlmBackend};
+use crate::llm::{ContentBlock, LlmBackend, LlmTurnMetadata};
 use crate::prompt::{self, PromptMode, PromptRuntimeConfig};
 use crate::session::SessionManager;
 use crate::tool::ToolManager;
@@ -256,6 +256,7 @@ impl Agent {
         F: FnMut(AgentEvent) + Send,
     {
         report(AgentEvent::Status("Sending prompt to model.".to_string()));
+        let turn_metadata = self.llm_turn_metadata();
         let mut messages = self
             .history
             .iter()
@@ -273,7 +274,7 @@ impl Agent {
         let mut streamed_any_delta = false;
         let response = self
             .llm_backend
-            .ask_streaming(&messages, tool_schemas, &mut |delta| {
+            .ask_streaming_with_context(&messages, tool_schemas, turn_metadata, &mut |delta| {
                 streamed_any_delta = true;
                 report(AgentEvent::AssistantDelta(delta));
             })
@@ -354,6 +355,13 @@ impl Agent {
             had_text_response,
             text_response: (!text_parts.is_empty()).then(|| text_parts.join("\n\n")),
         })
+    }
+
+    fn llm_turn_metadata(&self) -> LlmTurnMetadata {
+        match self.execution_mode {
+            AgentExecutionMode::Execute => LlmTurnMetadata::execute(),
+            AgentExecutionMode::Plan => LlmTurnMetadata::plan(),
+        }
     }
 
     async fn run_agent_loop<F>(

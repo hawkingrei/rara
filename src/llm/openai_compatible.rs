@@ -8,12 +8,12 @@ use serde_json::{json, Value};
 use crate::agent::Message;
 use crate::config::OpenAiEndpointKind;
 use crate::llm::{ContentBlock, LlmResponse, TokenUsage};
-use crate::prompt::PLAN_MODE_PROMPT_MARKER;
 use crate::redaction::{redact_secrets, sanitize_url_for_display};
 
 use super::shared::{
     collect_assistant_content, extract_message_text, http_client_for_target, model_context_budget,
     parse_tool_arguments, render_openai_message_content, ContextBudget, LlmBackend,
+    LlmTurnMetadata,
 };
 
 #[cfg(test)]
@@ -87,6 +87,16 @@ impl OpenAiCompatibleBackend {
 #[async_trait]
 impl LlmBackend for OpenAiCompatibleBackend {
     async fn ask(&self, messages: &[Message], tools: &[Value]) -> Result<LlmResponse> {
+        self.ask_with_context(messages, tools, LlmTurnMetadata::default())
+            .await
+    }
+
+    async fn ask_with_context(
+        &self,
+        messages: &[Message],
+        tools: &[Value],
+        metadata: LlmTurnMetadata,
+    ) -> Result<LlmResponse> {
         let body = build_chat_completion_request_body(
             &self.model,
             messages,
@@ -94,6 +104,7 @@ impl LlmBackend for OpenAiCompatibleBackend {
             self.endpoint_kind,
             self.reasoning_effort.as_deref(),
             self.thinking,
+            metadata,
         );
 
         let completions_url = self.endpoint_url("chat/completions");
@@ -114,6 +125,16 @@ impl LlmBackend for OpenAiCompatibleBackend {
         }
         let resp_json: Value = res.json().await?;
         parse_chat_completion_response(&resp_json, self.endpoint_kind)
+    }
+
+    async fn ask_streaming_with_context(
+        &self,
+        messages: &[Message],
+        tools: &[Value],
+        metadata: LlmTurnMetadata,
+        _on_text_delta: &mut (dyn FnMut(String) + Send),
+    ) -> Result<LlmResponse> {
+        self.ask_with_context(messages, tools, metadata).await
     }
 
     async fn embed(&self, text: &str) -> Result<Vec<f32>> {
@@ -156,6 +177,7 @@ impl LlmBackend for OpenAiCompatibleBackend {
             self.endpoint_kind,
             self.reasoning_effort.as_deref(),
             self.thinking,
+            LlmTurnMetadata::default(),
         );
         let completions_url = self.endpoint_url("chat/completions");
         let mut request = self.client.post(&completions_url);
@@ -191,6 +213,7 @@ pub(super) fn build_chat_completion_request_body(
     endpoint_kind: OpenAiEndpointKind,
     reasoning_effort: Option<&str>,
     thinking: Option<bool>,
+    metadata: LlmTurnMetadata,
 ) -> Value {
     let openai_messages = to_openai_messages_for_endpoint(messages, endpoint_kind);
     let openai_tools: Vec<Value> = tools
@@ -211,7 +234,7 @@ pub(super) fn build_chat_completion_request_body(
     if !openai_tools.is_empty() {
         body["tools"] = json!(openai_tools);
     }
-    let strong_reasoning = !openai_tools.is_empty() || is_plan_mode_request(messages);
+    let strong_reasoning = !openai_tools.is_empty() || metadata.prefers_strong_reasoning();
     apply_deepseek_thinking_options(
         &mut body,
         model,
@@ -245,13 +268,6 @@ fn apply_deepseek_thinking_options(
             strong_reasoning,
         ));
     }
-}
-
-fn is_plan_mode_request(messages: &[Message]) -> bool {
-    messages.iter().any(|message| {
-        message.role == "system"
-            && render_openai_message_content(&message.content).contains(PLAN_MODE_PROMPT_MARKER)
-    })
 }
 
 fn deepseek_supports_thinking(model: &str) -> bool {

@@ -2,8 +2,7 @@ use serde_json::json;
 
 use crate::agent::Message;
 use crate::config::OpenAiEndpointKind;
-use crate::llm::ContentBlock;
-use crate::prompt::PLAN_MODE_PROMPT_MARKER;
+use crate::llm::{ContentBlock, LlmTurnMetadata};
 
 use super::ollama::{
     apply_ollama_stream_event, build_ollama_options, ensure_ollama_stream_completed,
@@ -311,6 +310,7 @@ fn deepseek_v4_request_enables_thinking_and_uses_max_effort_for_tools() {
         OpenAiEndpointKind::Deepseek,
         None,
         None,
+        LlmTurnMetadata::default(),
     );
 
     assert_eq!(body["thinking"]["type"], "enabled");
@@ -321,15 +321,13 @@ fn deepseek_v4_request_enables_thinking_and_uses_max_effort_for_tools() {
 }
 
 #[test]
-fn deepseek_plan_mode_uses_max_effort_without_tools() {
+fn deepseek_plan_metadata_uses_max_effort_without_tools_or_prompt_marker() {
     let body = build_chat_completion_request_body(
         "deepseek-v4-pro",
         &[
             Message {
                 role: "system".to_string(),
-                content: json!(format!(
-                    "## Current Execution Mode\n- {PLAN_MODE_PROMPT_MARKER}\n- This pass is read-only."
-                )),
+                content: json!("Custom prompt without plan-mode prose."),
             },
             Message {
                 role: "user".to_string(),
@@ -340,6 +338,7 @@ fn deepseek_plan_mode_uses_max_effort_without_tools() {
         OpenAiEndpointKind::Deepseek,
         None,
         None,
+        LlmTurnMetadata::plan(),
     );
 
     assert_eq!(body["thinking"]["type"], "enabled");
@@ -359,6 +358,7 @@ fn deepseek_reasoning_effort_uses_documented_high_max_values() {
         OpenAiEndpointKind::Deepseek,
         Some("medium"),
         None,
+        LlmTurnMetadata::default(),
     );
     let xhigh_body = build_chat_completion_request_body(
         "deepseek-v4-flash",
@@ -370,6 +370,7 @@ fn deepseek_reasoning_effort_uses_documented_high_max_values() {
         OpenAiEndpointKind::Deepseek,
         Some("xhigh"),
         None,
+        LlmTurnMetadata::default(),
     );
 
     assert_eq!(medium_body["reasoning_effort"], "high");
@@ -388,6 +389,7 @@ fn deepseek_non_thinking_model_keeps_standard_openai_body() {
         OpenAiEndpointKind::Deepseek,
         None,
         None,
+        LlmTurnMetadata::default(),
     );
 
     assert!(body.get("thinking").is_none());

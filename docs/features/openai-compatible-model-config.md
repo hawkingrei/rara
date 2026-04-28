@@ -75,7 +75,8 @@ thinking-mode controls on chat-completions requests:
   thinking;
 - `reasoning_effort = high` for ordinary requests;
 - `reasoning_effort = max` for planning-mode or tool-enabled agent requests
-  unless the user has configured a reasoning effort explicitly;
+  unless the user has configured a reasoning effort explicitly; planning mode
+  is supplied through structured turn metadata, not inferred from prompt text;
 - Codex-style `low` and `medium` efforts are normalized to `high`, while
   `xhigh` is normalized to `max`.
 
