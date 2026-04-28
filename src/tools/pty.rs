@@ -183,30 +183,41 @@ impl PtySessionStore {
     }
 
     fn write(&self, id: &str, input: &str) -> Result<PtySessionSnapshot, ToolError> {
-        let sessions = self.sessions.lock().expect("pty session store lock");
-        let record = sessions
-            .get(id)
-            .ok_or_else(|| ToolError::InvalidInput(format!("unknown pty session id: {id}")))?;
-        let mut writer = record.writer.lock().expect("pty writer lock");
+        let writer = {
+            let sessions = self.sessions.lock().expect("pty session store lock");
+            let record = sessions
+                .get(id)
+                .ok_or_else(|| ToolError::InvalidInput(format!("unknown pty session id: {id}")))?;
+            record.writer.clone()
+        };
+        let mut writer = writer.lock().expect("pty writer lock");
         writer.write_all(input.as_bytes())?;
         writer.flush()?;
         drop(writer);
-        Ok(record.snapshot())
+        self.get(id)
+            .ok_or_else(|| ToolError::InvalidInput(format!("unknown pty session id: {id}")))
     }
 
     fn kill(&self, id: &str) -> Result<PtySessionSnapshot, ToolError> {
-        let sessions = self.sessions.lock().expect("pty session store lock");
-        let record = sessions
-            .get(id)
-            .ok_or_else(|| ToolError::InvalidInput(format!("unknown pty session id: {id}")))?;
-        record
-            .child
+        let (child, status, mut snapshot) = {
+            let sessions = self.sessions.lock().expect("pty session store lock");
+            let record = sessions
+                .get(id)
+                .ok_or_else(|| ToolError::InvalidInput(format!("unknown pty session id: {id}")))?;
+            (
+                record.child.clone(),
+                record.status.clone(),
+                record.snapshot(),
+            )
+        };
+        child
             .lock()
             .expect("pty child lock")
             .kill()
             .map_err(|err| ToolError::ExecutionFailed(format!("kill pty session: {err}")))?;
-        *record.status.lock().expect("pty status lock") = PtySessionStatus::Killed;
-        Ok(record.snapshot())
+        *status.lock().expect("pty status lock") = PtySessionStatus::Killed;
+        snapshot.status = PtySessionStatus::Killed;
+        Ok(snapshot)
     }
 }
 

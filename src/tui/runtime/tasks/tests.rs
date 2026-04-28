@@ -12,7 +12,9 @@ use crate::oauth::OAuthManager;
 use crate::prompt::PromptRuntimeConfig;
 use crate::session::SessionManager;
 use crate::tool::ToolManager;
-use crate::tui::state::{OAuthLoginMode, RunningTask, RuntimePhase, TaskKind, TuiApp};
+use crate::tui::state::{
+    OAuthLoginMode, RunningTask, RuntimePhase, TaskCompletion, TaskKind, TuiApp,
+};
 use crate::vectordb::VectorDB;
 use crate::workspace::WorkspaceMemory;
 use serde_json::json;
@@ -247,7 +249,7 @@ async fn query_heartbeat_preserves_running_tool_phase() {
     })
     .expect("build tui app");
     let (_sender, receiver) = mpsc::unbounded_channel();
-    let handle = tokio::spawn(std::future::pending());
+    let handle = tokio::spawn(std::future::pending::<TaskCompletion>());
     app.running_task = Some(RunningTask {
         kind: TaskKind::Query,
         receiver,

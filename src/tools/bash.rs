@@ -569,9 +569,20 @@ async fn run_background_bash_task(
     ));
     let stderr_task = tokio::spawn(read_stream_chunks(stderr, BashStreamKind::Stderr, tx));
 
+    let mut output_file = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&record.output_path)
+        .await?;
     while let Some((stream, chunk)) = rx.recv().await {
         if !chunk.is_empty() {
-            append_background_output(&record.output_path, stream, &chunk).await?;
+            match stream {
+                BashStreamKind::Stdout => output_file.write_all(chunk.as_bytes()).await?,
+                BashStreamKind::Stderr => {
+                    output_file.write_all(b"[stderr] ").await?;
+                    output_file.write_all(chunk.as_bytes()).await?;
+                }
+            }
         }
     }
 
