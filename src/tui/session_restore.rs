@@ -3,9 +3,8 @@ use std::sync::Arc;
 use anyhow::Result;
 
 use crate::agent::{
-    latest_compact_boundary_metadata, Agent, AgentExecutionMode, BashApprovalMode,
-    CompactBoundaryMetadata, CompletedInteraction, PendingApproval, PendingUserInput, PlanStep,
-    PlanStepStatus,
+    latest_compact_boundary_metadata, Agent, BashApprovalMode, CompactBoundaryMetadata,
+    CompletedInteraction, PendingApproval, PendingUserInput, PlanStep, PlanStepStatus,
 };
 use crate::state_db::StateDb;
 use crate::thread_store::{CompactionRecord, RolloutItem, ThreadStore};
@@ -54,7 +53,6 @@ pub(super) fn restore_thread_by_id(
     agent.history = history;
     agent.session_id = metadata.session_id;
     if let Some(runtime_state) = state_db.load_session_runtime_state(thread_id)? {
-        agent.set_execution_mode(parse_agent_mode(runtime_state.agent_mode.as_str()));
         agent.set_bash_approval_mode(parse_bash_approval_mode(
             runtime_state.bash_approval.as_str(),
         ));
@@ -210,13 +208,6 @@ fn apply_compaction_record(agent: &mut Agent, compaction: &CompactionRecord) {
     agent.compact_state.last_compaction_after_tokens = compaction.after_tokens;
 }
 
-fn parse_agent_mode(mode: &str) -> AgentExecutionMode {
-    match mode {
-        "plan" => AgentExecutionMode::Plan,
-        _ => AgentExecutionMode::Execute,
-    }
-}
-
 fn parse_bash_approval_mode(mode: &str) -> BashApprovalMode {
     match mode {
         "once" => BashApprovalMode::Once,
@@ -312,6 +303,7 @@ mod tests {
         original_app.attach_state_db(state_db.clone());
         original_app.sync_snapshot(&original_agent);
 
+        original_agent.execution_mode = AgentExecutionMode::Execute;
         let expected_runtime = original_agent.shared_runtime_context();
 
         let restored_agent = Agent::new(
@@ -340,6 +332,7 @@ mod tests {
         let restored_agent = restored_slot.expect("restored agent");
         let restored_runtime = restored_agent.shared_runtime_context();
 
+        assert_eq!(restored_agent.execution_mode, AgentExecutionMode::Execute);
         assert_eq!(restored_runtime.cwd, expected_runtime.cwd);
         assert_eq!(restored_runtime.branch, expected_runtime.branch);
         assert_eq!(restored_runtime.session_id, expected_runtime.session_id);

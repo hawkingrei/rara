@@ -1381,7 +1381,6 @@ impl TuiApp {
 
     pub fn set_agent_execution_mode(&mut self, mode: AgentExecutionMode) {
         self.agent_execution_mode = mode;
-        self.persist_runtime_state();
     }
 
     pub fn agent_execution_mode_label(&self) -> &'static str {
