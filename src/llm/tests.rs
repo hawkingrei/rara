@@ -9,8 +9,8 @@ use super::ollama::{
     suggest_ollama_num_ctx, to_ollama_messages,
 };
 use super::openai_compatible::{
-    apply_codex_stream_event, build_codex_responses_request, parse_chat_completion_response,
-    parse_codex_response, to_codex_input_items, to_openai_messages,
+    apply_codex_stream_event, build_chat_completion_request_body, build_codex_responses_request,
+    parse_chat_completion_response, parse_codex_response, to_codex_input_items, to_openai_messages,
     to_openai_messages_for_endpoint,
 };
 use super::shared::{
@@ -233,6 +233,137 @@ fn deepseek_reasoning_content_roundtrips_as_provider_metadata() {
 
     let generic_messages = to_openai_messages(&messages);
     assert!(generic_messages[0].get("reasoning_content").is_none());
+}
+
+#[test]
+fn deepseek_tool_call_reasoning_content_roundtrips_without_trimming() {
+    let reasoning_content = "\n private chain summary \n";
+    let response = parse_chat_completion_response(
+        &json!({
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "reasoning_content": reasoning_content,
+                    "content": "",
+                    "tool_calls": [{
+                        "id": "call-1",
+                        "type": "function",
+                        "function": {
+                            "name": "read_file",
+                            "arguments": "{\"path\":\"Cargo.toml\"}"
+                        }
+                    }]
+                },
+                "finish_reason": "tool_calls"
+            }]
+        }),
+        OpenAiEndpointKind::Deepseek,
+    )
+    .expect("parse response");
+
+    assert!(matches!(
+        &response.content[0],
+        ContentBlock::ProviderMetadata { provider, key, value }
+            if provider == "deepseek"
+                && key == "reasoning_content"
+                && value == reasoning_content
+    ));
+    assert!(matches!(
+        &response.content[1],
+        ContentBlock::ToolUse { id, name, input }
+            if id == "call-1" && name == "read_file" && input == &json!({"path":"Cargo.toml"})
+    ));
+
+    let messages = vec![
+        Message {
+            role: "assistant".to_string(),
+            content: serde_json::to_value(&response.content).expect("content json"),
+        },
+        Message {
+            role: "user".to_string(),
+            content: json!([
+                {"type":"tool_result","tool_use_id":"call-1","content":"[package]"}
+            ]),
+        },
+    ];
+    let openai_messages = to_openai_messages_for_endpoint(&messages, OpenAiEndpointKind::Deepseek);
+
+    assert_eq!(openai_messages[0]["reasoning_content"], reasoning_content);
+    assert_eq!(openai_messages[0]["tool_calls"][0]["id"], "call-1");
+    assert_eq!(openai_messages[1]["role"], "tool");
+    assert_eq!(openai_messages[1]["tool_call_id"], "call-1");
+}
+
+#[test]
+fn deepseek_v4_request_enables_thinking_and_uses_max_effort_for_tools() {
+    let body = build_chat_completion_request_body(
+        "deepseek-v4-pro",
+        &[Message {
+            role: "user".to_string(),
+            content: json!("Inspect the repository."),
+        }],
+        &[json!({
+            "name": "read_file",
+            "description": "Read a file",
+            "input_schema": {"type":"object"}
+        })],
+        OpenAiEndpointKind::Deepseek,
+        None,
+        None,
+    );
+
+    assert_eq!(body["thinking"]["type"], "enabled");
+    assert_eq!(body["reasoning_effort"], "max");
+    assert!(body["tools"]
+        .as_array()
+        .is_some_and(|tools| tools.len() == 1));
+}
+
+#[test]
+fn deepseek_reasoning_effort_uses_documented_high_max_values() {
+    let medium_body = build_chat_completion_request_body(
+        "deepseek-v4-flash",
+        &[Message {
+            role: "user".to_string(),
+            content: json!("Explain this code."),
+        }],
+        &[],
+        OpenAiEndpointKind::Deepseek,
+        Some("medium"),
+        None,
+    );
+    let xhigh_body = build_chat_completion_request_body(
+        "deepseek-v4-flash",
+        &[Message {
+            role: "user".to_string(),
+            content: json!("Explain this code."),
+        }],
+        &[],
+        OpenAiEndpointKind::Deepseek,
+        Some("xhigh"),
+        None,
+    );
+
+    assert_eq!(medium_body["reasoning_effort"], "high");
+    assert_eq!(xhigh_body["reasoning_effort"], "max");
+}
+
+#[test]
+fn deepseek_non_thinking_model_keeps_standard_openai_body() {
+    let body = build_chat_completion_request_body(
+        "deepseek-chat",
+        &[Message {
+            role: "user".to_string(),
+            content: json!("Hello"),
+        }],
+        &[],
+        OpenAiEndpointKind::Deepseek,
+        None,
+        None,
+    );
+
+    assert!(body.get("thinking").is_none());
+    assert!(body.get("reasoning_effort").is_none());
 }
 
 #[test]

@@ -9,6 +9,12 @@ provider-specific runtime metadata and a clearer `/model` management surface.
   provider metadata instead of rendering it as visible assistant text.
 - Rendered DeepSeek provider metadata back into later chat-completions requests
   only when the active endpoint kind is `deepseek`.
+- Enabled DeepSeek thinking-mode request controls for thinking-capable models:
+  `thinking.type = enabled` by default and `reasoning_effort = max` when tools
+  are present, with Codex-style `low` / `medium` / `xhigh` values normalized to
+  DeepSeek's documented `high` / `max` values.
+- Preserved `reasoning_content` byte-for-byte instead of trimming it before
+  replaying assistant tool-call messages back to DeepSeek.
 - Kept generic OpenAI-compatible endpoints on standard `content` and
   `tool_calls` fields unless their endpoint kind declares additional metadata.
 - Normalized OpenAI-compatible tool-call history so each assistant tool call is
@@ -25,6 +31,9 @@ provider-specific runtime metadata and a clearer `/model` management surface.
 ## Validation
 
 - `cargo test deepseek_reasoning_content_roundtrips_as_provider_metadata -- --nocapture`
+- `cargo test deepseek_tool_call_reasoning_content_roundtrips_without_trimming -- --nocapture`
+- `cargo test deepseek_v4_request_enables_thinking_and_uses_max_effort_for_tools -- --nocapture`
+- `cargo test deepseek_reasoning_effort_uses_documented_high_max_values -- --nocapture`
 - `cargo test deepseek_model_picker -- --nocapture`
 - `cargo test deepseek_api_key_editor_uses_deepseek_copy -- --nocapture`
 - `cargo test llm::tests -- --nocapture`

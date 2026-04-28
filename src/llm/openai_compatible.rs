@@ -27,6 +27,8 @@ pub struct OpenAiCompatibleBackend {
     pub base_url: String,
     pub model: String,
     pub endpoint_kind: OpenAiEndpointKind,
+    pub reasoning_effort: Option<String>,
+    pub thinking: Option<bool>,
 }
 
 impl OpenAiCompatibleBackend {
@@ -40,12 +42,32 @@ impl OpenAiCompatibleBackend {
         model: String,
         endpoint_kind: OpenAiEndpointKind,
     ) -> Result<Self> {
+        Self::new_with_endpoint_kind_and_reasoning(
+            api_key,
+            base_url,
+            model,
+            endpoint_kind,
+            None,
+            None,
+        )
+    }
+
+    pub fn new_with_endpoint_kind_and_reasoning(
+        api_key: Option<SecretString>,
+        base_url: String,
+        model: String,
+        endpoint_kind: OpenAiEndpointKind,
+        reasoning_effort: Option<String>,
+        thinking: Option<bool>,
+    ) -> Result<Self> {
         Ok(Self {
             client: http_client_for_target(&base_url)?,
             api_key,
             base_url,
             model,
             endpoint_kind,
+            reasoning_effort,
+            thinking,
         })
     }
 
@@ -64,25 +86,14 @@ impl OpenAiCompatibleBackend {
 #[async_trait]
 impl LlmBackend for OpenAiCompatibleBackend {
     async fn ask(&self, messages: &[Message], tools: &[Value]) -> Result<LlmResponse> {
-        let openai_messages = to_openai_messages_for_endpoint(messages, self.endpoint_kind);
-        let openai_tools: Vec<Value> = tools
-            .iter()
-            .map(|t| {
-                json!({
-                    "type": "function",
-                    "function": {
-                        "name": t["name"],
-                        "description": t["description"],
-                        "parameters": t["input_schema"]
-                    }
-                })
-            })
-            .collect();
-
-        let mut body = json!({ "model": self.model, "messages": openai_messages });
-        if !openai_tools.is_empty() {
-            body["tools"] = json!(openai_tools);
-        }
+        let body = build_chat_completion_request_body(
+            &self.model,
+            messages,
+            tools,
+            self.endpoint_kind,
+            self.reasoning_effort.as_deref(),
+            self.thinking,
+        );
 
         let completions_url = self.endpoint_url("chat/completions");
         let mut request = self.client.post(&completions_url);
@@ -137,10 +148,14 @@ impl LlmBackend for OpenAiCompatibleBackend {
             role: "user".to_string(),
             content: json!(instruction),
         });
-        let body = json!({
-            "model": self.model,
-            "messages": to_openai_messages_for_endpoint(&msgs, self.endpoint_kind),
-        });
+        let body = build_chat_completion_request_body(
+            &self.model,
+            &msgs,
+            &[],
+            self.endpoint_kind,
+            self.reasoning_effort.as_deref(),
+            self.thinking,
+        );
         let completions_url = self.endpoint_url("chat/completions");
         let mut request = self.client.post(&completions_url);
         if let Some(api_key) = self.api_key.as_ref().map(SecretString::expose_secret) {
@@ -165,6 +180,94 @@ impl LlmBackend for OpenAiCompatibleBackend {
 
     fn context_budget(&self, _messages: &[Message], _tools: &[Value]) -> Option<ContextBudget> {
         model_context_budget(self.model.as_str())
+    }
+}
+
+pub(super) fn build_chat_completion_request_body(
+    model: &str,
+    messages: &[Message],
+    tools: &[Value],
+    endpoint_kind: OpenAiEndpointKind,
+    reasoning_effort: Option<&str>,
+    thinking: Option<bool>,
+) -> Value {
+    let openai_messages = to_openai_messages_for_endpoint(messages, endpoint_kind);
+    let openai_tools: Vec<Value> = tools
+        .iter()
+        .map(|t| {
+            json!({
+                "type": "function",
+                "function": {
+                    "name": t["name"],
+                    "description": t["description"],
+                    "parameters": t["input_schema"]
+                }
+            })
+        })
+        .collect();
+
+    let mut body = json!({ "model": model, "messages": openai_messages });
+    if !openai_tools.is_empty() {
+        body["tools"] = json!(openai_tools);
+    }
+    apply_deepseek_thinking_options(
+        &mut body,
+        model,
+        endpoint_kind,
+        reasoning_effort,
+        thinking,
+        !openai_tools.is_empty(),
+    );
+    body
+}
+
+fn apply_deepseek_thinking_options(
+    body: &mut Value,
+    model: &str,
+    endpoint_kind: OpenAiEndpointKind,
+    reasoning_effort: Option<&str>,
+    thinking: Option<bool>,
+    has_tools: bool,
+) {
+    if endpoint_kind != OpenAiEndpointKind::Deepseek || !deepseek_supports_thinking(model) {
+        return;
+    }
+
+    let thinking_enabled = thinking.unwrap_or(true);
+    body["thinking"] = json!({
+        "type": if thinking_enabled { "enabled" } else { "disabled" },
+    });
+    if thinking_enabled {
+        body["reasoning_effort"] = Value::String(normalize_deepseek_reasoning_effort(
+            reasoning_effort,
+            has_tools,
+        ));
+    }
+}
+
+fn deepseek_supports_thinking(model: &str) -> bool {
+    let model = model.to_ascii_lowercase();
+    model.contains("v4") || model.contains("reasoner")
+}
+
+fn normalize_deepseek_reasoning_effort(reasoning_effort: Option<&str>, has_tools: bool) -> String {
+    let Some(reasoning_effort) = reasoning_effort
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return if has_tools { "max" } else { "high" }.to_string();
+    };
+
+    match reasoning_effort.to_ascii_lowercase().as_str() {
+        "max" | "xhigh" => "max".to_string(),
+        "low" | "medium" | "high" => "high".to_string(),
+        _ => {
+            if has_tools {
+                "max".to_string()
+            } else {
+                "high".to_string()
+            }
+        }
     }
 }
 
@@ -277,7 +380,6 @@ fn provider_metadata_string<'a>(content: &'a Value, provider: &str, key: &str) -
         }
         item.get("value")
             .and_then(Value::as_str)
-            .map(str::trim)
             .filter(|value| !value.is_empty())
     })
 }
@@ -374,7 +476,6 @@ pub(super) fn parse_chat_completion_response(
         if let Some(reasoning_content) = choice
             .get("reasoning_content")
             .and_then(Value::as_str)
-            .map(str::trim)
             .filter(|value| !value.is_empty())
         {
             content.push(ContentBlock::ProviderMetadata {

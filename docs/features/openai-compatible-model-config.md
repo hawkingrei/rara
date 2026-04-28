@@ -68,6 +68,23 @@ root with the active API key. If the model-list request fails, the picker may
 fall back to the built-in DeepSeek model list, but the failure must stay visible
 as a notice or system message.
 
+For thinking-capable DeepSeek models, RARA sends DeepSeek's documented
+thinking-mode controls on chat-completions requests:
+
+- `thinking.type = enabled` unless the runtime config explicitly disables
+  thinking;
+- `reasoning_effort = high` for ordinary requests;
+- `reasoning_effort = max` for tool-enabled agent requests unless the user has
+  configured a reasoning effort explicitly;
+- Codex-style `low` and `medium` efforts are normalized to `high`, while
+  `xhigh` is normalized to `max`.
+
+When DeepSeek returns `reasoning_content`, RARA stores it as provider metadata
+and replays it only for the DeepSeek endpoint. Assistant messages that contain
+tool calls must replay the original `reasoning_content` without trimming or
+rewriting it, because DeepSeek requires thinking-mode tool-call turns to be
+sent back intact on later requests.
+
 ## Remembered Provider State
 
 RARA keeps provider-scoped remembered state in `RaraConfig.provider_states`.
