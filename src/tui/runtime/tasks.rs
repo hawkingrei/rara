@@ -24,16 +24,6 @@ use super::super::state::{
 use super::events::{apply_tui_event, convert_agent_event, format_error_chain};
 use builder::rebuild_agent_with_progress;
 
-fn restore_execute_mode_after_plan_turn(app: &mut TuiApp, agent: &mut Agent) {
-    if matches!(
-        app.agent_execution_mode,
-        crate::agent::AgentExecutionMode::Plan
-    ) {
-        app.set_agent_execution_mode(crate::agent::AgentExecutionMode::Execute);
-        agent.set_execution_mode(crate::agent::AgentExecutionMode::Execute);
-    }
-}
-
 fn merge_rebuilt_agent(mut rebuilt: Agent, previous: Agent) -> Agent {
     let previous_prompt_config = previous.prompt_config().clone();
     rebuilt.session_id = previous.session_id;
@@ -451,7 +441,8 @@ pub(super) async fn finish_running_task_if_ready(
                         ) || matches!(agent.execution_mode, crate::agent::AgentExecutionMode::Plan);
                     app.clear_active_live_sections();
                     if finished_plan_turn {
-                        restore_execute_mode_after_plan_turn(app, &mut agent);
+                        agent.set_execution_mode(crate::agent::AgentExecutionMode::Plan);
+                        app.set_agent_execution_mode(crate::agent::AgentExecutionMode::Plan);
                         app.set_pending_plan_approval(
                             agent.last_query_produced_plan() && !agent.current_plan.is_empty(),
                         );
@@ -470,7 +461,7 @@ pub(super) async fn finish_running_task_if_ready(
                         );
                     } else {
                         if finished_plan_turn {
-                            app.push_notice("Planning finished. Returned to execute mode.");
+                            app.push_notice("Planning finished. Staying in plan mode.");
                         }
                         app.finalize_active_turn();
                         app.notice = Some("Prompt finished.".into());
@@ -481,8 +472,16 @@ pub(super) async fn finish_running_task_if_ready(
                 Err(err) => {
                     let error_message = format_error_chain(&err);
                     let cancelled = error_message.contains("cancelled by user");
-                    restore_execute_mode_after_plan_turn(app, &mut agent);
+                    let finished_plan_turn =
+                        matches!(
+                            app.agent_execution_mode,
+                            crate::agent::AgentExecutionMode::Plan
+                        ) || matches!(agent.execution_mode, crate::agent::AgentExecutionMode::Plan);
                     app.clear_active_live_sections();
+                    if finished_plan_turn {
+                        agent.set_execution_mode(crate::agent::AgentExecutionMode::Plan);
+                        app.set_agent_execution_mode(crate::agent::AgentExecutionMode::Plan);
+                    }
                     app.set_pending_plan_approval(false);
                     *agent_slot = Some(agent);
                     if let Some(agent) = agent_slot.as_ref() {

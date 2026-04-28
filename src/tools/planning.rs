@@ -27,7 +27,7 @@ impl Tool for EnterPlanModeTool {
             "instructions": [
                 "Inspect the repository with read-only tools.",
                 "Return a normal final answer for research, review, or planning-advice tasks.",
-                "Use a <plan> block only when you are requesting approval to implement a concrete plan.",
+                "Use a <proposed_plan> block only when you are requesting approval to implement a concrete plan.",
                 "Use <request_user_input> only when a blocking decision needs user input.",
                 "Use <continue_inspection/> only when another read-only inspection pass is required."
             ]

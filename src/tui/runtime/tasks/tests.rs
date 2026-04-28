@@ -11,6 +11,7 @@ use crate::agent::{
     Agent, AgentExecutionMode, BashApprovalMode, Message, PlanStep, PlanStepStatus,
 };
 use crate::config::ConfigManager;
+use crate::llm::{ContentBlock, LlmBackend, LlmResponse, TokenUsage};
 use crate::oauth::OAuthManager;
 use crate::prompt::PromptRuntimeConfig;
 use crate::session::SessionManager;
@@ -23,9 +24,41 @@ use crate::workspace::WorkspaceMemory;
 use serde_json::json;
 
 use super::{
-    emit_query_heartbeat, merge_rebuilt_agent, request_running_task_cancellation, start_oauth_task,
+    emit_query_heartbeat, finish_running_task_if_ready, merge_rebuilt_agent,
+    request_running_task_cancellation, start_oauth_task, start_query_task,
     try_start_queued_follow_up,
 };
+
+struct PlainAnswerBackend;
+
+#[async_trait::async_trait]
+impl LlmBackend for PlainAnswerBackend {
+    async fn ask(
+        &self,
+        _messages: &[crate::agent::Message],
+        _tools: &[serde_json::Value],
+    ) -> anyhow::Result<LlmResponse> {
+        Ok(LlmResponse {
+            content: vec![ContentBlock::Text {
+                text: "Planning analysis only.".to_string(),
+            }],
+            stop_reason: Some("end_turn".to_string()),
+            usage: Some(TokenUsage::default()),
+        })
+    }
+
+    async fn embed(&self, _text: &str) -> anyhow::Result<Vec<f32>> {
+        Ok(vec![0.0; 8])
+    }
+
+    async fn summarize(
+        &self,
+        _messages: &[crate::agent::Message],
+        _instruction: &str,
+    ) -> anyhow::Result<String> {
+        Ok("summary".to_string())
+    }
+}
 
 #[test]
 fn browser_oauth_is_rejected_before_task_start_in_ssh() {
@@ -210,6 +243,64 @@ async fn queued_follow_ups_start_as_one_multiline_turn() {
     if let Some(task) = app.running_task.take() {
         task.handle.abort();
     }
+}
+
+#[tokio::test]
+async fn plan_turn_completion_keeps_plan_mode_after_plain_answer() {
+    let temp = tempdir().unwrap();
+    let workspace_root = temp.path().join("workspace");
+    let rara_dir = workspace_root.join(".rara");
+    std::fs::create_dir_all(rara_dir.join("rollouts")).expect("rollouts");
+    std::fs::create_dir_all(rara_dir.join("sessions")).expect("sessions");
+    std::fs::create_dir_all(rara_dir.join("tool-results")).expect("tool results");
+
+    let mut app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("build tui app");
+    app.set_agent_execution_mode(AgentExecutionMode::Plan);
+
+    let workspace = Arc::new(WorkspaceMemory::from_paths(
+        workspace_root.clone(),
+        rara_dir.clone(),
+    ));
+    let session_manager = Arc::new(SessionManager {
+        storage_dir: rara_dir.join("rollouts"),
+        legacy_storage_dir: rara_dir.join("sessions"),
+    });
+    let mut agent = Agent::new(
+        ToolManager::new(),
+        Arc::new(PlainAnswerBackend),
+        Arc::new(VectorDB::new(
+            &rara_dir.join("lancedb").display().to_string(),
+        )),
+        session_manager,
+        workspace,
+    );
+    agent.set_execution_mode(AgentExecutionMode::Plan);
+
+    start_query_task(&mut app, "inspect only".to_string(), agent);
+    let mut agent_slot = None;
+    for _ in 0..20 {
+        finish_running_task_if_ready(&mut app, &mut agent_slot)
+            .await
+            .expect("finish task");
+        if app.running_task.is_none() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+
+    assert!(app.running_task.is_none());
+    assert_eq!(app.agent_execution_mode, AgentExecutionMode::Plan);
+    assert!(!app.has_pending_plan_approval());
+    assert_eq!(
+        agent_slot
+            .as_ref()
+            .expect("agent should return")
+            .execution_mode,
+        AgentExecutionMode::Plan
+    );
 }
 
 #[tokio::test]

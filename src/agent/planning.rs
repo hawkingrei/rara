@@ -367,8 +367,7 @@ impl Agent {
             AgentExecutionMode::Execute => true,
             AgentExecutionMode::Plan => !matches!(
                 name,
-                "bash"
-                    | "enter_plan_mode"
+                "enter_plan_mode"
                     | "write_file"
                     | "replace"
                     | "replace_lines"
@@ -603,38 +602,93 @@ impl Agent {
 }
 
 pub(super) fn parse_plan_block(text: &str) -> Option<(Vec<PlanStep>, Option<String>)> {
-    let start = text.find("<plan>")?;
-    let end = text.find("</plan>")?;
+    let (start_tag, end_tag, start, end) =
+        find_plan_block_bounds(text).or_else(|| find_legacy_plan_block_bounds(text))?;
     if end <= start {
         return None;
     }
 
-    let block = &text[start + "<plan>".len()..end];
+    let block = &text[start + start_tag.len()..end];
     let mut steps = Vec::new();
     for line in block.lines().map(str::trim).filter(|line| !line.is_empty()) {
-        let Some(rest) = line.strip_prefix("- [") else {
-            continue;
-        };
+        if let Some(step) = parse_plan_step_line(line) {
+            steps.push(step);
+        }
+    }
+
+    let mut explanation = text[end + end_tag.len()..].trim().to_string();
+    if steps.is_empty() && start_tag == "<proposed_plan>" {
+        let fallback = block
+            .lines()
+            .map(str::trim)
+            .find(|line| !line.is_empty() && !line.starts_with('#'))
+            .unwrap_or("Implement proposed plan");
+        steps.push(PlanStep {
+            step: fallback.trim_matches(['*', '#', ' ']).to_string(),
+            status: PlanStepStatus::Pending,
+        });
+        if explanation.is_empty() {
+            explanation = block.trim().to_string();
+        }
+    }
+
+    Some((
+        steps,
+        (!explanation.is_empty()).then(|| explanation.to_string()),
+    ))
+}
+
+fn find_plan_block_bounds(text: &str) -> Option<(&'static str, &'static str, usize, usize)> {
+    let start_tag = "<proposed_plan>";
+    let end_tag = "</proposed_plan>";
+    let start = text.find(start_tag)?;
+    let end = text.find(end_tag)?;
+    Some((start_tag, end_tag, start, end))
+}
+
+fn find_legacy_plan_block_bounds(text: &str) -> Option<(&'static str, &'static str, usize, usize)> {
+    let start_tag = "<plan>";
+    let end_tag = "</plan>";
+    let start = text.find(start_tag)?;
+    let end = text.find(end_tag)?;
+    Some((start_tag, end_tag, start, end))
+}
+
+fn parse_plan_step_line(line: &str) -> Option<PlanStep> {
+    if let Some(rest) = line
+        .strip_prefix("- [")
+        .or_else(|| line.strip_prefix("* ["))
+        .or_else(|| line.strip_prefix("• ["))
+    {
         let Some((status, step)) = rest.split_once("] ") else {
-            continue;
+            return None;
         };
         let status = match status.trim() {
             "pending" => PlanStepStatus::Pending,
             "in_progress" => PlanStepStatus::InProgress,
             "completed" => PlanStepStatus::Completed,
-            _ => continue,
+            _ => return None,
         };
-        steps.push(PlanStep {
-            step: step.trim().to_string(),
+        let step = step.trim();
+        return (!step.is_empty()).then(|| PlanStep {
+            step: step.to_string(),
             status,
         });
     }
 
-    let explanation = text[end + "</plan>".len()..].trim();
-    Some((
-        steps,
-        (!explanation.is_empty()).then(|| explanation.to_string()),
-    ))
+    let step = line
+        .strip_prefix("- ")
+        .or_else(|| line.strip_prefix("* "))
+        .or_else(|| line.strip_prefix("• "))
+        .or_else(|| {
+            let (number, rest) = line.split_once(". ")?;
+            number.chars().all(|ch| ch.is_ascii_digit()).then_some(rest)
+        })?
+        .trim();
+    (!step.is_empty()).then(|| PlanStep {
+        step: step.to_string(),
+        status: PlanStepStatus::Pending,
+    })
 }
 
 pub(super) fn parse_request_user_input_block(text: &str) -> Option<PendingUserInput> {
@@ -662,12 +716,10 @@ pub(super) fn parse_request_user_input_block(text: &str) -> Option<PendingUserIn
         }
     }
 
-    let note = text[end + "</request_user_input>".len()..]
-        .trim()
-        .strip_prefix("</plan>")
-        .unwrap_or(text[end + "</request_user_input>".len()..].trim())
-        .trim()
-        .to_string();
+    let mut note = text[end + "</request_user_input>".len()..].trim();
+    note = note.strip_prefix("</proposed_plan>").unwrap_or(note).trim();
+    note = note.strip_prefix("</plan>").unwrap_or(note).trim();
+    let note = note.to_string();
 
     Some(PendingUserInput {
         question: question?,
@@ -698,8 +750,8 @@ impl RuntimeContinuationPhase {
             Self::PlanContinuationRequired => vec![
                 "Continue planning immediately.",
                 "Use read-only tools to inspect the repository before stopping.",
-                "If the user asked for analysis or recommendations only, provide the final answer without a <plan> block.",
-                "Use <plan> only when you are requesting approval to implement a concrete plan.",
+                "If the user asked for analysis or recommendations only, provide the final answer without a <proposed_plan> block.",
+                "Use <proposed_plan> only when you are requesting approval to implement a concrete plan.",
                 "Use <request_user_input> when a key decision blocks the answer.",
                 "Use <continue_inspection/> when more repository inspection is still required.",
                 "Do not ask the user to continue.",

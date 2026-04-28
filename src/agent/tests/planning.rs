@@ -192,6 +192,100 @@ async fn suggestion_mode_keeps_write_bash_commands_pending_approval() {
 }
 
 #[tokio::test]
+async fn plan_mode_allows_read_only_bash_commands() {
+    let backend = Arc::new(SequencedBackend::new(vec![
+        LlmResponse {
+            content: vec![ContentBlock::ToolUse {
+                id: "tool-readonly-bash-plan".to_string(),
+                name: "bash".to_string(),
+                input: json!({ "command": "git status --short" }),
+            }],
+            stop_reason: Some("tool_use".to_string()),
+            usage: Some(TokenUsage::default()),
+        },
+        LlmResponse {
+            content: vec![ContentBlock::Text {
+                text: "Read-only inspection complete.".to_string(),
+            }],
+            stop_reason: Some("end_turn".to_string()),
+            usage: Some(TokenUsage::default()),
+        },
+    ]));
+    let mut tool_manager = ToolManager::new();
+    tool_manager.register(Box::new(StubBashTool));
+    let (_temp, session_manager, workspace, rara_dir) = test_runtime_storage();
+    let mut agent = Agent::new(
+        tool_manager,
+        backend.clone(),
+        Arc::new(VectorDB::new(&rara_dir.join("lancedb").to_string_lossy())),
+        session_manager,
+        workspace,
+    );
+    agent.set_execution_mode(AgentExecutionMode::Plan);
+
+    agent
+        .query_with_mode(
+            "inspect git state".to_string(),
+            super::super::AgentOutputMode::Silent,
+        )
+        .await
+        .expect("query should allow read-only bash in plan mode");
+
+    assert_eq!(agent.execution_mode, AgentExecutionMode::Plan);
+    assert!(agent.pending_approval.is_none());
+    assert_eq!(backend.observed_messages().len(), 2);
+}
+
+#[tokio::test]
+async fn plan_mode_rejects_mutating_bash_commands_without_approval() {
+    let backend = Arc::new(SequencedBackend::new(vec![
+        LlmResponse {
+            content: vec![ContentBlock::ToolUse {
+                id: "tool-write-bash-plan".to_string(),
+                name: "bash".to_string(),
+                input: json!({ "command": "git push origin main" }),
+            }],
+            stop_reason: Some("tool_use".to_string()),
+            usage: Some(TokenUsage::default()),
+        },
+        LlmResponse {
+            content: vec![ContentBlock::Text {
+                text: "I will return a plan instead.".to_string(),
+            }],
+            stop_reason: Some("end_turn".to_string()),
+            usage: Some(TokenUsage::default()),
+        },
+    ]));
+    let mut tool_manager = ToolManager::new();
+    tool_manager.register(Box::new(StubBashTool));
+    let (_temp, session_manager, workspace, rara_dir) = test_runtime_storage();
+    let mut agent = Agent::new(
+        tool_manager,
+        backend.clone(),
+        Arc::new(VectorDB::new(&rara_dir.join("lancedb").to_string_lossy())),
+        session_manager,
+        workspace,
+    );
+    agent.set_execution_mode(AgentExecutionMode::Plan);
+
+    agent
+        .query_with_mode(
+            "push changes".to_string(),
+            super::super::AgentOutputMode::Silent,
+        )
+        .await
+        .expect("query should reject mutating bash and continue");
+
+    assert_eq!(agent.execution_mode, AgentExecutionMode::Plan);
+    assert!(agent.pending_approval.is_none());
+    assert_eq!(backend.observed_messages().len(), 2);
+    assert!(agent.history.iter().any(|message| message
+        .content
+        .to_string()
+        .contains("bash is read-only in plan mode")));
+}
+
+#[tokio::test]
 async fn approved_bash_prefix_auto_allows_later_matching_commands() {
     let backend = Arc::new(SequencedBackend::new(vec![
         LlmResponse {
@@ -504,7 +598,7 @@ fn strips_continue_inspection_control_tag() {
 
 #[test]
 fn parses_structured_plan_block() {
-    let text = "<plan>\n- [in_progress] Inspect core agent loop\n- [pending] Review TUI rendering path\n- [completed] Confirm current constraints\n</plan>\nFocus on agent.rs and tui/runtime.rs first.";
+    let text = "<proposed_plan>\n- [in_progress] Inspect core agent loop\n- Review TUI rendering path\n1. Confirm current constraints\n</proposed_plan>\nFocus on agent.rs and tui/runtime.rs first.";
     let parsed = parse_plan_block(text).expect("plan block should parse");
     assert_eq!(
         parsed.0,
@@ -519,7 +613,7 @@ fn parses_structured_plan_block() {
             },
             PlanStep {
                 step: "Confirm current constraints".to_string(),
-                status: PlanStepStatus::Completed,
+                status: PlanStepStatus::Pending,
             },
         ]
     );

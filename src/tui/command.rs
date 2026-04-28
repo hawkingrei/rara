@@ -67,7 +67,7 @@ pub const COMMAND_SPECS: [CommandSpec; 18] = [
         name: "plan",
         usage: "/plan",
         summary: "Enter planning mode for the current task.",
-        detail: "Switch the agent into read-only planning mode. In planning mode, inspection tools stay available, but editing, shell execution, memory writes, and sub-agent launch tools are hidden and blocked. RARA can inspect the codebase, clarify constraints, refine the implementation approach, and only stop for approval once a concrete plan is ready. The agent can also enter planning mode automatically by calling enter_plan_mode.",
+        detail: "Switch the agent into read-only planning mode. In planning mode, inspection tools and read-only shell commands stay available, but editing, mutating shell commands, memory writes, and sub-agent launch tools are hidden or blocked. RARA can inspect the codebase, clarify constraints, refine the implementation approach, and only stop for approval once a concrete plan is ready. The agent can also enter planning mode automatically by calling enter_plan_mode.",
     },
     CommandSpec {
         category: "Session",

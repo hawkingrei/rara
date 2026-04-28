@@ -463,6 +463,45 @@ impl Agent {
             let tool_name = tool_call.name.clone();
             let tool_id = tool_call.id.clone();
             let tool_input = tool_call.input.clone();
+            if tool_call.name == "bash" && matches!(self.execution_mode, AgentExecutionMode::Plan) {
+                let request =
+                    BashCommandInput::from_value(tool_call.input.clone()).unwrap_or_else(|_| {
+                        BashCommandInput {
+                            command: tool_call
+                                .input
+                                .get("command")
+                                .and_then(Value::as_str)
+                                .map(str::to_string),
+                            program: None,
+                            args: Vec::new(),
+                            cwd: None,
+                            env: Default::default(),
+                            allow_net: tool_call
+                                .input
+                                .get("allow_net")
+                                .and_then(Value::as_bool)
+                                .unwrap_or(false),
+                            run_in_background: tool_call
+                                .input
+                                .get("run_in_background")
+                                .and_then(Value::as_bool)
+                                .unwrap_or(false),
+                        }
+                    });
+                if !request.is_read_only() {
+                    let error_text = format!(
+                        "Error: bash is read-only in plan mode. Refuse command '{}' and inspect with read-only commands or return a plan.",
+                        request.summary()
+                    );
+                    report(AgentEvent::ToolResult {
+                        name: tool_name.clone(),
+                        content: error_text.clone(),
+                        is_error: true,
+                    });
+                    tool_results.push(tool_result_message(&tool_id, error_text, true));
+                    continue;
+                }
+            }
             if tool_call.name == "bash"
                 && matches!(self.bash_approval_mode, BashApprovalMode::Suggestion)
             {

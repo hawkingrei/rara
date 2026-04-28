@@ -462,7 +462,9 @@ pub(super) fn suggest_ollama_num_ctx(
         }
     }
 
-    let has_plan_markers = combined_text.contains("<plan>") || combined_text.contains("Plan Mode");
+    let has_plan_markers = combined_text.contains("<proposed_plan>")
+        || combined_text.contains("<plan>")
+        || combined_text.contains("Plan Mode");
     let has_runtime_markers = combined_text.contains("<agent_runtime>");
 
     let lower_text = combined_text.to_ascii_lowercase();
