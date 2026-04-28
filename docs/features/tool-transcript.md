@@ -29,6 +29,22 @@ The transcript should move toward Codex/Claude-style tool visibility:
 
 - `bash` tool execution must emit live transcript updates while stdout/stderr are still being produced.
 - The final `bash` tool result should keep the exit code and avoid duplicating large output that was already streamed live.
+- background bash tasks must be inspectable without imposing a fixed task-count limit:
+  - `background_task_list` lists known background tasks;
+  - `background_task_status` reads status and recent output for one task;
+  - `background_task_stop` stops one task, or all running background bash tasks
+    when no task id is supplied.
+
+### PTY sessions
+
+- PTY sessions must be inspectable and stoppable without imposing a fixed
+  session-count limit:
+  - `pty_list` lists known PTY sessions;
+  - `pty_status` reads status and recent output for one session;
+  - `pty_stop` stops one session, or all running PTY sessions when no session id
+    is supplied.
+- `pty_read`, `pty_write`, and `pty_kill` remain supported for direct session
+  interaction and backward compatibility.
 
 ### Queued follow-up messages
 
@@ -39,6 +55,16 @@ The transcript should move toward Codex/Claude-style tool visibility:
 - The bottom pane should render the two queues separately:
   - `Messages to be submitted after next tool call`
   - `Queued follow-up messages`
+
+### Running query cancellation
+
+- When no overlay is open and a model query is running, `Esc` requests
+  cancellation for the current query.
+- Cancellation is cooperative: provider streaming loops should check the query
+  cancellation token and return a local cancellation error instead of leaving the
+  TUI stuck in `streaming model output`.
+- Cancellation must preserve the current agent state so the user can continue
+  from the same thread after the task exits.
 
 ## Non-Goals
 

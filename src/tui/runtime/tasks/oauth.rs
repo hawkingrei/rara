@@ -53,6 +53,8 @@ pub(crate) fn start_oauth_task(
         handle,
         started_at: std::time::Instant::now(),
         next_heartbeat_after_secs: u64::MAX,
+        cancellation_token: None,
+        cancellation_requested: false,
     });
 }
 

@@ -1,4 +1,3 @@
-use std::collections::HashSet;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -28,6 +27,7 @@ const LINUX_RUNTIME_READ_ROOTS: &[&str] = &[
     "/bin",
     "/sbin",
     "/usr",
+    "/opt",
     "/etc",
     "/lib",
     "/lib64",
@@ -80,20 +80,6 @@ impl SandboxManager {
         })
     }
 
-    fn get_proxy_hosts(&self) -> Vec<String> {
-        let mut proxies = HashSet::new();
-        for var in &["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"] {
-            if let Ok(url_str) = env::var(var) {
-                if let Ok(url) = url::Url::parse(&url_str) {
-                    if let Some(host) = url.host_str() {
-                        proxies.insert(host.to_string());
-                    }
-                }
-            }
-        }
-        proxies.into_iter().collect()
-    }
-
     fn create_profile(&self, allow_net: bool) -> Result<PathBuf> {
         if self.os != "macos" {
             bail!("sandbox profile creation is only supported on macOS");
@@ -115,12 +101,6 @@ impl SandboxManager {
             net_rules.push_str("(allow network*)");
         } else {
             net_rules.push_str("(deny network*)\n(allow network-outbound (literal \"/private/var/run/mDNSResponder\"))\n");
-            for host in self.get_proxy_hosts() {
-                net_rules.push_str(&format!(
-                    "(allow network-outbound (remote ip \"{}:*\"))\n",
-                    host
-                ));
-            }
         }
 
         let profile = format!(
@@ -163,6 +143,28 @@ impl SandboxManager {
         }
     }
 
+    fn append_ro_bind(args: &mut Vec<String>, path: &Path) {
+        Self::append_mount_target_parent_dirs(args, path);
+        args.push("--ro-bind".to_string());
+        args.push(path.display().to_string());
+        args.push(path.display().to_string());
+    }
+
+    fn linux_runtime_read_roots() -> Vec<PathBuf> {
+        let mut roots = LINUX_RUNTIME_READ_ROOTS
+            .iter()
+            .map(PathBuf::from)
+            .filter(|path| path.exists())
+            .collect::<Vec<_>>();
+        for path_dir in command_search_path_dirs() {
+            if roots.iter().any(|root| path_dir.starts_with(root)) {
+                continue;
+            }
+            roots.push(path_dir);
+        }
+        roots
+    }
+
     fn linux_sandbox_args(&self, cwd: &str, allow_net: bool) -> Vec<String> {
         let cwd_path = Path::new(cwd);
         let mut args = vec![
@@ -176,17 +178,26 @@ impl SandboxManager {
             "/proc".to_string(),
             "--tmpfs".to_string(),
             "/tmp".to_string(),
+            "--dir".to_string(),
+            "/run".to_string(),
+            "--dir".to_string(),
+            "/var".to_string(),
+            "--symlink".to_string(),
+            "../run".to_string(),
+            "/var/run".to_string(),
         ];
         for dir in sandbox_home_dirs(&self.sandbox_home) {
             args.push("--dir".to_string());
             args.push(dir.display().to_string());
         }
 
-        for root in LINUX_RUNTIME_READ_ROOTS {
-            if Path::new(root).exists() {
-                args.push("--ro-bind".to_string());
-                args.push((*root).to_string());
-                args.push((*root).to_string());
+        for root in Self::linux_runtime_read_roots() {
+            Self::append_ro_bind(&mut args, &root);
+        }
+
+        if let Ok(resolv_conf) = fs::metadata("/etc/resolv.conf") {
+            if resolv_conf.is_file() {
+                Self::append_ro_bind(&mut args, Path::new("/etc/resolv.conf"));
             }
         }
 
@@ -252,6 +263,19 @@ impl SandboxManager {
                 "sandboxed command execution is unsupported on platform {}",
                 platform
             ),
+        }
+    }
+
+    pub fn wrap_pty_shell_command(
+        &self,
+        original_cmd: &str,
+        cwd: &str,
+        allow_net: bool,
+    ) -> Result<WrappedCommand> {
+        match &self.backend {
+            // macOS sandbox-exec does not preserve interactive PTY stdin reliably.
+            SandboxBackend::MacosSeatbelt => Ok(wrap_direct_shell_command(original_cmd)),
+            _ => self.wrap_shell_command(original_cmd, cwd, allow_net),
         }
     }
 
@@ -382,6 +406,24 @@ fn command_exists(program: &str) -> bool {
         .unwrap_or(false)
 }
 
+fn command_search_path_dirs() -> Vec<PathBuf> {
+    env::var_os("PATH")
+        .map(|paths| {
+            let mut dirs = Vec::new();
+            for dir in env::split_paths(&paths) {
+                if !dir.is_absolute() || !dir.is_dir() {
+                    continue;
+                }
+                let dir = fs::canonicalize(&dir).unwrap_or(dir);
+                if !dirs.iter().any(|existing| existing == &dir) {
+                    dirs.push(dir);
+                }
+            }
+            dirs
+        })
+        .unwrap_or_default()
+}
+
 fn shell_program() -> String {
     env::var("SHELL")
         .ok()
@@ -476,6 +518,7 @@ mod tests {
         shell_command_flag, shell_program, SandboxBackend, SandboxManager, DEFAULT_SHELL,
         MACOS_SANDBOX_EXEC,
     };
+    use std::env;
     use std::path::PathBuf;
     use std::time::Duration;
     use tempfile::tempdir;
@@ -604,6 +647,18 @@ mod tests {
         );
         assert_eq!(wrapped.sandbox_backend, "direct");
         assert!(wrapped.sandbox_home.is_none());
+    }
+
+    #[test]
+    fn wrap_pty_shell_command_uses_direct_backend_on_macos() {
+        let manager = manager("macos", SandboxBackend::MacosSeatbelt);
+
+        let wrapped = manager
+            .wrap_pty_shell_command("read line", "/workspace/project", false)
+            .expect("pty shell wrapper");
+
+        assert!(!wrapped.sandboxed);
+        assert_eq!(wrapped.sandbox_backend, "direct");
     }
 
     #[test]
@@ -807,6 +862,52 @@ mod tests {
                     ]
             }),
             "linux sandbox should still mount the workspace path itself"
+        );
+    }
+
+    #[test]
+    fn linux_sandbox_binds_command_search_path_dirs() {
+        let tempdir = tempdir().expect("tempdir");
+        let custom_bin = tempdir.path().join("custom-bin");
+        std::fs::create_dir_all(&custom_bin).expect("custom bin dir");
+        let custom_bin = std::fs::canonicalize(&custom_bin).expect("canonical custom bin");
+        let original_path = std::env::var_os("PATH");
+        let test_path =
+            env::join_paths([PathBuf::from("."), custom_bin.clone()]).expect("build test PATH");
+        std::env::set_var("PATH", test_path);
+
+        let manager = manager("linux", SandboxBackend::LinuxBubblewrap);
+        let wrapped = manager
+            .wrap_shell_command("custom-tool --version", "/workspace/project", false)
+            .expect("linux sandbox wrapper");
+
+        if let Some(path) = original_path {
+            std::env::set_var("PATH", path);
+        } else {
+            std::env::remove_var("PATH");
+        }
+
+        assert!(
+            wrapped.args.windows(3).any(|window| {
+                window
+                    == [
+                        String::from("--ro-bind"),
+                        custom_bin.display().to_string(),
+                        custom_bin.display().to_string(),
+                    ]
+            }),
+            "linux sandbox should bind PATH command directories that are outside standard runtime roots"
+        );
+        assert!(
+            !wrapped.args.windows(3).any(|window| {
+                window
+                    == [
+                        String::from("--ro-bind"),
+                        String::from("."),
+                        String::from("."),
+                    ]
+            }),
+            "linux sandbox should not bind relative PATH entries"
         );
     }
 }

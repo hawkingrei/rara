@@ -1,5 +1,7 @@
 use std::sync::Arc;
 
+use anyhow::Result;
+use async_trait::async_trait;
 use serde_json::json;
 
 use crate::agent::planning::{
@@ -9,7 +11,7 @@ use crate::agent::{
     Agent, AgentExecutionMode, ContentBlock, PendingUserInput, PlanStep, PlanStepStatus,
     RuntimeContinuationPhase,
 };
-use crate::llm::{LlmResponse, TokenUsage};
+use crate::llm::{LlmBackend, LlmResponse, TokenUsage};
 use crate::session::SessionManager;
 use crate::tool::ToolManager;
 use crate::tool_result::ToolResultStore;
@@ -17,6 +19,47 @@ use crate::vectordb::VectorDB;
 use crate::workspace::WorkspaceMemory;
 
 use super::support::{test_runtime_storage, SequencedBackend, StubTool};
+
+struct CheckpointObserverBackend {
+    session_manager: Arc<SessionManager>,
+    session_id: String,
+}
+
+#[async_trait]
+impl LlmBackend for CheckpointObserverBackend {
+    async fn ask(
+        &self,
+        _messages: &[crate::agent::Message],
+        _tools: &[serde_json::Value],
+    ) -> Result<LlmResponse> {
+        let persisted = self
+            .session_manager
+            .load_thread_history(&self.session_id)
+            .expect("user message should be checkpointed before model call");
+        assert!(persisted.iter().any(|message| {
+            message.role == "user" && message.content.to_string().contains("checkpoint me")
+        }));
+        Ok(LlmResponse {
+            content: vec![ContentBlock::Text {
+                text: "checkpoint observed".to_string(),
+            }],
+            stop_reason: Some("end_turn".to_string()),
+            usage: Some(TokenUsage::default()),
+        })
+    }
+
+    async fn embed(&self, _text: &str) -> Result<Vec<f32>> {
+        Ok(vec![0.0; 8])
+    }
+
+    async fn summarize(
+        &self,
+        _messages: &[crate::agent::Message],
+        _instruction: &str,
+    ) -> Result<String> {
+        Ok("summary".to_string())
+    }
+}
 
 #[tokio::test]
 async fn appends_continuation_after_tool_result() {
@@ -41,12 +84,13 @@ async fn appends_continuation_after_tool_result() {
 
     let mut tool_manager = ToolManager::new();
     tool_manager.register(Box::new(StubTool));
+    let (_temp, session_manager, workspace, rara_dir) = test_runtime_storage();
     let mut agent = Agent::new(
         tool_manager,
         backend.clone(),
-        Arc::new(VectorDB::new("data/lancedb")),
-        Arc::new(SessionManager::new().expect("session manager")),
-        Arc::new(WorkspaceMemory::new().expect("workspace memory")),
+        Arc::new(VectorDB::new(&rara_dir.join("lancedb").to_string_lossy())),
+        session_manager,
+        workspace,
     );
 
     agent
@@ -65,6 +109,36 @@ async fn appends_continuation_after_tool_result() {
     assert!(second_round
         .iter()
         .any(|message| { message.content.to_string().contains("tool_result") }));
+}
+
+#[tokio::test]
+async fn checkpoints_user_message_before_first_model_turn() {
+    let (_temp, session_manager, workspace, rara_dir) = test_runtime_storage();
+    let session_id = "checkpoint-before-model".to_string();
+    let backend = Arc::new(CheckpointObserverBackend {
+        session_manager: session_manager.clone(),
+        session_id: session_id.clone(),
+    });
+    let mut agent = Agent::new(
+        ToolManager::new(),
+        backend,
+        Arc::new(VectorDB::new(
+            &rara_dir.join("lancedb").display().to_string(),
+        )),
+        session_manager,
+        workspace,
+    );
+    agent.session_id = session_id;
+    agent.tool_result_store =
+        ToolResultStore::new(rara_dir.join("tool-results")).expect("tool result store");
+
+    agent
+        .query_with_mode(
+            "checkpoint me".to_string(),
+            super::super::AgentOutputMode::Silent,
+        )
+        .await
+        .expect("query should succeed");
 }
 
 #[tokio::test]
@@ -152,8 +226,9 @@ async fn does_not_append_continuation_without_tools() {
 }
 
 #[tokio::test]
-async fn forces_final_answer_when_tool_loop_exceeds_limit() {
-    let mut responses = (0..=super::super::MAX_TOOL_ROUNDS_PER_TURN)
+async fn continues_tool_loop_without_fixed_turn_cap() {
+    let tool_turns = 205;
+    let mut responses = (0..tool_turns)
         .map(|idx| LlmResponse {
             content: vec![ContentBlock::ToolUse {
                 id: format!("tool-{idx}"),
@@ -175,103 +250,35 @@ async fn forces_final_answer_when_tool_loop_exceeds_limit() {
 
     let mut tool_manager = ToolManager::new();
     tool_manager.register(Box::new(StubTool));
+    let (_temp, session_manager, workspace, rara_dir) = test_runtime_storage();
     let mut agent = Agent::new(
         tool_manager,
         backend.clone(),
-        Arc::new(VectorDB::new("data/lancedb")),
-        Arc::new(SessionManager::new().expect("session manager")),
-        Arc::new(WorkspaceMemory::new().expect("workspace memory")),
+        Arc::new(VectorDB::new(&rara_dir.join("lancedb").to_string_lossy())),
+        session_manager,
+        workspace,
     );
 
     agent
         .query_with_mode("loop".to_string(), super::super::AgentOutputMode::Silent)
         .await
-        .expect("query should finish with a forced final answer");
+        .expect("query should continue until the model returns a final answer");
 
     let observed_tools = backend.observed_tools();
     assert_eq!(
         observed_tools.len(),
-        super::super::MAX_TOOL_ROUNDS_PER_TURN + 2
+        tool_turns + 1,
+        "the agent should continue past the former fixed turn cap before the final answer"
     );
-    assert!(observed_tools.last().is_some_and(|tools| tools.is_empty()));
     assert!(agent.history.last().is_some_and(|message| message
         .content
         .to_string()
         .contains("Final answer after reviewing the tool results.")));
-}
-
-#[tokio::test]
-async fn returns_local_fallback_when_forced_final_answer_still_calls_tools() {
-    let mut responses = (0..=super::super::MAX_TOOL_ROUNDS_PER_TURN)
-        .map(|idx| LlmResponse {
-            content: vec![ContentBlock::ToolUse {
-                id: format!("tool-{idx}"),
-                name: "stub_tool".to_string(),
-                input: json!({}),
-            }],
-            stop_reason: Some("tool_use".to_string()),
-            usage: Some(TokenUsage::default()),
-        })
-        .collect::<Vec<_>>();
-    responses.push(LlmResponse {
-        content: vec![
-            ContentBlock::Text {
-                text: "Partial text before requesting another tool.".to_string(),
-            },
-            ContentBlock::ToolUse {
-                id: "tool-final".to_string(),
-                name: "stub_tool".to_string(),
-                input: json!({}),
-            },
-        ],
-        stop_reason: Some("tool_use".to_string()),
-        usage: Some(TokenUsage::default()),
-    });
-    let backend = Arc::new(SequencedBackend::new(responses));
-
-    let mut tool_manager = ToolManager::new();
-    tool_manager.register(Box::new(StubTool));
-    let mut agent = Agent::new(
-        tool_manager,
-        backend.clone(),
-        Arc::new(VectorDB::new("data/lancedb")),
-        Arc::new(SessionManager::new().expect("session manager")),
-        Arc::new(WorkspaceMemory::new().expect("workspace memory")),
-    );
-
-    let mut events = Vec::new();
-    agent
-        .query_with_mode_and_events(
-            "loop".to_string(),
-            super::super::AgentOutputMode::Silent,
-            |event| events.push(event),
-        )
-        .await
-        .expect("query should finish with a local fallback answer");
-
-    let observed_tools = backend.observed_tools();
-    assert!(observed_tools.last().is_some_and(|tools| tools.is_empty()));
-    let fallback_message = agent
-        .history
-        .last()
-        .expect("fallback message should be appended")
-        .content
-        .to_string();
-    assert!(fallback_message.contains(&format!(
-        "Tool loop reached the {}-round limit",
-        super::super::MAX_TOOL_ROUNDS_PER_TURN
-    )));
-    assert!(!fallback_message.contains("Partial text before requesting another tool."));
     assert!(agent
         .history
         .iter()
-        .any(|message| message.content.to_string().contains("tool-final")));
+        .any(|message| message.content.to_string().contains("tool-204")));
     assert_no_unresolved_tool_uses(&agent.history);
-    assert!(events.iter().any(|event| matches!(
-        event,
-        super::super::AgentEvent::AssistantText(text)
-            if text.contains("Tool loop reached the")
-    )));
 }
 
 #[test]

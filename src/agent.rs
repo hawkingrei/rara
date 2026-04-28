@@ -19,7 +19,7 @@ use crate::workspace::WorkspaceMemory;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::sync::Arc;
+use std::sync::{atomic::AtomicBool, Arc};
 use uuid::Uuid;
 
 pub use self::compact::{latest_compact_boundary_metadata, CompactBoundaryMetadata, CompactState};
@@ -29,10 +29,6 @@ use self::planning::{
 pub use self::planning::{
     CompletedInteraction, PendingApproval, PendingUserInput, PlanStep, PlanStepStatus,
 };
-
-const MAX_TOOL_ROUNDS_PER_TURN: usize = 8;
-const MAX_PLAN_CONTINUATIONS_PER_TURN: usize = 2;
-const MAX_EXECUTE_CONTINUATIONS_PER_TURN: usize = 2;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AgentExecutionMode {
@@ -120,6 +116,7 @@ pub struct Agent {
     inspection_progress: InspectionProgress,
     last_query_plan_updated: bool,
     prompt_config: PromptRuntimeConfig,
+    cancellation_token: Option<Arc<AtomicBool>>,
 }
 
 impl Agent {
@@ -156,6 +153,7 @@ impl Agent {
             inspection_progress: InspectionProgress::default(),
             last_query_plan_updated: false,
             prompt_config: PromptRuntimeConfig::default(),
+            cancellation_token: None,
         }
     }
 
@@ -183,15 +181,14 @@ impl Agent {
         F: FnMut(AgentEvent) + Send,
     {
         let turn_start_idx = self.history.len();
-        let mut tool_rounds = 0usize;
-        let mut plan_continuations = 0usize;
-        let mut execute_continuations = 0usize;
+        let mut agentic_turns = 0usize;
         self.inspection_progress = InspectionProgress::default();
         self.last_query_plan_updated = false;
         self.compact_if_needed_with_reporter(&mut report).await?;
         let repaired_history = repair_tool_result_history(&self.history);
         if repaired_history != self.history {
             self.replace_history(repaired_history);
+            self.checkpoint_session()?;
         }
         self.clear_completed_interactions();
 
@@ -199,18 +196,12 @@ impl Agent {
             role: "user".to_string(),
             content: json!([{"type": "text", "text": prompt.clone()}]),
         });
+        self.checkpoint_session()?;
 
-        self.run_agent_loop_with_limit(
-            output_mode,
-            &mut report,
-            &mut tool_rounds,
-            &mut plan_continuations,
-            &mut execute_continuations,
-        )
-        .await?;
+        self.run_agent_loop_with_limit(output_mode, &mut report, &mut agentic_turns)
+            .await?;
 
-        self.session_manager
-            .save_session(&self.session_id, &self.history)?;
+        self.checkpoint_session()?;
         let turn_text = format!(
             "User: {}\nAgent Response: {:?}",
             prompt,
@@ -231,6 +222,11 @@ impl Agent {
                 .await;
         }
         Ok(())
+    }
+
+    pub(super) fn checkpoint_session(&self) -> Result<()> {
+        self.session_manager
+            .save_session(&self.session_id, &self.history)
     }
 
     async fn run_model_turn<F>(
@@ -257,6 +253,7 @@ impl Agent {
     {
         report(AgentEvent::Status("Sending prompt to model.".to_string()));
         let turn_metadata = self.llm_turn_metadata();
+        turn_metadata.ensure_not_cancelled()?;
         let mut messages = self
             .history
             .iter()
@@ -358,9 +355,14 @@ impl Agent {
     }
 
     fn llm_turn_metadata(&self) -> LlmTurnMetadata {
-        match self.execution_mode {
+        let metadata = match self.execution_mode {
             AgentExecutionMode::Execute => LlmTurnMetadata::execute(),
             AgentExecutionMode::Plan => LlmTurnMetadata::plan(),
+        };
+        if let Some(token) = self.cancellation_token.as_ref() {
+            metadata.with_cancellation(token.clone())
+        } else {
+            metadata
         }
     }
 
@@ -372,26 +374,16 @@ impl Agent {
     where
         F: FnMut(AgentEvent) + Send,
     {
-        let mut tool_rounds = 0usize;
-        let mut plan_continuations = 0usize;
-        let mut execute_continuations = 0usize;
-        self.run_agent_loop_with_limit(
-            output_mode,
-            report,
-            &mut tool_rounds,
-            &mut plan_continuations,
-            &mut execute_continuations,
-        )
-        .await
+        let mut agentic_turns = 0usize;
+        self.run_agent_loop_with_limit(output_mode, report, &mut agentic_turns)
+            .await
     }
 
     async fn run_agent_loop_with_limit<F>(
         &mut self,
         output_mode: AgentOutputMode,
         report: &mut F,
-        tool_rounds: &mut usize,
-        plan_continuations: &mut usize,
-        execute_continuations: &mut usize,
+        agentic_turns: &mut usize,
     ) -> Result<()>
     where
         F: FnMut(AgentEvent) + Send,
@@ -401,16 +393,15 @@ impl Agent {
             let turn_output = self.run_model_turn(output_mode, report).await?;
             self.last_query_plan_updated = turn_output.plan_updated;
             self.push_history_message(turn_output.assistant_message);
+            self.checkpoint_session()?;
 
             if turn_output.tool_calls.is_empty() {
                 if self.should_continue_plan_without_tools(
                     turn_output.plan_updated,
                     turn_output.continue_inspection,
                     turn_output.had_text_response,
-                    *tool_rounds,
-                    *plan_continuations,
+                    *agentic_turns,
                 ) {
-                    *plan_continuations += 1;
                     let phase = if matches!(
                         self.planning_outcome_contract(
                             turn_output.plan_updated,
@@ -432,132 +423,42 @@ impl Agent {
                         RuntimeContinuationPhase::PlanContinuationRequired
                     };
                     self.push_history_message(
-                        self.runtime_continuation_message(phase, *tool_rounds),
+                        self.runtime_continuation_message(phase, *agentic_turns),
                     );
+                    self.checkpoint_session()?;
                     continue;
                 }
                 if self.should_continue_execute_without_tools(
-                    *tool_rounds,
-                    *execute_continuations,
+                    *agentic_turns,
                     turn_output.continue_inspection,
                 ) {
-                    *execute_continuations += 1;
                     report(AgentEvent::Status(
                         "Repository review needs more code inspection. Continuing the same turn."
                             .to_string(),
                     ));
                     self.push_history_message(self.runtime_continuation_message(
                         RuntimeContinuationPhase::ExecutionContinuationRequired,
-                        *tool_rounds,
+                        *agentic_turns,
                     ));
+                    self.checkpoint_session()?;
                     continue;
                 }
                 self.complete_active_plan_step();
                 break;
             }
-            *tool_rounds += 1;
-            if *tool_rounds > MAX_TOOL_ROUNDS_PER_TURN {
-                let skipped_results =
-                    self.tool_loop_limit_result_messages(&turn_output.tool_calls, report);
-                self.extend_history_messages(skipped_results);
-                report(AgentEvent::Status(
-                    "Tool loop reached the limit. Requesting a final answer without more tool calls."
-                        .to_string(),
-                ));
-                self.push_history_message(self.runtime_continuation_message(
-                    RuntimeContinuationPhase::FinalAnswerRequired,
-                    *tool_rounds,
-                ));
-                let final_turn = self
-                    .run_model_turn_with_tools(output_mode, report, &[])
-                    .await?;
-                self.last_query_plan_updated = final_turn.plan_updated;
-                if final_turn.tool_calls.is_empty() && final_turn.had_text_response {
-                    self.push_history_message(final_turn.assistant_message);
-                } else {
-                    if !final_turn.tool_calls.is_empty() {
-                        self.push_history_message(final_turn.assistant_message);
-                        let skipped_results =
-                            self.tool_loop_limit_result_messages(&final_turn.tool_calls, report);
-                        self.extend_history_messages(skipped_results);
-                    }
-                    let fallback_text = self.tool_loop_limit_fallback_text();
-                    report(AgentEvent::Status(
-                        "Tool loop reached the limit. Returning a bounded final response without more tool calls."
-                            .to_string(),
-                    ));
-                    report(AgentEvent::AssistantText(fallback_text.clone()));
-                    if matches!(output_mode, AgentOutputMode::Terminal) {
-                        println!("Agent: {}", fallback_text);
-                    }
-                    self.push_history_message(assistant_text_message(fallback_text));
-                }
-                self.complete_active_plan_step();
-                break;
-            }
+            *agentic_turns += 1;
 
             let tool_results = self
                 .execute_tool_calls(turn_output.tool_calls, report)
                 .await?;
             if self.pending_approval.is_some() {
+                self.checkpoint_session()?;
                 break;
             }
             self.advance_plan_step();
-            self.extend_history_for_next_turn(tool_results, report, *tool_rounds);
+            self.extend_history_for_next_turn(tool_results, report, *agentic_turns)?;
         }
         Ok(())
-    }
-
-    fn tool_loop_limit_result_messages<F>(
-        &self,
-        tool_calls: &[ToolCall],
-        report: &mut F,
-    ) -> Vec<Message>
-    where
-        F: FnMut(AgentEvent) + Send,
-    {
-        tool_calls
-            .iter()
-            .map(|tool_call| {
-                let content = format!(
-                    "Error: tool call '{}' was not executed because this turn reached the {} tool-round limit.",
-                    tool_call.name, MAX_TOOL_ROUNDS_PER_TURN
-                );
-                report(AgentEvent::ToolResult {
-                    name: tool_call.name.clone(),
-                    content: content.clone(),
-                    is_error: true,
-                });
-                tool_result_message(&tool_call.id, content, true)
-            })
-            .collect()
-    }
-
-    fn tool_loop_limit_fallback_text(&self) -> String {
-        let mut lines = vec![
-            format!(
-                "Tool loop reached the {MAX_TOOL_ROUNDS_PER_TURN}-round limit before a clean final answer was produced."
-            ),
-            "I stopped additional tool execution, recorded any skipped tool calls as error results, and preserved the transcript for the next turn.".to_string(),
-        ];
-        if !self.current_plan.is_empty() {
-            lines.push(String::new());
-            lines.push("Current plan state:".to_string());
-            lines.extend(
-                self.current_plan.iter().map(|step| {
-                    format!("- [{}] {}", plan_step_status_label(&step.status), step.step)
-                }),
-            );
-        }
-        if let Some(explanation) = self
-            .plan_explanation
-            .as_deref()
-            .filter(|explanation| !explanation.trim().is_empty())
-        {
-            lines.push(String::new());
-            lines.push(explanation.trim().to_string());
-        }
-        lines.join("\n")
     }
 
     async fn execute_tool_calls<F>(
@@ -591,6 +492,11 @@ impl Agent {
                             allow_net: tool_call
                                 .input
                                 .get("allow_net")
+                                .and_then(Value::as_bool)
+                                .unwrap_or(false),
+                            run_in_background: tool_call
+                                .input
+                                .get("run_in_background")
                                 .and_then(Value::as_bool)
                                 .unwrap_or(false),
                         }
@@ -690,21 +596,6 @@ impl Agent {
             }
         }
         Ok(tool_results)
-    }
-}
-
-fn assistant_text_message(text: String) -> Message {
-    Message {
-        role: "assistant".to_string(),
-        content: json!([{"type": "text", "text": text}]),
-    }
-}
-
-fn plan_step_status_label(status: &PlanStepStatus) -> &'static str {
-    match status {
-        PlanStepStatus::Pending => "pending",
-        PlanStepStatus::InProgress => "in_progress",
-        PlanStepStatus::Completed => "completed",
     }
 }
 

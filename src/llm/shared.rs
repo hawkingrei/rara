@@ -1,6 +1,10 @@
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use serde_json::{json, Value};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 use std::time::Duration;
 use url::Url;
 
@@ -27,15 +31,17 @@ pub enum LlmExecutionMode {
     Plan,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct LlmTurnMetadata {
     execution_mode: LlmExecutionMode,
+    cancellation: Option<Arc<AtomicBool>>,
 }
 
 impl Default for LlmTurnMetadata {
     fn default() -> Self {
         Self {
             execution_mode: LlmExecutionMode::Execute,
+            cancellation: None,
         }
     }
 }
@@ -44,16 +50,36 @@ impl LlmTurnMetadata {
     pub fn execute() -> Self {
         Self {
             execution_mode: LlmExecutionMode::Execute,
+            cancellation: None,
         }
     }
 
     pub fn plan() -> Self {
         Self {
             execution_mode: LlmExecutionMode::Plan,
+            cancellation: None,
         }
     }
 
-    pub fn prefers_strong_reasoning(self) -> bool {
+    pub fn with_cancellation(mut self, cancellation: Arc<AtomicBool>) -> Self {
+        self.cancellation = Some(cancellation);
+        self
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.cancellation
+            .as_ref()
+            .is_some_and(|cancellation| cancellation.load(Ordering::SeqCst))
+    }
+
+    pub fn ensure_not_cancelled(&self) -> Result<()> {
+        if self.is_cancelled() {
+            return Err(anyhow!("LLM turn cancelled by user"));
+        }
+        Ok(())
+    }
+
+    pub fn prefers_strong_reasoning(&self) -> bool {
         matches!(self.execution_mode, LlmExecutionMode::Plan)
     }
 }

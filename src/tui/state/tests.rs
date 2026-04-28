@@ -174,6 +174,24 @@ fn queued_follow_up_messages_preserve_fifo_order() {
 }
 
 #[test]
+fn drain_queued_follow_up_messages_preserves_fifo_order() {
+    let dir = tempdir().expect("tempdir");
+    let cm = ConfigManager {
+        path: dir.path().join("config.json"),
+    };
+    let mut app = TuiApp::new(cm).expect("app");
+
+    app.queue_follow_up_message("first");
+    app.queue_follow_up_message("second");
+
+    assert_eq!(
+        app.drain_queued_follow_up_messages(),
+        vec!["first".to_string(), "second".to_string()]
+    );
+    assert_eq!(app.pop_queued_follow_up_message(), None);
+}
+
+#[test]
 fn pending_follow_up_messages_release_on_tool_boundary() {
     let dir = tempdir().expect("tempdir");
     let cm = ConfigManager {

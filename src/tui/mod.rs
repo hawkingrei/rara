@@ -43,9 +43,10 @@ use self::provider_flow::{
 };
 use self::render::{desired_viewport_height, render};
 use self::runtime::{
-    execute_local_command, finish_running_task_if_ready, should_suggest_planning_mode,
-    start_deepseek_model_list_task, start_oauth_task, start_pending_approval_task,
-    start_plan_approval_resume_task, start_query_task, start_rebuild_task,
+    execute_local_command, finish_running_task_if_ready, request_running_task_cancellation,
+    should_suggest_planning_mode, start_deepseek_model_list_task, start_oauth_task,
+    start_pending_approval_task, start_plan_approval_resume_task, start_query_task,
+    start_rebuild_task,
 };
 use self::session_restore::{
     provider_requires_api_key, restore_latest_thread, restore_thread_by_id,
@@ -185,6 +186,7 @@ async fn dispatch_event(
         AppEvent::Noop => {}
         AppEvent::OpenOverlay(overlay) => app.open_overlay(overlay),
         AppEvent::CloseOverlay => app.close_overlay(),
+        AppEvent::CancelRunningTask => request_running_task_cancellation(app),
         AppEvent::SubmitComposer => {
             if handle_submit(app, agent_slot, oauth_manager).await? {
                 return Ok(true);

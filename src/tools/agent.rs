@@ -29,12 +29,32 @@ impl SubAgentKind {
 
     fn append_prompt(self) -> &'static str {
         match self {
-            SubAgentKind::General => "",
+            SubAgentKind::General => {
+                "## Sub-Agent Role\n- You are a direct worker sub-agent.\n- Do not delegate to another agent or spawn sub-agents; complete the assigned work directly."
+            }
             SubAgentKind::Explore => {
-                "## Sub-Agent Role\n- You are a read-only exploration sub-agent.\n- Inspect the repository and summarize concrete findings.\n- Do not propose edits you cannot justify from inspected code.\n- Do not narrate each next tool call; call the tool directly.\n- End with a concise findings summary."
+                concat!(
+                    "## Sub-Agent Role\n",
+                    "- You are a read-only exploration sub-agent.\n",
+                    "- Inspect the repository and summarize concrete findings.\n",
+                    "- Do not propose edits you cannot justify from inspected code.\n",
+                    "- Do not narrate each next tool call; call the tool directly.\n",
+                    "- Do not delegate to another agent or spawn sub-agents; inspect and answer directly.\n",
+                    "- End with a concise findings summary."
+                )
             }
             SubAgentKind::Plan => {
-                "## Sub-Agent Role\n- You are a read-only planning sub-agent.\n- Inspect the repository and refine an implementation approach.\n- Keep plans shallow and grouped by behavior.\n- Use <plan> only when the plan is decision-complete.\n- If the plan is not ready, summarize what additional inspection is still needed and end with <continue_inspection/>.\n- Do not stop with narration alone.\n- End with exactly one of: <plan>, <request_user_input>, or <continue_inspection/>."
+                concat!(
+                    "## Sub-Agent Role\n",
+                    "- You are a read-only planning sub-agent.\n",
+                    "- Inspect the repository and refine an implementation approach.\n",
+                    "- Keep plans shallow and grouped by behavior.\n",
+                    "- Use <plan> only when the plan is decision-complete.\n",
+                    "- If the plan is not ready, summarize what additional inspection is still needed and end with <continue_inspection/>.\n",
+                    "- Do not stop with narration alone.\n",
+                    "- Do not delegate to another agent or spawn sub-agents; inspect and answer directly.\n",
+                    "- End with exactly one of: <plan>, <request_user_input>, or <continue_inspection/>."
+                )
             }
         }
     }
@@ -273,11 +293,7 @@ async fn run_sub_agent(
     workspace: Arc<WorkspaceMemory>,
     prompt_config: PromptRuntimeConfig,
 ) -> Result<SubAgentResult, ToolError> {
-    let tool_manager = if kind.read_only() {
-        build_read_only_tool_manager()
-    } else {
-        ToolManager::new()
-    };
+    let tool_manager = build_subagent_tool_manager(kind);
     let mut sub = Agent::new(tool_manager, backend, vdb, session_manager, workspace);
     sub.set_execution_mode(kind.execution_mode());
     sub.set_prompt_config(append_subagent_prompt(prompt_config, kind.append_prompt()));
@@ -304,6 +320,14 @@ fn build_read_only_tool_manager() -> ToolManager {
     tool_manager.register(Box::new(GlobTool));
     tool_manager.register(Box::new(GrepTool));
     tool_manager
+}
+
+fn build_subagent_tool_manager(kind: SubAgentKind) -> ToolManager {
+    if kind.read_only() {
+        build_read_only_tool_manager()
+    } else {
+        ToolManager::new()
+    }
 }
 
 fn append_subagent_prompt(
@@ -381,14 +405,15 @@ fn serialize_pending_user_input(request: &PendingUserInput) -> Value {
 #[cfg(test)]
 mod tests {
     use super::{
-        append_subagent_prompt, build_read_only_tool_manager, latest_assistant_text_from_history,
+        append_subagent_prompt, build_read_only_tool_manager, build_subagent_tool_manager,
+        latest_assistant_text_from_history, SubAgentKind,
     };
     use crate::agent::Message;
     use crate::prompt::PromptRuntimeConfig;
     use serde_json::json;
 
     #[test]
-    fn read_only_subagent_manager_excludes_mutating_tools() {
+    fn read_only_subagent_manager_excludes_mutating_and_agent_tools() {
         let manager = build_read_only_tool_manager();
         assert!(manager.get_tool("read_file").is_some());
         assert!(manager.get_tool("list_files").is_some());
@@ -398,6 +423,28 @@ mod tests {
         assert!(manager.get_tool("write_file").is_none());
         assert!(manager.get_tool("apply_patch").is_none());
         assert!(manager.get_tool("bash").is_none());
+        assert!(manager.get_tool("background_task_list").is_none());
+        assert!(manager.get_tool("background_task_status").is_none());
+        assert!(manager.get_tool("background_task_stop").is_none());
+        assert!(manager.get_tool("pty_start").is_none());
+        assert!(manager.get_tool("pty_list").is_none());
+        assert!(manager.get_tool("pty_status").is_none());
+        assert!(manager.get_tool("pty_stop").is_none());
+        assert!(manager.get_tool("spawn_agent").is_none());
+        assert!(manager.get_tool("explore_agent").is_none());
+        assert!(manager.get_tool("plan_agent").is_none());
+        assert!(manager.get_tool("team_create").is_none());
+    }
+
+    #[test]
+    fn general_subagent_manager_does_not_expose_recursive_agent_tools() {
+        let manager = build_subagent_tool_manager(SubAgentKind::General);
+        assert!(manager.get_tool("spawn_agent").is_none());
+        assert!(manager.get_tool("explore_agent").is_none());
+        assert!(manager.get_tool("plan_agent").is_none());
+        assert!(manager.get_tool("team_create").is_none());
+        assert!(manager.get_tool("bash").is_none());
+        assert!(manager.get_tool("pty_start").is_none());
     }
 
     #[test]

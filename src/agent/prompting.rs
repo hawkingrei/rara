@@ -70,6 +70,13 @@ impl Agent {
         self.prompt_config = prompt_config;
     }
 
+    pub fn set_cancellation_token(
+        &mut self,
+        cancellation_token: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    ) {
+        self.cancellation_token = cancellation_token;
+    }
+
     pub fn prompt_config(&self) -> &PromptRuntimeConfig {
         &self.prompt_config
     }

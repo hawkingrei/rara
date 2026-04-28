@@ -28,6 +28,9 @@ If the model ends a planning turn with narration alone, runtime must continue th
 
 - `explore_agent` is a read-only exploration sidecar for repository inspection;
 - `plan_agent` is a read-only planning sidecar for delegated sub-planning;
+- sub-agents must not recursively create sub-agents;
+- general worker sub-agents do not receive tool access until RARA has an explicit
+  nested-agent depth and observability contract;
 - planning sub-agents follow the same completion contract:
   - `<plan>`
   - `<request_user_input>`

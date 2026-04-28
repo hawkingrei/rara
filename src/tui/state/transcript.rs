@@ -392,6 +392,10 @@ impl TuiApp {
         }
     }
 
+    pub fn drain_queued_follow_up_messages(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.queued_follow_up_messages)
+    }
+
     pub fn begin_running_turn(&mut self) {
         self.running_tool_boundary_count = 0;
     }

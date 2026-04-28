@@ -22,6 +22,10 @@ pub fn start_query_task(app: &mut TuiApp, prompt: String, agent: Agent) {
     tasks::start_query_task(app, prompt, agent);
 }
 
+pub fn request_running_task_cancellation(app: &mut TuiApp) {
+    tasks::request_running_task_cancellation(app);
+}
+
 pub fn should_suggest_planning_mode(app: &TuiApp, prompt: &str) -> bool {
     tasks::should_suggest_planning_mode(app, prompt)
 }

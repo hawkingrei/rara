@@ -227,6 +227,7 @@ pub(super) fn map_key_to_event(key: KeyEvent, app: &TuiApp) -> AppEvent {
             _ => AppEvent::Noop,
         },
         None => match (code, modifiers) {
+            (KeyCode::Esc, _) if app.is_busy() => AppEvent::CancelRunningTask,
             (KeyCode::Esc, _) => AppEvent::Noop,
             (KeyCode::Enter, KeyModifiers::SHIFT) | (KeyCode::Char('j'), KeyModifiers::CONTROL) => {
                 AppEvent::InsertNewline

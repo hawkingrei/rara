@@ -4,7 +4,10 @@ mod oauth;
 mod tests;
 
 use secrecy::ExposeSecret;
-use std::sync::Arc;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 use std::time::Instant;
 
 use rara_provider_catalog::{
@@ -75,25 +78,25 @@ fn try_start_queued_follow_up(app: &mut TuiApp, agent_slot: &mut Option<Agent>) 
         return;
     }
 
-    let Some(prompt) = app.pop_queued_follow_up_message() else {
+    let prompts = app.drain_queued_follow_up_messages();
+    if prompts.is_empty() {
         return;
-    };
+    }
+    let prompt = prompts.join("\n\n");
+
     let Some(agent) = agent_slot.take() else {
+        // If the agent is missing, re-queue the merged prompt
         app.queue_follow_up_message(prompt);
         return;
     };
 
-    let remaining = app.queued_follow_up_count();
-    app.notice = Some(if remaining > 0 {
-        format!("Running queued follow-up. {remaining} more queued.")
-    } else {
-        "Running queued follow-up.".to_string()
-    });
+    app.notice = Some("Running queued follow-up.".to_string());
     start_query_task(app, prompt, agent);
 }
 
 pub(super) fn start_query_task(app: &mut TuiApp, prompt: String, mut agent: Agent) {
     let (sender, receiver) = mpsc::unbounded_channel();
+    let cancellation_token = Arc::new(AtomicBool::new(false));
     app.clear_pending_planning_suggestion();
     app.clear_active_live_sections();
     app.begin_running_turn();
@@ -102,6 +105,7 @@ pub(super) fn start_query_task(app: &mut TuiApp, prompt: String, mut agent: Agen
     app.notice = Some("Running prompt.".into());
     app.set_runtime_phase(RuntimePhase::SendingPrompt, Some("sending prompt".into()));
     app.push_entry("You", prompt.clone());
+    agent.set_cancellation_token(Some(cancellation_token.clone()));
 
     let handle = tokio::spawn(async move {
         let tx = sender.clone();
@@ -121,6 +125,8 @@ pub(super) fn start_query_task(app: &mut TuiApp, prompt: String, mut agent: Agen
         handle,
         started_at: Instant::now(),
         next_heartbeat_after_secs: 2,
+        cancellation_token: Some(cancellation_token),
+        cancellation_requested: false,
     });
 }
 
@@ -216,6 +222,8 @@ pub(super) fn start_compact_task(app: &mut TuiApp, mut agent: Agent) {
         handle,
         started_at: Instant::now(),
         next_heartbeat_after_secs: 2,
+        cancellation_token: None,
+        cancellation_requested: false,
     });
 }
 
@@ -225,6 +233,7 @@ pub(super) fn start_pending_approval_task(
     mut agent: Agent,
 ) {
     let (sender, receiver) = mpsc::unbounded_channel();
+    let cancellation_token = Arc::new(AtomicBool::new(false));
     let selection_label = match selection {
         BashApprovalMode::Once => "run once",
         BashApprovalMode::Always => "always allow bash",
@@ -235,6 +244,7 @@ pub(super) fn start_pending_approval_task(
         RuntimePhase::ProcessingResponse,
         Some("resuming after approval".into()),
     );
+    agent.set_cancellation_token(Some(cancellation_token.clone()));
 
     let handle = tokio::spawn(async move {
         let tx = sender.clone();
@@ -254,6 +264,8 @@ pub(super) fn start_pending_approval_task(
         handle,
         started_at: Instant::now(),
         next_heartbeat_after_secs: 2,
+        cancellation_token: Some(cancellation_token),
+        cancellation_requested: false,
     });
 }
 
@@ -263,6 +275,7 @@ pub(super) fn start_plan_approval_resume_task(
     mut agent: Agent,
 ) {
     let (sender, receiver) = mpsc::unbounded_channel();
+    let cancellation_token = Arc::new(AtomicBool::new(false));
     app.clear_active_live_sections();
     app.set_pending_plan_approval(false);
     app.record_completed_interaction(
@@ -295,6 +308,7 @@ pub(super) fn start_plan_approval_resume_task(
         crate::agent::AgentExecutionMode::Execute
     });
     app.set_agent_execution_mode(agent.execution_mode);
+    agent.set_cancellation_token(Some(cancellation_token.clone()));
 
     let handle = tokio::spawn(async move {
         let tx = sender.clone();
@@ -318,6 +332,8 @@ pub(super) fn start_plan_approval_resume_task(
         handle,
         started_at: Instant::now(),
         next_heartbeat_after_secs: 2,
+        cancellation_token: Some(cancellation_token),
+        cancellation_requested: false,
     });
 }
 
@@ -351,6 +367,8 @@ pub(super) fn start_rebuild_task(app: &mut TuiApp) {
         handle,
         started_at: Instant::now(),
         next_heartbeat_after_secs: u64::MAX,
+        cancellation_token: None,
+        cancellation_requested: false,
     });
 }
 
@@ -391,7 +409,36 @@ pub(super) fn start_deepseek_model_list_task(app: &mut TuiApp) {
         handle,
         started_at: Instant::now(),
         next_heartbeat_after_secs: u64::MAX,
+        cancellation_token: None,
+        cancellation_requested: false,
     });
+}
+
+pub(super) fn request_running_task_cancellation(app: &mut TuiApp) {
+    let Some(task) = app.running_task.as_mut() else {
+        return;
+    };
+    if !matches!(task.kind, TaskKind::Query) {
+        app.notice = Some("Only running model queries can be cancelled from the TUI.".into());
+        return;
+    }
+    if task.cancellation_requested {
+        app.notice =
+            Some("Cancellation already requested. Waiting for the provider stream to stop.".into());
+        return;
+    }
+    if let Some(token) = task.cancellation_token.as_ref() {
+        token.store(true, Ordering::SeqCst);
+        task.cancellation_requested = true;
+        task.next_heartbeat_after_secs = 0;
+        app.notice = Some("Cancellation requested.".into());
+        app.set_runtime_phase(
+            RuntimePhase::ProcessingResponse,
+            Some("cancelling query".into()),
+        );
+    } else {
+        app.notice = Some("This running task does not expose cancellation.".into());
+    }
 }
 
 pub(super) async fn finish_running_task_if_ready(
@@ -465,6 +512,8 @@ pub(super) async fn finish_running_task_if_ready(
                     }
                 }
                 Err(err) => {
+                    let error_message = format_error_chain(&err);
+                    let cancelled = error_message.contains("cancelled by user");
                     restore_execute_mode_after_plan_turn(app, &mut agent);
                     app.clear_active_live_sections();
                     app.set_pending_plan_approval(false);
@@ -474,8 +523,14 @@ pub(super) async fn finish_running_task_if_ready(
                     }
                     app.release_pending_follow_ups();
                     app.finalize_agent_stream(None);
+                    if cancelled {
+                        app.finalize_active_turn();
+                        app.notice = Some("Query cancelled.".into());
+                        app.set_runtime_phase(RuntimePhase::Idle, Some("query cancelled".into()));
+                        return Ok(());
+                    }
                     app.set_runtime_phase(RuntimePhase::Failed, Some("query failed".into()));
-                    let mut message = format!("Query failed:\n{}", format_error_chain(&err));
+                    let mut message = format!("Query failed:\n{error_message}");
                     if app.config.provider == "ollama" {
                         let base_url = app
                             .config
@@ -635,30 +690,68 @@ pub(super) async fn finish_running_task_if_ready(
 }
 
 fn emit_query_heartbeat(app: &mut TuiApp) {
-    let Some(task) = app.running_task.as_mut() else {
-        return;
-    };
-    if !matches!(task.kind, TaskKind::Query) {
-        return;
-    }
+    let elapsed = {
+        let Some(task) = app.running_task.as_mut() else {
+            return;
+        };
+        if !matches!(task.kind, TaskKind::Query) {
+            return;
+        }
 
-    let elapsed = task.started_at.elapsed().as_secs();
-    if elapsed < task.next_heartbeat_after_secs {
-        return;
-    }
+        let elapsed = task.started_at.elapsed().as_secs();
+        if elapsed < task.next_heartbeat_after_secs {
+            return;
+        }
+        task.next_heartbeat_after_secs = elapsed.saturating_add(1);
+        elapsed
+    };
 
     let is_local = super::super::command::is_local_provider(&app.config.provider);
-    let detail = if is_local {
-        format!("local model is still generating · {}s elapsed", elapsed)
-    } else {
-        format!("waiting for model response · {}s elapsed", elapsed)
+    let current_detail = app
+        .runtime_phase_detail
+        .as_deref()
+        .map(|detail| detail.split(" · ").next().unwrap_or(detail))
+        .filter(|detail| !detail.trim().is_empty());
+    let (phase, detail, notice) = match app.runtime_phase {
+        RuntimePhase::RunningTool => {
+            let detail = format!(
+                "{} · {}s elapsed",
+                current_detail.unwrap_or("running tool"),
+                elapsed
+            );
+            (
+                RuntimePhase::RunningTool,
+                detail.clone(),
+                format!("Running tool · {}s elapsed", elapsed),
+            )
+        }
+        RuntimePhase::ProcessingResponse => {
+            let detail = format!(
+                "{} · {}s elapsed",
+                current_detail.unwrap_or("processing response"),
+                elapsed
+            );
+            (
+                RuntimePhase::ProcessingResponse,
+                detail.clone(),
+                format!("Processing response · {}s elapsed", elapsed),
+            )
+        }
+        _ => {
+            let detail = if is_local {
+                format!("local model is still generating · {}s elapsed", elapsed)
+            } else {
+                format!("waiting for model response · {}s elapsed", elapsed)
+            };
+            let notice = if is_local {
+                format!("Working locally · {}s elapsed", elapsed)
+            } else {
+                format!("Waiting on {} · {}s elapsed", app.config.provider, elapsed)
+            };
+            (RuntimePhase::SendingPrompt, detail, notice)
+        }
     };
-    task.next_heartbeat_after_secs = elapsed.saturating_add(1);
 
-    app.set_runtime_phase(RuntimePhase::SendingPrompt, Some(detail.clone()));
-    app.notice = Some(if is_local {
-        format!("Working locally · {}s elapsed", elapsed)
-    } else {
-        format!("Waiting on {} · {}s elapsed", app.config.provider, elapsed)
-    });
+    app.set_runtime_phase(phase, Some(detail));
+    app.notice = Some(notice);
 }

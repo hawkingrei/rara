@@ -1,6 +1,6 @@
 use std::cell::RefCell;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{atomic::AtomicBool, Arc};
 use std::time::Instant;
 
 use ratatui::text::Line;
@@ -265,6 +265,8 @@ pub struct RunningTask {
     pub handle: JoinHandle<TaskCompletion>,
     pub started_at: Instant,
     pub next_heartbeat_after_secs: u64,
+    pub cancellation_token: Option<Arc<AtomicBool>>,
+    pub cancellation_requested: bool,
 }
 
 pub const PROVIDER_FAMILIES: [(ProviderFamily, &str, &str); 5] = [

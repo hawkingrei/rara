@@ -47,6 +47,7 @@ impl CodexBackend {
         &self,
         messages: &[Message],
         tools: &[Value],
+        metadata: crate::llm::LlmTurnMetadata,
         mut on_text_delta: Option<&mut (dyn FnMut(String) + Send)>,
     ) -> Result<LlmResponse> {
         let body = build_codex_responses_request(
@@ -82,6 +83,7 @@ impl CodexBackend {
         let mut streamed_text = String::new();
 
         while let Some(event) = stream.next().await {
+            metadata.ensure_not_cancelled()?;
             let event =
                 event.map_err(|error| anyhow!("Failed to decode Codex SSE event: {error}"))?;
             if event.data.trim().is_empty() {
@@ -116,7 +118,8 @@ impl CodexBackend {
 #[async_trait]
 impl LlmBackend for CodexBackend {
     async fn ask(&self, m: &[Message], t: &[Value]) -> Result<LlmResponse> {
-        self.ask_responses_streaming(m, t, None).await
+        self.ask_responses_streaming(m, t, crate::llm::LlmTurnMetadata::default(), None)
+            .await
     }
 
     async fn ask_streaming(
@@ -125,7 +128,23 @@ impl LlmBackend for CodexBackend {
         tools: &[Value],
         on_text_delta: &mut (dyn FnMut(String) + Send),
     ) -> Result<LlmResponse> {
-        self.ask_responses_streaming(messages, tools, Some(on_text_delta))
+        self.ask_responses_streaming(
+            messages,
+            tools,
+            crate::llm::LlmTurnMetadata::default(),
+            Some(on_text_delta),
+        )
+        .await
+    }
+
+    async fn ask_streaming_with_context(
+        &self,
+        messages: &[Message],
+        tools: &[Value],
+        metadata: crate::llm::LlmTurnMetadata,
+        on_text_delta: &mut (dyn FnMut(String) + Send),
+    ) -> Result<LlmResponse> {
+        self.ask_responses_streaming(messages, tools, metadata, Some(on_text_delta))
             .await
     }
 

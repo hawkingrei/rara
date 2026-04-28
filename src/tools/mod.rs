@@ -3,6 +3,7 @@ pub mod bash;
 pub mod context;
 pub mod file;
 pub mod patch;
+pub mod pty;
 pub mod search;
 pub mod skill;
 pub mod vector;

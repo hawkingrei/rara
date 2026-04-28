@@ -4,7 +4,7 @@ use crate::thread_rollout_log;
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -81,8 +81,32 @@ impl SessionManager {
             fs::create_dir_all(parent)?;
         }
         let content = serde_json::to_string(history)?;
-        fs::write(path, content)?;
+        let tmp_path = path.with_extension(format!("json.tmp-{}", uuid::Uuid::new_v4()));
+        fs::write(&tmp_path, content)?;
+        if let Err(err) = Self::replace_file(&tmp_path, &path) {
+            let _ = fs::remove_file(&tmp_path);
+            return Err(err);
+        }
         Ok(())
+    }
+
+    #[cfg(not(windows))]
+    fn replace_file(src: &Path, dst: &Path) -> Result<()> {
+        fs::rename(src, dst)?;
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    fn replace_file(src: &Path, dst: &Path) -> Result<()> {
+        match fs::rename(src, dst) {
+            Ok(()) => Ok(()),
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists && dst.exists() => {
+                fs::remove_file(dst)?;
+                fs::rename(src, dst)?;
+                Ok(())
+            }
+            Err(err) => Err(err.into()),
+        }
     }
 
     pub fn load_thread_history(&self, thread_id: &str) -> Result<Vec<Message>> {
@@ -364,6 +388,28 @@ mod tests {
         let canonical_messages: Vec<Message> = serde_json::from_str(&canonical_history)?;
         assert_eq!(canonical_messages.len(), 1);
         assert_eq!(canonical_messages[0].role, "user");
+        Ok(())
+    }
+
+    #[test]
+    fn save_session_writes_history_without_leaving_temp_files() -> Result<()> {
+        let temp = tempdir()?;
+        let session_manager = SessionManager::new_for_rara_dir(temp.path().join(".rara"))?;
+        let history = vec![Message {
+            role: "user".to_string(),
+            content: serde_json::json!([{"type": "text", "text": "hello"}]),
+        }];
+
+        session_manager.save_session("thread-atomic-history", &history)?;
+
+        let path = session_manager.session_history_path("thread-atomic-history");
+        let persisted: Vec<Message> = serde_json::from_str(&fs::read_to_string(&path)?)?;
+        assert_eq!(persisted, history);
+        let leftovers = fs::read_dir(path.parent().expect("history parent"))?
+            .filter_map(std::result::Result::ok)
+            .filter(|entry| entry.file_name().to_string_lossy().contains(".tmp-"))
+            .count();
+        assert_eq!(leftovers, 0);
         Ok(())
     }
 

@@ -46,7 +46,6 @@ pub(super) struct InspectionProgress {
 #[derive(Clone, Copy)]
 pub(super) enum RuntimeContinuationPhase {
     ToolResultsAvailable,
-    FinalAnswerRequired,
     PlanContinuationRequired,
     PlanStructuredOutcomeRequired,
     ExecutionContinuationRequired,
@@ -64,7 +63,7 @@ pub(super) enum PlanningOutcomeContract {
 struct RuntimeContinuation<'a> {
     phase: &'a str,
     mode: &'a str,
-    tool_rounds: usize,
+    agentic_turns: usize,
     inspection: RuntimeInspectionSnapshot,
     plan: RuntimePlanSnapshot,
     pending_interaction: &'a str,
@@ -231,12 +230,12 @@ impl Agent {
                     RuntimeContinuationPhase::ToolResultsAvailable,
                     0,
                 ));
+                self.checkpoint_session()?;
                 self.run_agent_loop(output_mode, &mut report).await?;
             }
         }
 
-        self.session_manager
-            .save_session(&self.session_id, &self.history)?;
+        self.checkpoint_session()?;
         Ok(())
     }
 
@@ -292,6 +291,7 @@ impl Agent {
                     result_text,
                     false,
                 ));
+                self.checkpoint_session()?;
             }
             Err(err) => {
                 let error_text = format!("Error: {}", err);
@@ -305,11 +305,13 @@ impl Agent {
                     error_text,
                     true,
                 ));
+                self.checkpoint_session()?;
             }
         }
         self.push_history_message(
             self.runtime_continuation_message(RuntimeContinuationPhase::ToolResultsAvailable, 1),
         );
+        self.checkpoint_session()?;
         if !keep_always {
             self.bash_approval_mode = BashApprovalMode::Suggestion;
         }
@@ -320,8 +322,9 @@ impl Agent {
         &mut self,
         tool_results: Vec<Message>,
         report: &mut F,
-        tool_rounds: usize,
-    ) where
+        agentic_turns: usize,
+    ) -> Result<()>
+    where
         F: FnMut(AgentEvent) + Send,
     {
         self.extend_history_messages(tool_results);
@@ -330,8 +333,9 @@ impl Agent {
         ));
         self.push_history_message(self.runtime_continuation_message(
             RuntimeContinuationPhase::ToolResultsAvailable,
-            tool_rounds,
+            agentic_turns,
         ));
+        self.checkpoint_session()
     }
 
     pub(super) fn visible_tool_schemas(&self) -> Vec<Value> {
@@ -378,6 +382,7 @@ impl Agent {
                 RuntimeContinuationPhase::PlanContinuationRequired,
                 0,
             ));
+            self.checkpoint_session()?;
         } else {
             self.execution_mode = AgentExecutionMode::Execute;
             report(AgentEvent::Status(
@@ -386,6 +391,7 @@ impl Agent {
             self.push_history_message(
                 self.runtime_continuation_message(RuntimeContinuationPhase::PlanApproved, 0),
             );
+            self.checkpoint_session()?;
         }
 
         self.run_agent_loop(output_mode, &mut report).await
@@ -409,16 +415,16 @@ impl Agent {
         plan_updated: bool,
         continue_inspection: bool,
         had_text_response: bool,
-        tool_rounds: usize,
-        plan_continuations: usize,
+        agentic_turns: usize,
     ) -> bool {
-        let shallow_initial_plan = plan_updated && tool_rounds == 0 && self.current_plan.len() <= 1;
+        let shallow_initial_plan =
+            plan_updated && agentic_turns == 0 && self.current_plan.len() <= 1;
         let has_inspection_evidence = self.inspection_progress.has_any_evidence();
-        let still_missing_inspection_evidence = tool_rounds > 0
+        let still_missing_inspection_evidence = agentic_turns > 0
             && !plan_updated
             && has_inspection_evidence
             && !self.inspection_progress.has_minimum_review_evidence();
-        let needs_plan_synthesis = tool_rounds > 0 && has_inspection_evidence && !plan_updated;
+        let needs_plan_synthesis = agentic_turns > 0 && has_inspection_evidence && !plan_updated;
         !matches!(
             self.planning_outcome_contract(plan_updated, continue_inspection, had_text_response),
             PlanningOutcomeContract::Satisfied
@@ -431,7 +437,6 @@ impl Agent {
                     && !plan_updated
                     && !continue_inspection
                     && self.pending_user_input.is_none()))
-            && plan_continuations < MAX_PLAN_CONTINUATIONS_PER_TURN
             && self.pending_user_input.is_none()
             && self.pending_approval.is_none()
             && (continue_inspection
@@ -463,14 +468,12 @@ impl Agent {
 
     pub(super) fn should_continue_execute_without_tools(
         &self,
-        _tool_rounds: usize,
-        execute_continuations: usize,
+        _agentic_turns: usize,
         continue_inspection: bool,
     ) -> bool {
         let inspection_intent = continue_inspection || self.inspection_progress.has_any_evidence();
         matches!(self.execution_mode, AgentExecutionMode::Execute)
             && inspection_intent
-            && execute_continuations < MAX_EXECUTE_CONTINUATIONS_PER_TURN
             && self.pending_user_input.is_none()
             && self.pending_approval.is_none()
             && (continue_inspection || !self.inspection_progress.has_minimum_review_evidence())
@@ -538,7 +541,7 @@ impl Agent {
     pub(super) fn runtime_continuation_message(
         &self,
         phase: RuntimeContinuationPhase,
-        tool_rounds: usize,
+        agentic_turns: usize,
     ) -> Message {
         let pending_interaction = if self.pending_approval.is_some() {
             "approval"
@@ -550,7 +553,7 @@ impl Agent {
         let payload = RuntimeContinuation {
             phase: phase.label(),
             mode: self.execution_mode_label(),
-            tool_rounds,
+            agentic_turns,
             inspection: RuntimeInspectionSnapshot {
                 list_calls: self.inspection_progress.list_calls,
                 source_reads: self.inspection_progress.source_reads,
@@ -667,7 +670,6 @@ impl RuntimeContinuationPhase {
     fn label(self) -> &'static str {
         match self {
             Self::ToolResultsAvailable => "tool_results_available",
-            Self::FinalAnswerRequired => "final_answer_required",
             Self::PlanContinuationRequired => "plan_continuation_required",
             Self::PlanStructuredOutcomeRequired => "plan_structured_outcome_required",
             Self::ExecutionContinuationRequired => "execution_continuation_required",
@@ -683,14 +685,6 @@ impl RuntimeContinuationPhase {
                 "Either call the next tool directly, or provide the final answer.",
                 "Do not ask the user to continue.",
                 "Do not repeat tool results verbatim.",
-            ],
-            Self::FinalAnswerRequired => vec![
-                "The tool loop reached the execution limit for this turn.",
-                "Do not call any more tools.",
-                "Synthesize the result from the repository context and tool results already in the conversation.",
-                "If another tool call would be useful, state the limitation in the final answer instead of emitting a tool call.",
-                "Provide the final answer now.",
-                "Do not ask the user to continue.",
             ],
             Self::PlanContinuationRequired => vec![
                 "Continue planning immediately.",
