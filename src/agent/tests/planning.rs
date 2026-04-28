@@ -646,6 +646,38 @@ fn parses_request_user_input_block() {
     );
 }
 
+fn new_planning_agent() -> Agent {
+    let (_temp, session_manager, workspace, rara_dir) = test_runtime_storage();
+    let mut agent = Agent::new(
+        ToolManager::new(),
+        Arc::new(SequencedBackend::new(Vec::new())),
+        Arc::new(VectorDB::new(&rara_dir.join("lancedb").to_string_lossy())),
+        session_manager,
+        workspace,
+    );
+    agent.set_execution_mode(AgentExecutionMode::Plan);
+    agent
+}
+
+#[test]
+fn shallow_initial_plan_continues_even_after_plan_update() {
+    let mut agent = new_planning_agent();
+    agent.current_plan = vec![PlanStep {
+        step: "Inspect code".to_string(),
+        status: PlanStepStatus::Pending,
+    }];
+
+    assert!(agent.should_continue_plan_without_tools(true, false, true, 0,));
+}
+
+#[test]
+fn missing_minimum_review_evidence_continues_without_plan_update() {
+    let mut agent = new_planning_agent();
+    agent.inspection_progress.source_reads = 1;
+
+    assert!(agent.should_continue_plan_without_tools(false, false, true, 1,));
+}
+
 #[test]
 fn advances_plan_steps_during_execute_mode() {
     let mut agent = Agent::new(

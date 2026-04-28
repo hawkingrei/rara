@@ -51,12 +51,6 @@ pub(super) enum RuntimeContinuationPhase {
     PlanApproved,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum PlanningOutcomeContract {
-    Satisfied,
-    MoreInspectionRequired,
-}
-
 #[derive(Serialize)]
 struct RuntimeContinuation<'a> {
     phase: &'a str,
@@ -443,10 +437,7 @@ impl Agent {
             && !plan_updated
             && has_inspection_evidence
             && !self.inspection_progress.has_minimum_review_evidence();
-        !matches!(
-            self.planning_outcome_contract(plan_updated, continue_inspection, had_text_response),
-            PlanningOutcomeContract::Satisfied
-        ) && matches!(self.execution_mode, AgentExecutionMode::Plan)
+        matches!(self.execution_mode, AgentExecutionMode::Plan)
             && (continue_inspection || shallow_initial_plan || still_missing_inspection_evidence)
             && self.pending_user_input.is_none()
             && self.pending_approval.is_none()
@@ -454,25 +445,6 @@ impl Agent {
                 || has_inspection_evidence
                 || !self.current_plan.is_empty()
                 || had_text_response)
-    }
-
-    pub(super) fn planning_outcome_contract(
-        &self,
-        plan_updated: bool,
-        continue_inspection: bool,
-        had_text_response: bool,
-    ) -> PlanningOutcomeContract {
-        if !matches!(self.execution_mode, AgentExecutionMode::Plan) {
-            return PlanningOutcomeContract::Satisfied;
-        }
-        if self.pending_approval.is_some() || self.pending_user_input.is_some() || plan_updated {
-            return PlanningOutcomeContract::Satisfied;
-        }
-        if continue_inspection {
-            return PlanningOutcomeContract::MoreInspectionRequired;
-        }
-        let _ = had_text_response;
-        PlanningOutcomeContract::Satisfied
     }
 
     pub(super) fn should_continue_execute_without_tools(

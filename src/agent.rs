@@ -407,8 +407,7 @@ impl Agent {
                     *agentic_turns,
                 ) {
                     report(AgentEvent::Status(
-                        "Plan needs more repository inspection. Continuing in read-only mode."
-                            .to_string(),
+                        "Plan mode needs more evidence. Continuing in read-only mode.".to_string(),
                     ));
                     let phase = RuntimeContinuationPhase::PlanContinuationRequired;
                     self.push_history_message(
