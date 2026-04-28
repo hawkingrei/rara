@@ -82,6 +82,7 @@ Priority order for this phase:
   - persist after the user message is accepted, after each assistant message, after each tool-result batch, after runtime continuation messages, and before waiting for pending user approval;
   - make `SessionManager::save_session` crash-tolerant by writing through a temporary file and atomic rename instead of overwriting `history.json` directly;
   - separate resumable transcript history from transient TUI task state so interrupted turns can resume with a clear `in progress` / `interrupted` / `failed` boundary rather than only an end-of-turn save.
+- [ ] Define background task restart/reattach semantics before persisting background task metadata across process restarts; the durable index should make completed logs discoverable without pretending killed parent processes are still attachable.
 - [ ] Make compaction a first-class runtime lifecycle event with persisted summaries, token counters, and boundary metadata ownership aligned with the thread domain.
 - [ ] Define thread-scoped and workspace-scoped `MemoryRecord` storage plus promotion rules so durable findings are not mixed with transient turn context.
 - [ ] Replace the current placeholder retrieval path with real vector retrieval over Lance/LanceDB, including metadata-aware ranking for thread and workspace memory selection.

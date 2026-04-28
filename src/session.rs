@@ -4,7 +4,7 @@ use crate::thread_rollout_log;
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -83,8 +83,30 @@ impl SessionManager {
         let content = serde_json::to_string(history)?;
         let tmp_path = path.with_extension(format!("json.tmp-{}", uuid::Uuid::new_v4()));
         fs::write(&tmp_path, content)?;
-        fs::rename(tmp_path, path)?;
+        if let Err(err) = Self::replace_file(&tmp_path, &path) {
+            let _ = fs::remove_file(&tmp_path);
+            return Err(err);
+        }
         Ok(())
+    }
+
+    #[cfg(not(windows))]
+    fn replace_file(src: &Path, dst: &Path) -> Result<()> {
+        fs::rename(src, dst)?;
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    fn replace_file(src: &Path, dst: &Path) -> Result<()> {
+        match fs::rename(src, dst) {
+            Ok(()) => Ok(()),
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists && dst.exists() => {
+                fs::remove_file(dst)?;
+                fs::rename(src, dst)?;
+                Ok(())
+            }
+            Err(err) => Err(err.into()),
+        }
     }
 
     pub fn load_thread_history(&self, thread_id: &str) -> Result<Vec<Message>> {

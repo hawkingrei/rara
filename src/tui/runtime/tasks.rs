@@ -78,10 +78,7 @@ fn try_start_queued_follow_up(app: &mut TuiApp, agent_slot: &mut Option<Agent>) 
         return;
     }
 
-    let mut prompts = Vec::new();
-    while let Some(p) = app.pop_queued_follow_up_message() {
-        prompts.push(p);
-    }
+    let prompts = app.drain_queued_follow_up_messages();
     if prompts.is_empty() {
         return;
     }

@@ -457,7 +457,7 @@ impl Tool for BashTool {
             .take()
             .ok_or_else(|| ToolError::ExecutionFailed("stderr pipe unavailable".into()))?;
 
-        let (tx, mut rx) = mpsc::unbounded_channel();
+        let (tx, mut rx) = mpsc::channel(64);
         let stdout_task = tokio::spawn(read_stream_chunks(
             stdout,
             BashStreamKind::Stdout,
@@ -689,7 +689,7 @@ async fn run_background_bash_task(
         .stderr
         .take()
         .ok_or_else(|| ToolError::ExecutionFailed("stderr pipe unavailable".into()))?;
-    let (tx, mut rx) = mpsc::unbounded_channel();
+    let (tx, mut rx) = mpsc::channel(64);
     let stdout_task = tokio::spawn(read_stream_chunks(
         stdout,
         BashStreamKind::Stdout,
@@ -778,7 +778,7 @@ async fn read_output_tail(path: &Path, max_bytes: usize) -> Result<String, ToolE
 async fn read_stream_chunks<R>(
     reader: R,
     stream: BashStreamKind,
-    tx: mpsc::UnboundedSender<(BashStreamKind, String)>,
+    tx: mpsc::Sender<(BashStreamKind, String)>,
 ) -> Result<(), ToolError>
 where
     R: AsyncRead + Unpin + Send + 'static,
@@ -791,7 +791,9 @@ where
             break;
         }
         let chunk = String::from_utf8_lossy(&buffer[..read]).into_owned();
-        let _ = tx.send((stream, chunk));
+        if tx.send((stream, chunk)).await.is_err() {
+            break;
+        }
     }
     Ok(())
 }

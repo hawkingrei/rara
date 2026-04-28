@@ -409,9 +409,17 @@ fn command_exists(program: &str) -> bool {
 fn command_search_path_dirs() -> Vec<PathBuf> {
     env::var_os("PATH")
         .map(|paths| {
-            env::split_paths(&paths)
-                .filter(|dir| dir.is_dir())
-                .collect::<Vec<_>>()
+            let mut dirs = Vec::new();
+            for dir in env::split_paths(&paths) {
+                if !dir.is_absolute() || !dir.is_dir() {
+                    continue;
+                }
+                let dir = fs::canonicalize(&dir).unwrap_or(dir);
+                if !dirs.iter().any(|existing| existing == &dir) {
+                    dirs.push(dir);
+                }
+            }
+            dirs
         })
         .unwrap_or_default()
 }
@@ -510,6 +518,7 @@ mod tests {
         shell_command_flag, shell_program, SandboxBackend, SandboxManager, DEFAULT_SHELL,
         MACOS_SANDBOX_EXEC,
     };
+    use std::env;
     use std::path::PathBuf;
     use std::time::Duration;
     use tempfile::tempdir;
@@ -861,8 +870,11 @@ mod tests {
         let tempdir = tempdir().expect("tempdir");
         let custom_bin = tempdir.path().join("custom-bin");
         std::fs::create_dir_all(&custom_bin).expect("custom bin dir");
+        let custom_bin = std::fs::canonicalize(&custom_bin).expect("canonical custom bin");
         let original_path = std::env::var_os("PATH");
-        std::env::set_var("PATH", custom_bin.display().to_string());
+        let test_path =
+            env::join_paths([PathBuf::from("."), custom_bin.clone()]).expect("build test PATH");
+        std::env::set_var("PATH", test_path);
 
         let manager = manager("linux", SandboxBackend::LinuxBubblewrap);
         let wrapped = manager
@@ -885,6 +897,17 @@ mod tests {
                     ]
             }),
             "linux sandbox should bind PATH command directories that are outside standard runtime roots"
+        );
+        assert!(
+            !wrapped.args.windows(3).any(|window| {
+                window
+                    == [
+                        String::from("--ro-bind"),
+                        String::from("."),
+                        String::from("."),
+                    ]
+            }),
+            "linux sandbox should not bind relative PATH entries"
         );
     }
 }

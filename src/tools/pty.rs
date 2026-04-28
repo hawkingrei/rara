@@ -140,24 +140,20 @@ impl PtySessionStore {
         let child = Arc::new(Mutex::new(child));
         let status = Arc::new(Mutex::new(PtySessionStatus::Running));
         let reader_status = status.clone();
-        let reader_path = output_path.clone();
+        let mut output_file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&output_path)
+            .map_err(|err| ToolError::ExecutionFailed(format!("open pty session log: {err}")))?;
 
         thread::spawn(move || {
-            let mut file = match OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&reader_path)
-            {
-                Ok(file) => file,
-                Err(_) => return,
-            };
             let mut buffer = [0_u8; 4096];
             loop {
                 match reader.read(&mut buffer) {
                     Ok(0) => break,
                     Ok(n) => {
-                        let _ = file.write_all(&buffer[..n]);
-                        let _ = file.flush();
+                        let _ = output_file.write_all(&buffer[..n]);
+                        let _ = output_file.flush();
                     }
                     Err(_) => break,
                 }
@@ -327,8 +323,8 @@ impl Tool for PtyStartTool {
                     "description": "Optional environment overrides."
                 },
                 "allow_net": { "type": "boolean", "default": false },
-                "rows": { "type": "integer", "default": 24, "minimum": 1 },
-                "cols": { "type": "integer", "default": 120, "minimum": 1 }
+                "rows": { "type": "integer", "default": 24, "minimum": 1, "maximum": 65535 },
+                "cols": { "type": "integer", "default": 120, "minimum": 1, "maximum": 65535 }
             },
             "required": ["command"]
         })
@@ -361,10 +357,10 @@ impl Tool for PtyStartTool {
             .map_err(|err| {
                 ToolError::ExecutionFailed(format!("{} {}", err, sandbox_failure_hint()))
             })?;
-        let rows = input.get("rows").and_then(Value::as_u64).unwrap_or(24) as u16;
-        let cols = input.get("cols").and_then(Value::as_u64).unwrap_or(120) as u16;
+        let rows = parse_pty_dimension(input.get("rows"), 24, "rows")?;
+        let cols = parse_pty_dimension(input.get("cols"), 120, "cols")?;
         self.sessions
-            .start(command, wrapped, cwd, env, rows.max(1), cols.max(1))?
+            .start(command, wrapped, cwd, env, rows, cols)?
             .into_json(12_000)
             .await
     }
@@ -633,6 +629,24 @@ async fn read_output_tail(path: &Path, max_bytes: usize) -> Result<String, ToolE
     Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
 
+fn parse_pty_dimension(value: Option<&Value>, default: u16, name: &str) -> Result<u16, ToolError> {
+    let Some(value) = value else {
+        return Ok(default);
+    };
+    let Some(value) = value.as_u64() else {
+        return Err(ToolError::InvalidInput(format!(
+            "{name} must be an integer"
+        )));
+    };
+    if value == 0 || value > u16::MAX as u64 {
+        return Err(ToolError::InvalidInput(format!(
+            "{name} must be between 1 and {}",
+            u16::MAX
+        )));
+    }
+    Ok(value as u16)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -650,6 +664,15 @@ mod tests {
         let output = read_output_tail(&path, 4).await.expect("tail");
 
         assert_eq!(output, "tail");
+    }
+
+    #[test]
+    fn parse_pty_dimension_rejects_overflowing_values() {
+        let value = json!(u16::MAX as u64 + 1);
+
+        let err = parse_pty_dimension(Some(&value), 24, "rows").expect_err("overflow rejected");
+
+        assert!(matches!(err, ToolError::InvalidInput(_)));
     }
 
     #[tokio::test]
