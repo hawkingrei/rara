@@ -8,6 +8,7 @@ use serde_json::{json, Value};
 use crate::agent::Message;
 use crate::config::OpenAiEndpointKind;
 use crate::llm::{ContentBlock, LlmResponse, TokenUsage};
+use crate::prompt::PLAN_MODE_PROMPT_MARKER;
 use crate::redaction::{redact_secrets, sanitize_url_for_display};
 
 use super::shared::{
@@ -249,7 +250,7 @@ fn apply_deepseek_thinking_options(
 fn is_plan_mode_request(messages: &[Message]) -> bool {
     messages.iter().any(|message| {
         message.role == "system"
-            && render_openai_message_content(&message.content).contains("Planning mode is active.")
+            && render_openai_message_content(&message.content).contains(PLAN_MODE_PROMPT_MARKER)
     })
 }
 

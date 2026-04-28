@@ -14,6 +14,8 @@ provider-specific runtime metadata and a clearer `/model` management surface.
   planning-mode or tool-enabled agent requests, with Codex-style `low` /
   `medium` / `xhigh` values normalized to DeepSeek's documented `high` / `max`
   values.
+- Routed planning-mode detection through the shared prompt marker constant so
+  request policy does not duplicate the plan-mode prompt text.
 - Preserved `reasoning_content` byte-for-byte instead of trimming it before
   replaying assistant tool-call messages back to DeepSeek.
 - Kept generic OpenAI-compatible endpoints on standard `content` and

@@ -3,6 +3,7 @@ use serde_json::json;
 use crate::agent::Message;
 use crate::config::OpenAiEndpointKind;
 use crate::llm::ContentBlock;
+use crate::prompt::PLAN_MODE_PROMPT_MARKER;
 
 use super::ollama::{
     apply_ollama_stream_event, build_ollama_options, ensure_ollama_stream_completed,
@@ -326,9 +327,9 @@ fn deepseek_plan_mode_uses_max_effort_without_tools() {
         &[
             Message {
                 role: "system".to_string(),
-                content: json!(
-                    "## Current Execution Mode\n- Planning mode is active.\n- This pass is read-only."
-                ),
+                content: json!(format!(
+                    "## Current Execution Mode\n- {PLAN_MODE_PROMPT_MARKER}\n- This pass is read-only."
+                )),
             },
             Message {
                 role: "user".to_string(),
