@@ -4,6 +4,9 @@ use std::path::Path;
 
 use crate::config::ConfigManager;
 use crate::tui::state::{RuntimePhase, RuntimeSnapshot, TranscriptEntry, TranscriptTurn, TuiApp};
+use crate::tui::terminal_event::{
+    TerminalCommandEvent, TerminalEvent, TerminalTarget, TERMINAL_EVENT_ROLE,
+};
 use insta::assert_snapshot;
 use tempfile::tempdir;
 

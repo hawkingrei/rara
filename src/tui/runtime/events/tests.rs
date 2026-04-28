@@ -11,7 +11,7 @@ use crate::agent::{AgentEvent, AgentExecutionMode};
 use crate::config::ConfigManager;
 use crate::tool::ToolOutputStream;
 use crate::tui::state::{RuntimePhase, TuiApp, TuiEvent};
-use crate::tui::terminal_event::{TerminalEvent, TerminalTarget};
+use crate::tui::terminal_event::{TerminalEvent, TerminalTarget, TERMINAL_EVENT_ROLE};
 
 #[test]
 fn parses_delegated_request_input_from_subagent_result() {
@@ -467,8 +467,16 @@ fn applies_terminal_begin_event_as_running_action() {
         vec!["Run cargo test".to_string()]
     );
     assert_eq!(app.active_turn.entries.len(), 1);
-    assert_eq!(app.active_turn.entries[0].role, "Tool");
-    assert_eq!(app.active_turn.entries[0].message, "bash cargo test");
+    assert_eq!(app.active_turn.entries[0].role, TERMINAL_EVENT_ROLE);
+    let event = serde_json::from_str::<TerminalEvent>(&app.active_turn.entries[0].message)
+        .expect("terminal event payload");
+    match event {
+        TerminalEvent::Begin(command) => {
+            assert_eq!(command.target, TerminalTarget::BackgroundTask);
+            assert_eq!(command.command.as_deref(), Some("cargo test"));
+        }
+        other => panic!("unexpected event: {other:?}"),
+    }
 }
 
 #[test]

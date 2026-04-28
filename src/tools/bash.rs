@@ -239,11 +239,8 @@ impl BashCommandInput {
 
 fn prefix_from_tokens(tokens: &[String]) -> Option<String> {
     let program = tokens.first()?;
-    let program = Path::new(program)
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or(program);
-    if let Some(subcommand) = tokens.get(1) {
+    let program = command_basename(program);
+    if let Some(subcommand) = approval_subcommand_token(program, &tokens[1..]) {
         Some(format!("{program} {subcommand}"))
     } else {
         Some(program.to_string())
@@ -254,14 +251,68 @@ fn normalized_tokens_summary(tokens: &[String]) -> String {
     let Some(program) = tokens.first() else {
         return String::new();
     };
-    let program = Path::new(program)
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or(program);
+    let program = command_basename(program);
+    let rest = &tokens[1..];
+    let args = approval_subcommand_index(program, rest)
+        .map(|index| rest[index..].iter().cloned().collect::<Vec<_>>())
+        .unwrap_or_else(|| rest.to_vec());
     std::iter::once(program.to_string())
-        .chain(tokens.iter().skip(1).cloned())
+        .chain(args)
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+fn command_basename(command: &str) -> &str {
+    Path::new(command)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(command)
+}
+
+fn approval_subcommand_token<'a>(program: &str, args: &'a [String]) -> Option<&'a str> {
+    approval_subcommand_index(program, args).and_then(|index| args.get(index).map(String::as_str))
+}
+
+fn approval_subcommand_index(program: &str, args: &[String]) -> Option<usize> {
+    match program {
+        "git" => skip_known_global_options(
+            args,
+            &["--no-pager", "--no-optional-locks"],
+            &["-C", "-c", "--git-dir", "--work-tree"],
+        ),
+        "docker" => skip_known_global_options(
+            args,
+            &["--debug", "--tls", "--tlsverify"],
+            &["--config", "--context", "--host", "-H", "--log-level"],
+        ),
+        _ => args.first().map(|_| 0),
+    }
+}
+
+fn skip_known_global_options(
+    args: &[String],
+    valueless_options: &[&str],
+    value_options: &[&str],
+) -> Option<usize> {
+    let mut index = 0;
+    while index < args.len() {
+        let arg = args[index].as_str();
+        if valueless_options.contains(&arg) {
+            index += 1;
+        } else if value_options.contains(&arg) {
+            index += 2;
+        } else if value_options
+            .iter()
+            .any(|option| arg.starts_with(&format!("{option}=")))
+        {
+            index += 1;
+        } else if arg.starts_with('-') {
+            index += 1;
+        } else {
+            return Some(index);
+        }
+    }
+    None
 }
 
 fn shell_command_is_read_only(command: &str) -> bool {
@@ -1280,6 +1331,17 @@ mod tests {
             Some("git push")
         );
         assert!(structured_input.matches_approval_prefix("git push"));
+    }
+
+    #[test]
+    fn approval_prefix_skips_known_global_options() {
+        let input = BashCommandInput::from_value(json!({
+            "command": "git --no-pager push origin main"
+        }))
+        .expect("shell payload");
+
+        assert_eq!(input.approval_prefix().as_deref(), Some("git push"));
+        assert!(input.matches_approval_prefix("git push"));
     }
 
     #[test]

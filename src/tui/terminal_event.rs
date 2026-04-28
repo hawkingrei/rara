@@ -4,6 +4,8 @@ use crate::tool::ToolOutputStream;
 use crate::tools::bash::BashCommandInput;
 use crate::tui::tool_text::compact_instruction;
 
+pub(crate) const TERMINAL_EVENT_ROLE: &str = "Terminal Event";
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum TerminalTarget {

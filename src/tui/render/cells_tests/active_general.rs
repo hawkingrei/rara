@@ -145,6 +145,50 @@ fn active_turn_cell_renders_terminal_result_as_terminal_cell() {
 }
 
 #[test]
+fn active_turn_cell_renders_typed_terminal_event_as_terminal_cell() {
+    let temp = tempdir().unwrap();
+    let mut app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("build tui app");
+    app.runtime_phase = RuntimePhase::RunningTool;
+    app.active_turn = TranscriptTurn {
+        entries: vec![
+            TranscriptEntry {
+                role: "You".into(),
+                message: "Start the dev server".into(),
+            },
+            TranscriptEntry {
+                role: TERMINAL_EVENT_ROLE.into(),
+                message: serde_json::to_string(&TerminalEvent::End(TerminalCommandEvent {
+                    target: TerminalTarget::Pty,
+                    id: Some("pty-123".into()),
+                    status: "running".into(),
+                    command: Some("npm run dev".into()),
+                    exit_code: None,
+                    output: vec!["ready".into(), "listening on 3000".into()],
+                    output_path: None,
+                    is_error: false,
+                }))
+                .expect("terminal event json"),
+            },
+        ],
+    };
+
+    let rendered = ActiveTurnCell::new(&app, Some(Path::new(".")))
+        .display_lines(100)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(rendered.contains("Running pty npm run dev"));
+    assert!(rendered.contains("└ ready"));
+    assert!(rendered.contains("listening on 3000"));
+    assert!(!rendered.contains(TERMINAL_EVENT_ROLE));
+}
+
+#[test]
 fn active_turn_cell_renders_planning_suggestion_without_active_turn_entries() {
     let temp = tempdir().unwrap();
     let mut app = TuiApp::new(ConfigManager {

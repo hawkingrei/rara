@@ -10,7 +10,7 @@ use self::helpers::{
 };
 use super::super::state::{contains_structured_planning_output, RuntimePhase, TuiApp, TuiEvent};
 use crate::agent::AgentEvent;
-use crate::tui::terminal_event::{TerminalEvent, TerminalTarget};
+use crate::tui::terminal_event::{TerminalEvent, TerminalTarget, TERMINAL_EVENT_ROLE};
 
 const TOOL_PROGRESS_LINE_LIMIT: usize = 16;
 
@@ -219,7 +219,8 @@ pub(super) fn apply_tui_event(app: &mut TuiApp, event: TuiEvent) {
                 RuntimePhase::RunningTool,
                 Some(message.lines().next().unwrap_or(role).trim().to_string()),
             );
-            app.push_entry(role, message);
+            let payload = serde_json::to_string(&event).unwrap_or(message);
+            app.push_entry(TERMINAL_EVENT_ROLE, payload);
         }
         TuiEvent::ToolProgress {
             name,

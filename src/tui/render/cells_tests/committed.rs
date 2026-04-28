@@ -240,6 +240,75 @@ fn committed_turn_cell_renders_terminal_result_as_terminal_cell() {
 }
 
 #[test]
+fn committed_turn_cell_renders_terminal_result_with_inline_output_path() {
+    let entries = vec![
+        TranscriptEntry {
+            role: "You".into(),
+            message: "Run tests in the background".into(),
+        },
+        TranscriptEntry {
+            role: "Tool Result".into(),
+            message:
+                "background task bash-123 running\noutput: /tmp/rara/background-tasks/bash-123.log"
+                    .into(),
+        },
+    ];
+
+    let rendered = CommittedTurnCell::new(entries.as_slice(), Some(Path::new(".")))
+        .display_lines(100)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(rendered.contains("Running background bash-123"));
+    assert!(rendered.contains("/tmp/rara/background-tasks/bash-123.log"));
+    assert!(!rendered.contains("background bash-123 running"));
+}
+
+#[test]
+fn committed_turn_cell_renders_typed_terminal_event_as_terminal_cell() {
+    let entries = vec![
+        TranscriptEntry {
+            role: "You".into(),
+            message: "Run tests in the background".into(),
+        },
+        TranscriptEntry {
+            role: TERMINAL_EVENT_ROLE.into(),
+            message: serde_json::to_string(&TerminalEvent::End(TerminalCommandEvent {
+                target: TerminalTarget::BackgroundTask,
+                id: Some("bash-123".into()),
+                status: "completed".into(),
+                command: Some("cargo test".into()),
+                exit_code: Some(0),
+                output: vec!["compile".into(), "running tests".into(), "ok".into()],
+                output_path: None,
+                is_error: false,
+            }))
+            .expect("terminal event json"),
+        },
+        TranscriptEntry {
+            role: "Agent".into(),
+            message: "The background test task completed.".into(),
+        },
+    ];
+
+    let rendered = CommittedTurnCell::new(entries.as_slice(), Some(Path::new(".")))
+        .display_lines(100)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(rendered.contains("Ran background cargo test"));
+    assert!(rendered.contains("└ compile"));
+    assert!(rendered.contains("running tests"));
+    assert!(rendered.contains("ok"));
+    assert!(rendered.contains("• The background test task completed."));
+    assert!(!rendered.contains(TERMINAL_EVENT_ROLE));
+}
+
+#[test]
 fn committed_turn_cell_keeps_final_agent_response_when_system_notice_arrives_after_tool_turn() {
     let entries = vec![
         TranscriptEntry {
