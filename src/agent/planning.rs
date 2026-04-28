@@ -208,23 +208,17 @@ impl Agent {
                     .await?;
             }
             BashApprovalDecision::Prefix => {
-                if let Some(prefix) = pending.request.approval_prefix() {
-                    if !self.approved_bash_prefixes.contains(&prefix) {
-                        self.approved_bash_prefixes.push(prefix.clone());
-                    }
-                    self.completed_approval = Some(CompletedInteraction {
-                        title: "Bash approval".to_string(),
-                        summary: format!("Approved prefix for session: {}", prefix),
-                    });
-                } else {
-                    self.completed_approval = Some(CompletedInteraction {
-                        title: "Bash approval".to_string(),
-                        summary: format!(
-                            "Approved once for command: {}",
-                            pending.request.summary()
-                        ),
-                    });
+                let prefix = pending
+                    .request
+                    .approval_prefix()
+                    .unwrap_or_else(|| pending.request.summary());
+                if !self.approved_bash_prefixes.contains(&prefix) {
+                    self.approved_bash_prefixes.push(prefix.clone());
                 }
+                self.completed_approval = Some(CompletedInteraction {
+                    title: "Bash approval".to_string(),
+                    summary: format!("Approved prefix for session: {}", prefix),
+                });
                 self.execute_pending_bash(pending, false, output_mode, &mut report)
                     .await?;
             }

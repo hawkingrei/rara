@@ -25,7 +25,7 @@ pub fn pending_interaction_card_title(kind: ActivePendingInteractionKind) -> &'s
 pub fn pending_interaction_hint_text(kind: ActivePendingInteractionKind) -> &'static str {
     match kind {
         ActivePendingInteractionKind::PlanApproval => "type reply  1 yes  2 plan",
-        ActivePendingInteractionKind::ShellApproval => "type reply  1 yes  2 on  3 no",
+        ActivePendingInteractionKind::ShellApproval => "type reply  1 yes  2 prefix  3 on  4 no",
         ActivePendingInteractionKind::PlanningQuestion
         | ActivePendingInteractionKind::ExplorationQuestion
         | ActivePendingInteractionKind::SubAgentQuestion
@@ -41,7 +41,7 @@ pub fn status_plan_approval_text(app: &TuiApp) -> String {
 pub fn pending_interaction_shortcut_text(kind: ActivePendingInteractionKind) -> &'static str {
     match kind {
         ActivePendingInteractionKind::PlanApproval => "1 yes  2 plan",
-        ActivePendingInteractionKind::ShellApproval => "1 yes  2 on  3 no",
+        ActivePendingInteractionKind::ShellApproval => "1 yes  2 prefix  3 on  4 no",
         ActivePendingInteractionKind::PlanningQuestion
         | ActivePendingInteractionKind::ExplorationQuestion
         | ActivePendingInteractionKind::SubAgentQuestion
@@ -180,7 +180,7 @@ mod tests {
             pending_interaction_hint_text(
                 crate::tui::state::ActivePendingInteractionKind::ShellApproval
             ),
-            "type reply  1 yes  2 on  3 no"
+            "type reply  1 yes  2 prefix  3 on  4 no"
         );
     }
 }

@@ -197,11 +197,43 @@ impl BashCommandInput {
     }
 
     pub fn matches_approval_prefix(&self, prefix: &str) -> bool {
-        let summary = self.summary();
-        summary == prefix
-            || summary
+        let normalized = self.normalized_approval_summary();
+        normalized == prefix
+            || normalized
                 .strip_prefix(prefix)
                 .is_some_and(|suffix| suffix.starts_with(char::is_whitespace))
+    }
+
+    fn normalized_approval_summary(&self) -> String {
+        if let Some(command) = self
+            .command
+            .as_ref()
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
+        {
+            if let Some(tokens) = split_shell_segments(command).and_then(|segments| {
+                if segments.len() == 1 {
+                    tokenize_shell_segment(&segments[0])
+                } else {
+                    None
+                }
+            }) {
+                return normalized_tokens_summary(&tokens);
+            }
+            return command.to_string();
+        }
+
+        let Some(program) = self
+            .program
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+        else {
+            return self.summary();
+        };
+        let mut tokens = Vec::with_capacity(self.args.len() + 1);
+        tokens.push(program.to_string());
+        tokens.extend(self.args.iter().cloned());
+        normalized_tokens_summary(&tokens)
     }
 }
 
@@ -216,6 +248,20 @@ fn prefix_from_tokens(tokens: &[String]) -> Option<String> {
     } else {
         Some(program.to_string())
     }
+}
+
+fn normalized_tokens_summary(tokens: &[String]) -> String {
+    let Some(program) = tokens.first() else {
+        return String::new();
+    };
+    let program = Path::new(program)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(program);
+    std::iter::once(program.to_string())
+        .chain(tokens.iter().skip(1).cloned())
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn shell_command_is_read_only(command: &str) -> bool {
@@ -1213,6 +1259,27 @@ mod tests {
         assert_eq!(input.approval_prefix().as_deref(), Some("git push"));
         assert!(input.matches_approval_prefix("git push"));
         assert!(!input.matches_approval_prefix("git pull"));
+    }
+
+    #[test]
+    fn approval_prefix_matching_normalizes_program_paths() {
+        let shell_input = BashCommandInput::from_value(json!({
+            "command": "/usr/bin/git push origin main"
+        }))
+        .expect("shell payload");
+        assert_eq!(shell_input.approval_prefix().as_deref(), Some("git push"));
+        assert!(shell_input.matches_approval_prefix("git push"));
+
+        let structured_input = BashCommandInput::from_value(json!({
+            "program": "/usr/bin/git",
+            "args": ["push", "origin", "main"]
+        }))
+        .expect("structured payload");
+        assert_eq!(
+            structured_input.approval_prefix().as_deref(),
+            Some("git push")
+        );
+        assert!(structured_input.matches_approval_prefix("git push"));
     }
 
     #[test]
