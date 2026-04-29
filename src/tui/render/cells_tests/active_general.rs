@@ -886,6 +886,35 @@ fn active_turn_cell_flattens_thinking_and_running_events_in_order() {
 }
 
 #[test]
+fn active_turn_cell_preserves_flushed_thinking_leading_indentation() {
+    let temp = tempdir().unwrap();
+    let mut app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("build tui app");
+    app.runtime_phase = RuntimePhase::RunningTool;
+    app.active_turn = TranscriptTurn {
+        entries: vec![TranscriptEntry {
+            role: "You".into(),
+            message: "Inspect thinking formatting".into(),
+            payload: None,
+        }],
+    };
+
+    app.append_agent_thinking_delta("    let value = 1;\n");
+    app.flush_agent_thinking_stream_to_live_event();
+
+    let rendered = ActiveTurnCell::new(&app, Some(Path::new(".")))
+        .display_lines(100)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(rendered.contains("      let value = 1;"));
+}
+
+#[test]
 fn active_turn_cell_preserves_repeated_progress_events_when_interleaved() {
     let temp = tempdir().unwrap();
     let mut app = TuiApp::new(ConfigManager {

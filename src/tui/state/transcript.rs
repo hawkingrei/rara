@@ -137,10 +137,10 @@ impl TuiApp {
         let Some(stream) = self.agent_thinking_stream.take() else {
             return;
         };
-        let message = stream.raw_text.trim().to_string();
-        if message.is_empty() {
+        if stream.raw_text.trim().is_empty() {
             return;
         }
+        let message = stream.raw_text.trim_end().to_string();
         self.push_active_live_event(ActiveLiveEvent::Thinking(message));
         self.reset_transcript_scroll_if_following_tail();
     }
