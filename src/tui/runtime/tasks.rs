@@ -426,6 +426,10 @@ pub(super) async fn finish_running_task_if_ready(
     match completion {
         TaskCompletion::Query { agent, result } => {
             let mut agent = agent;
+            let query_started_in_plan_mode = matches!(
+                app.agent_execution_mode,
+                crate::agent::AgentExecutionMode::Plan
+            );
             if let Err(err) = sync_bash_prefixes_to_config(app, &agent) {
                 app.push_notice(format!(
                     "Failed to persist bash approval rules: {}",
@@ -444,7 +448,9 @@ pub(super) async fn finish_running_task_if_ready(
                         agent.set_execution_mode(crate::agent::AgentExecutionMode::Plan);
                         app.set_agent_execution_mode(crate::agent::AgentExecutionMode::Plan);
                         app.set_pending_plan_approval(
-                            agent.last_query_produced_plan() && !agent.current_plan.is_empty(),
+                            query_started_in_plan_mode
+                                && agent.last_query_produced_plan()
+                                && !agent.current_plan.is_empty(),
                         );
                     }
                     *agent_slot = Some(agent);

@@ -12,5 +12,6 @@ Implementation notes:
 - Switched the implementation-approval signal to Codex-style `<proposed_plan>` while keeping legacy `<plan>` parsing compatibility.
 - Allowed read-only shell commands in planning mode while rejecting mutating shell commands without opening the normal approval flow.
 - Tightened pending plan approval text handling so generic confirmations do not start implementation.
+- Limited TUI plan approval prompts to user-started planning turns. When the agent enters planning mode from an execute turn, its produced plan is rendered as normal assistant output instead of requiring an extra user confirmation.
 
 This aligns RARA with Codex-style agent-selected planning and Claude Code's distinction between entering planning mode and explicitly requesting plan approval.

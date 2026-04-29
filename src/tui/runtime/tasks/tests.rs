@@ -5,7 +5,7 @@ use std::sync::{
 use std::time::{Duration, Instant};
 
 use tempfile::tempdir;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, Mutex};
 
 use crate::agent::{
     Agent, AgentExecutionMode, BashApprovalMode, Message, PlanStep, PlanStepStatus,
@@ -16,6 +16,7 @@ use crate::oauth::OAuthManager;
 use crate::prompt::PromptRuntimeConfig;
 use crate::session::SessionManager;
 use crate::tool::ToolManager;
+use crate::tools::planning::EnterPlanModeTool;
 use crate::tui::state::{
     OAuthLoginMode, RunningTask, RuntimePhase, TaskCompletion, TaskKind, TuiApp,
 };
@@ -41,6 +42,52 @@ impl LlmBackend for PlainAnswerBackend {
         Ok(LlmResponse {
             content: vec![ContentBlock::Text {
                 text: "Planning analysis only.".to_string(),
+            }],
+            stop_reason: Some("end_turn".to_string()),
+            usage: Some(TokenUsage::default()),
+        })
+    }
+
+    async fn embed(&self, _text: &str) -> anyhow::Result<Vec<f32>> {
+        Ok(vec![0.0; 8])
+    }
+
+    async fn summarize(
+        &self,
+        _messages: &[crate::agent::Message],
+        _instruction: &str,
+    ) -> anyhow::Result<String> {
+        Ok("summary".to_string())
+    }
+}
+
+struct AgentDrivenPlanBackend {
+    calls: Mutex<usize>,
+}
+
+#[async_trait::async_trait]
+impl LlmBackend for AgentDrivenPlanBackend {
+    async fn ask(
+        &self,
+        _messages: &[crate::agent::Message],
+        _tools: &[serde_json::Value],
+    ) -> anyhow::Result<LlmResponse> {
+        let mut calls = self.calls.lock().await;
+        *calls += 1;
+        if *calls == 1 {
+            return Ok(LlmResponse {
+                content: vec![ContentBlock::ToolUse {
+                    id: "enter-plan".to_string(),
+                    name: "enter_plan_mode".to_string(),
+                    input: json!({}),
+                }],
+                stop_reason: Some("tool_use".to_string()),
+                usage: Some(TokenUsage::default()),
+            });
+        }
+        Ok(LlmResponse {
+            content: vec![ContentBlock::Text {
+                text: "<proposed_plan>\n- [pending] Inspect the TUI state machine\n- [pending] Update focused tests\n</proposed_plan>".to_string(),
             }],
             stop_reason: Some("end_turn".to_string()),
             usage: Some(TokenUsage::default()),
@@ -301,6 +348,65 @@ async fn plan_turn_completion_keeps_plan_mode_after_plain_answer() {
             .execution_mode,
         AgentExecutionMode::Plan
     );
+}
+
+#[tokio::test]
+async fn agent_driven_plan_mode_does_not_request_tui_approval() {
+    let temp = tempdir().unwrap();
+    let workspace_root = temp.path().join("workspace");
+    let rara_dir = workspace_root.join(".rara");
+    std::fs::create_dir_all(rara_dir.join("rollouts")).expect("rollouts");
+    std::fs::create_dir_all(rara_dir.join("sessions")).expect("sessions");
+    std::fs::create_dir_all(rara_dir.join("tool-results")).expect("tool results");
+
+    let mut app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("build tui app");
+    app.set_agent_execution_mode(AgentExecutionMode::Execute);
+
+    let workspace = Arc::new(WorkspaceMemory::from_paths(
+        workspace_root.clone(),
+        rara_dir.clone(),
+    ));
+    let session_manager = Arc::new(SessionManager {
+        storage_dir: rara_dir.join("rollouts"),
+        legacy_storage_dir: rara_dir.join("sessions"),
+    });
+    let mut tool_manager = ToolManager::new();
+    tool_manager.register(Box::new(EnterPlanModeTool));
+    let mut agent = Agent::new(
+        tool_manager,
+        Arc::new(AgentDrivenPlanBackend {
+            calls: Mutex::new(0),
+        }),
+        Arc::new(VectorDB::new(
+            &rara_dir.join("lancedb").display().to_string(),
+        )),
+        session_manager,
+        workspace,
+    );
+    agent.set_execution_mode(AgentExecutionMode::Execute);
+
+    start_query_task(&mut app, "inspect and plan".to_string(), agent);
+    let mut agent_slot = None;
+    for _ in 0..20 {
+        finish_running_task_if_ready(&mut app, &mut agent_slot)
+            .await
+            .expect("finish task");
+        if app.running_task.is_none() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+
+    assert!(app.running_task.is_none());
+    assert_eq!(app.agent_execution_mode, AgentExecutionMode::Plan);
+    assert!(!app.has_pending_plan_approval());
+    let agent = agent_slot.as_ref().expect("agent should return");
+    assert_eq!(agent.execution_mode, AgentExecutionMode::Plan);
+    assert!(agent.last_query_produced_plan());
+    assert_eq!(agent.current_plan.len(), 2);
 }
 
 #[tokio::test]
