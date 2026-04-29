@@ -2,19 +2,19 @@ mod tooling;
 
 use std::sync::Arc;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 
 use self::tooling::{create_full_tool_manager, load_skill_manager, vector_db_uri_for_workspace};
 use crate::agent::Agent;
 use crate::config::{
-    OpenAiEndpointKind, RaraConfig, DEFAULT_CODEX_BASE_URL, DEFAULT_CODEX_MODEL,
-    REASONING_SUMMARY_NONE,
+    DEFAULT_CODEX_BASE_URL, DEFAULT_CODEX_MODEL, OpenAiEndpointKind, REASONING_SUMMARY_NONE,
+    RaraConfig,
 };
 use crate::llm::{
     CodexBackend, GeminiBackend, LlmBackend, MockLlm, OllamaBackend, OpenAiCompatibleBackend,
 };
 use crate::local_backend::{LocalLlmBackend, LocalProgressReporter};
-use crate::prompt::PromptRuntimeConfig;
+use crate::prompt::{PromptRuntimeConfig, PromptSkillSummary};
 use crate::sandbox::SandboxManager;
 use crate::session::SessionManager;
 use crate::tool::ToolManager;
@@ -62,9 +62,17 @@ pub(crate) async fn initialize_rara_context(
     let session_manager = Arc::new(SessionManager::new()?);
     let sandbox_manager = Arc::new(SandboxManager::new()?);
 
-    let prompt_config = PromptRuntimeConfig::from_config(config);
-    let mut warnings = prompt_config.warnings.clone();
-    let skill_manager = load_skill_manager(&mut warnings);
+    let mut prompt_config = PromptRuntimeConfig::from_config(config);
+    let skill_manager = load_skill_manager(&mut prompt_config.warnings);
+    prompt_config.available_skills = skill_manager
+        .list_summaries()
+        .into_iter()
+        .map(|skill| PromptSkillSummary {
+            name: skill.name,
+            description: skill.description,
+            display_path: skill.display_path,
+        })
+        .collect();
 
     let tool_manager = create_full_tool_manager(
         backend.clone(),
@@ -75,6 +83,7 @@ pub(crate) async fn initialize_rara_context(
         skill_manager,
         prompt_config.clone(),
     );
+    let warnings = prompt_config.warnings.clone();
 
     Ok(RuntimeBootstrap {
         backend,
@@ -194,7 +203,7 @@ mod tests {
         build_backend_with_progress, initialize_rara_context, ollama_thinking_enabled,
         vector_db_uri_for_workspace,
     };
-    use crate::config::{RaraConfig, DEFAULT_REASONING_SUMMARY, REASONING_SUMMARY_NONE};
+    use crate::config::{DEFAULT_REASONING_SUMMARY, REASONING_SUMMARY_NONE, RaraConfig};
     use crate::workspace::WorkspaceMemory;
     use tempfile::tempdir;
 
@@ -226,10 +235,12 @@ mod tests {
             .await
             .expect("bootstrap");
 
-        assert!(bootstrap
-            .warnings
-            .iter()
-            .any(|warning| warning.contains("system prompt")));
+        assert!(
+            bootstrap
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("system prompt"))
+        );
     }
 
     #[tokio::test]
@@ -244,9 +255,10 @@ mod tests {
             Err(err) => err,
         };
 
-        assert!(err
-            .to_string()
-            .contains("Unsupported provider 'does-not-exist'"));
+        assert!(
+            err.to_string()
+                .contains("Unsupported provider 'does-not-exist'")
+        );
     }
 
     #[tokio::test]
@@ -262,9 +274,10 @@ mod tests {
             Err(err) => err,
         };
 
-        assert!(err
-            .to_string()
-            .contains("Model required for Ollama provider"));
+        assert!(
+            err.to_string()
+                .contains("Model required for Ollama provider")
+        );
     }
 
     #[tokio::test]
@@ -280,9 +293,10 @@ mod tests {
             Err(err) => err,
         };
 
-        assert!(err
-            .to_string()
-            .contains("Model required for Ollama OpenAI provider"));
+        assert!(
+            err.to_string()
+                .contains("Model required for Ollama OpenAI provider")
+        );
     }
 
     #[test]
