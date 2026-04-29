@@ -1,18 +1,18 @@
 use anyhow::Result;
-use codex_execpolicy::{blocking_append_allow_prefix_rule, PolicyParser};
+use codex_execpolicy::{PolicyParser, blocking_append_allow_prefix_rule};
 use dirs::home_dir;
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
-use std::collections::{hash_map::DefaultHasher, BTreeMap};
+use std::collections::{BTreeMap, hash_map::DefaultHasher};
 use std::fs;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 
 use crate::defaults::{
-    should_apply_codex_base_url, should_reset_codex_model, DEFAULT_CODEX_BASE_URL,
-    DEFAULT_CODEX_MODEL, DEFAULT_DEEPSEEK_BASE_URL, DEFAULT_DEEPSEEK_MODEL, DEFAULT_KIMI_BASE_URL,
-    DEFAULT_KIMI_MODEL, DEFAULT_OPENAI_COMPATIBLE_BASE_URL, DEFAULT_OPENAI_COMPATIBLE_MODEL,
-    DEFAULT_OPENROUTER_BASE_URL, DEFAULT_OPENROUTER_MODEL, DEFAULT_REASONING_SUMMARY,
+    DEFAULT_CODEX_BASE_URL, DEFAULT_CODEX_MODEL, DEFAULT_DEEPSEEK_BASE_URL, DEFAULT_DEEPSEEK_MODEL,
+    DEFAULT_KIMI_BASE_URL, DEFAULT_KIMI_MODEL, DEFAULT_OPENAI_COMPATIBLE_BASE_URL,
+    DEFAULT_OPENAI_COMPATIBLE_MODEL, DEFAULT_OPENROUTER_BASE_URL, DEFAULT_OPENROUTER_MODEL,
+    DEFAULT_REASONING_SUMMARY, should_apply_codex_base_url, should_reset_codex_model,
 };
 use crate::migration::migrate_reasoning_summary;
 use crate::provider_surface::{ConfigValueSource, EffectiveProviderSurface, ResolvedProviderValue};
@@ -117,6 +117,30 @@ pub struct OpenAiEndpointProfile {
     pub revision: Option<String>,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
+pub struct SandboxWorkspaceWriteConfig {
+    #[serde(default = "default_true")]
+    pub network_access: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+impl Default for SandboxWorkspaceWriteConfig {
+    fn default() -> Self {
+        Self {
+            network_access: true,
+        }
+    }
+}
+
+impl SandboxWorkspaceWriteConfig {
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct RaraConfig {
     pub provider: String,
@@ -145,6 +169,11 @@ pub struct RaraConfig {
     pub active_openai_profile_id: Option<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub openai_profiles: BTreeMap<String, OpenAiEndpointProfile>,
+    #[serde(
+        default,
+        skip_serializing_if = "SandboxWorkspaceWriteConfig::is_default"
+    )]
+    pub sandbox_workspace_write: SandboxWorkspaceWriteConfig,
 }
 
 impl RaraConfig {
@@ -798,8 +827,8 @@ fn stable_path_hash(root: &Path) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        workspace_data_dir_for_home, ConfigManager, OpenAiEndpointKind, OpenAiEndpointProfile,
-        ProviderConfigState, RaraConfig,
+        ConfigManager, OpenAiEndpointKind, OpenAiEndpointProfile, ProviderConfigState, RaraConfig,
+        workspace_data_dir_for_home,
     };
     use crate::defaults::{
         DEFAULT_CODEX_BASE_URL, DEFAULT_CODEX_CHATGPT_BASE_URL, DEFAULT_CODEX_MODEL,
@@ -831,6 +860,63 @@ mod tests {
         let mut config = RaraConfig::default();
         config.set_api_key("");
         assert!(!config.has_api_key());
+    }
+
+    #[test]
+    fn loads_codex_style_sandbox_workspace_network_access() {
+        let config: RaraConfig = serde_json::from_str(
+            r#"{
+                "provider": "codex",
+                "sandbox_workspace_write": {
+                    "network_access": true
+                }
+            }"#,
+        )
+        .expect("deserialize config");
+
+        assert!(config.sandbox_workspace_write.network_access);
+    }
+
+    #[test]
+    fn sandbox_workspace_network_access_defaults_on() {
+        let config: RaraConfig = serde_json::from_str(
+            r#"{
+                "provider": "codex"
+            }"#,
+        )
+        .expect("deserialize config");
+
+        assert!(config.sandbox_workspace_write.network_access);
+    }
+
+    #[test]
+    fn sandbox_workspace_network_access_empty_object_defaults_on() {
+        let config: RaraConfig = serde_json::from_str(
+            r#"{
+                "provider": "codex",
+                "sandbox_workspace_write": {}
+            }"#,
+        )
+        .expect("deserialize config");
+
+        assert!(config.sandbox_workspace_write.network_access);
+    }
+
+    #[test]
+    fn sandbox_workspace_network_access_can_be_disabled() {
+        let config: RaraConfig = serde_json::from_str(
+            r#"{
+                "provider": "codex",
+                "sandbox_workspace_write": {
+                    "network_access": false
+                }
+            }"#,
+        )
+        .expect("deserialize config");
+
+        assert!(!config.sandbox_workspace_write.network_access);
+        let json = serde_json::to_string(&config).expect("serialize config");
+        assert!(json.contains("sandbox_workspace_write"));
     }
 
     #[test]
