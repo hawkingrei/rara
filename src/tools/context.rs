@@ -3,7 +3,7 @@ use crate::session::SessionManager;
 use crate::tool::{Tool, ToolError};
 use crate::vectordb::VectorDB;
 use async_trait::async_trait;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::sync::Arc;
 
 pub struct RetrieveSessionContextTool {

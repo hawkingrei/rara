@@ -1,7 +1,7 @@
 use super::{
-    input_requests_command_palette, parse_repo_slug, state_db_status_error,
-    ActivePendingInteractionKind, InteractionKind, Overlay, PendingInteractionSnapshot,
-    ProviderFamily, RuntimeSnapshot, TranscriptEntry, TranscriptTurn, TuiApp, PROVIDER_FAMILIES,
+    ActivePendingInteractionKind, InteractionKind, Overlay, PROVIDER_FAMILIES,
+    PendingInteractionSnapshot, ProviderFamily, RuntimeSnapshot, TranscriptEntry, TranscriptTurn,
+    TuiApp, input_requests_command_palette, parse_repo_slug, state_db_status_error,
 };
 use crate::codex_model_catalog::{CodexModelOption, CodexReasoningOption};
 use crate::config::{ConfigManager, OpenAiEndpointKind, RaraConfig};
@@ -302,10 +302,11 @@ fn deepseek_catalog_options_keep_current_custom_model_selectable() {
 
     app.set_deepseek_model_options(vec!["deepseek-chat".to_string()]);
 
-    assert!(app
-        .deepseek_model_options
-        .iter()
-        .any(|model| model == "deepseek-v4-preview"));
+    assert!(
+        app.deepseek_model_options
+            .iter()
+            .any(|model| model == "deepseek-v4-preview")
+    );
     assert_eq!(app.model_picker_idx, app.selected_preset_idx());
     assert_eq!(
         app.deepseek_model_options

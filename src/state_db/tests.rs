@@ -305,16 +305,18 @@ fn load_rollout_events_prefers_append_only_log_without_snapshot_rewrite() -> Res
         }],
     )?;
 
-    assert!(!db
-        .rollout_root()
-        .join("session-events")
-        .join("events.json")
-        .exists());
-    assert!(db
-        .rollout_root()
-        .join("session-events")
-        .join("events.jsonl")
-        .exists());
+    assert!(
+        !db.rollout_root()
+            .join("session-events")
+            .join("events.json")
+            .exists()
+    );
+    assert!(
+        db.rollout_root()
+            .join("session-events")
+            .join("events.jsonl")
+            .exists()
+    );
 
     let events = db.load_rollout_events("session-events")?;
     assert_eq!(events.len(), 2);

@@ -110,9 +110,11 @@ fn fills_missing_openai_tool_results_before_follow_up_messages() {
     assert_eq!(openai_messages[1]["tool_call_id"], "tool-1");
     assert_eq!(openai_messages[2]["role"], "tool");
     assert_eq!(openai_messages[2]["tool_call_id"], "tool-2");
-    assert!(openai_messages[2]["content"]
-        .as_str()
-        .is_some_and(|content| content.contains("interrupted before a result was recorded")));
+    assert!(
+        openai_messages[2]["content"]
+            .as_str()
+            .is_some_and(|content| content.contains("interrupted before a result was recorded"))
+    );
     assert_eq!(openai_messages[3]["role"], "user");
     assert_eq!(openai_messages[3]["content"], "continue");
 }
@@ -139,9 +141,11 @@ fn drops_orphan_openai_tool_results_without_context_prefix() {
     assert_eq!(openai_messages.len(), 1);
     assert_eq!(openai_messages[0]["role"], "user");
     assert_eq!(openai_messages[0]["content"], "continue");
-    assert!(!openai_messages.iter().any(|message| message["content"]
-        .as_str()
-        .is_some_and(|content| content.contains("tool_result orphan:"))));
+    assert!(!openai_messages.iter().any(|message| {
+        message["content"]
+            .as_str()
+            .is_some_and(|content| content.contains("tool_result orphan:"))
+    }));
 }
 
 #[test]
@@ -341,9 +345,11 @@ fn deepseek_reasoner_defaults_preserve_standard_body() {
 
     assert!(body.get("thinking").is_none());
     assert!(body.get("reasoning_effort").is_none());
-    assert!(body["tools"]
-        .as_array()
-        .is_some_and(|tools| tools.len() == 1));
+    assert!(
+        body["tools"]
+            .as_array()
+            .is_some_and(|tools| tools.len() == 1)
+    );
 }
 
 #[test]
@@ -436,9 +442,11 @@ fn deepseek_reasoner_explicit_thinking_enables_controls_for_tools() {
 
     assert_eq!(body["thinking"]["type"], "enabled");
     assert_eq!(body["reasoning_effort"], "max");
-    assert!(body["tools"]
-        .as_array()
-        .is_some_and(|tools| tools.len() == 1));
+    assert!(
+        body["tools"]
+            .as_array()
+            .is_some_and(|tools| tools.len() == 1)
+    );
 }
 
 #[test]
@@ -462,9 +470,11 @@ fn deepseek_v4_explicit_thinking_enables_controls_for_tools() {
 
     assert_eq!(body["thinking"]["type"], "enabled");
     assert_eq!(body["reasoning_effort"], "max");
-    assert!(body["tools"]
-        .as_array()
-        .is_some_and(|tools| tools.len() == 1));
+    assert!(
+        body["tools"]
+            .as_array()
+            .is_some_and(|tools| tools.len() == 1)
+    );
 }
 
 #[test]
@@ -522,10 +532,12 @@ fn deepseek_explicit_thinking_folds_legacy_assistant_history_without_reasoning()
     let messages = body["messages"].as_array().expect("messages");
     assert_eq!(messages.len(), 2);
     assert_eq!(messages[0]["role"], "user");
-    assert!(messages[0]["content"]
-        .as_str()
-        .expect("folded note")
-        .contains("Legacy answer without provider metadata."));
+    assert!(
+        messages[0]["content"]
+            .as_str()
+            .expect("folded note")
+            .contains("Legacy answer without provider metadata.")
+    );
     assert_eq!(messages[1]["role"], "user");
     assert_eq!(messages[1]["content"], "Continue.");
 }
@@ -592,10 +604,12 @@ fn deepseek_default_thinking_folds_legacy_assistant_history_without_reasoning() 
     let messages = body["messages"].as_array().expect("messages");
     assert_eq!(messages.len(), 2);
     assert_eq!(messages[0]["role"], "user");
-    assert!(messages[0]["content"]
-        .as_str()
-        .expect("folded note")
-        .contains("Legacy answer without provider metadata."));
+    assert!(
+        messages[0]["content"]
+            .as_str()
+            .expect("folded note")
+            .contains("Legacy answer without provider metadata.")
+    );
     assert_eq!(messages[1]["role"], "user");
     assert_eq!(messages[1]["content"], "Continue.");
 }
@@ -683,10 +697,12 @@ fn deepseek_explicit_thinking_keeps_compatible_suffix_after_legacy_prefix() {
     assert_eq!(messages[0]["role"], "system");
     assert_eq!(messages[0]["content"], "System prompt.");
     assert_eq!(messages[1]["role"], "user");
-    assert!(messages[1]["content"]
-        .as_str()
-        .expect("folded note")
-        .contains("Legacy answer."));
+    assert!(
+        messages[1]["content"]
+            .as_str()
+            .expect("folded note")
+            .contains("Legacy answer.")
+    );
     assert_eq!(messages[2]["content"], "Fresh answer.");
     assert_eq!(messages[2]["reasoning_content"], "fresh reasoning");
     assert_eq!(messages[3]["content"], "Continue.");
@@ -1047,45 +1063,51 @@ fn codex_stream_events_collect_output_items_usage_and_text_deltas() {
 
     let mut on_delta = |event: LlmStreamEvent| deltas.push(event);
     let mut on_delta_option: Option<&mut (dyn FnMut(LlmStreamEvent) + Send)> = Some(&mut on_delta);
-    assert!(!apply_codex_stream_event(
-        &json!({"type":"response.output_text.delta","delta":"Hello"}),
-        &mut output_items,
-        &mut usage,
-        &mut streamed_text,
-        &mut on_delta_option,
-    )
-    .unwrap());
+    assert!(
+        !apply_codex_stream_event(
+            &json!({"type":"response.output_text.delta","delta":"Hello"}),
+            &mut output_items,
+            &mut usage,
+            &mut streamed_text,
+            &mut on_delta_option,
+        )
+        .unwrap()
+    );
 
     let mut no_delta_callback: Option<&mut (dyn FnMut(LlmStreamEvent) + Send)> = None;
-    assert!(!apply_codex_stream_event(
-        &json!({
-            "type":"response.output_item.done",
-            "item":{
-                "type":"message",
-                "content":[{"type":"output_text","text":"Hello"}]
-            }
-        }),
-        &mut output_items,
-        &mut usage,
-        &mut streamed_text,
-        &mut no_delta_callback,
-    )
-    .unwrap());
+    assert!(
+        !apply_codex_stream_event(
+            &json!({
+                "type":"response.output_item.done",
+                "item":{
+                    "type":"message",
+                    "content":[{"type":"output_text","text":"Hello"}]
+                }
+            }),
+            &mut output_items,
+            &mut usage,
+            &mut streamed_text,
+            &mut no_delta_callback,
+        )
+        .unwrap()
+    );
 
-    assert!(apply_codex_stream_event(
-        &json!({
-            "type":"response.completed",
-            "response":{
-                "id":"resp-1",
-                "usage":{"input_tokens":11,"output_tokens":7}
-            }
-        }),
-        &mut output_items,
-        &mut usage,
-        &mut streamed_text,
-        &mut no_delta_callback,
-    )
-    .unwrap());
+    assert!(
+        apply_codex_stream_event(
+            &json!({
+                "type":"response.completed",
+                "response":{
+                    "id":"resp-1",
+                    "usage":{"input_tokens":11,"output_tokens":7}
+                }
+            }),
+            &mut output_items,
+            &mut usage,
+            &mut streamed_text,
+            &mut no_delta_callback,
+        )
+        .unwrap()
+    );
 
     assert_eq!(deltas, vec![LlmStreamEvent::TextDelta("Hello".to_string())]);
     assert_eq!(streamed_text, "Hello");
@@ -1105,14 +1127,16 @@ fn codex_stream_reasoning_delta_is_reported_without_agent_text() {
     let mut on_event = |event: LlmStreamEvent| events.push(event);
     let mut on_event_option: Option<&mut (dyn FnMut(LlmStreamEvent) + Send)> = Some(&mut on_event);
 
-    assert!(!apply_codex_stream_event(
-        &json!({"type":"response.reasoning_summary_text.delta","delta":"checking files"}),
-        &mut output_items,
-        &mut usage,
-        &mut streamed_text,
-        &mut on_event_option,
-    )
-    .unwrap());
+    assert!(
+        !apply_codex_stream_event(
+            &json!({"type":"response.reasoning_summary_text.delta","delta":"checking files"}),
+            &mut output_items,
+            &mut usage,
+            &mut streamed_text,
+            &mut on_event_option,
+        )
+        .unwrap()
+    );
 
     assert_eq!(streamed_text, "");
     assert_eq!(
@@ -1128,21 +1152,23 @@ fn codex_stream_conversation_item_done_is_treated_as_output_item() {
     let mut streamed_text = String::new();
     let mut no_delta_callback: Option<&mut (dyn FnMut(LlmStreamEvent) + Send)> = None;
 
-    assert!(!apply_codex_stream_event(
-        &json!({
-            "type":"conversation.item.done",
-            "item":{
-                "type":"message",
-                "role":"assistant",
-                "content":[{"type":"output_text","text":"Hello from conversation item"}]
-            }
-        }),
-        &mut output_items,
-        &mut usage,
-        &mut streamed_text,
-        &mut no_delta_callback,
-    )
-    .unwrap());
+    assert!(
+        !apply_codex_stream_event(
+            &json!({
+                "type":"conversation.item.done",
+                "item":{
+                    "type":"message",
+                    "role":"assistant",
+                    "content":[{"type":"output_text","text":"Hello from conversation item"}]
+                }
+            }),
+            &mut output_items,
+            &mut usage,
+            &mut streamed_text,
+            &mut no_delta_callback,
+        )
+        .unwrap()
+    );
 
     let response = parse_codex_response(&super::openai_compatible::build_codex_stream_response(
         output_items,
@@ -1166,39 +1192,43 @@ fn codex_stream_output_item_added_is_upserted_by_done_item() {
     let mut streamed_text = String::new();
     let mut no_delta_callback: Option<&mut (dyn FnMut(LlmStreamEvent) + Send)> = None;
 
-    assert!(!apply_codex_stream_event(
-        &json!({
-            "type":"response.output_item.added",
-            "item":{
-                "id":"msg_1",
-                "type":"message",
-                "role":"assistant",
-                "content":[{"type":"output_text","text":"partial"}]
-            }
-        }),
-        &mut output_items,
-        &mut usage,
-        &mut streamed_text,
-        &mut no_delta_callback,
-    )
-    .unwrap());
+    assert!(
+        !apply_codex_stream_event(
+            &json!({
+                "type":"response.output_item.added",
+                "item":{
+                    "id":"msg_1",
+                    "type":"message",
+                    "role":"assistant",
+                    "content":[{"type":"output_text","text":"partial"}]
+                }
+            }),
+            &mut output_items,
+            &mut usage,
+            &mut streamed_text,
+            &mut no_delta_callback,
+        )
+        .unwrap()
+    );
 
-    assert!(!apply_codex_stream_event(
-        &json!({
-            "type":"response.output_item.done",
-            "item":{
-                "id":"msg_1",
-                "type":"message",
-                "role":"assistant",
-                "content":[{"type":"output_text","text":"final"}]
-            }
-        }),
-        &mut output_items,
-        &mut usage,
-        &mut streamed_text,
-        &mut no_delta_callback,
-    )
-    .unwrap());
+    assert!(
+        !apply_codex_stream_event(
+            &json!({
+                "type":"response.output_item.done",
+                "item":{
+                    "id":"msg_1",
+                    "type":"message",
+                    "role":"assistant",
+                    "content":[{"type":"output_text","text":"final"}]
+                }
+            }),
+            &mut output_items,
+            &mut usage,
+            &mut streamed_text,
+            &mut no_delta_callback,
+        )
+        .unwrap()
+    );
 
     let response = parse_codex_response(&super::openai_compatible::build_codex_stream_response(
         output_items,
@@ -1222,39 +1252,43 @@ fn codex_stream_output_item_matches_mixed_id_and_call_id() {
     let mut streamed_text = String::new();
     let mut no_delta_callback: Option<&mut (dyn FnMut(LlmStreamEvent) + Send)> = None;
 
-    assert!(!apply_codex_stream_event(
-        &json!({
-            "type":"response.output_item.added",
-            "item":{
-                "id":"tool_1",
-                "type":"function_call",
-                "name":"bash",
-                "arguments":"{}"
-            }
-        }),
-        &mut output_items,
-        &mut usage,
-        &mut streamed_text,
-        &mut no_delta_callback,
-    )
-    .unwrap());
+    assert!(
+        !apply_codex_stream_event(
+            &json!({
+                "type":"response.output_item.added",
+                "item":{
+                    "id":"tool_1",
+                    "type":"function_call",
+                    "name":"bash",
+                    "arguments":"{}"
+                }
+            }),
+            &mut output_items,
+            &mut usage,
+            &mut streamed_text,
+            &mut no_delta_callback,
+        )
+        .unwrap()
+    );
 
-    assert!(!apply_codex_stream_event(
-        &json!({
-            "type":"response.output_item.done",
-            "item":{
-                "call_id":"tool_1",
-                "type":"function_call",
-                "name":"bash",
-                "arguments":"{\"cmd\":\"pwd\"}"
-            }
-        }),
-        &mut output_items,
-        &mut usage,
-        &mut streamed_text,
-        &mut no_delta_callback,
-    )
-    .unwrap());
+    assert!(
+        !apply_codex_stream_event(
+            &json!({
+                "type":"response.output_item.done",
+                "item":{
+                    "call_id":"tool_1",
+                    "type":"function_call",
+                    "name":"bash",
+                    "arguments":"{\"cmd\":\"pwd\"}"
+                }
+            }),
+            &mut output_items,
+            &mut usage,
+            &mut streamed_text,
+            &mut no_delta_callback,
+        )
+        .unwrap()
+    );
 
     assert_eq!(output_items.len(), 1);
     assert_eq!(output_items[0]["call_id"], "tool_1");
@@ -1268,20 +1302,22 @@ fn codex_stream_response_done_marks_completion() {
     let mut streamed_text = String::new();
     let mut no_delta_callback: Option<&mut (dyn FnMut(LlmStreamEvent) + Send)> = None;
 
-    assert!(apply_codex_stream_event(
-        &json!({
-            "type":"response.done",
-            "response":{
-                "id":"resp-1",
-                "usage":{"input_tokens":5,"output_tokens":3}
-            }
-        }),
-        &mut output_items,
-        &mut usage,
-        &mut streamed_text,
-        &mut no_delta_callback,
-    )
-    .unwrap());
+    assert!(
+        apply_codex_stream_event(
+            &json!({
+                "type":"response.done",
+                "response":{
+                    "id":"resp-1",
+                    "usage":{"input_tokens":5,"output_tokens":3}
+                }
+            }),
+            &mut output_items,
+            &mut usage,
+            &mut streamed_text,
+            &mut no_delta_callback,
+        )
+        .unwrap()
+    );
 
     assert_eq!(usage.as_ref().unwrap()["input_tokens"], 5);
     assert_eq!(usage.as_ref().unwrap()["output_tokens"], 3);
@@ -1478,9 +1514,11 @@ fn applies_ollama_stream_event_deltas_and_tool_calls() {
 fn rejects_ollama_streams_without_final_done_event() {
     let error = ensure_ollama_stream_completed(false, "http://localhost:11434/api/chat")
         .expect_err("missing done event should fail");
-    assert!(error
-        .to_string()
-        .contains("ended before the final done event"));
+    assert!(
+        error
+            .to_string()
+            .contains("ended before the final done event")
+    );
 }
 
 #[test]
