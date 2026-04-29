@@ -1,4 +1,5 @@
 use std::env;
+use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
@@ -11,6 +12,7 @@ pub struct SandboxManager {
     profile_dir: PathBuf,
     sandbox_home: PathBuf,
     backend: SandboxBackend,
+    command_install_roots: Vec<PathBuf>,
 }
 
 #[derive(Debug)]
@@ -59,7 +61,22 @@ impl SandboxManager {
         Self::new_with_rara_dir(os, rara_dir)
     }
 
+    pub fn new_with_command_path(command_path: Option<String>) -> Result<Self> {
+        let os = std::env::consts::OS.to_string();
+        let root = std::env::current_dir()?;
+        let rara_dir = rara_config::workspace_data_dir_for(&root)?;
+        Self::new_with_rara_dir_and_command_path(os, rara_dir, command_path.map(OsString::from))
+    }
+
     fn new_with_rara_dir(os: String, rara_dir: PathBuf) -> Result<Self> {
+        Self::new_with_rara_dir_and_command_path(os, rara_dir, env::var_os("PATH"))
+    }
+
+    fn new_with_rara_dir_and_command_path(
+        os: String,
+        rara_dir: PathBuf,
+        command_path: Option<OsString>,
+    ) -> Result<Self> {
         if !rara_dir.exists() {
             fs::create_dir_all(&rara_dir)?;
         }
@@ -71,12 +88,14 @@ impl SandboxManager {
         let sandbox_home = process_sandbox_home();
 
         let backend = SandboxBackend::detect(os.as_str());
+        let command_install_roots = command_search_install_roots(command_path.as_deref());
 
         Ok(Self {
             os,
             profile_dir,
             sandbox_home,
             backend,
+            command_install_roots,
         })
     }
 
@@ -91,9 +110,15 @@ impl SandboxManager {
                 let path = home.join(sensitive_dir);
                 file_rules.push_str(&format!(
                     "(deny file-read* (subpath \"{}\"))\n",
-                    path.display()
+                    sandbox_profile_string_literal(&path)
                 ));
             }
+        }
+        for root in &self.command_install_roots {
+            let root = sandbox_profile_string_literal(&root);
+            file_rules.push_str(&format!(
+                "(allow file-read* (subpath \"{root}\"))\n(allow file-map-executable (subpath \"{root}\"))\n"
+            ));
         }
 
         let mut net_rules = String::new();
@@ -150,17 +175,17 @@ impl SandboxManager {
         args.push(path.display().to_string());
     }
 
-    fn linux_runtime_read_roots() -> Vec<PathBuf> {
+    fn linux_runtime_read_roots(&self) -> Vec<PathBuf> {
         let mut roots = LINUX_RUNTIME_READ_ROOTS
             .iter()
             .map(PathBuf::from)
             .filter(|path| path.exists())
             .collect::<Vec<_>>();
-        for path_dir in command_search_path_dirs() {
+        for path_dir in &self.command_install_roots {
             if roots.iter().any(|root| path_dir.starts_with(root)) {
                 continue;
             }
-            roots.push(path_dir);
+            roots.push(path_dir.clone());
         }
         roots
     }
@@ -191,7 +216,7 @@ impl SandboxManager {
             args.push(dir.display().to_string());
         }
 
-        for root in Self::linux_runtime_read_roots() {
+        for root in self.linux_runtime_read_roots() {
             Self::append_ro_bind(&mut args, &root);
         }
 
@@ -406,15 +431,23 @@ fn command_exists(program: &str) -> bool {
         .unwrap_or(false)
 }
 
-fn command_search_path_dirs() -> Vec<PathBuf> {
-    env::var_os("PATH")
+fn command_search_path_dirs(command_path: Option<&std::ffi::OsStr>) -> Vec<PathBuf> {
+    command_path
+        .map(OsString::from)
+        .or_else(|| env::var_os("PATH"))
         .map(|paths| {
             let mut dirs = Vec::new();
             for dir in env::split_paths(&paths) {
                 if !dir.is_absolute() || !dir.is_dir() {
                     continue;
                 }
+                if path_contains_control_chars(&dir) {
+                    continue;
+                }
                 let dir = fs::canonicalize(&dir).unwrap_or(dir);
+                if path_contains_control_chars(&dir) {
+                    continue;
+                }
                 if !dirs.iter().any(|existing| existing == &dir) {
                     dirs.push(dir);
                 }
@@ -422,6 +455,46 @@ fn command_search_path_dirs() -> Vec<PathBuf> {
             dirs
         })
         .unwrap_or_default()
+}
+
+fn command_search_install_roots(command_path: Option<&std::ffi::OsStr>) -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    let home_dir = env::var_os("HOME")
+        .map(PathBuf::from)
+        .and_then(|path| fs::canonicalize(&path).ok().or(Some(path)));
+    for dir in command_search_path_dirs(command_path) {
+        let root = if matches!(
+            dir.file_name().and_then(|name| name.to_str()),
+            Some("bin" | "sbin")
+        ) {
+            let parent = dir.parent().unwrap_or_else(|| dir.as_path());
+            if parent == Path::new("/") || home_dir.as_deref() == Some(parent) {
+                dir.clone()
+            } else {
+                parent.to_path_buf()
+            }
+        } else {
+            dir
+        };
+        if !roots.iter().any(|existing| existing == &root) {
+            roots.push(root);
+        }
+    }
+    roots
+}
+
+fn path_contains_control_chars(path: &Path) -> bool {
+    path.display().to_string().chars().any(char::is_control)
+}
+
+fn sandbox_profile_string_literal(path: &Path) -> String {
+    path.display()
+        .to_string()
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
+        .replace('\t', "\\t")
 }
 
 fn shell_program() -> String {
@@ -515,8 +588,8 @@ fn cleanup_profiles_older_than(profile_dir: &Path, max_age: Duration) -> Result<
 mod tests {
     use super::{
         DEFAULT_SHELL, MACOS_SANDBOX_EXEC, SandboxBackend, SandboxManager,
-        cleanup_profiles_older_than, cleanup_stale_profiles, sanitize_shell_program,
-        shell_command_flag, shell_program,
+        cleanup_profiles_older_than, cleanup_stale_profiles, command_search_install_roots,
+        sandbox_profile_string_literal, sanitize_shell_program, shell_command_flag, shell_program,
     };
     use std::env;
     use std::path::PathBuf;
@@ -529,6 +602,9 @@ mod tests {
             profile_dir: PathBuf::from("/tmp/rara-test-sandbox"),
             sandbox_home: PathBuf::from("/tmp/rara-test-sandbox-home"),
             backend,
+            command_install_roots: command_search_install_roots(
+                std::env::var_os("PATH").as_deref(),
+            ),
         }
     }
 
@@ -607,6 +683,9 @@ mod tests {
             profile_dir: tempdir.path().to_path_buf(),
             sandbox_home: tempdir.path().join("home"),
             backend: SandboxBackend::MacosSeatbelt,
+            command_install_roots: command_search_install_roots(
+                std::env::var_os("PATH").as_deref(),
+            ),
         };
 
         let wrapped = manager
@@ -927,5 +1006,110 @@ mod tests {
             }),
             "linux sandbox should not bind relative PATH entries"
         );
+    }
+
+    #[test]
+    fn linux_sandbox_binds_command_install_roots_for_bin_dirs() {
+        let tempdir = tempdir().expect("tempdir");
+        let tool_root = tempdir.path().join("toolchain");
+        let tool_bin = tool_root.join("bin");
+        std::fs::create_dir_all(&tool_bin).expect("tool bin dir");
+        let tool_root = std::fs::canonicalize(&tool_root).expect("canonical tool root");
+        let tool_bin = tool_root.join("bin");
+        let original_path = std::env::var_os("PATH");
+        set_env_var("PATH", &tool_bin);
+
+        let manager = manager("linux", SandboxBackend::LinuxBubblewrap);
+        let wrapped = manager
+            .wrap_shell_command("custom-tool --version", "/workspace/project", false)
+            .expect("linux sandbox wrapper");
+
+        if let Some(path) = original_path {
+            set_env_var("PATH", path);
+        } else {
+            remove_env_var("PATH");
+        }
+
+        assert!(
+            wrapped.args.windows(3).any(|window| {
+                window
+                    == [
+                        String::from("--ro-bind"),
+                        tool_root.display().to_string(),
+                        tool_root.display().to_string(),
+                    ]
+            }),
+            "linux sandbox should bind the PATH install root so symlinked launchers and adjacent libraries remain readable"
+        );
+    }
+
+    #[test]
+    fn macos_profile_allows_command_install_roots() {
+        let tempdir = tempdir().expect("tempdir");
+        let tool_root = tempdir.path().join("toolchain");
+        let tool_bin = tool_root.join("bin");
+        std::fs::create_dir_all(&tool_bin).expect("tool bin dir");
+        let tool_root = std::fs::canonicalize(&tool_root).expect("canonical tool root");
+        let original_path = std::env::var_os("PATH");
+        set_env_var("PATH", tool_root.join("bin"));
+        let manager = SandboxManager {
+            os: "macos".to_string(),
+            profile_dir: tempdir.path().to_path_buf(),
+            sandbox_home: tempdir.path().join("home"),
+            backend: SandboxBackend::MacosSeatbelt,
+            command_install_roots: command_search_install_roots(Some(
+                tool_root.join("bin").as_os_str(),
+            )),
+        };
+
+        let profile_path = manager.create_profile(false).expect("macos profile");
+
+        if let Some(path) = original_path {
+            set_env_var("PATH", path);
+        } else {
+            remove_env_var("PATH");
+        }
+
+        let profile = std::fs::read_to_string(profile_path).expect("profile contents");
+        let expected = tool_root.display().to_string();
+        assert!(
+            profile.contains(&format!("(allow file-read* (subpath \"{expected}\"))")),
+            "macos profile should allow reading PATH install roots"
+        );
+        assert!(
+            profile.contains(&format!(
+                "(allow file-map-executable (subpath \"{expected}\"))"
+            )),
+            "macos profile should allow mapping executables from PATH install roots"
+        );
+    }
+
+    #[test]
+    fn home_bin_path_stays_narrow() {
+        let tempdir = tempdir().expect("tempdir");
+        let home = tempdir.path().join("home");
+        let home_bin = home.join("bin");
+        std::fs::create_dir_all(&home_bin).expect("home bin dir");
+        let home = std::fs::canonicalize(&home).expect("canonical home");
+        let home_bin = home.join("bin");
+        let original_home = std::env::var_os("HOME");
+        set_env_var("HOME", &home);
+
+        let roots = command_search_install_roots(Some(home_bin.as_os_str()));
+
+        if let Some(home) = original_home {
+            set_env_var("HOME", home);
+        } else {
+            remove_env_var("HOME");
+        }
+
+        assert_eq!(roots, vec![home_bin]);
+    }
+
+    #[test]
+    fn sandbox_profile_string_literal_escapes_control_characters() {
+        let escaped = sandbox_profile_string_literal(PathBuf::from("/tmp/a\nb\tc").as_path());
+
+        assert_eq!(escaped, "/tmp/a\\nb\\tc");
     }
 }
