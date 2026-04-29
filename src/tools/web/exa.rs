@@ -111,6 +111,7 @@ fn parse_mcp_response_error(body: &str) -> Option<String> {
 }
 
 fn parse_sse_text(body: &str) -> Option<String> {
+    let mut text_blocks = Vec::new();
     for line in body.lines().map(str::trim) {
         let Some(data) = line.strip_prefix("data:") else {
             continue;
@@ -120,10 +121,10 @@ fn parse_sse_text(body: &str) -> Option<String> {
             continue;
         }
         if let Some(text) = parse_json_rpc_text(data) {
-            return Some(text);
+            text_blocks.push(text);
         }
     }
-    None
+    (!text_blocks.is_empty()).then(|| text_blocks.join("\n"))
 }
 
 fn parse_sse_error(body: &str) -> Option<String> {
@@ -180,6 +181,19 @@ data: {"result":{"content":[{"type":"text","text":"search result"}]}}
         assert_eq!(
             parse_mcp_response_text(body).as_deref(),
             Some("search result")
+        );
+    }
+
+    #[test]
+    fn concatenates_multiple_sse_text_events() {
+        let body = r#"data: {"result":{"content":[{"type":"text","text":"first"}]}}
+data: {"result":{"content":[{"type":"text","text":"second"}]}}
+data: [DONE]
+"#;
+
+        assert_eq!(
+            parse_mcp_response_text(body).as_deref(),
+            Some("first\nsecond")
         );
     }
 
