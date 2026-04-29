@@ -26,10 +26,6 @@ pub fn request_running_task_cancellation(app: &mut TuiApp) {
     tasks::request_running_task_cancellation(app);
 }
 
-pub fn should_suggest_planning_mode(app: &TuiApp, prompt: &str) -> bool {
-    tasks::should_suggest_planning_mode(app, prompt)
-}
-
 pub fn start_pending_approval_task(
     app: &mut TuiApp,
     selection: BashApprovalDecision,

@@ -59,7 +59,7 @@ impl TuiApp {
             provider: &self.config.provider,
             model: self.current_model_label(),
             base_url: self.config.base_url.as_deref(),
-            agent_mode: self.agent_execution_mode_label(),
+            agent_mode: "execute",
             bash_approval: self.bash_approval_mode_label(),
             plan_explanation: self.snapshot.plan_explanation.as_deref(),
             prompt_runtime: PersistedPromptRuntimeState {

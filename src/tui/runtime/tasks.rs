@@ -24,16 +24,6 @@ use super::super::state::{
 use super::events::{apply_tui_event, convert_agent_event, format_error_chain};
 use builder::rebuild_agent_with_progress;
 
-fn restore_execute_mode_after_plan_turn(app: &mut TuiApp, agent: &mut Agent) {
-    if matches!(
-        app.agent_execution_mode,
-        crate::agent::AgentExecutionMode::Plan
-    ) {
-        app.set_agent_execution_mode(crate::agent::AgentExecutionMode::Execute);
-        agent.set_execution_mode(crate::agent::AgentExecutionMode::Execute);
-    }
-}
-
 fn merge_rebuilt_agent(mut rebuilt: Agent, previous: Agent) -> Agent {
     let previous_prompt_config = previous.prompt_config().clone();
     rebuilt.session_id = previous.session_id;
@@ -149,69 +139,6 @@ pub(super) fn start_query_task(app: &mut TuiApp, prompt: String, mut agent: Agen
         cancellation_token: Some(cancellation_token),
         cancellation_requested: false,
     });
-}
-
-pub(super) fn should_suggest_planning_mode(app: &TuiApp, prompt: &str) -> bool {
-    if app.is_busy()
-        || app.has_pending_plan_approval()
-        || app.has_pending_approval()
-        || app.pending_request_input().is_some()
-        || matches!(
-            app.agent_execution_mode,
-            crate::agent::AgentExecutionMode::Plan
-        )
-    {
-        return false;
-    }
-
-    let trimmed = prompt.trim();
-    if trimmed.is_empty() || trimmed.lines().count() > 20 {
-        return false;
-    }
-
-    let lowered = trimmed.to_ascii_lowercase();
-    let strong_keywords = [
-        "review the code",
-        "review this repo",
-        "inspect the codebase",
-        "implementation plan",
-        "refactor",
-        "architecture",
-        "design proposal",
-        "migration plan",
-        "跨模块",
-        "重构",
-        "架构",
-        "设计方案",
-        "实现方案",
-        "修改建议",
-        "看一下代码",
-        "代码质量",
-    ];
-    if strong_keywords
-        .iter()
-        .any(|keyword| lowered.contains(keyword) || trimmed.contains(keyword))
-    {
-        return true;
-    }
-
-    let asks_for_analysis = lowered.contains("analyze")
-        || lowered.contains("analyse")
-        || lowered.contains("proposal")
-        || lowered.contains("suggest")
-        || lowered.contains("review")
-        || lowered.contains("plan")
-        || lowered.contains("design");
-    let mentions_codebase = lowered.contains("repo")
-        || lowered.contains("repository")
-        || lowered.contains("codebase")
-        || lowered.contains("module")
-        || lowered.contains("system")
-        || trimmed.contains("代码")
-        || trimmed.contains("仓库")
-        || trimmed.contains("项目");
-
-    asks_for_analysis && mentions_codebase
 }
 
 pub(super) fn start_compact_task(app: &mut TuiApp, mut agent: Agent) {
@@ -507,13 +434,15 @@ pub(super) async fn finish_running_task_if_ready(
             }
             match result {
                 Ok(_) => {
-                    let finished_plan_turn = matches!(
-                        app.agent_execution_mode,
-                        crate::agent::AgentExecutionMode::Plan
-                    );
+                    let finished_plan_turn =
+                        matches!(
+                            app.agent_execution_mode,
+                            crate::agent::AgentExecutionMode::Plan
+                        ) || matches!(agent.execution_mode, crate::agent::AgentExecutionMode::Plan);
                     app.clear_active_live_sections();
                     if finished_plan_turn {
-                        restore_execute_mode_after_plan_turn(app, &mut agent);
+                        agent.set_execution_mode(crate::agent::AgentExecutionMode::Plan);
+                        app.set_agent_execution_mode(crate::agent::AgentExecutionMode::Plan);
                         app.set_pending_plan_approval(
                             agent.last_query_produced_plan() && !agent.current_plan.is_empty(),
                         );
@@ -532,7 +461,7 @@ pub(super) async fn finish_running_task_if_ready(
                         );
                     } else {
                         if finished_plan_turn {
-                            app.push_notice("Planning finished. Returned to execute mode.");
+                            app.push_notice("Planning finished. Staying in plan mode.");
                         }
                         app.finalize_active_turn();
                         app.notice = Some("Prompt finished.".into());
@@ -543,8 +472,16 @@ pub(super) async fn finish_running_task_if_ready(
                 Err(err) => {
                     let error_message = format_error_chain(&err);
                     let cancelled = error_message.contains("cancelled by user");
-                    restore_execute_mode_after_plan_turn(app, &mut agent);
+                    let finished_plan_turn =
+                        matches!(
+                            app.agent_execution_mode,
+                            crate::agent::AgentExecutionMode::Plan
+                        ) || matches!(agent.execution_mode, crate::agent::AgentExecutionMode::Plan);
                     app.clear_active_live_sections();
+                    if finished_plan_turn {
+                        agent.set_execution_mode(crate::agent::AgentExecutionMode::Plan);
+                        app.set_agent_execution_mode(crate::agent::AgentExecutionMode::Plan);
+                    }
                     app.set_pending_plan_approval(false);
                     *agent_slot = Some(agent);
                     if let Some(agent) = agent_slot.as_ref() {

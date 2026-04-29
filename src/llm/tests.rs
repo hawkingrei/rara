@@ -1069,7 +1069,7 @@ fn suggests_larger_num_ctx_for_plan_and_tool_heavy_turns() {
     let messages = vec![
         Message {
             role: "system".to_string(),
-            content: json!("<plan>\n- [pending] Inspect src/\n</plan>"),
+            content: json!("<proposed_plan>\n- [pending] Inspect src/\n</proposed_plan>"),
         },
         Message {
             role: "assistant".to_string(),

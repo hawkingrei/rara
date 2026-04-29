@@ -60,7 +60,9 @@ pub fn input_requests_command_palette(input: &str) -> bool {
 }
 
 pub(crate) fn contains_structured_planning_output(message: &str) -> bool {
-    message.contains("<plan>") || message.contains("<request_user_input>")
+    message.contains("<proposed_plan>")
+        || message.contains("<plan>")
+        || message.contains("<request_user_input>")
 }
 
 fn state_db_status_error(prefix: &str, message: impl Into<String>) -> String {

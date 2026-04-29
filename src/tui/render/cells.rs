@@ -109,7 +109,9 @@ fn split_progress_sentences(message: &str) -> Vec<String> {
 
 fn is_structured_response_marker(line: &str) -> bool {
     let trimmed = line.trim();
-    trimmed.starts_with("<plan>")
+    trimmed.starts_with("<proposed_plan>")
+        || trimmed.starts_with("</proposed_plan>")
+        || trimmed.starts_with("<plan>")
         || trimmed.starts_with("</plan>")
         || trimmed.starts_with("<request_user_input>")
         || trimmed.starts_with("</request_user_input>")
@@ -118,7 +120,12 @@ fn is_structured_response_marker(line: &str) -> bool {
 
 fn is_structured_progress_list_line(line: &str) -> bool {
     let trimmed = line.trim_start();
-    trimmed.starts_with("- [") || trimmed.starts_with("* [") || trimmed.starts_with("• [")
+    trimmed.starts_with("- [")
+        || trimmed.starts_with("* [")
+        || trimmed.starts_with("• [")
+        || trimmed.starts_with("- ")
+        || trimmed.starts_with("* ")
+        || trimmed.starts_with("• ")
 }
 
 fn compact_live_response_source(message: &str) -> Option<String> {
@@ -226,41 +233,84 @@ fn compact_live_response_message(message: &str) -> Option<String> {
 }
 
 fn parse_render_plan_block(message: &str) -> Option<(Vec<(String, String)>, Option<String>)> {
-    let start = message.find("<plan>")?;
-    let end = message.find("</plan>")?;
+    let (start_tag, end_tag, start, end) = find_render_plan_block_bounds(message)
+        .or_else(|| find_render_legacy_plan_block_bounds(message))?;
     if end <= start {
         return None;
     }
 
-    let block = &message[start + "<plan>".len()..end];
+    let block = &message[start + start_tag.len()..end];
     let mut steps = Vec::new();
     for line in block.lines().map(str::trim).filter(|line| !line.is_empty()) {
-        let Some(step) = line
-            .strip_prefix("- [")
-            .or_else(|| line.strip_prefix("* ["))
-            .or_else(|| line.strip_prefix("• ["))
-        else {
-            continue;
-        };
-        let Some((status, rest)) = step.split_once(']') else {
-            continue;
-        };
-        let step = rest.trim();
-        if step.is_empty() {
-            continue;
+        if let Some(step) = parse_render_plan_step_line(line) {
+            steps.push(step);
         }
-        steps.push((status.trim().to_string(), step.to_string()));
     }
 
     if steps.is_empty() {
-        return None;
+        if start_tag != "<proposed_plan>" {
+            return None;
+        }
+        let fallback = block
+            .lines()
+            .map(str::trim)
+            .find(|line| !line.is_empty() && !line.starts_with('#'))
+            .unwrap_or("Implement proposed plan")
+            .trim_matches(['*', '#', ' '])
+            .to_string();
+        steps.push(("pending".to_string(), fallback));
     }
 
-    let explanation = message[end + "</plan>".len()..].trim();
+    let explanation = message[end + end_tag.len()..].trim();
     Some((
         steps,
         (!explanation.is_empty()).then(|| explanation.to_string()),
     ))
+}
+
+fn find_render_plan_block_bounds(
+    message: &str,
+) -> Option<(&'static str, &'static str, usize, usize)> {
+    let start_tag = "<proposed_plan>";
+    let end_tag = "</proposed_plan>";
+    let start = message.find(start_tag)?;
+    let end = message.find(end_tag)?;
+    Some((start_tag, end_tag, start, end))
+}
+
+fn find_render_legacy_plan_block_bounds(
+    message: &str,
+) -> Option<(&'static str, &'static str, usize, usize)> {
+    let start_tag = "<plan>";
+    let end_tag = "</plan>";
+    let start = message.find(start_tag)?;
+    let end = message.find(end_tag)?;
+    Some((start_tag, end_tag, start, end))
+}
+
+fn parse_render_plan_step_line(line: &str) -> Option<(String, String)> {
+    if let Some(step) = line
+        .strip_prefix("- [")
+        .or_else(|| line.strip_prefix("* ["))
+        .or_else(|| line.strip_prefix("• ["))
+    {
+        let Some((status, rest)) = step.split_once(']') else {
+            return None;
+        };
+        let step = rest.trim();
+        return (!step.is_empty()).then(|| (status.trim().to_string(), step.to_string()));
+    }
+
+    let step = line
+        .strip_prefix("- ")
+        .or_else(|| line.strip_prefix("* "))
+        .or_else(|| line.strip_prefix("• "))
+        .or_else(|| {
+            let (number, rest) = line.split_once(". ")?;
+            number.chars().all(|ch| ch.is_ascii_digit()).then_some(rest)
+        })?
+        .trim();
+    (!step.is_empty()).then(|| ("pending".to_string(), step.to_string()))
 }
 
 fn terminal_cell_from_entries<'a>(
@@ -1125,7 +1175,7 @@ mod helper_tests {
     #[test]
     fn compact_live_response_source_strips_structured_plan_block() {
         let rendered = compact_live_response_source(
-            "我先对比代码结构和现有 todo，找出未记录但值得改进的点。\n我再补两处证据，尽量把建议落到具体代码位置。\n<plan>\n- [completed] Inspect runtime entrypoint\n- [pending] Tighten render path\n</plan>",
+            "我先对比代码结构和现有 todo，找出未记录但值得改进的点。\n我再补两处证据，尽量把建议落到具体代码位置。\n<proposed_plan>\n- [completed] Inspect runtime entrypoint\n- [pending] Tighten render path\n</proposed_plan>",
         )
         .unwrap();
 
@@ -1151,7 +1201,7 @@ mod helper_tests {
     #[test]
     fn compact_live_response_source_keeps_prose_after_structured_plan_block() {
         let rendered = compact_live_response_source(
-            "I inspected the current context path.\n<plan>\n- [completed] Review context/runtime.rs\n- [pending] Add a focused test\n</plan>\nI am starting the focused patch now.",
+            "I inspected the current context path.\n<proposed_plan>\n- [completed] Review context/runtime.rs\n- [pending] Add a focused test\n</proposed_plan>\nI am starting the focused patch now.",
         )
         .unwrap();
 
@@ -1164,7 +1214,7 @@ mod helper_tests {
     #[test]
     fn parse_render_plan_block_extracts_steps_and_explanation() {
         let parsed = parse_render_plan_block(
-            "I reviewed the code.\n<plan>\n- [completed] Inspect the runtime path\n- [pending] Tighten the render path\n</plan>\nKeep the diff narrow.",
+            "I reviewed the code.\n<proposed_plan>\n- [completed] Inspect the runtime path\n- Tighten the render path\n</proposed_plan>\nKeep the diff narrow.",
         )
         .unwrap();
 

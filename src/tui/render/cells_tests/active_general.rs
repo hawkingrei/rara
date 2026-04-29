@@ -497,7 +497,7 @@ fn active_turn_cell_hides_structured_plan_response_once_plan_card_exists() {
     app.active_turn = TranscriptTurn {
         entries: vec![
             TranscriptEntry { role: "You".into(), message: "Plan the next refactor".into(), payload: None },
-            TranscriptEntry { role: "Agent".into(), message: "<plan>\n- [completed] Inspect the auth flow\n- [in_progress] Reuse codex_login\n- [pending] Add auth picker snapshots\n</plan>\nPrefer direct auth reuse before expanding more TUI flows.".into(), payload: None },
+            TranscriptEntry { role: "Agent".into(), message: "<proposed_plan>\n- [completed] Inspect the auth flow\n- [in_progress] Reuse codex_login\n- [pending] Add auth picker snapshots\n</proposed_plan>\nPrefer direct auth reuse before expanding more TUI flows.".into(), payload: None },
         ],
     };
     app.snapshot.plan_steps = vec![
@@ -517,7 +517,7 @@ fn active_turn_cell_hides_structured_plan_response_once_plan_card_exists() {
 
     assert!(rendered.contains("Updated Plan"));
     assert!(!rendered.contains("Responding"));
-    assert!(!rendered.contains("<plan>"));
+    assert!(!rendered.contains("<proposed_plan>"));
 }
 
 #[test]
@@ -532,7 +532,7 @@ fn active_turn_cell_prefers_inline_plan_artifact_over_preamble_before_snapshot_s
     app.active_turn = TranscriptTurn {
         entries: vec![
             TranscriptEntry { role: "You".into(), message: "Review the codebase and propose changes".into(), payload: None },
-            TranscriptEntry { role: "Agent".into(), message: "我基于当前代码的建议如下。\n这里先给一个简短前言。\n<plan>\n- [completed] Inspect the runtime entrypoint\n- [pending] Tighten the render path\n</plan>\nKeep the diff narrow and reviewable.".into(), payload: None },
+            TranscriptEntry { role: "Agent".into(), message: "I reviewed the current implementation.\nHere is the concise plan.\n<proposed_plan>\n- [completed] Inspect the runtime entrypoint\n- [pending] Tighten the render path\n</proposed_plan>\nKeep the diff narrow and reviewable.".into(), payload: None },
         ],
     };
 
@@ -547,8 +547,8 @@ fn active_turn_cell_prefers_inline_plan_artifact_over_preamble_before_snapshot_s
     assert!(rendered.contains("Inspect the runtime entrypoint"));
     assert!(rendered.contains("Keep the diff narrow and reviewable."));
     assert!(!rendered.contains("Responding"));
-    assert!(!rendered.contains("我基于当前代码的建议如下"));
-    assert!(!rendered.contains("<plan>"));
+    assert!(!rendered.contains("I reviewed the current implementation"));
+    assert!(!rendered.contains("<proposed_plan>"));
 }
 
 #[test]

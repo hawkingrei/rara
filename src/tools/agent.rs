@@ -49,11 +49,11 @@ impl SubAgentKind {
                     "- You are a read-only planning sub-agent.\n",
                     "- Inspect the repository and refine an implementation approach.\n",
                     "- Keep plans shallow and grouped by behavior.\n",
-                    "- Use <plan> only when the plan is decision-complete.\n",
+                    "- Use <proposed_plan> only when the plan is decision-complete.\n",
                     "- If the plan is not ready, summarize what additional inspection is still needed and end with <continue_inspection/>.\n",
                     "- Do not stop with narration alone.\n",
                     "- Do not delegate to another agent or spawn sub-agents; inspect and answer directly.\n",
-                    "- End with exactly one of: <plan>, <request_user_input>, or <continue_inspection/>."
+                    "- End with exactly one of: <proposed_plan>, <request_user_input>, or <continue_inspection/>."
                 )
             }
         }

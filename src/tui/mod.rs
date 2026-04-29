@@ -45,9 +45,8 @@ use self::provider_flow::{
 use self::render::{desired_viewport_height, render};
 use self::runtime::{
     execute_local_command, finish_running_task_if_ready, request_running_task_cancellation,
-    should_suggest_planning_mode, start_deepseek_model_list_task, start_oauth_task,
-    start_pending_approval_task, start_plan_approval_resume_task, start_query_task,
-    start_rebuild_task,
+    start_deepseek_model_list_task, start_oauth_task, start_pending_approval_task,
+    start_plan_approval_resume_task, start_query_task, start_rebuild_task,
 };
 use self::session_restore::{
     provider_requires_api_key, restore_latest_thread, restore_thread_by_id,
@@ -879,13 +878,8 @@ async fn handle_submit(
             }
         }
         let prompt = input.trim().to_string();
-        if should_suggest_planning_mode(app, prompt.as_str()) {
-            app.queue_planning_suggestion(prompt);
-            *agent_slot = Some(agent);
-        } else {
-            app.clear_pending_planning_suggestion();
-            start_query_task(app, prompt, agent);
-        }
+        app.clear_pending_planning_suggestion();
+        start_query_task(app, prompt, agent);
     }
     Ok(false)
 }
@@ -956,26 +950,12 @@ fn classify_pending_plan_approval_input(input: &str) -> Option<PendingPlanApprov
     }
 
     let approve_keywords = [
-        "继续",
-        "继续吧",
-        "好的",
-        "好",
-        "开始",
-        "开始吧",
-        "执行",
-        "执行吧",
-        "实现",
-        "实现吧",
-        "可以",
-        "行",
-        "ok",
-        "okay",
-        "yes",
-        "y",
-        "go",
-        "proceed",
-        "continue",
-        "ship it",
+        "执行计划",
+        "开始实现",
+        "实现计划",
+        "approve plan",
+        "implement plan",
+        "start implementation",
     ];
     if approve_keywords
         .iter()
@@ -994,7 +974,7 @@ async fn handle_pending_plan_approval_submit(
 ) -> anyhow::Result<bool> {
     let Some(action) = classify_pending_plan_approval_input(input) else {
         app.push_notice(
-            "A plan is waiting for approval. Press 1/2 or type '继续' to implement, '继续规划' to refine the plan.",
+            "A plan is waiting for approval. Press 1/2 or type '执行计划' to implement, '继续规划' to refine the plan.",
         );
         return Ok(true);
     };
