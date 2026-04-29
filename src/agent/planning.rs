@@ -105,7 +105,6 @@ impl InspectionProgress {
                     self.config_reads += 1;
                 } else if path.ends_with("agents.md")
                     || path.ends_with("readme.md")
-                    || path.ends_with(".rara/instructions.md")
                     || path.ends_with(".rara/memory.md")
                     || path.ends_with(".md")
                 {

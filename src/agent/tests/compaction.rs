@@ -78,10 +78,12 @@ async fn manual_compact_replaces_older_history_with_summary() {
         boundary.get("type").and_then(serde_json::Value::as_str),
         Some("compact_boundary")
     );
-    assert!(agent.history[1]
-        .content
-        .to_string()
-        .contains("STRUCTURED SUMMARY OF PREVIOUS CONVERSATION"));
+    assert!(
+        agent.history[1]
+            .content
+            .to_string()
+            .contains("STRUCTURED SUMMARY OF PREVIOUS CONVERSATION")
+    );
 }
 
 #[tokio::test]
@@ -119,13 +121,17 @@ async fn automatic_compaction_timeout_does_not_block_query() {
         .await
         .expect("query should continue after automatic compaction timeout");
 
-    assert!(statuses
-        .iter()
-        .any(|status| status.contains("Automatic history compaction timed out")));
-    assert!(agent
-        .history
-        .last()
-        .is_some_and(|message| message.content.to_string().contains("query completed")));
+    assert!(
+        statuses
+            .iter()
+            .any(|status| status.contains("Automatic history compaction timed out"))
+    );
+    assert!(
+        agent
+            .history
+            .last()
+            .is_some_and(|message| message.content.to_string().contains("query completed"))
+    );
 }
 
 #[tokio::test]
@@ -167,9 +173,11 @@ async fn automatic_compaction_failure_suspends_retry_until_history_grows() {
         .await
         .expect("suspended auto compaction should be non-fatal");
 
-    assert!(statuses
-        .iter()
-        .any(|status| status.contains("temporarily suspended")));
+    assert!(
+        statuses
+            .iter()
+            .any(|status| status.contains("temporarily suspended"))
+    );
     assert_eq!(
         agent.compact_state.consecutive_auto_compaction_failures,
         after_failure.consecutive_auto_compaction_failures
@@ -303,7 +311,7 @@ async fn manual_compact_prefers_latest_excerpt_and_tracks_apply_patch() {
         Message {
             role: "assistant".to_string(),
             content: json!([
-                {"type":"tool_use","id":"tool-3","name":"read_file","input":{"path":"src/main.rs","start_line":10,"end_line":12}}
+                {"type":"tool_use","id":"tool-3","name":"read_file","input":{"path":"src/main.rs","offset":10,"limit":3}}
             ]),
         },
         Message {

@@ -2,7 +2,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use anyhow::Result;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::agent::Message;
 
@@ -512,7 +512,12 @@ fn summarize_tool_result(tool_name: &str, input: &Value, result: &Value) -> Stri
             let total_lines = result
                 .get("total_lines")
                 .and_then(Value::as_u64)
+                .or_else(|| result.get("observed_lines").and_then(Value::as_u64))
                 .unwrap_or_default();
+            let total_lines_exact = result
+                .get("total_lines_exact")
+                .and_then(Value::as_bool)
+                .unwrap_or(true);
             let start_line = result
                 .get("start_line")
                 .and_then(Value::as_u64)
@@ -521,12 +526,41 @@ fn summarize_tool_result(tool_name: &str, input: &Value, result: &Value) -> Stri
                 .get("end_line")
                 .and_then(Value::as_u64)
                 .unwrap_or(total_lines);
+            let truncated = result
+                .get("truncated")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let line_truncated = result
+                .get("line_truncated")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let next_offset = result.get("next_offset").and_then(Value::as_u64);
+            let continuation = match (next_offset, line_truncated) {
+                (Some(next_offset), true) => {
+                    format!(
+                        " Truncated line(s); continue with offset={next_offset} for more lines."
+                    )
+                }
+                (Some(next_offset), false) => {
+                    format!(" Truncated; continue with offset={next_offset}.")
+                }
+                (None, true) => " Truncated line(s).".to_string(),
+                (None, false) if truncated => " Truncated.".to_string(),
+                (None, false) => String::new(),
+            };
+            let total_label = if total_lines_exact {
+                total_lines.to_string()
+            } else {
+                format!("at least {total_lines}")
+            };
             if total_lines > 0 && (start_line != 1 || end_line != total_lines) {
                 format!(
-                    "Read file {path} lines {start_line}-{end_line} of {total_lines} ({total_chars} chars)."
+                    "Read file {path} lines {start_line}-{end_line} of {total_label} ({total_chars} chars).{continuation}"
                 )
             } else {
-                format!("Read file {path} ({total_lines} lines, {total_chars} chars).")
+                format!(
+                    "Read file {path} ({total_label} lines, {total_chars} chars).{continuation}"
+                )
             }
         }
         "glob" => {
@@ -653,8 +687,8 @@ pub fn default_tool_result_store_dir() -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::{
-        compact_read_file, compact_subagent_result, default_tool_result_store_dir,
-        repair_tool_result_history, ToolResultStore,
+        ToolResultStore, compact_read_file, compact_subagent_result, default_tool_result_store_dir,
+        repair_tool_result_history,
     };
     use crate::agent::Message;
     use serde_json::json;
@@ -688,6 +722,27 @@ mod tests {
     }
 
     #[test]
+    fn read_file_summary_distinguishes_line_truncation_from_more_lines() {
+        let summary = compact_read_file(
+            &json!({ "path": "src/generated.json" }),
+            &json!({
+                "content": "x".repeat(4_020),
+                "total_lines": 1,
+                "total_lines_exact": true,
+                "start_line": 1,
+                "end_line": 1,
+                "truncated": true,
+                "line_truncated": true,
+                "next_offset": null,
+            }),
+        );
+
+        assert!(summary.contains("Read file src/generated.json"));
+        assert!(summary.contains("Truncated line(s)."));
+        assert!(!summary.contains("continue with offset"));
+    }
+
+    #[test]
     fn stores_oversized_results_on_disk() {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let store = ToolResultStore::new(tempdir.path()).expect("store");
@@ -702,9 +757,11 @@ mod tests {
         assert!(output.contains("full_result_path="));
         assert!(output.contains("Fetched https://example.com"));
         assert!(tempdir.path().join("tool-1.json").exists());
-        assert!(default_tool_result_store_dir()
-            .expect("default tool result dir")
-            .ends_with(std::path::Path::new("tool-results")));
+        assert!(
+            default_tool_result_store_dir()
+                .expect("default tool result dir")
+                .ends_with(std::path::Path::new("tool-results"))
+        );
     }
 
     #[test]

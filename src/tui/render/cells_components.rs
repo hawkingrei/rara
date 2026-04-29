@@ -9,6 +9,7 @@ use crate::tui::interaction_text::{
     pending_interaction_card_title, status_planning_suggestion_text,
 };
 use crate::tui::plan_display::updated_plan_lines;
+use crate::tui::render::diff::render_patch_preview;
 use crate::tui::render::{
     display_width, formatted_message_lines, prefixed_message_lines, rendered_markdown_lines,
     section_span, startup_card_inner_width, truncate_for_startup_card, truncate_path_middle,
@@ -53,13 +54,26 @@ impl SummaryCell {
 }
 
 impl HistoryCell for SummaryCell {
-    fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
         let mut lines = vec![Line::from(section_span(self.title, self.color))];
-        lines.extend(
-            self.summary
-                .lines()
-                .map(|line| Line::from(format!("  {line}"))),
-        );
+        let mut summary_lines = self.summary.lines();
+        while let Some(line) = summary_lines.next() {
+            if line == "diff:" {
+                lines.push(Line::from(vec![
+                    Span::raw("  "),
+                    Span::styled(
+                        "diff:",
+                        Style::default()
+                            .fg(Color::Cyan)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                ]));
+                let diff = summary_lines.collect::<Vec<_>>().join("\n");
+                lines.extend(render_patch_preview(diff.as_str(), width));
+                break;
+            }
+            lines.push(Line::from(format!("  {line}")));
+        }
         lines
     }
 }

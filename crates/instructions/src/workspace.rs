@@ -80,12 +80,7 @@ impl WorkspaceMemory {
     pub fn discover_instructions(&self) -> Vec<String> {
         self.discover_prompt_sources()
             .into_iter()
-            .filter(|source| {
-                matches!(
-                    source.kind,
-                    PromptSourceKind::ProjectInstruction | PromptSourceKind::LocalInstruction
-                )
-            })
+            .filter(|source| matches!(source.kind, PromptSourceKind::ProjectInstruction))
             .map(|source| format!("### {}:\n{}", source.label, source.content))
             .collect()
     }
@@ -114,15 +109,6 @@ impl WorkspaceMemory {
                     });
                 }
             }
-        }
-        let rara_inst = self.rara_dir.join("instructions.md");
-        if let Some(content) = self.cached_file_content(&rara_inst) {
-            sources.push(PromptSource {
-                kind: PromptSourceKind::LocalInstruction,
-                label: "RARA Local Instruction".to_string(),
-                display_path: rara_inst.display().to_string(),
-                content,
-            });
         }
         let memory = self.rara_dir.join("memory.md");
         if let Some(content) = self.cached_file_content(&memory) {

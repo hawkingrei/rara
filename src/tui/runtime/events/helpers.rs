@@ -4,7 +4,7 @@ use crate::tool::ToolOutputStream;
 use crate::tools::bash::BashCommandInput;
 use crate::tui::state::TuiApp;
 use crate::tui::terminal_event::{
-    output_tail_preview as terminal_output_tail_preview, TerminalEvent,
+    TerminalEvent, output_tail_preview as terminal_output_tail_preview,
 };
 use crate::tui::tool_text::{compact_delegate_rest, compact_instruction};
 
@@ -598,67 +598,66 @@ pub(super) fn format_tool_result(name: &str, content: &str) -> String {
     if let Some(event) = TerminalEvent::from_tool_result(name, content, false) {
         return event.to_transcript_message();
     }
-    if name == "bash" {
-        if let Ok(value) = serde_json::from_str::<serde_json::Value>(content) {
-            let exit_code = value
-                .get("exit_code")
-                .and_then(serde_json::Value::as_i64)
-                .unwrap_or(-1);
-            let stdout = value
-                .get("stdout")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or_default();
-            let stderr = value
-                .get("stderr")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or_default();
-            let live_streamed = value
-                .get("live_streamed")
-                .and_then(serde_json::Value::as_bool)
-                .unwrap_or(false);
-            let mut summary = if exit_code == 0 {
-                "bash finished with exit code 0".to_string()
-            } else if exit_code >= 0 {
-                format!("bash failed with exit code {exit_code}")
-            } else {
-                "bash finished with unknown exit status".to_string()
-            };
-            if live_streamed {
-                summary.push_str("\noutput streamed above");
-                return summary;
-            }
-            if let Some(stdout_preview) = output_tail_preview(stdout) {
-                summary.push_str(&format!("\nstdout:\n{stdout_preview}"));
-            }
-            if let Some(stderr_preview) = output_tail_preview(stderr) {
-                summary.push_str(&format!("\nstderr:\n{stderr_preview}"));
-            }
-            return summary;
+    if name == "bash"
+        && let Ok(value) = serde_json::from_str::<serde_json::Value>(content)
+    {
+        let exit_code = value
+            .get("exit_code")
+            .and_then(serde_json::Value::as_i64)
+            .unwrap_or(-1);
+        let stdout = value
+            .get("stdout")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        let stderr = value
+            .get("stderr")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        let live_streamed = value
+            .get("live_streamed")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        let mut summary = if exit_code == 0 {
+            "bash finished with exit code 0".to_string()
+        } else if exit_code >= 0 {
+            format!("bash failed with exit code {exit_code}")
+        } else {
+            "bash finished with unknown exit status".to_string()
+        };
+        if live_streamed {
+            summary.push_str("\noutput streamed above");
         }
+        if let Some(stdout_preview) = output_tail_preview(stdout) {
+            summary.push_str(&format!("\nstdout:\n{stdout_preview}"));
+        }
+        if let Some(stderr_preview) = output_tail_preview(stderr) {
+            summary.push_str(&format!("\nstderr:\n{stderr_preview}"));
+        }
+        return summary;
     }
 
-    if name == "apply_patch" {
-        if let Ok(value) = serde_json::from_str::<serde_json::Value>(content) {
-            return format_apply_patch_result(&value);
-        }
+    if name == "apply_patch"
+        && let Ok(value) = serde_json::from_str::<serde_json::Value>(content)
+    {
+        return format_apply_patch_result(&value);
     }
 
-    if name == "write_file" {
-        if let Ok(value) = serde_json::from_str::<serde_json::Value>(content) {
-            return format_write_file_result(&value);
-        }
+    if name == "write_file"
+        && let Ok(value) = serde_json::from_str::<serde_json::Value>(content)
+    {
+        return format_write_file_result(&value);
     }
 
-    if name == "replace" {
-        if let Ok(value) = serde_json::from_str::<serde_json::Value>(content) {
-            return format_replace_result(&value);
-        }
+    if name == "replace"
+        && let Ok(value) = serde_json::from_str::<serde_json::Value>(content)
+    {
+        return format_replace_result(&value);
     }
 
-    if name == "replace_lines" {
-        if let Ok(value) = serde_json::from_str::<serde_json::Value>(content) {
-            return format_replace_lines_result(&value);
-        }
+    if name == "replace_lines"
+        && let Ok(value) = serde_json::from_str::<serde_json::Value>(content)
+    {
+        return format_replace_lines_result(&value);
     }
 
     if name == "list_files" {
@@ -733,12 +732,12 @@ pub(super) fn append_tool_progress(
         return false;
     }
 
-    if let Some(last) = app.active_turn.entries.last_mut() {
-        if last.role == "Tool Progress" {
-            last.message.push_str(&rendered);
-            limit_tool_progress_entry(&mut last.message);
-            return true;
-        }
+    if let Some(last) = app.active_turn.entries.last_mut()
+        && last.role == "Tool Progress"
+    {
+        last.message.push_str(&rendered);
+        limit_tool_progress_entry(&mut last.message);
+        return true;
     }
 
     app.push_entry("Tool Progress", rendered);
@@ -837,6 +836,16 @@ pub(super) fn format_apply_patch_result(value: &serde_json::Value) -> String {
                 lines.push(format!("  ... {remaining} more change(s)"));
             }
         }
+    }
+
+    if let Some(diff_preview) = value
+        .get("diff_preview")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        lines.push("diff:".to_string());
+        lines.extend(diff_preview.lines().map(ToString::to_string));
     }
 
     lines.join("\n")

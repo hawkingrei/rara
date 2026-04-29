@@ -21,7 +21,6 @@ static PLAN_MODE_PROMPT: LazyLock<String> = LazyLock::new(|| {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PromptSourceKind {
     ProjectInstruction,
-    LocalInstruction,
     LocalMemory,
     CustomSystemPrompt,
     AppendSystemPrompt,
@@ -40,7 +39,6 @@ impl PromptSource {
     pub fn kind_label(&self) -> &'static str {
         match self.kind {
             PromptSourceKind::ProjectInstruction => "project_instruction",
-            PromptSourceKind::LocalInstruction => "local_instruction",
             PromptSourceKind::LocalMemory => "local_memory",
             PromptSourceKind::CustomSystemPrompt => "custom_system_prompt",
             PromptSourceKind::AppendSystemPrompt => "append_system_prompt",
@@ -52,9 +50,6 @@ impl PromptSource {
         match self.kind {
             PromptSourceKind::ProjectInstruction => {
                 format!("project instruction: {}", self.display_path)
-            }
-            PromptSourceKind::LocalInstruction => {
-                format!("local instruction: {}", self.display_path)
             }
             PromptSourceKind::LocalMemory => format!("local memory: {}", self.display_path),
             PromptSourceKind::CustomSystemPrompt => {
@@ -71,9 +66,6 @@ impl PromptSource {
         match self.kind {
             PromptSourceKind::ProjectInstruction => {
                 "included as a repository instruction discovered while walking from the workspace root toward the current focus directory"
-            }
-            PromptSourceKind::LocalInstruction => {
-                "included as a workspace-local RARA instruction override"
             }
             PromptSourceKind::LocalMemory => {
                 "included as durable workspace memory from the local RARA memory file"
@@ -358,7 +350,8 @@ fn default_system_prompt_sections() -> Vec<PromptSection> {
                     "Use 'replace_lines' only for large deletions or replacements when you have verified exact line numbers from the current file contents; do not pass hundreds of lines through 'replace.old_string'.",
                     "Use 'write_file' only for new files or intentional full-file rewrites after reading the current file when it already exists.",
                     "Do not use shell redirection, sed, perl, or ad-hoc scripts to edit files when direct edit tools or 'apply_patch' can do the job.",
-                    "If a 'read_file' result is truncated, retry with narrower start_line/end_line ranges instead of asking the user to paste the file.",
+                    "If a 'read_file' result is truncated, continue with offset=next_offset and a narrower limit instead of asking the user to paste the file.",
+                    "When a CLI command or its flags are unfamiliar or uncertain, first inspect local usage with a safe read-only command such as '<cmd> --help', '<cmd> help', '<cmd> -h', or '<cmd> --version' before relying on guessed flags.",
                     "If sandboxed bash is unavailable or blocked, continue with direct file tools such as read_file, apply_patch, and replace_lines before asking the user for help.",
                     "Use 'remember_experience' for global vector memory.",
                     "Use 'update_project_memory' to record facts into memory.md.",
@@ -447,12 +440,7 @@ fn dynamic_system_prompt_sections(
     let (cwd, branch) = workspace.get_env_info();
     let instruction_sections = sources
         .iter()
-        .filter(|source| {
-            matches!(
-                source.kind,
-                PromptSourceKind::ProjectInstruction | PromptSourceKind::LocalInstruction
-            )
-        })
+        .filter(|source| matches!(source.kind, PromptSourceKind::ProjectInstruction))
         .map(|source| format!("## {}\n{}", source.label, source.content))
         .collect::<Vec<_>>();
     let instruction_block = if instruction_sections.is_empty() {
@@ -750,6 +738,8 @@ mod tests {
         assert!(prompt.contains("Use 'replace' only for one exact, unique snippet"));
         assert!(prompt.contains("Use 'write_file' only for new files"));
         assert!(prompt.contains("Do not use shell redirection"));
+        assert!(prompt.contains("first inspect local usage"));
+        assert!(prompt.contains("<cmd> --help"));
         assert!(prompt.contains("Autonomy And Execution Bias"));
         assert!(prompt.contains("assume the user wants you to solve the task"));
         assert!(prompt.contains("Do not stop at a proposed solution"));

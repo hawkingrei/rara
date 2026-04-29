@@ -114,12 +114,7 @@ impl<'a> ContextAssembler<'a> {
         let workspace_prompt_budget = effective_prompt
             .sources
             .iter()
-            .filter(|source| {
-                matches!(
-                    source.kind_label(),
-                    "project_instruction" | "local_instruction" | "local_memory"
-                )
-            })
+            .filter(|source| matches!(source.kind_label(), "project_instruction" | "local_memory"))
             .map(|source| estimate_text_tokens(source.content.as_str()))
             .sum();
         let retrieval_entries = retrieval_source_entries(
@@ -262,7 +257,7 @@ fn assemble_context_view(
     for source in &effective_prompt.sources {
         let kind = source.kind_label().to_string();
         let layer = match kind.as_str() {
-            "project_instruction" | "local_instruction" => "stable_instructions",
+            "project_instruction" => "stable_instructions",
             "local_memory" => "workspace_prompt_sources",
             _ => "workspace_prompt_sources",
         };
@@ -1316,10 +1311,12 @@ mod tests {
 
         assert!(assembled.system_prompt().contains("appendix"));
         assert_eq!(assembled.compact_instruction, "compact me");
-        assert!(assembled
-            .effective_prompt
-            .section_keys
-            .contains(&"append_system_prompt"));
+        assert!(
+            assembled
+                .effective_prompt
+                .section_keys
+                .contains(&"append_system_prompt")
+        );
     }
 
     #[test]
@@ -1511,20 +1508,22 @@ mod tests {
         assert!(!selected_kinds.contains(&"retrieved_thread_context"));
         assert!(dropped_kinds.contains(&"retrieved_workspace_memory"));
         assert!(dropped_kinds.contains(&"retrieved_thread_context"));
-        assert!(runtime_context
-            .retrieval
-            .memory_selection
-            .dropped_items
-            .iter()
-            .any(|item| {
-                matches!(
-                    item.kind.as_str(),
-                    "retrieved_workspace_memory" | "retrieved_thread_context"
-                ) && item
-                    .dropped_reason
-                    .as_deref()
-                    .is_some_and(|reason| reason.contains("memory-selection budget"))
-            }));
+        assert!(
+            runtime_context
+                .retrieval
+                .memory_selection
+                .dropped_items
+                .iter()
+                .any(|item| {
+                    matches!(
+                        item.kind.as_str(),
+                        "retrieved_workspace_memory" | "retrieved_thread_context"
+                    ) && item
+                        .dropped_reason
+                        .as_deref()
+                        .is_some_and(|reason| reason.contains("memory-selection budget"))
+                })
+        );
     }
 
     #[test]

@@ -298,15 +298,15 @@ fn compaction_summary_timeout() -> Duration {
 
 fn estimate_history_tokens(history: &[Message]) -> Result<usize> {
     let bpe = tokenizer()?;
-    Ok(history
+    history
         .iter()
-        .map(|message| estimate_message_tokens_with_bpe(message, &bpe))
-        .sum::<Result<usize>>()?)
+        .map(|message| estimate_message_tokens_with_bpe(message, bpe))
+        .sum::<Result<usize>>()
 }
 
 fn estimate_message_tokens(message: &Message) -> Result<usize> {
     let bpe = tokenizer()?;
-    estimate_message_tokens_with_bpe(message, &bpe)
+    estimate_message_tokens_with_bpe(message, bpe)
 }
 
 fn estimate_message_tokens_with_bpe(
@@ -403,14 +403,7 @@ fn collect_recent_file_excerpts(
                     let Some(path) = input.get("path").and_then(Value::as_str) else {
                         continue;
                     };
-                    let line_range = match (
-                        input.get("start_line").and_then(Value::as_u64),
-                        input.get("end_line").and_then(Value::as_u64),
-                    ) {
-                        (Some(start), Some(end)) => Some((start as usize, end as usize)),
-                        (Some(start), None) => Some((start as usize, start as usize)),
-                        _ => None,
-                    };
+                    let line_range = read_file_line_range(input);
                     pending_reads.insert(
                         tool_use_id.to_string(),
                         (path.replace('\\', "/"), line_range),
@@ -456,6 +449,41 @@ fn collect_recent_file_excerpts(
     }
     excerpts.reverse();
     excerpts
+}
+
+fn read_file_line_range(input: &serde_json::Map<String, Value>) -> Option<(usize, usize)> {
+    match (
+        input.get("offset").and_then(Value::as_u64),
+        input.get("limit").and_then(Value::as_u64),
+    ) {
+        (Some(offset), Some(limit)) if limit > 0 => {
+            let start = usize::try_from(offset).ok()?;
+            let limit = usize::try_from(limit).ok()?;
+            let end = start.checked_add(limit)?.checked_sub(1)?;
+            return Some((start, end));
+        }
+        (Some(offset), None) => {
+            let start = usize::try_from(offset).ok()?;
+            return Some((start, start));
+        }
+        _ => {}
+    }
+
+    match (
+        input.get("start_line").and_then(Value::as_u64),
+        input.get("end_line").and_then(Value::as_u64),
+    ) {
+        (Some(start), Some(end)) => {
+            let start = usize::try_from(start).ok()?;
+            let end = usize::try_from(end).ok()?;
+            Some((start, end))
+        }
+        (Some(start), None) => {
+            let start = usize::try_from(start).ok()?;
+            Some((start, start))
+        }
+        _ => None,
+    }
 }
 
 fn render_recent_file_excerpt(excerpt: &RecentFileExcerpt) -> String {
@@ -511,4 +539,34 @@ pub fn latest_compact_boundary_metadata(history: &[Message]) -> Option<CompactBo
                 .unwrap_or_default() as usize,
         })
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::read_file_line_range;
+    use serde_json::{Map, Value, json};
+
+    fn object(value: Value) -> Map<String, Value> {
+        value.as_object().expect("object").clone()
+    }
+
+    #[test]
+    fn read_file_line_range_rejects_overflowing_offset_limit() {
+        let input = object(json!({
+            "offset": usize::MAX,
+            "limit": 2,
+        }));
+
+        assert_eq!(read_file_line_range(&input), None);
+    }
+
+    #[test]
+    fn read_file_line_range_accepts_checked_offset_limit() {
+        let input = object(json!({
+            "offset": 10,
+            "limit": 3,
+        }));
+
+        assert_eq!(read_file_line_range(&input), Some((10, 12)));
+    }
 }

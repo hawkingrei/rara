@@ -1,8 +1,8 @@
 use crate::config::RaraConfig;
 
 use super::state::{
-    current_model_presets, CommandSpec, LocalCommand, LocalCommandKind, PendingInteractionSnapshot,
-    ProviderFamily, TuiApp, PROVIDER_FAMILIES,
+    CommandSpec, LocalCommand, LocalCommandKind, PROVIDER_FAMILIES, PendingInteractionSnapshot,
+    ProviderFamily, TuiApp, current_model_presets,
 };
 
 pub const COMMAND_SPECS: [CommandSpec; 18] = [
@@ -508,7 +508,11 @@ pub fn status_context_text(app: &TuiApp) -> String {
                 .unwrap_or_else(|| "-".to_string()),
         ),
         render_context_assembly_entries(app, "stable_instructions", "Stable Instructions"),
-        render_context_assembly_entries(app, "workspace_prompt_sources", "Workspace Prompt Sources"),
+        render_context_assembly_entries(
+            app,
+            "workspace_prompt_sources",
+            "Workspace Prompt Sources",
+        ),
         render_context_assembly_entries(app, "active_memory_inputs", "Active Memory Inputs"),
         render_memory_selection(app),
         render_context_assembly_entries(app, "compacted_history", "Compacted History"),
@@ -632,7 +636,9 @@ pub fn status_runtime_text(app: &TuiApp) -> String {
         thinking,
         reasoning_summary,
         surface.reasoning_summary.source.label(),
-        surface.reasoning_effort.display_or(reasoning_effort_label.as_str()),
+        surface
+            .reasoning_effort
+            .display_or(reasoning_effort_label.as_str()),
         surface.reasoning_effort.source.label(),
         device,
         dtype,
@@ -1032,9 +1038,9 @@ pub fn normalize_command_token(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        help_text, matching_commands, model_help_text, normalize_command_token, palette_commands,
-        parse_local_command, status_context_text, status_prompt_sources_text,
-        status_resources_text, status_runtime_text, LocalCommandKind, COMMAND_SPECS,
+        COMMAND_SPECS, LocalCommandKind, help_text, matching_commands, model_help_text,
+        normalize_command_token, palette_commands, parse_local_command, status_context_text,
+        status_prompt_sources_text, status_resources_text, status_runtime_text,
     };
     use crate::config::{ConfigManager, OpenAiEndpointKind};
     use crate::context::PromptSourceContextEntry;
@@ -1281,7 +1287,9 @@ mod tests {
             rendered.contains("retrieval_selected=workspace_memory, retrieved_workspace_memory")
         );
         assert!(rendered.contains("compactions=2 (last: 12000 -> 4500, ratio: 0.38)"));
-        assert!(rendered.contains("compact_boundary=v1 (before_tokens=12000, recent_file_count=2)"));
+        assert!(
+            rendered.contains("compact_boundary=v1 (before_tokens=12000, recent_file_count=2)")
+        );
         assert!(rendered.contains("recent_compact_file_count=2"));
         assert!(rendered.contains(
             "recent_compact_files=src/agent/compact.rs, crates/instructions/src/prompt.rs"
@@ -1311,8 +1319,10 @@ mod tests {
         assert!(
             rendered.contains("1. Project Instruction (AGENTS.md) [project_instruction] AGENTS.md")
         );
-        assert!(rendered
-            .contains("why: included because workspace instruction discovery found this file"));
+        assert!(
+            rendered
+                .contains("why: included because workspace instruction discovery found this file")
+        );
     }
 
     #[test]
@@ -1460,17 +1470,18 @@ mod tests {
                 },
                 crate::context::PromptSourceContextEntry {
                     order: 2,
-                    kind: "local_instruction".into(),
-                    label: "RARA Local Instruction".into(),
-                    display_path: "/workspace/rara/.rara/instructions.md".into(),
-                    status_line: "local instruction: /workspace/rara/.rara/instructions.md".into(),
+                    kind: "local_memory".into(),
+                    label: "Local Project Memory".into(),
+                    display_path: "/workspace/rara/.rara/memory.md".into(),
+                    status_line: "local memory: /workspace/rara/.rara/memory.md".into(),
                     inclusion_reason:
-                        "included as a workspace-local RARA instruction override".into(),
+                        "included as durable workspace memory from the local RARA memory file"
+                            .into(),
                 },
             ],
             prompt_source_status_lines: vec![
                 "AGENTS.md from workspace root".into(),
-                "workspace instruction file".into(),
+                "local memory: /workspace/rara/.rara/memory.md".into(),
             ],
             assembly_entries: vec![
                 crate::context::ContextAssemblyEntry {
