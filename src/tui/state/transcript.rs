@@ -324,14 +324,6 @@ impl TuiApp {
     }
 
     fn push_active_live_event(&mut self, event: ActiveLiveEvent) {
-        if self
-            .active_live
-            .events
-            .last()
-            .is_some_and(|last| last.role() == event.role() && last.message() == event.message())
-        {
-            return;
-        }
         self.active_live.events.push(event);
     }
 

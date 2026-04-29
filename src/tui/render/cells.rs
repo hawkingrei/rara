@@ -628,9 +628,7 @@ fn ordered_exploration_agent_segments<'a>(
         match entry.role.as_str() {
             "Tool" => {
                 if let Some(action) = super::exploration_action_label(&entry.message) {
-                    if !exploration_items.iter().any(|existing| existing == &action) {
-                        exploration_items.push(action);
-                    }
+                    exploration_items.push(action);
                 }
             }
             "Exploring" => {
@@ -647,9 +645,7 @@ fn ordered_exploration_agent_segments<'a>(
                     })
                     .filter(|line| !line.is_empty())
                 {
-                    if !exploration_items.iter().any(|existing| existing == &item) {
-                        exploration_items.push(item);
-                    }
+                    exploration_items.push(item);
                 }
             }
             "Agent" => {
