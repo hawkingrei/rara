@@ -172,26 +172,26 @@ fn push_live_event_group<'a>(
     events: Vec<&crate::tui::state::ActiveLiveEvent>,
     active: bool,
 ) {
-    let actions = events
-        .iter()
-        .filter(|event| !event.is_note())
-        .map(|event| event.message().to_string())
-        .collect::<Vec<_>>();
-    let notes = events
-        .iter()
-        .filter(|event| event.is_note())
-        .map(|event| event.message().to_string())
-        .collect::<Vec<_>>();
+    let mut actions = Vec::new();
+    let mut notes = Vec::new();
+    for event in events {
+        if event.is_note() {
+            notes.push(event.message().to_string());
+        } else {
+            actions.push(event.message().to_string());
+        }
+    }
     match role {
-        "Thinking" => cells.push(Box::new(ThinkingTextCell::new(
-            &actions
-                .iter()
-                .chain(notes.iter())
-                .cloned()
-                .collect::<Vec<_>>()
-                .join("\n"),
-            4,
-        ))),
+        "Thinking" => {
+            let mut message = actions.join("\n");
+            if !notes.is_empty() {
+                if !message.is_empty() {
+                    message.push('\n');
+                }
+                message.push_str(&notes.join("\n"));
+            }
+            cells.push(Box::new(ThinkingTextCell::new(&message, 4)));
+        }
         "Exploring" => cells.push(Box::new(ExploringCell::new(
             compact_progress_summary_lines(
                 actions.as_slice(),
