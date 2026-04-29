@@ -815,6 +815,35 @@ fn active_turn_cell_uses_lightweight_busy_response_when_not_streaming() {
 }
 
 #[test]
+fn active_turn_cell_shows_live_thinking_stream() {
+    let temp = tempdir().unwrap();
+    let mut app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("build tui app");
+    app.runtime_phase = RuntimePhase::ProcessingResponse;
+    app.runtime_phase_detail = Some("thinking".into());
+    app.active_turn = TranscriptTurn {
+        entries: vec![TranscriptEntry {
+            role: "You".into(),
+            message: "Review this repository".into(),
+            payload: None,
+        }],
+    };
+    app.append_agent_thinking_delta("checking runtime events\n");
+
+    let rendered = ActiveTurnCell::new(&app, Some(Path::new(".")))
+        .display_lines(100)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(rendered.contains(" Thinking "));
+    assert!(rendered.contains("checking runtime events"));
+}
+
+#[test]
 fn active_turn_cell_renders_live_response_as_lightweight_message() {
     let temp = tempdir().unwrap();
     let mut app = TuiApp::new(ConfigManager {

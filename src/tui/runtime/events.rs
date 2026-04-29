@@ -30,6 +30,10 @@ pub(super) fn apply_tui_event(app: &mut TuiApp, event: TuiEvent) {
                 );
                 app.append_agent_delta(&message);
                 return;
+            } else if role == "Agent Thinking Delta" {
+                app.set_runtime_phase(RuntimePhase::ProcessingResponse, Some("thinking".into()));
+                app.append_agent_thinking_delta(&message);
+                return;
             } else if role == "Tool" || role == "Tool Result" || role == "Tool Error" {
                 if role == "Tool" {
                     if let Some(action) = exploration_action_label(&message) {
@@ -249,6 +253,10 @@ pub(super) fn convert_agent_event(event: AgentEvent) -> Option<TuiEvent> {
         }),
         AgentEvent::AssistantDelta(text) => Some(TuiEvent::Transcript {
             role: "Agent Delta",
+            message: text,
+        }),
+        AgentEvent::AssistantThinkingDelta(text) => Some(TuiEvent::Transcript {
+            role: "Agent Thinking Delta",
             message: text,
         }),
         AgentEvent::ToolUse { name, input } => {

@@ -2,7 +2,7 @@ use serde_json::json;
 
 use crate::agent::Message;
 use crate::config::OpenAiEndpointKind;
-use crate::llm::{ContentBlock, LlmTurnMetadata};
+use crate::llm::{ContentBlock, LlmStreamEvent, LlmTurnMetadata};
 
 use super::ollama::{
     apply_ollama_stream_event, build_ollama_options, ensure_ollama_stream_completed,
@@ -488,6 +488,69 @@ fn deepseek_reasoner_plan_with_explicit_thinking_uses_max_effort() {
 }
 
 #[test]
+fn deepseek_explicit_thinking_disables_for_legacy_assistant_history_without_reasoning() {
+    let body = build_chat_completion_request_body(
+        "deepseek-v4-pro",
+        &[
+            Message {
+                role: "assistant".to_string(),
+                content: serde_json::to_value(vec![ContentBlock::Text {
+                    text: "Legacy answer without provider metadata.".to_string(),
+                }])
+                .expect("content"),
+            },
+            Message {
+                role: "user".to_string(),
+                content: json!("Continue."),
+            },
+        ],
+        &[],
+        OpenAiEndpointKind::Deepseek,
+        None,
+        Some(true),
+        LlmTurnMetadata::default(),
+    );
+
+    assert_eq!(body["thinking"]["type"], "disabled");
+    assert!(body.get("reasoning_effort").is_none());
+}
+
+#[test]
+fn deepseek_explicit_thinking_stays_enabled_for_reasoning_compatible_history() {
+    let body = build_chat_completion_request_body(
+        "deepseek-v4-pro",
+        &[
+            Message {
+                role: "assistant".to_string(),
+                content: serde_json::to_value(vec![
+                    ContentBlock::Text {
+                        text: "Visible answer.".to_string(),
+                    },
+                    ContentBlock::ProviderMetadata {
+                        provider: "deepseek".to_string(),
+                        key: "reasoning_content".to_string(),
+                        value: json!("preserved reasoning"),
+                    },
+                ])
+                .expect("content"),
+            },
+            Message {
+                role: "user".to_string(),
+                content: json!("Continue."),
+            },
+        ],
+        &[],
+        OpenAiEndpointKind::Deepseek,
+        None,
+        Some(true),
+        LlmTurnMetadata::default(),
+    );
+
+    assert_eq!(body["thinking"]["type"], "enabled");
+    assert_eq!(body["reasoning_effort"], "high");
+}
+
+#[test]
 fn deepseek_reasoner_explicit_thinking_normalizes_reasoning_effort() {
     let medium_body = build_chat_completion_request_body(
         "deepseek-reasoner",
@@ -840,8 +903,8 @@ fn codex_stream_events_collect_output_items_usage_and_text_deltas() {
     let mut streamed_text = String::new();
     let mut deltas = Vec::new();
 
-    let mut on_delta = |delta: String| deltas.push(delta);
-    let mut on_delta_option: Option<&mut (dyn FnMut(String) + Send)> = Some(&mut on_delta);
+    let mut on_delta = |event: LlmStreamEvent| deltas.push(event);
+    let mut on_delta_option: Option<&mut (dyn FnMut(LlmStreamEvent) + Send)> = Some(&mut on_delta);
     assert!(!apply_codex_stream_event(
         &json!({"type":"response.output_text.delta","delta":"Hello"}),
         &mut output_items,
@@ -851,7 +914,7 @@ fn codex_stream_events_collect_output_items_usage_and_text_deltas() {
     )
     .unwrap());
 
-    let mut no_delta_callback: Option<&mut (dyn FnMut(String) + Send)> = None;
+    let mut no_delta_callback: Option<&mut (dyn FnMut(LlmStreamEvent) + Send)> = None;
     assert!(!apply_codex_stream_event(
         &json!({
             "type":"response.output_item.done",
@@ -882,7 +945,7 @@ fn codex_stream_events_collect_output_items_usage_and_text_deltas() {
     )
     .unwrap());
 
-    assert_eq!(deltas, vec!["Hello".to_string()]);
+    assert_eq!(deltas, vec![LlmStreamEvent::TextDelta("Hello".to_string())]);
     assert_eq!(streamed_text, "Hello");
     assert_eq!(output_items.len(), 1);
     assert_eq!(output_items[0]["type"], "message");
@@ -891,11 +954,37 @@ fn codex_stream_events_collect_output_items_usage_and_text_deltas() {
 }
 
 #[test]
+fn codex_stream_reasoning_delta_is_reported_without_agent_text() {
+    let mut output_items = Vec::new();
+    let mut usage = None;
+    let mut streamed_text = String::new();
+    let mut events = Vec::new();
+
+    let mut on_event = |event: LlmStreamEvent| events.push(event);
+    let mut on_event_option: Option<&mut (dyn FnMut(LlmStreamEvent) + Send)> = Some(&mut on_event);
+
+    assert!(!apply_codex_stream_event(
+        &json!({"type":"response.reasoning_summary_text.delta","delta":"checking files"}),
+        &mut output_items,
+        &mut usage,
+        &mut streamed_text,
+        &mut on_event_option,
+    )
+    .unwrap());
+
+    assert_eq!(streamed_text, "");
+    assert_eq!(
+        events,
+        vec![LlmStreamEvent::ReasoningDelta("checking files".to_string())]
+    );
+}
+
+#[test]
 fn codex_stream_conversation_item_done_is_treated_as_output_item() {
     let mut output_items = Vec::new();
     let mut usage = None;
     let mut streamed_text = String::new();
-    let mut no_delta_callback: Option<&mut (dyn FnMut(String) + Send)> = None;
+    let mut no_delta_callback: Option<&mut (dyn FnMut(LlmStreamEvent) + Send)> = None;
 
     assert!(!apply_codex_stream_event(
         &json!({
@@ -933,7 +1022,7 @@ fn codex_stream_output_item_added_is_upserted_by_done_item() {
     let mut output_items = Vec::new();
     let mut usage = None;
     let mut streamed_text = String::new();
-    let mut no_delta_callback: Option<&mut (dyn FnMut(String) + Send)> = None;
+    let mut no_delta_callback: Option<&mut (dyn FnMut(LlmStreamEvent) + Send)> = None;
 
     assert!(!apply_codex_stream_event(
         &json!({
@@ -989,7 +1078,7 @@ fn codex_stream_output_item_matches_mixed_id_and_call_id() {
     let mut output_items = Vec::new();
     let mut usage = None;
     let mut streamed_text = String::new();
-    let mut no_delta_callback: Option<&mut (dyn FnMut(String) + Send)> = None;
+    let mut no_delta_callback: Option<&mut (dyn FnMut(LlmStreamEvent) + Send)> = None;
 
     assert!(!apply_codex_stream_event(
         &json!({
@@ -1035,7 +1124,7 @@ fn codex_stream_response_done_marks_completion() {
     let mut output_items = Vec::new();
     let mut usage = None;
     let mut streamed_text = String::new();
-    let mut no_delta_callback: Option<&mut (dyn FnMut(String) + Send)> = None;
+    let mut no_delta_callback: Option<&mut (dyn FnMut(LlmStreamEvent) + Send)> = None;
 
     assert!(apply_codex_stream_event(
         &json!({
@@ -1223,7 +1312,13 @@ fn applies_ollama_stream_event_deltas_and_tool_calls() {
     assert!(done);
 
     assert_eq!(text, "Hello world");
-    assert_eq!(deltas, vec!["Hello".to_string(), " world".to_string()]);
+    assert_eq!(
+        deltas,
+        vec![
+            LlmStreamEvent::TextDelta("Hello".to_string()),
+            LlmStreamEvent::TextDelta(" world".to_string())
+        ]
+    );
     assert_eq!(tool_calls.len(), 1);
     assert_eq!(tool_calls[0].name, "read_file");
     assert_eq!(tool_calls[0].arguments, json!({"path":"Cargo.toml"}));

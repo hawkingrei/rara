@@ -21,6 +21,13 @@ runtime contract instead of an inferred prose intent.
   later successful compaction clears the backoff state.
 - Added a DeepSeek v4 context budget override so 1M-token models do not fall
   back to the default 10k-token budget and compact too early.
+- Split streaming model callbacks into text deltas and reasoning deltas. RARA
+  now surfaces DeepSeek `reasoning_content` and Codex reasoning summary deltas
+  as transient live Thinking output while still preserving DeepSeek
+  `reasoning_content` in provider metadata for API roundtrip.
+- Added DeepSeek thinking compatibility fallback for legacy histories. If an
+  old assistant message has no preserved `reasoning_content`, RARA disables
+  thinking for that request instead of sending a body DeepSeek rejects.
 - Added a focused agent planning regression test for the execute-mode
   structured continuation boundary.
 
@@ -35,6 +42,10 @@ runtime contract instead of an inferred prose intent.
   / follow-up state and stop when no structured continuation remains. Automatic
   compaction returns both a compaction result and consecutive failure state, so
   repeated compaction failures can be handled without blocking every turn.
+- Codex and Claude both expose model thinking as runtime-visible progress
+  instead of waiting for the final assistant message. RARA mirrors that shape
+  with a transient TUI Thinking stream that is not committed as ordinary
+  assistant transcript text.
 
 ## Validation
 
@@ -43,5 +54,12 @@ runtime contract instead of an inferred prose intent.
 - `cargo test automatic_compaction_failure_suspends_retry_until_history_grows -- --nocapture`
 - `cargo test successful_compaction_clears_auto_failure_backoff -- --nocapture`
 - `cargo test derives_context_budget_for_deepseek_v4_models -- --nocapture`
+- `cargo test codex_stream_reasoning_delta_is_reported_without_agent_text -- --nocapture`
+- `cargo test agent_thinking_delta_updates_live_thinking_without_transcript_entry -- --nocapture`
+- `cargo test active_turn_cell_shows_live_thinking_stream -- --nocapture`
+- `cargo test deepseek_streaming_reasoning_content_preserves_exact_bytes -- --nocapture`
+- `cargo test deepseek_tool_call_reasoning_content_roundtrips_without_trimming -- --nocapture`
+- `cargo test deepseek_explicit_thinking_disables_for_legacy_assistant_history_without_reasoning -- --nocapture`
+- `cargo test deepseek_explicit_thinking_stays_enabled_for_reasoning_compatible_history -- --nocapture`
 - `cargo check`
 - `git diff --check`

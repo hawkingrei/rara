@@ -133,6 +133,33 @@ fn agent_dsml_only_message_does_not_enter_transcript() {
 }
 
 #[test]
+fn agent_thinking_delta_updates_live_thinking_without_transcript_entry() {
+    let temp = tempdir().expect("tempdir");
+    let mut app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("app");
+
+    let event = convert_agent_event(AgentEvent::AssistantThinkingDelta(
+        "checking relevant files".to_string(),
+    ))
+    .expect("tui event");
+    apply_tui_event(&mut app, event);
+
+    assert_eq!(app.runtime_phase, RuntimePhase::ProcessingResponse);
+    assert_eq!(app.runtime_phase_detail.as_deref(), Some("thinking"));
+    assert!(app.active_turn.entries.is_empty());
+    let rendered = app
+        .agent_thinking_stream_lines()
+        .expect("thinking stream")
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(rendered.contains("checking relevant files"));
+}
+
+#[test]
 fn bash_rg_tool_use_is_shown_as_exploration() {
     let temp = tempdir().expect("tempdir");
     let mut app = TuiApp::new(ConfigManager {

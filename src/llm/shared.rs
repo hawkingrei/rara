@@ -32,6 +32,12 @@ pub enum LlmExecutionMode {
     Plan,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LlmStreamEvent {
+    TextDelta(String),
+    ReasoningDelta(String),
+}
+
 #[derive(Debug, Clone)]
 pub struct LlmTurnMetadata {
     execution_mode: LlmExecutionMode,
@@ -101,7 +107,7 @@ pub trait LlmBackend: Send + Sync {
         &self,
         messages: &[Message],
         tools: &[Value],
-        _on_text_delta: &mut (dyn FnMut(String) + Send),
+        _on_event: &mut (dyn FnMut(LlmStreamEvent) + Send),
     ) -> Result<LlmResponse> {
         self.ask(messages, tools).await
     }
@@ -110,9 +116,9 @@ pub trait LlmBackend: Send + Sync {
         messages: &[Message],
         tools: &[Value],
         _metadata: LlmTurnMetadata,
-        on_text_delta: &mut (dyn FnMut(String) + Send),
+        on_event: &mut (dyn FnMut(LlmStreamEvent) + Send),
     ) -> Result<LlmResponse> {
-        self.ask_streaming(messages, tools, on_text_delta).await
+        self.ask_streaming(messages, tools, on_event).await
     }
 
     async fn embed(&self, text: &str) -> Result<Vec<f32>>;

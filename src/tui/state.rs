@@ -494,6 +494,7 @@ impl TuiApp {
             transcript_scroll: 0,
             terminal_width: 80,
             agent_markdown_stream: None,
+            agent_thinking_stream: None,
             active_live: ActiveLiveSections::default(),
             pending_planning_suggestion: None,
             pending_follow_up_messages: Vec::new(),

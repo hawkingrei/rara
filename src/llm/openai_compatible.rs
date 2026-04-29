@@ -14,7 +14,7 @@ use crate::redaction::{redact_secrets, sanitize_url_for_display};
 use super::shared::{
     collect_assistant_content, extract_message_text, http_client_for_target, model_context_budget,
     next_stream_item_with_idle_timeout, parse_tool_arguments, render_openai_message_content,
-    ContextBudget, LlmBackend, LlmTurnMetadata,
+    ContextBudget, LlmBackend, LlmStreamEvent, LlmTurnMetadata,
 };
 
 #[cfg(test)]
@@ -133,7 +133,7 @@ impl LlmBackend for OpenAiCompatibleBackend {
         messages: &[Message],
         tools: &[Value],
         metadata: LlmTurnMetadata,
-        on_text_delta: &mut (dyn FnMut(String) + Send),
+        on_event: &mut (dyn FnMut(LlmStreamEvent) + Send),
     ) -> Result<LlmResponse> {
         let mut body = build_chat_completion_request_body(
             &self.model,
@@ -193,12 +193,15 @@ impl LlmBackend for OpenAiCompatibleBackend {
                 if let Some(delta) = choice.get("delta") {
                     if let Some(content) = delta.get("content").and_then(Value::as_str) {
                         if !content.is_empty() {
-                            on_text_delta(content.to_string());
+                            on_event(LlmStreamEvent::TextDelta(content.to_string()));
                             streamed_text.push_str(content);
                         }
                     }
                     if let Some(reasoning) = delta.get("reasoning_content").and_then(Value::as_str)
                     {
+                        if !reasoning.is_empty() {
+                            on_event(LlmStreamEvent::ReasoningDelta(reasoning.to_string()));
+                        }
                         streamed_reasoning_content.push_str(reasoning);
                     }
                     if let Some(tool_deltas) = delta.get("tool_calls").and_then(Value::as_array) {

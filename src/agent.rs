@@ -5,7 +5,7 @@ mod prompting;
 #[cfg(test)]
 mod tests;
 
-use crate::llm::{ContentBlock, LlmBackend, LlmTurnMetadata};
+use crate::llm::{ContentBlock, LlmBackend, LlmStreamEvent, LlmTurnMetadata};
 use crate::prompt::{self, PromptMode, PromptRuntimeConfig};
 use crate::session::SessionManager;
 use crate::tool::ToolManager;
@@ -66,6 +66,7 @@ pub enum AgentEvent {
     Status(String),
     AssistantText(String),
     AssistantDelta(String),
+    AssistantThinkingDelta(String),
     ToolUse {
         name: String,
         input: Value,
@@ -275,12 +276,19 @@ impl Agent {
             },
         );
 
-        let mut streamed_any_delta = false;
+        let mut streamed_any_text_delta = false;
         let response = self
             .llm_backend
-            .ask_streaming_with_context(&messages, tool_schemas, turn_metadata, &mut |delta| {
-                streamed_any_delta = true;
-                report(AgentEvent::AssistantDelta(delta));
+            .ask_streaming_with_context(&messages, tool_schemas, turn_metadata, &mut |event| {
+                match event {
+                    LlmStreamEvent::TextDelta(delta) => {
+                        streamed_any_text_delta = true;
+                        report(AgentEvent::AssistantDelta(delta));
+                    }
+                    LlmStreamEvent::ReasoningDelta(delta) => {
+                        report(AgentEvent::AssistantThinkingDelta(delta));
+                    }
+                }
             })
             .await?;
 
@@ -305,7 +313,7 @@ impl Agent {
                         sanitized_content.push(ContentBlock::Text {
                             text: clean_text.clone(),
                         });
-                        if !streamed_any_delta {
+                        if !streamed_any_text_delta {
                             report(AgentEvent::AssistantText(clean_text.clone()));
                         }
                         if matches!(self.execution_mode, AgentExecutionMode::Plan) {

@@ -21,7 +21,7 @@ pub(crate) use self::components::StartupCardCell;
 use self::components::{
     planning_suggestion_text, CommittedInteractionCell, ExploredCell, ExploringCell, MessageCell,
     PendingInteractionCell, PlanModeCell, PlanSummaryCell, PlanningCell, PlanningSuggestionCell,
-    RanCell, RespondingCell, RunningCell, TerminalCell, UserCell,
+    RanCell, RespondingCell, RunningCell, TerminalCell, ThinkingCell, UserCell,
 };
 use super::{
     compact_progress_summary_lines, compact_recent_first_summary_lines, compact_summary_lines,
@@ -785,6 +785,8 @@ impl ActiveCell for ActiveTurnCell<'_> {
             .map(|entry| entry.message.as_str());
         let streaming_agent_lines = self.app.agent_stream_lines();
         let has_agent_stream = self.app.has_agent_stream();
+        let streaming_thinking_lines = self.app.agent_thinking_stream_lines();
+        let has_thinking_stream = self.app.has_agent_thinking_stream();
         let latest_system = current_turn
             .iter()
             .rev()
@@ -820,6 +822,12 @@ impl ActiveCell for ActiveTurnCell<'_> {
         if self.app.agent_execution_mode_label() == "plan" && !self.app.has_pending_plan_approval()
         {
             cells.push(Box::new(PlanModeCell));
+        }
+
+        if turn_live && has_thinking_stream {
+            if let Some(lines) = streaming_thinking_lines {
+                cells.push(Box::new(ThinkingCell::new(lines, 4)));
+            }
         }
 
         let ordered_exploration_agent_segments =
