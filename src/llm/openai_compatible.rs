@@ -334,10 +334,7 @@ pub(super) fn build_chat_completion_request_body(
         body["tools"] = json!(openai_tools);
     }
     let strong_reasoning = !openai_tools.is_empty() || metadata.prefers_strong_reasoning();
-    if thinking == Some(true)
-        && endpoint_kind == OpenAiEndpointKind::Deepseek
-        && deepseek_supports_thinking(model)
-    {
+    if deepseek_history_requires_reasoning_content(model, endpoint_kind, thinking) {
         openai_messages = fold_deepseek_legacy_reasoning_history(openai_messages);
         body["messages"] = Value::Array(openai_messages);
     }
@@ -389,6 +386,16 @@ fn fold_deepseek_legacy_reasoning_history(openai_messages: Vec<Value>) -> Vec<Va
     }
     folded.extend(openai_messages.into_iter().skip(fold_end + 1));
     folded
+}
+
+fn deepseek_history_requires_reasoning_content(
+    model: &str,
+    endpoint_kind: OpenAiEndpointKind,
+    thinking: Option<bool>,
+) -> bool {
+    endpoint_kind == OpenAiEndpointKind::Deepseek
+        && deepseek_supports_thinking(model)
+        && thinking != Some(false)
 }
 
 fn deepseek_legacy_history_note(messages: &[Value]) -> String {
