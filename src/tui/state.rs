@@ -150,6 +150,7 @@ impl TuiApp {
 
     fn update_composer_after_edit_if_needed(&mut self, target: TextInputTarget) {
         if matches!(target, TextInputTarget::Composer) {
+            self.reset_input_history_navigation();
             self.sync_command_palette_with_input();
         }
     }
@@ -183,7 +184,83 @@ impl TuiApp {
     pub fn set_input(&mut self, input: String) {
         self.input = input;
         self.input_cursor_offset = None;
+        self.reset_input_history_navigation();
         self.sync_command_palette_with_input();
+    }
+
+    fn set_input_from_history(&mut self, input: String) {
+        self.input = input;
+        self.input_cursor_offset = Some(self.input.chars().count());
+        self.sync_command_palette_with_input();
+    }
+
+    pub fn record_input_history(&mut self, input: &str) {
+        let input = input.trim();
+        if input.is_empty() {
+            return;
+        }
+        if self
+            .input_history
+            .last()
+            .is_some_and(|previous| previous == input)
+        {
+            self.reset_input_history_navigation();
+            return;
+        }
+        self.input_history.push(input.to_string());
+        self.reset_input_history_navigation();
+    }
+
+    pub fn reset_input_history_navigation(&mut self) {
+        self.input_history_cursor = None;
+        self.input_history_draft = None;
+    }
+
+    pub fn should_handle_input_history_navigation(&self, delta: i32) -> bool {
+        if self.input_history.is_empty() {
+            return false;
+        }
+        if self.input.is_empty() {
+            return true;
+        }
+        let cursor = self.composer_cursor_offset();
+        let at_boundary = cursor == 0 || cursor == self.input.chars().count();
+        at_boundary
+            && self
+                .input_history_cursor
+                .is_some_and(|idx| self.input_history.get(idx) == Some(&self.input))
+            && (delta < 0 || delta > 0)
+    }
+
+    pub fn navigate_input_history(&mut self, delta: i32) {
+        if self.input_history.is_empty() || delta == 0 {
+            return;
+        }
+
+        let next = match self.input_history_cursor {
+            None if delta < 0 => {
+                self.input_history_draft = Some(self.input.clone());
+                Some(self.input_history.len().saturating_sub(1))
+            }
+            None => return,
+            Some(idx) if delta < 0 => Some(idx.saturating_sub(1)),
+            Some(idx) if idx + 1 < self.input_history.len() => Some(idx + 1),
+            Some(_) => None,
+        };
+
+        match next {
+            Some(idx) => {
+                self.input_history_cursor = Some(idx);
+                if let Some(entry) = self.input_history.get(idx).cloned() {
+                    self.set_input_from_history(entry);
+                }
+            }
+            None => {
+                let draft = self.input_history_draft.take().unwrap_or_default();
+                self.input_history_cursor = None;
+                self.set_input_from_history(draft);
+            }
+        }
     }
 
     pub fn insert_active_input_char(&mut self, ch: char) {
@@ -453,6 +530,9 @@ impl TuiApp {
         Ok(Self {
             input: String::new(),
             input_cursor_offset: None,
+            input_history: Vec::new(),
+            input_history_cursor: None,
+            input_history_draft: None,
             committed_turns: Vec::new(),
             active_turn: TranscriptTurn::default(),
             inserted_turns: 0,

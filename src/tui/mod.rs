@@ -222,6 +222,9 @@ async fn dispatch_event(
         AppEvent::MoveCursorDown => {
             app.move_composer_cursor_down();
         }
+        AppEvent::NavigateInputHistory(delta) => {
+            app.navigate_input_history(delta);
+        }
         AppEvent::ScrollTranscript(delta) => app.scroll_transcript(delta),
         AppEvent::MoveCommandSelection(delta) => {
             let len = palette_commands(app, app.input.trim_start().trim_start_matches('/')).len();
@@ -794,6 +797,7 @@ async fn handle_submit(
         if trimmed.is_empty() {
             return Ok(false);
         }
+        app.record_input_history(trimmed);
         if trimmed.starts_with('/') {
             if let Some(command) = parse_local_command(trimmed) {
                 if matches!(command.kind, LocalCommandKind::Quit) {
@@ -833,17 +837,21 @@ async fn handle_submit(
     let input = std::mem::take(&mut app.input);
     app.input_cursor_offset = None;
     if app.has_pending_plan_approval() && !input.trim_start().starts_with('/') {
+        app.record_input_history(input.trim());
         if handle_pending_plan_approval_submit(app, agent_slot, input.trim()).await? {
             return Ok(false);
         }
     }
     if let Some(command) = parse_local_command(&input) {
+        app.record_input_history(input.trim());
         if execute_local_command(command, app, agent_slot, oauth_manager).await? {
             return Ok(true);
         }
     } else if input.trim_start().starts_with('/') {
+        app.record_input_history(input.trim());
         app.push_notice(format!("Unknown command '{}'. Use /help.", input.trim()));
     } else if let Some(agent) = agent_slot.take() {
+        app.record_input_history(input.trim());
         let mut agent = agent;
         if app.pending_request_input().is_some() {
             if app.has_local_pending_request_input() {

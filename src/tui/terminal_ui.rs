@@ -1,7 +1,12 @@
 use std::io;
 
 use anyhow::Result;
-use crossterm::{cursor::Show, execute, terminal::disable_raw_mode};
+use crossterm::{
+    cursor::Show,
+    event::{DisableMouseCapture, EnableMouseCapture},
+    execute,
+    terminal::disable_raw_mode,
+};
 use ratatui::{backend::CrosstermBackend, layout::Rect, text::Line};
 
 use super::custom_terminal::Terminal;
@@ -17,6 +22,7 @@ pub(super) fn build_terminal(
     viewport_height: u16,
 ) -> Result<Terminal<CrosstermBackend<std::io::Stdout>>> {
     let mut terminal = Terminal::new(CrosstermBackend::new(io::stdout()))?;
+    execute!(terminal.backend_mut(), EnableMouseCapture)?;
     let size = terminal.size()?;
     terminal.set_viewport_area(viewport_area(size.width, size.height, viewport_height));
     terminal.clear_visible_screen()?;
@@ -40,7 +46,7 @@ pub(super) fn teardown_terminal(
     mut terminal: Terminal<CrosstermBackend<std::io::Stdout>>,
 ) -> Result<()> {
     disable_raw_mode()?;
-    execute!(terminal.backend_mut(), Show)?;
+    execute!(terminal.backend_mut(), DisableMouseCapture, Show)?;
     terminal.show_cursor()?;
     Ok(())
 }

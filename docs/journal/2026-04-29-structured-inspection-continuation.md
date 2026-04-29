@@ -30,6 +30,11 @@ runtime contract instead of an inferred prose intent.
   incompatible prefix into a normal system context note and keeps later
   reasoning-compatible history intact. This keeps thinking enabled without
   fabricating provider reasoning content.
+- Added Codex-style TUI input recall for the composer. Submitted inputs are
+  kept in local session history, `Up` / `Down` browse those entries, and moving
+  past the newest entry restores the draft that was active before browsing.
+- Enabled TUI mouse capture and mapped mouse wheel events to transcript scroll,
+  keeping mouse history browsing separate from composer input recall.
 - Added a focused agent planning regression test for the execute-mode
   structured continuation boundary.
 
@@ -48,6 +53,10 @@ runtime contract instead of an inferred prose intent.
   instead of waiting for the final assistant message. RARA mirrors that shape
   with a transient TUI Thinking stream that is not committed as ordinary
   assistant transcript text.
+- Codex keeps composer input recall inside the chat composer rather than using
+  transcript scrolling as the arrow-key fallback. RARA mirrors the local
+  session part of that behavior and leaves cross-session persistent history and
+  reverse search as future extensions.
 
 ## Validation
 
@@ -64,5 +73,7 @@ runtime contract instead of an inferred prose intent.
 - `cargo test deepseek_explicit_thinking_folds_legacy_assistant_history_without_reasoning -- --nocapture`
 - `cargo test deepseek_explicit_thinking_stays_enabled_for_reasoning_compatible_history -- --nocapture`
 - `cargo test deepseek_explicit_thinking_keeps_compatible_suffix_after_legacy_prefix -- --nocapture`
+- `cargo test input_history -- --nocapture`
+- `cargo test mouse_wheel -- --nocapture`
 - `cargo check`
 - `git diff --check`

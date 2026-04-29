@@ -380,6 +380,9 @@ pub struct ActiveLiveSections {
 pub struct TuiApp {
     pub input: String,
     pub input_cursor_offset: Option<usize>,
+    pub input_history: Vec<String>,
+    pub input_history_cursor: Option<usize>,
+    pub input_history_draft: Option<String>,
     pub committed_turns: Vec<TranscriptTurn>,
     pub active_turn: TranscriptTurn,
     pub inserted_turns: usize,

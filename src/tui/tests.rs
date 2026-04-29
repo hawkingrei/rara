@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
 use secrecy::ExposeSecret;
 use tempfile::tempdir;
 use tokio::sync::mpsc;
@@ -12,6 +12,7 @@ use crate::config::{DEFAULT_CODEX_BASE_URL, DEFAULT_CODEX_CHATGPT_BASE_URL, DEFA
 use crate::tui::command::palette_commands;
 
 use super::app_event::AppEvent;
+use super::event_stream::{translate_event, UiEvent};
 use super::provider_flow::{
     codex_auth_is_available, open_provider_family_overlay, sync_codex_credential_from_auth_store,
 };
@@ -22,6 +23,15 @@ fn key(code: KeyCode) -> KeyEvent {
 
 fn shifted_key(code: KeyCode) -> KeyEvent {
     KeyEvent::new(code, KeyModifiers::SHIFT)
+}
+
+fn mouse_scroll(kind: MouseEventKind) -> Event {
+    Event::Mouse(MouseEvent {
+        kind,
+        column: 0,
+        row: 0,
+        modifiers: KeyModifiers::NONE,
+    })
 }
 use super::state::{Overlay, ProviderFamily, RunningTask, TaskKind, TuiApp};
 use super::{
@@ -330,21 +340,124 @@ fn arrow_keys_and_home_end_map_to_composer_cursor_events() {
 }
 
 #[test]
-fn empty_composer_keeps_up_down_for_transcript_scroll() {
+fn empty_composer_uses_up_down_for_input_history_when_available() {
+    let temp = tempdir().expect("tempdir");
+    let mut app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("app");
+    app.record_input_history("previous request");
+
+    assert!(matches!(
+        map_key_to_event(key(KeyCode::Up), &app),
+        AppEvent::NavigateInputHistory(-1)
+    ));
+    assert!(matches!(
+        map_key_to_event(key(KeyCode::Down), &app),
+        AppEvent::NavigateInputHistory(1)
+    ));
+}
+
+#[test]
+fn empty_composer_keeps_vim_keys_for_transcript_scroll() {
+    let temp = tempdir().expect("tempdir");
+    let mut app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("app");
+    app.record_input_history("previous request");
+
+    assert!(matches!(
+        map_key_to_event(key(KeyCode::Char('k')), &app),
+        AppEvent::ScrollTranscript(-1)
+    ));
+    assert!(matches!(
+        map_key_to_event(key(KeyCode::Char('j')), &app),
+        AppEvent::ScrollTranscript(1)
+    ));
+}
+
+#[test]
+fn input_history_navigation_recalls_previous_submissions_and_restores_draft() {
+    let temp = tempdir().expect("tempdir");
+    let mut app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("app");
+    app.record_input_history("first request");
+    app.record_input_history("second request");
+    app.set_input("draft".to_string());
+
+    app.navigate_input_history(-1);
+    assert_eq!(app.input, "second request");
+    assert_eq!(
+        app.composer_cursor_offset(),
+        "second request".chars().count()
+    );
+
+    app.navigate_input_history(-1);
+    assert_eq!(app.input, "first request");
+
+    app.navigate_input_history(1);
+    assert_eq!(app.input, "second request");
+
+    app.navigate_input_history(1);
+    assert_eq!(app.input, "draft");
+    assert_eq!(app.input_history_cursor, None);
+}
+
+#[test]
+fn input_history_navigation_keeps_multiline_cursor_movement_for_unrecalled_text() {
+    let temp = tempdir().expect("tempdir");
+    let mut app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("app");
+    app.record_input_history("previous request");
+    app.set_input("line one\nline two".to_string());
+    app.input_cursor_offset = Some("line one\nline".chars().count());
+
+    assert!(matches!(
+        map_key_to_event(key(KeyCode::Up), &app),
+        AppEvent::MoveCursorUp
+    ));
+    assert!(matches!(
+        map_key_to_event(key(KeyCode::Down), &app),
+        AppEvent::MoveCursorDown
+    ));
+}
+
+#[test]
+fn mouse_wheel_scrolls_transcript() {
     let temp = tempdir().expect("tempdir");
     let app = TuiApp::new(ConfigManager {
         path: temp.path().join("config.json"),
     })
     .expect("app");
 
-    assert!(matches!(
-        map_key_to_event(key(KeyCode::Up), &app),
-        AppEvent::ScrollTranscript(-1)
-    ));
-    assert!(matches!(
-        map_key_to_event(key(KeyCode::Down), &app),
-        AppEvent::ScrollTranscript(1)
-    ));
+    match translate_event(mouse_scroll(MouseEventKind::ScrollUp), &app) {
+        Some(UiEvent::App(AppEvent::ScrollTranscript(delta))) => assert_eq!(delta, -3),
+        event => panic!("unexpected event: {event:?}"),
+    }
+    match translate_event(mouse_scroll(MouseEventKind::ScrollDown), &app) {
+        Some(UiEvent::App(AppEvent::ScrollTranscript(delta))) => assert_eq!(delta, 3),
+        event => panic!("unexpected event: {event:?}"),
+    }
+}
+
+#[test]
+fn mouse_wheel_does_not_scroll_transcript_behind_overlay() {
+    let temp = tempdir().expect("tempdir");
+    let mut app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("app");
+    app.open_overlay(Overlay::CommandPalette);
+
+    match translate_event(mouse_scroll(MouseEventKind::ScrollUp), &app) {
+        Some(UiEvent::App(AppEvent::Noop)) => {}
+        event => panic!("unexpected event: {event:?}"),
+    }
 }
 
 #[tokio::test]
