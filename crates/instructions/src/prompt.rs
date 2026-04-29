@@ -374,6 +374,19 @@ fn default_system_prompt_sections() -> Vec<PromptSection> {
             ),
         ),
         PromptSection::new(
+            "autonomy",
+            section(
+                "Autonomy And Execution Bias",
+                &[
+                    "Unless the user explicitly asks for a plan, asks a question about the code, requests brainstorming, or otherwise makes clear that no code should be changed, assume the user wants you to solve the task by using tools and making the necessary local changes.",
+                    "Do not stop at a proposed solution when the next safe step is to inspect, edit, test, or verify. Take that step.",
+                    "Prefer local, reversible actions such as reading files, editing tracked source files, formatting, and running focused tests without asking for confirmation.",
+                    "Ask the user only when a material decision cannot be discovered locally, or when the action is destructive, hard to reverse, or affects shared external state.",
+                    "If an approach fails, inspect the error, update your hypothesis, and try a focused fix before asking the user for help.",
+                ],
+            ),
+        ),
+        PromptSection::new(
             "agent_loop",
             section(
                 "Agent Loop",
@@ -592,6 +605,10 @@ mod tests {
         assert!(prompt.contains("Use 'replace' only for one exact, unique snippet"));
         assert!(prompt.contains("Use 'write_file' only for new files"));
         assert!(prompt.contains("Do not use shell redirection"));
+        assert!(prompt.contains("Autonomy And Execution Bias"));
+        assert!(prompt.contains("assume the user wants you to solve the task"));
+        assert!(prompt.contains("Do not stop at a proposed solution"));
+        assert!(prompt.contains("Prefer local, reversible actions"));
     }
 
     #[test]
