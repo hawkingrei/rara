@@ -9,21 +9,6 @@ use super::{
 use crate::redaction::redact_secrets;
 use crate::tui::terminal_event::TerminalEvent;
 
-fn grouped_active_live_events(events: &[ActiveLiveEvent]) -> Vec<(&'static str, Vec<String>)> {
-    let mut groups: Vec<(&'static str, Vec<String>)> = Vec::new();
-    for event in events {
-        let role = event.role();
-        if let Some((last_role, messages)) = groups.last_mut()
-            && *last_role == role
-        {
-            messages.push(event.message().to_string());
-            continue;
-        }
-        groups.push((role, vec![event.message().to_string()]));
-    }
-    groups
-}
-
 fn legacy_active_live_sections(live: &ActiveLiveSections) -> Vec<(&'static str, Vec<String>)> {
     vec![
         (
@@ -276,14 +261,11 @@ impl TuiApp {
 
     fn materialize_active_live_entries(&mut self) {
         if !self.active_live.events.is_empty() {
-            let sections = grouped_active_live_events(&self.active_live.events);
-            for (role, lines) in sections {
-                if lines.is_empty() {
-                    continue;
-                }
-                self.active_turn
-                    .entries
-                    .push(TranscriptEntry::new(role, lines.join("\n")));
+            for event in &self.active_live.events {
+                self.active_turn.entries.push(TranscriptEntry::new(
+                    event.role(),
+                    event.message().to_string(),
+                ));
             }
             return;
         }
