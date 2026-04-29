@@ -408,6 +408,28 @@ fn input_history_navigation_recalls_previous_submissions_and_restores_draft() {
 }
 
 #[test]
+fn input_history_navigation_starts_from_non_empty_draft_at_start() {
+    let temp = tempdir().expect("tempdir");
+    let mut app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("app");
+    app.record_input_history("previous request");
+    app.set_input("draft".to_string());
+    app.input_cursor_offset = Some(0);
+
+    assert!(matches!(
+        map_key_to_event(key(KeyCode::Up), &app),
+        AppEvent::NavigateInputHistory(-1)
+    ));
+
+    app.navigate_input_history(-1);
+    assert_eq!(app.input, "previous request");
+    app.navigate_input_history(1);
+    assert_eq!(app.input, "draft");
+}
+
+#[test]
 fn input_history_keeps_recent_entries_bounded() {
     let temp = tempdir().expect("tempdir");
     let mut app = TuiApp::new(ConfigManager {
@@ -453,25 +475,6 @@ fn input_history_navigation_keeps_multiline_cursor_movement_for_unrecalled_text(
 
 #[test]
 fn mouse_wheel_scrolls_transcript() {
-    let temp = tempdir().expect("tempdir");
-    let app = TuiApp::new(ConfigManager {
-        path: temp.path().join("config.json"),
-    })
-    .expect("app");
-
-    match translate_event(mouse_scroll(MouseEventKind::ScrollUp), &app) {
-        Some(UiEvent::App(AppEvent::ScrollTranscript(delta))) => assert_eq!(delta, -3),
-        event => panic!("unexpected event: {event:?}"),
-    }
-    match translate_event(mouse_scroll(MouseEventKind::ScrollDown), &app) {
-        Some(UiEvent::App(AppEvent::ScrollTranscript(delta))) => assert_eq!(delta, 3),
-        event => panic!("unexpected event: {event:?}"),
-    }
-}
-
-#[test]
-fn mouse_wheel_scrolls_transcript_in_ssh_session() {
-    let _ssh_env = super::terminal_ui::test_env::set_ssh_session(true);
     let temp = tempdir().expect("tempdir");
     let app = TuiApp::new(ConfigManager {
         path: temp.path().join("config.json"),

@@ -33,9 +33,11 @@ runtime contract instead of an inferred prose intent.
 - Added Codex-style TUI input recall for the composer. Submitted inputs are
   kept in local session history, `Up` / `Down` browse those entries, and moving
   past the newest entry restores the draft that was active before browsing.
-- Mapped TUI mouse wheel events to transcript scroll when the terminal sends
-  mouse events, but left mouse capture disabled by default so terminal text
-  selection and copy keep working normally.
+- Mapped TUI mouse wheel events to transcript scroll and enable mouse capture
+  when the TUI starts, matching the fullscreen-style terminal interaction model.
+- Moved the workspace and root crate to Rust 2024 edition. Test helpers that
+  mutate process environment now isolate the required unsafe boundary in
+  explicit helper functions.
 - Added a focused agent planning regression test for the execute-mode
   structured continuation boundary.
 

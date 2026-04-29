@@ -95,7 +95,7 @@ impl LlmBackend for RecoverableRuntimeErrorBackend {
         *calls += 1;
         if *calls == 1 {
             return Err(std::io::Error::new(
-                std::io::ErrorKind::Other,
+                std::io::ErrorKind::StorageFull,
                 "No space left on device (os error 28)",
             )
             .into());

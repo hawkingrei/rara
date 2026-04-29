@@ -23,9 +23,19 @@ pub(super) fn build_terminal(
 ) -> Result<Terminal<CrosstermBackend<std::io::Stdout>>> {
     let mut terminal = Terminal::new(CrosstermBackend::new(io::stdout()))?;
     execute!(terminal.backend_mut(), EnableMouseCapture)?;
-    let size = terminal.size()?;
-    terminal.set_viewport_area(viewport_area(size.width, size.height, viewport_height));
-    terminal.clear_visible_screen()?;
+
+    let result = (|| -> Result<()> {
+        let size = terminal.size()?;
+        terminal.set_viewport_area(viewport_area(size.width, size.height, viewport_height));
+        terminal.clear_visible_screen()?;
+        Ok(())
+    })();
+
+    if let Err(err) = result {
+        let _ = execute!(terminal.backend_mut(), DisableMouseCapture);
+        return Err(err);
+    }
+
     Ok(terminal)
 }
 

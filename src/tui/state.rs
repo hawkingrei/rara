@@ -18,9 +18,9 @@ pub use self::types::{
     ActiveLiveSections, ActivePendingInteraction, ActivePendingInteractionKind,
     AgentMarkdownStreamState, CommandSpec, CompletedInteractionSnapshot, HelpTab, InteractionKind,
     LocalCommand, LocalCommandKind, OAuthLoginMode, OpenAiModelPickerAction, Overlay,
-    PendingApprovalSnapshot, PendingInteractionSnapshot, ProviderFamily, RebuildSuccess,
-    RunningTask, RuntimePhase, RuntimeSnapshot, TaskCompletion, TaskKind, TranscriptEntry,
-    TranscriptEntryPayload, TranscriptTurn, TuiApp, TuiEvent, PROVIDER_FAMILIES,
+    PROVIDER_FAMILIES, PendingApprovalSnapshot, PendingInteractionSnapshot, ProviderFamily,
+    RebuildSuccess, RunningTask, RuntimePhase, RuntimeSnapshot, TaskCompletion, TaskKind,
+    TranscriptEntry, TranscriptEntryPayload, TranscriptTurn, TuiApp, TuiEvent,
 };
 
 const OPENAI_PROFILE_SETUP_KINDS: [OpenAiEndpointKind; 3] = [
@@ -37,11 +37,11 @@ pub fn openai_profile_setup_kinds() -> &'static [OpenAiEndpointKind] {
 use super::queued_input::PendingFollowUpMessage;
 use crate::agent::{Agent, AgentExecutionMode, BashApprovalMode};
 use crate::codex_model_catalog::{CodexModelOption, CodexReasoningOption};
-use crate::config::{ConfigManager, OpenAiEndpointKind, DEFAULT_CODEX_BASE_URL};
+use crate::config::{ConfigManager, DEFAULT_CODEX_BASE_URL, OpenAiEndpointKind};
 use crate::redaction::redact_secrets;
 use crate::state_db::StateDb;
 use crate::tui::is_ssh_session;
-use rara_provider_catalog::{fallback_models, ModelCatalogProvider};
+use rara_provider_catalog::{ModelCatalogProvider, fallback_models};
 
 fn completed_interaction_role(kind: InteractionKind, source: Option<&str>) -> &'static str {
     match kind {
@@ -229,12 +229,11 @@ impl TuiApp {
             return true;
         }
         let cursor = self.composer_cursor_offset();
-        let at_boundary = cursor == 0 || cursor == self.input.chars().count();
-        at_boundary
-            && self
-                .input_history_cursor
-                .is_some_and(|idx| self.input_history.get(idx) == Some(&self.input))
-            && delta != 0
+        if delta < 0 {
+            cursor == 0 || self.input_history_cursor.is_some()
+        } else {
+            delta > 0 && cursor == self.input.chars().count() && self.input_history_cursor.is_some()
+        }
     }
 
     pub fn navigate_input_history(&mut self, delta: i32) {

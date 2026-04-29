@@ -750,11 +750,10 @@ fn recoverable_runtime_error_kind(err: &anyhow::Error) -> Option<&'static str> {
                 std::io::ErrorKind::WouldBlock => Some("would_block"),
                 std::io::ErrorKind::WriteZero => Some("write_zero"),
                 std::io::ErrorKind::UnexpectedEof => Some("unexpected_eof"),
+                std::io::ErrorKind::StorageFull => Some("storage_full"),
                 _ => {
                     let text = io_err.to_string().to_ascii_lowercase();
-                    if text.contains("no space left on device") {
-                        Some("storage_full")
-                    } else if text.contains("operation not permitted") {
+                    if text.contains("operation not permitted") {
                         Some("operation_not_permitted")
                     } else {
                         Some("io_error")
