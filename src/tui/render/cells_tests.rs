@@ -8,7 +8,9 @@ use crate::tui::terminal_event::{TerminalCommandEvent, TerminalEvent, TerminalTa
 use insta::assert_snapshot;
 use tempfile::tempdir;
 
-use super::{ActiveCell, ActiveTurnCell, CommittedTurnCell, HistoryCell};
+use super::{
+    ActiveCell, ActiveTurnCell, CommittedTurnCell, HistoryCell, explicit_progress_entry_groups,
+};
 
 #[path = "cells_tests/active_general.rs"]
 mod active_general;

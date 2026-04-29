@@ -5,10 +5,10 @@ expression: rendered
 › Read the local codebase and propose the next refactor
 
  Plan Mode 
- Exploring 
-  └ Read src/oauth.rs
  Planning 
   └ The auth flow should reuse codex_login instead of mirroring it.
+ Exploring 
+  └ Read src/oauth.rs
 
 • Updated Plan
   └ Prefer direct Codex auth reuse before extending more TUI flows.

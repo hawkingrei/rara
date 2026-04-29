@@ -2,9 +2,49 @@ use std::path::PathBuf;
 
 use ratatui::text::Line;
 
-use super::{PendingFollowUpMessage, RuntimePhase, TranscriptEntry, TranscriptTurn, TuiApp};
+use super::{
+    ActiveLiveEvent, ActiveLiveSections, PendingFollowUpMessage, RuntimePhase, TranscriptEntry,
+    TranscriptTurn, TuiApp,
+};
 use crate::redaction::redact_secrets;
 use crate::tui::terminal_event::TerminalEvent;
+
+fn grouped_active_live_events(events: &[ActiveLiveEvent]) -> Vec<(&'static str, Vec<String>)> {
+    let mut groups: Vec<(&'static str, Vec<String>)> = Vec::new();
+    for event in events {
+        let role = event.role();
+        if let Some((last_role, messages)) = groups.last_mut()
+            && *last_role == role
+        {
+            messages.push(event.message().to_string());
+            continue;
+        }
+        groups.push((role, vec![event.message().to_string()]));
+    }
+    groups
+}
+
+fn legacy_active_live_sections(live: &ActiveLiveSections) -> Vec<(&'static str, Vec<String>)> {
+    vec![
+        (
+            "Exploring",
+            live.exploration_actions
+                .iter()
+                .chain(live.exploration_notes.iter())
+                .cloned()
+                .collect::<Vec<_>>(),
+        ),
+        (
+            "Planning",
+            live.planning_actions
+                .iter()
+                .chain(live.planning_notes.iter())
+                .cloned()
+                .collect::<Vec<_>>(),
+        ),
+        ("Running", live.running_actions.to_vec()),
+    ]
+}
 
 impl TuiApp {
     fn replace_turn_agent_message(turn: &mut TranscriptTurn, message: String) -> bool {
@@ -93,6 +133,18 @@ impl TuiApp {
         self.reset_transcript_scroll_if_following_tail();
     }
 
+    pub fn flush_agent_thinking_stream_to_live_event(&mut self) {
+        let Some(stream) = self.agent_thinking_stream.take() else {
+            return;
+        };
+        if stream.raw_text.trim().is_empty() {
+            return;
+        }
+        let message = stream.raw_text.trim_end().to_string();
+        self.push_active_live_event(ActiveLiveEvent::Thinking(message));
+        self.reset_transcript_scroll_if_following_tail();
+    }
+
     pub fn agent_stream_lines(&self) -> Option<&[Line<'static>]> {
         self.agent_markdown_stream
             .as_ref()
@@ -114,7 +166,7 @@ impl TuiApp {
     }
 
     pub fn finalize_agent_stream(&mut self, final_message: Option<String>) {
-        self.agent_thinking_stream = None;
+        self.flush_agent_thinking_stream_to_live_event();
         let fallback = self
             .agent_markdown_stream
             .take()
@@ -223,27 +275,20 @@ impl TuiApp {
     }
 
     fn materialize_active_live_entries(&mut self) {
-        let sections = [
-            (
-                "Exploring",
-                self.active_live
-                    .exploration_actions
-                    .iter()
-                    .chain(self.active_live.exploration_notes.iter())
-                    .cloned()
-                    .collect::<Vec<_>>(),
-            ),
-            (
-                "Planning",
-                self.active_live
-                    .planning_actions
-                    .iter()
-                    .chain(self.active_live.planning_notes.iter())
-                    .cloned()
-                    .collect::<Vec<_>>(),
-            ),
-            ("Running", self.active_live.running_actions.to_vec()),
-        ];
+        if !self.active_live.events.is_empty() {
+            let sections = grouped_active_live_events(&self.active_live.events);
+            for (role, lines) in sections {
+                if lines.is_empty() {
+                    continue;
+                }
+                self.active_turn
+                    .entries
+                    .push(TranscriptEntry::new(role, lines.join("\n")));
+            }
+            return;
+        }
+
+        let sections = legacy_active_live_sections(&self.active_live);
 
         for (role, lines) in sections {
             if lines.is_empty() {
@@ -296,6 +341,18 @@ impl TuiApp {
         self.active_live = super::ActiveLiveSections::default();
     }
 
+    fn push_active_live_event(&mut self, event: ActiveLiveEvent) {
+        if self
+            .active_live
+            .events
+            .last()
+            .is_some_and(|last| last.role() == event.role() && last.message() == event.message())
+        {
+            return;
+        }
+        self.active_live.events.push(event);
+    }
+
     pub fn record_exploration_action(&mut self, action: impl Into<String>) {
         let action = action.into();
         if !self
@@ -304,8 +361,9 @@ impl TuiApp {
             .iter()
             .any(|item| item == &action)
         {
-            self.active_live.exploration_actions.push(action);
+            self.active_live.exploration_actions.push(action.clone());
         }
+        self.push_active_live_event(ActiveLiveEvent::ExplorationAction(action));
     }
 
     pub fn record_exploration_note(&mut self, note: impl Into<String>) {
@@ -316,8 +374,9 @@ impl TuiApp {
             .iter()
             .any(|item| item == &note)
         {
-            self.active_live.exploration_notes.push(note);
+            self.active_live.exploration_notes.push(note.clone());
         }
+        self.push_active_live_event(ActiveLiveEvent::ExplorationNote(note));
     }
 
     pub fn record_running_action(&mut self, action: impl Into<String>) {
@@ -328,8 +387,9 @@ impl TuiApp {
             .iter()
             .any(|item| item == &action)
         {
-            self.active_live.running_actions.push(action);
+            self.active_live.running_actions.push(action.clone());
         }
+        self.push_active_live_event(ActiveLiveEvent::RunningAction(action));
     }
 
     pub fn record_planning_action(&mut self, action: impl Into<String>) {
@@ -340,8 +400,9 @@ impl TuiApp {
             .iter()
             .any(|item| item == &action)
         {
-            self.active_live.planning_actions.push(action);
+            self.active_live.planning_actions.push(action.clone());
         }
+        self.push_active_live_event(ActiveLiveEvent::PlanningAction(action));
     }
 
     pub fn record_planning_note(&mut self, note: impl Into<String>) {
@@ -352,8 +413,9 @@ impl TuiApp {
             .iter()
             .any(|item| item == &note)
         {
-            self.active_live.planning_notes.push(note);
+            self.active_live.planning_notes.push(note.clone());
         }
+        self.push_active_live_event(ActiveLiveEvent::PlanningNote(note));
     }
 
     pub fn has_pending_planning_suggestion(&self) -> bool {

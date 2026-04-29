@@ -1,6 +1,27 @@
 use super::*;
 
 #[test]
+fn explicit_progress_entry_groups_preserves_thinking_indentation() {
+    let entries = vec![TranscriptEntry {
+        role: "Thinking".into(),
+        message: "    let value = 1;\n  aligned note\n\n".into(),
+        payload: None,
+    }];
+
+    let groups = explicit_progress_entry_groups(entries.iter());
+
+    assert_eq!(groups.len(), 1);
+    assert_eq!(groups[0].0, "Thinking");
+    assert_eq!(
+        groups[0].1,
+        vec![
+            "    let value = 1;".to_string(),
+            "  aligned note".to_string()
+        ]
+    );
+}
+
+#[test]
 fn committed_turn_cell_keeps_user_summary_and_agent_sections_in_order() {
     let entries = vec![
         TranscriptEntry {
@@ -113,6 +134,59 @@ fn committed_turn_cell_renders_materialized_sidecar_sections() {
     assert!(planning_idx < agent_idx);
     assert!(rendered.contains("Sub-agent summary: current discovery is hardcoded"));
     assert!(rendered.contains("Sub-agent summary: reuse the workspace traversal helper"));
+}
+
+#[test]
+fn committed_turn_cell_keeps_progress_segments_and_terminal_output() {
+    let entries = vec![
+        TranscriptEntry {
+            role: "You".into(),
+            message: "Run the checks".into(),
+            payload: None,
+        },
+        TranscriptEntry {
+            role: "Thinking".into(),
+            message: "I should run the focused test first.".into(),
+            payload: None,
+        },
+        TranscriptEntry {
+            role: "Running".into(),
+            message: "Run cargo test active_turn_cell".into(),
+            payload: None,
+        },
+        TranscriptEntry::terminal_event(TerminalEvent::End(TerminalCommandEvent {
+            target: TerminalTarget::BackgroundTask,
+            id: Some("bash-123".into()),
+            status: "completed".into(),
+            command: Some("cargo test active_turn_cell".into()),
+            exit_code: Some(0),
+            output: vec!["running 38 tests".into(), "ok".into()],
+            output_path: None,
+            is_error: false,
+        })),
+        TranscriptEntry {
+            role: "Agent".into(),
+            message: "The focused tests passed.".into(),
+            payload: None,
+        },
+    ];
+
+    let rendered = CommittedTurnCell::new(entries.as_slice(), Some(Path::new(".")))
+        .display_lines(100)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let thinking_idx = rendered.find(" Thinking ").unwrap();
+    let progress_idx = rendered.find("Run cargo test active_turn_cell").unwrap();
+    let terminal_idx = rendered.find("running 38 tests").unwrap();
+    let agent_idx = rendered.find("• The focused tests passed.").unwrap();
+
+    assert!(thinking_idx < progress_idx);
+    assert!(progress_idx < terminal_idx);
+    assert!(terminal_idx < agent_idx);
+    assert!(rendered.contains("ok"));
 }
 
 #[test]

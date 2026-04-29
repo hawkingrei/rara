@@ -8,6 +8,7 @@ use ratatui::{
 use crate::tui::interaction_text::{
     pending_interaction_card_title, status_planning_suggestion_text,
 };
+use crate::tui::markdown_render::render_markdown_text_with_width;
 use crate::tui::plan_display::updated_plan_lines;
 use crate::tui::render::diff::render_patch_preview;
 use crate::tui::render::{
@@ -230,6 +231,42 @@ impl HistoryCell for ThinkingCell<'_> {
     }
 }
 
+pub(super) struct ThinkingTextCell {
+    message: String,
+    max_lines: usize,
+}
+
+impl ThinkingTextCell {
+    pub(super) fn new(message: &str, max_lines: usize) -> Self {
+        Self {
+            message: message.to_string(),
+            max_lines,
+        }
+    }
+}
+
+impl HistoryCell for ThinkingTextCell {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        let render_width = usize::from(width.saturating_sub(2));
+        let rendered = render_markdown_text_with_width(&self.message, Some(render_width));
+        let rendered_lines = rendered.lines;
+        let start = rendered_lines.len().saturating_sub(self.max_lines);
+        let body = markdown_body_lines(&rendered_lines[start..], self.max_lines);
+        let mut lines = vec![Line::from(section_span("Thinking", Color::LightBlue))];
+        if start > 0 {
+            lines.push(Line::from(Span::styled(
+                format!("  ... {start} more line(s)"),
+                Style::default().fg(Color::DarkGray),
+            )));
+        }
+        lines.extend(body.into_iter().map(|mut line| {
+            line.spans.insert(0, Span::raw("  "));
+            line
+        }));
+        lines
+    }
+}
+
 pub(super) struct TerminalCell {
     command: String,
     output: Vec<String>,
@@ -263,11 +300,7 @@ impl TerminalCell {
     }
 
     fn title(&self) -> &'static str {
-        if self.active {
-            "Running"
-        } else {
-            "Ran"
-        }
+        if self.active { "Running" } else { "Ran" }
     }
 
     fn output_lines(&self) -> Vec<String> {

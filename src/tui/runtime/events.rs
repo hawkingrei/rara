@@ -8,7 +8,7 @@ use self::helpers::{
     is_oauth_prompt_message, planning_action_label, planning_note_lines, planning_result_note,
     scrub_internal_control_tokens, subagent_request_input, tool_action_label,
 };
-use super::super::state::{contains_structured_planning_output, RuntimePhase, TuiApp, TuiEvent};
+use super::super::state::{RuntimePhase, TuiApp, TuiEvent, contains_structured_planning_output};
 use crate::agent::AgentEvent;
 use crate::tui::terminal_event::{TerminalEvent, TerminalTarget};
 
@@ -35,6 +35,7 @@ pub(super) fn apply_tui_event(app: &mut TuiApp, event: TuiEvent) {
                 app.append_agent_thinking_delta(&message);
                 return;
             } else if role == "Tool" || role == "Tool Result" || role == "Tool Error" {
+                app.flush_agent_thinking_stream_to_live_event();
                 if role == "Tool" {
                     if let Some(action) = exploration_action_label(&message) {
                         app.record_exploration_action(action);
@@ -209,6 +210,7 @@ pub(super) fn apply_tui_event(app: &mut TuiApp, event: TuiEvent) {
             );
         }
         TuiEvent::Terminal(event) => {
+            app.flush_agent_thinking_stream_to_live_event();
             let role = event.transcript_role();
             let message = event.to_transcript_message();
             if role == "Tool" {
@@ -230,6 +232,7 @@ pub(super) fn apply_tui_event(app: &mut TuiApp, event: TuiEvent) {
             stream,
             chunk,
         } => {
+            app.flush_agent_thinking_stream_to_live_event();
             if !append_tool_progress(app, &name, stream, &chunk) {
                 return;
             }

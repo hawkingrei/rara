@@ -15,7 +15,7 @@ pub use self::state_presets::{
 };
 use self::types::CommittedTranscriptRenderCache;
 pub use self::types::{
-    ActiveLiveSections, ActivePendingInteraction, ActivePendingInteractionKind,
+    ActiveLiveEvent, ActiveLiveSections, ActivePendingInteraction, ActivePendingInteractionKind,
     AgentMarkdownStreamState, CommandSpec, CompletedInteractionSnapshot, HelpTab, InteractionKind,
     LocalCommand, LocalCommandKind, OAuthLoginMode, OpenAiModelPickerAction, Overlay,
     PROVIDER_FAMILIES, PendingApprovalSnapshot, PendingInteractionSnapshot, ProviderFamily,

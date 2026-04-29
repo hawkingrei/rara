@@ -1,6 +1,6 @@
 use std::cell::RefCell;
 use std::path::PathBuf;
-use std::sync::{atomic::AtomicBool, Arc};
+use std::sync::{Arc, atomic::AtomicBool};
 use std::time::Instant;
 
 use ratatui::text::Line;
@@ -368,8 +368,45 @@ impl AgentMarkdownStreamState {
     }
 }
 
+#[derive(Clone)]
+pub enum ActiveLiveEvent {
+    Thinking(String),
+    ExplorationAction(String),
+    ExplorationNote(String),
+    PlanningAction(String),
+    PlanningNote(String),
+    RunningAction(String),
+}
+
+impl ActiveLiveEvent {
+    pub fn role(&self) -> &'static str {
+        match self {
+            Self::Thinking(_) => "Thinking",
+            Self::ExplorationAction(_) | Self::ExplorationNote(_) => "Exploring",
+            Self::PlanningAction(_) | Self::PlanningNote(_) => "Planning",
+            Self::RunningAction(_) => "Running",
+        }
+    }
+
+    pub fn message(&self) -> &str {
+        match self {
+            Self::Thinking(message)
+            | Self::ExplorationAction(message)
+            | Self::ExplorationNote(message)
+            | Self::PlanningAction(message)
+            | Self::PlanningNote(message)
+            | Self::RunningAction(message) => message,
+        }
+    }
+
+    pub fn is_note(&self) -> bool {
+        matches!(self, Self::ExplorationNote(_) | Self::PlanningNote(_))
+    }
+}
+
 #[derive(Default)]
 pub struct ActiveLiveSections {
+    pub events: Vec<ActiveLiveEvent>,
     pub exploration_actions: Vec<String>,
     pub exploration_notes: Vec<String>,
     pub planning_actions: Vec<String>,
