@@ -74,6 +74,10 @@ Priority order for this phase:
 - [ ] Define and surface skill precedence/override behavior across home, repo, nested repo roots, and workspace-local skill roots.
 - [ ] Extend `SkillManager::list_summaries()` (or equivalent status output) with source precedence and overridden-skill visibility so conflicts are debuggable.
 
+## Web Tools
+
+- [ ] Replace the initial lightweight `web_fetch` HTML-to-text conversion with a higher-fidelity markdown conversion layer while preserving the current `web_fetch` result contract.
+
 ## Memory / Retrieval / Persistence
 
 - [ ] Extend the local `ThreadStore` / `ThreadRecorder` boundary from a façade over `SessionManager` + `StateDb` into a true structured thread store with explicit thread metadata and rollout-item ownership.

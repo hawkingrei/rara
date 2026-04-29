@@ -45,6 +45,7 @@ impl ToolResultStore {
             "glob" => compact_glob(result),
             "grep" => compact_grep(result),
             "web_fetch" => compact_web_fetch(input, result),
+            "web_search" => compact_web_search(input, result),
             _ => compact_generic(&summary, result),
         };
         let full_rendered =
@@ -274,6 +275,21 @@ fn compact_web_fetch(input: &Value, result: &Value) -> String {
         format!("{summary}\nContent preview:\n{preview}\n... truncated.")
     } else {
         format!("{summary}\nContent:\n{preview}")
+    }
+}
+
+fn compact_web_search(input: &Value, result: &Value) -> String {
+    let content = result
+        .get("content")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let total_chars = content.chars().count();
+    let preview = truncate_text(content, LARGE_PREVIEW_HEAD);
+    let summary = summarize_tool_result("web_search", input, result);
+    if preview.chars().count() < total_chars {
+        format!("{summary}\nResults preview:\n{preview}\n... truncated.")
+    } else {
+        format!("{summary}\nResults:\n{preview}")
     }
 }
 
@@ -589,6 +605,19 @@ fn summarize_tool_result(tool_name: &str, input: &Value, result: &Value) -> Stri
                 .unwrap_or_default();
             format!("Fetched {url} ({total_chars} chars).")
         }
+        "web_search" => {
+            let query = input
+                .get("query")
+                .and_then(Value::as_str)
+                .or_else(|| result.get("query").and_then(Value::as_str))
+                .unwrap_or("<unknown>");
+            let total_chars = result
+                .get("content")
+                .and_then(Value::as_str)
+                .map(|content| content.chars().count())
+                .unwrap_or_default();
+            format!("Searched web for {query:?} ({total_chars} chars).")
+        }
         "apply_patch" => {
             let status = result
                 .get("status")
@@ -687,8 +716,8 @@ pub fn default_tool_result_store_dir() -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::{
-        ToolResultStore, compact_read_file, compact_subagent_result, default_tool_result_store_dir,
-        repair_tool_result_history,
+        ToolResultStore, compact_read_file, compact_subagent_result, compact_web_search,
+        default_tool_result_store_dir, repair_tool_result_history,
     };
     use crate::agent::Message;
     use serde_json::json;
@@ -762,6 +791,22 @@ mod tests {
                 .expect("default tool result dir")
                 .ends_with(std::path::Path::new("tool-results"))
         );
+    }
+
+    #[test]
+    fn compacts_web_search_with_preview() {
+        let output = compact_web_search(
+            &json!({ "query": "rara exa mcp" }),
+            &json!({
+                "query": "rara exa mcp",
+                "provider": "exa_mcp",
+                "content": "Result one\nResult two"
+            }),
+        );
+
+        assert!(output.contains("Searched web for \"rara exa mcp\""));
+        assert!(output.contains("Results:"));
+        assert!(output.contains("Result one"));
     }
 
     #[test]

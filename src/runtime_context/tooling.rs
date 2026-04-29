@@ -25,7 +25,7 @@ use crate::tools::pty::{
 use crate::tools::search::{GlobTool, GrepTool};
 use crate::tools::skill::SkillTool;
 use crate::tools::vector::{RememberExperienceTool, RetrieveExperienceTool};
-use crate::tools::web::WebFetchTool;
+use crate::tools::web::{WebFetchTool, WebSearchTool};
 use crate::tools::workspace::UpdateProjectMemoryTool;
 use crate::vectordb::VectorDB;
 use crate::workspace::WorkspaceMemory;
@@ -95,6 +95,7 @@ pub(super) fn create_full_tool_manager(
     tm.register(Box::new(ReplaceTool));
     tm.register(Box::new(ReplaceLinesTool));
     tm.register(Box::new(WebFetchTool));
+    tm.register(Box::new(WebSearchTool::from_env()));
     tm.register(Box::new(GlobTool));
     tm.register(Box::new(GrepTool));
     tm.register(Box::new(EnterPlanModeTool));
