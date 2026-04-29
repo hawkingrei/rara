@@ -8,7 +8,7 @@ use crate::tools::search::{GlobTool, GrepTool};
 use crate::vectordb::VectorDB;
 use crate::workspace::WorkspaceMemory;
 use async_trait::async_trait;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::sync::Arc;
 
 #[derive(Clone, Copy)]
@@ -16,6 +16,21 @@ enum SubAgentKind {
     General,
     Explore,
     Plan,
+}
+
+macro_rules! strict_read_only_subagent_prompt {
+    () => {
+        concat!(
+            "## Strict Read-Only Contract\n",
+            "- This is a STRICT READ-ONLY sub-agent task.\n",
+            "- You are prohibited from creating, modifying, deleting, moving, or copying files.\n",
+            "- Do not create temporary files anywhere, including /tmp.\n",
+            "- Do not run shell commands, scripts, redirection, heredocs, or any workaround that changes filesystem, process, network, git, or repository state.\n",
+            "- Bash, PTY, editing, patching, and agent-spawning tools are intentionally unavailable.\n",
+            "- Use only the read-only repository inspection tools available to you: read_file, list_files, glob, grep.\n",
+            "- If the assigned instruction requires mutation, report the limitation and provide the evidence-backed findings or plan instead of attempting a workaround."
+        )
+    };
 }
 
 impl SubAgentKind {
@@ -46,6 +61,9 @@ impl SubAgentKind {
                     "- Treat the assigned instruction as the complete task contract.\n",
                     "- Honor every constraint in the assigned instruction, including workspace, branch, network, and output limits.\n",
                     "- Stay inside the current workspace unless the assigned instruction explicitly allows another path.\n",
+                    "\n",
+                    strict_read_only_subagent_prompt!(),
+                    "\n",
                     "- Inspect the repository and summarize concrete findings.\n",
                     "- Do not propose edits you cannot justify from inspected code.\n",
                     "- Do not narrate each next tool call; call the tool directly.\n",
@@ -60,6 +78,9 @@ impl SubAgentKind {
                     "- Treat the assigned instruction as the complete task contract.\n",
                     "- Honor every constraint in the assigned instruction, including workspace, branch, network, and output limits.\n",
                     "- Stay inside the current workspace unless the assigned instruction explicitly allows another path.\n",
+                    "\n",
+                    strict_read_only_subagent_prompt!(),
+                    "\n",
                     "- Inspect the repository and refine an implementation approach.\n",
                     "- Keep plans shallow and grouped by behavior.\n",
                     "- Use <proposed_plan> only when the plan is decision-complete.\n",
@@ -418,8 +439,8 @@ fn serialize_pending_user_input(request: &PendingUserInput) -> Value {
 #[cfg(test)]
 mod tests {
     use super::{
-        append_subagent_prompt, build_read_only_tool_manager, build_subagent_tool_manager,
-        latest_assistant_text_from_history, SubAgentKind,
+        SubAgentKind, append_subagent_prompt, build_read_only_tool_manager,
+        build_subagent_tool_manager, latest_assistant_text_from_history,
     };
     use crate::agent::Message;
     use crate::prompt::PromptRuntimeConfig;
@@ -480,6 +501,27 @@ mod tests {
         assert!(prompt.contains("Treat the assigned instruction as the complete task contract."));
         assert!(prompt.contains("Honor every constraint in the assigned instruction"));
         assert!(prompt.contains("Stay inside the current workspace"));
+    }
+
+    #[test]
+    fn read_only_subagent_prompts_forbid_mutation_and_shell_workarounds() {
+        for kind in [SubAgentKind::Explore, SubAgentKind::Plan] {
+            let prompt = kind.append_prompt();
+
+            assert!(prompt.contains("STRICT READ-ONLY"));
+            assert!(prompt.contains("creating, modifying, deleting, moving, or copying files"));
+            assert!(prompt.contains("including /tmp"));
+            assert!(prompt.contains("redirection"));
+            assert!(prompt.contains("Bash, PTY, editing, patching"));
+            assert!(prompt.contains("read_file, list_files, glob, grep"));
+            assert!(prompt.contains("instead of attempting a workaround"));
+        }
+
+        assert!(
+            !SubAgentKind::General
+                .append_prompt()
+                .contains("STRICT READ-ONLY")
+        );
     }
 
     #[test]
