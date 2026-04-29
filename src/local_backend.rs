@@ -7,7 +7,7 @@ mod tests;
 
 use std::sync::{Arc, Mutex};
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use async_trait::async_trait;
 use candle::{DType, Tensor};
 use candle_transformers::generation::{LogitsProcessor, Sampling};
@@ -15,11 +15,11 @@ use serde_json::Value;
 
 use crate::agent::Message;
 use crate::config::RaraConfig;
-use crate::llm::{hashed_embedding, ContentBlock, LlmBackend, LlmResponse, TokenUsage};
+use crate::llm::{ContentBlock, LlmBackend, LlmResponse, TokenUsage, hashed_embedding};
 
 use self::model::{
-    build_hf_api, default_local_model_cache_dir as model_cache_dir, load_safetensors,
-    preferred_dtype, select_device, LocalModelSpec, LocalTextModel,
+    LocalModelSpec, LocalTextModel, build_hf_api, default_local_model_cache_dir as model_cache_dir,
+    load_safetensors, preferred_dtype, select_device,
 };
 use self::parser::parse_tool_aware_reply;
 use self::prompt::{build_agent_prompt, render_messages, scenario_token_cap};

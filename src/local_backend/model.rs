@@ -1,12 +1,12 @@
 use std::path::PathBuf;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use candle::{DType, Device};
 use candle_nn::VarBuilder;
 use candle_transformers::models::gemma4::{
+    Model as Gemma4Model,
     config::{Gemma4Config, Gemma4TextConfig},
     text::TextModel as Gemma4TextModel,
-    Model as Gemma4Model,
 };
 use candle_transformers::models::qwen3::{Config as Qwen3Config, ModelForCausalLM as Qwen3Model};
 use hf_hub::api::sync::{ApiBuilder, ApiRepo};

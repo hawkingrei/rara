@@ -2,6 +2,7 @@ use std::fmt;
 use std::io;
 use std::io::Write;
 
+use crossterm::Command;
 use crossterm::cursor::MoveDown;
 use crossterm::cursor::MoveTo;
 use crossterm::cursor::MoveToColumn;
@@ -17,7 +18,6 @@ use crossterm::style::SetColors;
 use crossterm::style::SetForegroundColor;
 use crossterm::terminal::Clear;
 use crossterm::terminal::ClearType;
-use crossterm::Command;
 use ratatui::layout::Size;
 use ratatui::prelude::Backend;
 use ratatui::style::Color;

@@ -1,6 +1,6 @@
-use crate::acp::{run_acp_stdio, RaraAcpAgent};
+use crate::acp::{RaraAcpAgent, run_acp_stdio};
 use crate::config::{
-    ConfigManager, RaraConfig, DEFAULT_CODEX_BASE_URL, DEFAULT_CODEX_CHATGPT_BASE_URL,
+    ConfigManager, DEFAULT_CODEX_BASE_URL, DEFAULT_CODEX_CHATGPT_BASE_URL, RaraConfig,
 };
 use crate::llm::{LlmBackend, MockLlm};
 use crate::oauth::{OAuthManager, SavedCodexAuthMode};
@@ -8,7 +8,7 @@ use crate::redaction::redact_secrets;
 use crate::runtime_context;
 use crate::thread_cli;
 use crate::tui::StartupResumeTarget;
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use clap::{Parser, Subcommand};
 use secrecy::ExposeSecret;
 

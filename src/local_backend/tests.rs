@@ -2,7 +2,7 @@ use serde_json::json;
 
 use crate::agent::Message;
 
-use super::model::{default_local_model_cache_dir, extract_context_window, LocalModelSpec};
+use super::model::{LocalModelSpec, default_local_model_cache_dir, extract_context_window};
 use super::parser::{extract_json_object, parse_tool_aware_reply};
 use super::prompt::{render_content, scenario_token_cap};
 
@@ -46,8 +46,7 @@ fn extracts_first_json_object_from_mixed_text() {
 
 #[test]
 fn parses_tool_reply() {
-    let raw =
-        "{\"kind\":\"tool\",\"calls\":[{\"name\":\"read_file\",\"input\":{\"path\":\"Cargo.toml\"}}]}";
+    let raw = "{\"kind\":\"tool\",\"calls\":[{\"name\":\"read_file\",\"input\":{\"path\":\"Cargo.toml\"}}]}";
     let reply = parse_tool_aware_reply(raw).unwrap();
     assert_eq!(reply.kind.as_deref(), Some("tool"));
     assert_eq!(reply.calls.unwrap()[0].name, "read_file");

@@ -1,10 +1,10 @@
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use codex_login::{
+    AuthCredentialsStoreMode, AuthDotJson, CLIENT_ID, DeviceCode as CodexDeviceCode,
+    LoginServer as CodexLoginServer, ServerOptions,
     complete_device_code_login as codex_complete_device_code_login, load_auth_dot_json,
     login_with_api_key as codex_login_with_api_key, logout as codex_logout,
     request_device_code as codex_request_device_code, run_login_server as codex_run_login_server,
-    AuthCredentialsStoreMode, AuthDotJson, DeviceCode as CodexDeviceCode,
-    LoginServer as CodexLoginServer, ServerOptions, CLIENT_ID,
 };
 use secrecy::SecretString;
 use std::io::Read;
@@ -296,9 +296,11 @@ mod tests {
             .start_browser_login(false)
             .expect("browser login session");
 
-        assert!(session
-            .auth_url()
-            .starts_with("https://auth.openai.com/oauth/authorize?"));
+        assert!(
+            session
+                .auth_url()
+                .starts_with("https://auth.openai.com/oauth/authorize?")
+        );
         assert!(session.auth_url().contains(CLIENT_ID));
         session.inner.cancel();
     }
@@ -480,9 +482,10 @@ mod tests {
         let err = manager
             .load_saved_credential()
             .expect_err("blank credentials should be rejected");
-        assert!(err
-            .to_string()
-            .contains("did not contain an API key or access token"));
+        assert!(
+            err.to_string()
+                .contains("did not contain an API key or access token")
+        );
     }
 
     #[test]

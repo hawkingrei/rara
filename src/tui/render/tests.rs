@@ -971,9 +971,11 @@ fn formatted_agent_markdown_keeps_first_and_latest_lines() {
     .collect::<Vec<_>>();
 
     assert!(rendered.iter().any(|line| line.contains("first line")));
-    assert!(rendered
-        .iter()
-        .any(|line| line.contains("... 2 more line(s)")));
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.contains("... 2 more line(s)"))
+    );
     assert!(rendered.iter().any(|line| line.contains("latest 1")));
     assert!(rendered.iter().any(|line| line.contains("latest 2")));
     assert!(!rendered.iter().any(|line| line.contains("middle 1")));

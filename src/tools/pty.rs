@@ -783,7 +783,10 @@ mod tests {
             .and_then(Value::as_str)
             .expect("session id")
             .to_string();
-        assert_eq!(started.get("network_access").and_then(Value::as_bool), Some(true));
+        assert_eq!(
+            started.get("network_access").and_then(Value::as_bool),
+            Some(true)
+        );
 
         write
             .call(json!({
@@ -862,7 +865,10 @@ mod tests {
             .and_then(Value::as_str)
             .expect("session id")
             .to_string();
-        assert_eq!(started.get("network_access").and_then(Value::as_bool), Some(true));
+        assert_eq!(
+            started.get("network_access").and_then(Value::as_bool),
+            Some(true)
+        );
 
         let listed = list.call(json!({})).await.expect("list ptys");
         assert_eq!(

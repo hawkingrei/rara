@@ -1,18 +1,18 @@
 use std::collections::HashMap;
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use futures::StreamExt;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::agent::Message;
 use crate::llm::{ContentBlock, LlmResponse, TokenUsage};
 use crate::redaction::{redact_secrets, sanitize_url_for_display};
 
 use super::shared::{
-    collect_assistant_content, context_budget_from_window, extract_single_tool_result,
-    hashed_embedding, http_client_for_target, parse_tool_arguments, render_openai_message_content,
-    ContextBudget, LlmBackend, LlmStreamEvent,
+    ContextBudget, LlmBackend, LlmStreamEvent, collect_assistant_content,
+    context_budget_from_window, extract_single_tool_result, hashed_embedding,
+    http_client_for_target, parse_tool_arguments, render_openai_message_content,
 };
 
 pub struct OllamaBackend {
