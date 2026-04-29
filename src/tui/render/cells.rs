@@ -81,19 +81,42 @@ fn progress_entry_role(role: &str) -> bool {
 
 fn active_live_event_groups(
     events: &[crate::tui::state::ActiveLiveEvent],
-) -> Vec<(&'static str, Vec<crate::tui::state::ActiveLiveEvent>)> {
-    let mut groups: Vec<(&'static str, Vec<crate::tui::state::ActiveLiveEvent>)> = Vec::new();
+) -> Vec<(&'static str, Vec<&crate::tui::state::ActiveLiveEvent>)> {
+    let mut groups: Vec<(&'static str, Vec<&crate::tui::state::ActiveLiveEvent>)> = Vec::new();
     for event in events {
         let role = event.role();
         if let Some((last_role, messages)) = groups.last_mut()
             && *last_role == role
         {
-            messages.push(event.clone());
+            messages.push(event);
             continue;
         }
-        groups.push((role, vec![event.clone()]));
+        groups.push((role, vec![event]));
     }
     groups
+}
+
+fn progress_entry_message_lines(role: &str, message: &str) -> Vec<String> {
+    if role == "Thinking" {
+        return message
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .map(ToString::to_string)
+            .collect();
+    }
+
+    message
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(|line| {
+            line.trim_start_matches("└")
+                .trim_start_matches('•')
+                .trim()
+                .to_string()
+        })
+        .filter(|line| !line.is_empty())
+        .collect()
 }
 
 fn explicit_progress_entry_groups<'a>(
@@ -102,19 +125,7 @@ fn explicit_progress_entry_groups<'a>(
     let mut groups: Vec<(&str, Vec<String>)> = Vec::new();
     for entry in entries.filter(|entry| progress_entry_role(entry.role.as_str())) {
         let role = entry.role.as_str();
-        let messages = entry
-            .message
-            .lines()
-            .map(str::trim)
-            .filter(|line| !line.is_empty())
-            .map(|line| {
-                line.trim_start_matches("└")
-                    .trim_start_matches('•')
-                    .trim()
-                    .to_string()
-            })
-            .filter(|line| !line.is_empty())
-            .collect::<Vec<_>>();
+        let messages = progress_entry_message_lines(role, &entry.message);
         if messages.is_empty() {
             continue;
         }
@@ -158,7 +169,7 @@ fn push_progress_group<'a>(
 fn push_live_event_group<'a>(
     cells: &mut Vec<Box<dyn HistoryCell + 'a>>,
     role: &str,
-    events: Vec<crate::tui::state::ActiveLiveEvent>,
+    events: Vec<&crate::tui::state::ActiveLiveEvent>,
     active: bool,
 ) {
     let actions = events

@@ -1,6 +1,27 @@
 use super::*;
 
 #[test]
+fn explicit_progress_entry_groups_preserves_thinking_indentation() {
+    let entries = vec![TranscriptEntry {
+        role: "Thinking".into(),
+        message: "    let value = 1;\n  aligned note\n\n".into(),
+        payload: None,
+    }];
+
+    let groups = explicit_progress_entry_groups(entries.iter());
+
+    assert_eq!(groups.len(), 1);
+    assert_eq!(groups[0].0, "Thinking");
+    assert_eq!(
+        groups[0].1,
+        vec![
+            "    let value = 1;".to_string(),
+            "  aligned note".to_string()
+        ]
+    );
+}
+
+#[test]
 fn committed_turn_cell_keeps_user_summary_and_agent_sections_in_order() {
     let entries = vec![
         TranscriptEntry {

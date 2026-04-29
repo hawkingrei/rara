@@ -141,9 +141,7 @@ impl TuiApp {
         if message.is_empty() {
             return;
         }
-        self.active_live
-            .events
-            .push(ActiveLiveEvent::Thinking(message));
+        self.push_active_live_event(ActiveLiveEvent::Thinking(message));
         self.reset_transcript_scroll_if_following_tail();
     }
 
@@ -343,6 +341,18 @@ impl TuiApp {
         self.active_live = super::ActiveLiveSections::default();
     }
 
+    fn push_active_live_event(&mut self, event: ActiveLiveEvent) {
+        if self
+            .active_live
+            .events
+            .last()
+            .is_some_and(|last| last.role() == event.role() && last.message() == event.message())
+        {
+            return;
+        }
+        self.active_live.events.push(event);
+    }
+
     pub fn record_exploration_action(&mut self, action: impl Into<String>) {
         let action = action.into();
         if !self
@@ -352,10 +362,8 @@ impl TuiApp {
             .any(|item| item == &action)
         {
             self.active_live.exploration_actions.push(action.clone());
-            self.active_live
-                .events
-                .push(ActiveLiveEvent::ExplorationAction(action));
         }
+        self.push_active_live_event(ActiveLiveEvent::ExplorationAction(action));
     }
 
     pub fn record_exploration_note(&mut self, note: impl Into<String>) {
@@ -367,10 +375,8 @@ impl TuiApp {
             .any(|item| item == &note)
         {
             self.active_live.exploration_notes.push(note.clone());
-            self.active_live
-                .events
-                .push(ActiveLiveEvent::ExplorationNote(note));
         }
+        self.push_active_live_event(ActiveLiveEvent::ExplorationNote(note));
     }
 
     pub fn record_running_action(&mut self, action: impl Into<String>) {
@@ -382,10 +388,8 @@ impl TuiApp {
             .any(|item| item == &action)
         {
             self.active_live.running_actions.push(action.clone());
-            self.active_live
-                .events
-                .push(ActiveLiveEvent::RunningAction(action));
         }
+        self.push_active_live_event(ActiveLiveEvent::RunningAction(action));
     }
 
     pub fn record_planning_action(&mut self, action: impl Into<String>) {
@@ -397,10 +401,8 @@ impl TuiApp {
             .any(|item| item == &action)
         {
             self.active_live.planning_actions.push(action.clone());
-            self.active_live
-                .events
-                .push(ActiveLiveEvent::PlanningAction(action));
         }
+        self.push_active_live_event(ActiveLiveEvent::PlanningAction(action));
     }
 
     pub fn record_planning_note(&mut self, note: impl Into<String>) {
@@ -412,10 +414,8 @@ impl TuiApp {
             .any(|item| item == &note)
         {
             self.active_live.planning_notes.push(note.clone());
-            self.active_live
-                .events
-                .push(ActiveLiveEvent::PlanningNote(note));
         }
+        self.push_active_live_event(ActiveLiveEvent::PlanningNote(note));
     }
 
     pub fn has_pending_planning_suggestion(&self) -> bool {
