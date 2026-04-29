@@ -55,6 +55,7 @@ struct PtySessionRecord {
     output_path: PathBuf,
     sandboxed: bool,
     sandbox_backend: String,
+    network_access: bool,
     writer: Arc<Mutex<Box<dyn Write + Send>>>,
     child: Arc<Mutex<Box<dyn portable_pty::Child + Send + Sync>>>,
     status: Arc<Mutex<PtySessionStatus>>,
@@ -173,6 +174,7 @@ impl PtySessionStore {
             output_path,
             sandboxed: wrapped.sandboxed,
             sandbox_backend: wrapped.sandbox_backend,
+            network_access: wrapped.network_access,
             writer: Arc::new(Mutex::new(writer)),
             child,
             status,
@@ -262,6 +264,7 @@ struct PtySessionSnapshot {
     output_path: PathBuf,
     sandboxed: bool,
     sandbox_backend: String,
+    network_access: bool,
     status: PtySessionStatus,
 }
 
@@ -273,6 +276,7 @@ impl PtySessionRecord {
             output_path: self.output_path.clone(),
             sandboxed: self.sandboxed,
             sandbox_backend: self.sandbox_backend.clone(),
+            network_access: self.network_access,
             status: *self.status.lock().expect("pty status lock"),
         }
     }
@@ -287,6 +291,7 @@ impl PtySessionSnapshot {
             "output_path": self.output_path,
             "sandboxed": self.sandboxed,
             "sandbox_backend": self.sandbox_backend,
+            "network_access": self.network_access,
         })
     }
 
@@ -299,6 +304,7 @@ impl PtySessionSnapshot {
             "output_path": self.output_path,
             "sandboxed": self.sandboxed,
             "sandbox_backend": self.sandbox_backend,
+            "network_access": self.network_access,
             "output": output,
         }))
     }
@@ -777,6 +783,7 @@ mod tests {
             .and_then(Value::as_str)
             .expect("session id")
             .to_string();
+        assert_eq!(started.get("network_access").and_then(Value::as_bool), Some(true));
 
         write
             .call(json!({
@@ -855,6 +862,7 @@ mod tests {
             .and_then(Value::as_str)
             .expect("session id")
             .to_string();
+        assert_eq!(started.get("network_access").and_then(Value::as_bool), Some(true));
 
         let listed = list.call(json!({})).await.expect("list ptys");
         assert_eq!(
@@ -863,6 +871,12 @@ mod tests {
                 .and_then(Value::as_array)
                 .map(Vec::len),
             Some(1)
+        );
+        assert_eq!(
+            listed
+                .pointer("/sessions/0/network_access")
+                .and_then(Value::as_bool),
+            Some(true)
         );
 
         let inspected = status
@@ -873,11 +887,21 @@ mod tests {
             inspected.get("status").and_then(Value::as_str),
             Some("running")
         );
+        assert_eq!(
+            inspected.get("network_access").and_then(Value::as_bool),
+            Some(true)
+        );
 
         let stopped = stop.call(json!({})).await.expect("stop all ptys");
         assert_eq!(
             stopped.pointer("/stopped/0/status").and_then(Value::as_str),
             Some("killed")
+        );
+        assert_eq!(
+            stopped
+                .pointer("/stopped/0/network_access")
+                .and_then(Value::as_bool),
+            Some(true)
         );
     }
 }

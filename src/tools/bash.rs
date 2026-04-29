@@ -53,6 +53,7 @@ pub struct BackgroundTaskRecord {
     exit_code: Option<i32>,
     sandboxed: bool,
     sandbox_backend: String,
+    network_access: bool,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
@@ -521,6 +522,7 @@ impl BackgroundTaskStore {
         command: String,
         sandboxed: bool,
         sandbox_backend: String,
+        network_access: bool,
     ) -> Result<(BackgroundTaskRecord, oneshot::Receiver<()>), ToolError> {
         let id = format!("bash-{}", Uuid::new_v4());
         let output_path = self.dir.join(format!("{id}.log"));
@@ -532,6 +534,7 @@ impl BackgroundTaskStore {
             exit_code: None,
             sandboxed,
             sandbox_backend,
+            network_access,
         };
         let (stop_tx, stop_rx) = oneshot::channel();
         self.tasks
@@ -824,6 +827,7 @@ impl Tool for BashTool {
                 request.summary(),
                 wrapped.sandboxed,
                 wrapped.sandbox_backend.clone(),
+                wrapped.network_access,
             )?;
             spawn_background_bash_task(
                 child,
@@ -842,6 +846,7 @@ impl Tool for BashTool {
                 "background_task_id": record.id,
                 "output_path": record.output_path,
                 "status": record.status,
+                "network_access": record.network_access,
             }));
         }
 
@@ -993,6 +998,7 @@ impl Tool for BackgroundTaskStatusTool {
             "output": output,
             "sandboxed": record.sandboxed,
             "sandbox_backend": record.sandbox_backend,
+            "network_access": record.network_access,
         }))
     }
 }
@@ -1652,6 +1658,10 @@ mod tests {
             started.get("status"),
             Some(&json!(BackgroundTaskStatus::Running))
         );
+        assert_eq!(
+            started.get("network_access").and_then(Value::as_bool),
+            Some(wrapped.network_access)
+        );
 
         let mut last = Value::Null;
         for _ in 0..50 {
@@ -1670,6 +1680,10 @@ mod tests {
             Some(&json!(BackgroundTaskStatus::Running))
         );
         assert!(last.get("output_path").and_then(Value::as_str).is_some());
+        assert_eq!(
+            last.get("network_access").and_then(Value::as_bool),
+            Some(wrapped.network_access)
+        );
     }
 
     #[tokio::test]
@@ -1724,6 +1738,10 @@ mod tests {
             listed.get("tasks").and_then(Value::as_array).map(Vec::len),
             Some(1)
         );
+        assert_eq!(
+            listed.pointer("/tasks/0/network_access").and_then(Value::as_bool),
+            Some(wrapped.network_access)
+        );
 
         let stopped = stop_tool
             .call(json!({ "task_id": task_id }))
@@ -1732,6 +1750,12 @@ mod tests {
         assert_eq!(
             stopped.pointer("/stopped/0/status"),
             Some(&json!(BackgroundTaskStatus::Killed))
+        );
+        assert_eq!(
+            stopped
+                .pointer("/stopped/0/network_access")
+                .and_then(Value::as_bool),
+            Some(wrapped.network_access)
         );
     }
 
