@@ -15,7 +15,7 @@ use crate::tui::command::api_key_status;
 use crate::tui::is_ssh_session;
 use crate::tui::render::bottom_pane::editor_cursor_position;
 use crate::tui::state::{
-    current_model_presets, openai_profile_setup_kinds, ProviderFamily, TuiApp, PROVIDER_FAMILIES,
+    PROVIDER_FAMILIES, ProviderFamily, TuiApp, current_model_presets, openai_profile_setup_kinds,
 };
 
 fn wrapped_text_height(text: &str, area_width: u16) -> u16 {
@@ -315,7 +315,10 @@ pub(super) fn render_model_picker_modal(f: &mut Frame, app: &TuiApp, area: Rect)
     } else {
         &format!(
             "Provider: {provider_label}\nBase URL: {}\nSelect a concrete model preset. Enter applies immediately.",
-            app.config.base_url.as_deref().unwrap_or("http://localhost:11434"),
+            app.config
+                .base_url
+                .as_deref()
+                .unwrap_or("http://localhost:11434"),
         )
     };
     let help_height = wrapped_text_height(help, area.width);
@@ -797,8 +800,7 @@ pub(super) fn render_model_name_editor_modal(
     app: &TuiApp,
     area: Rect,
 ) -> Option<(u16, u16)> {
-    let intro_text =
-        "Set the model name for the selected OpenAI-compatible endpoint profile.\nExample: gpt-4o-mini, kimi-k2, deepseek-chat, or any server-specific model id.";
+    let intro_text = "Set the model name for the selected OpenAI-compatible endpoint profile.\nExample: gpt-4o-mini, kimi-k2, deepseek-chat, or any server-specific model id.";
     let intro_height = wrapped_text_height(intro_text, area.width);
     let chunks = Layout::default()
         .direction(Direction::Vertical)

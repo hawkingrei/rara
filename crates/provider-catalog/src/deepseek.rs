@@ -1,10 +1,10 @@
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use rara_config::DEFAULT_DEEPSEEK_BASE_URL;
 use secrecy::{ExposeSecret, SecretString};
 use serde::Deserialize;
 
-use crate::redaction::{redact_known_secret, sanitize_url_for_display};
 use crate::ModelCatalogRequest;
+use crate::redaction::{redact_known_secret, sanitize_url_for_display};
 
 const MODELS_TIMEOUT_SECS: u64 = 15;
 

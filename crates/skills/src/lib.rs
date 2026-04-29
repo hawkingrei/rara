@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -176,7 +176,7 @@ fn skill_name_from_path(path: &Path) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{repo_skill_search_dirs, skill_search_dirs, SkillManager};
+    use super::{SkillManager, repo_skill_search_dirs, skill_search_dirs};
     use std::fs;
     use tempfile::tempdir;
 

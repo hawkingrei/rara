@@ -1,4 +1,4 @@
-use super::support::{test_runtime_storage, SequencedBackend};
+use super::support::{SequencedBackend, test_runtime_storage};
 use crate::agent::{Agent, AgentExecutionMode, Message, PlanStep, PlanStepStatus};
 use crate::llm::{ContentBlock, LlmResponse};
 use crate::prompt::PromptRuntimeConfig;
@@ -148,20 +148,24 @@ fn shared_runtime_context_collects_prompt_plan_and_compaction_state() {
     assert_eq!(runtime.total_input_tokens, 11);
     assert_eq!(runtime.total_output_tokens, 7);
     assert_eq!(runtime.prompt.base_prompt_kind, "default");
-    assert!(runtime
-        .prompt
-        .section_keys
-        .contains(&"append_system_prompt".to_string()));
+    assert!(
+        runtime
+            .prompt
+            .section_keys
+            .contains(&"append_system_prompt".to_string())
+    );
     assert_eq!(
         runtime.prompt.source_entries.len(),
         runtime.prompt.source_status_lines.len()
     );
     assert_eq!(runtime.prompt.source_entries[0].order, 1);
     assert!(!runtime.prompt.source_entries[0].inclusion_reason.is_empty());
-    assert!(runtime
-        .prompt
-        .warnings
-        .contains(&"missing prompt file".to_string()));
+    assert!(
+        runtime
+            .prompt
+            .warnings
+            .contains(&"missing prompt file".to_string())
+    );
     assert_eq!(runtime.plan.execution_mode, "plan");
     assert_eq!(
         runtime.plan.steps,
@@ -210,12 +214,16 @@ fn shared_runtime_context_collects_prompt_plan_and_compaction_state() {
         runtime.retrieval.memory_selection.selected_items[0].kind,
         "workspace_memory"
     );
-    assert!(runtime.retrieval.memory_selection.selected_items[0]
-        .detail
-        .contains(".rara/memory.md"));
-    assert!(runtime.retrieval.memory_selection.selected_items[0]
-        .detail
-        .contains("2 non-empty lines"));
+    assert!(
+        runtime.retrieval.memory_selection.selected_items[0]
+            .detail
+            .contains(".rara/memory.md")
+    );
+    assert!(
+        runtime.retrieval.memory_selection.selected_items[0]
+            .detail
+            .contains("2 non-empty lines")
+    );
     assert_eq!(
         runtime.retrieval.memory_selection.selected_items[1].kind,
         "compacted_summary"
@@ -252,22 +260,26 @@ fn shared_runtime_context_collects_prompt_plan_and_compaction_state() {
         runtime.retrieval.memory_selection.selected_items[9].kind,
         "retrieved_workspace_memory"
     );
-    assert!(runtime.retrieval.memory_selection.selected_items[9]
-        .detail
-        .contains("recalled=2 item(s)"));
+    assert!(
+        runtime.retrieval.memory_selection.selected_items[9]
+            .detail
+            .contains("recalled=2 item(s)")
+    );
     assert_eq!(
         runtime.retrieval.memory_selection.selected_items[10].kind,
         "retrieved_thread_context"
     );
-    assert!(runtime
-        .retrieval
-        .memory_selection
-        .selected_items
-        .iter()
-        .find(|item| item.kind == "retrieved_thread_context")
-        .is_some_and(|item| item
-            .detail
-            .contains("Auth picker already moved behind the shared runtime bootstrap.")));
+    assert!(
+        runtime
+            .retrieval
+            .memory_selection
+            .selected_items
+            .iter()
+            .find(|item| item.kind == "retrieved_thread_context")
+            .is_some_and(|item| item
+                .detail
+                .contains("Auth picker already moved behind the shared runtime bootstrap."))
+    );
     assert_eq!(runtime.retrieval.memory_selection.available_items.len(), 2);
     assert_eq!(
         runtime.retrieval.memory_selection.available_items[0].kind,
@@ -278,28 +290,36 @@ fn shared_runtime_context_collects_prompt_plan_and_compaction_state() {
         "vector_memory"
     );
     assert!(runtime.retrieval.memory_selection.dropped_items.is_empty());
-    assert!(runtime
-        .retrieval
-        .memory_selection
-        .selection_budget_tokens
-        .is_some());
+    assert!(
+        runtime
+            .retrieval
+            .memory_selection
+            .selection_budget_tokens
+            .is_some()
+    );
     assert!(runtime.budget.stable_instructions_budget > 0);
     assert!(runtime.budget.active_turn_budget > 0);
-    assert!(runtime
-        .assembly
-        .entries
-        .iter()
-        .any(|entry| entry.layer == "stable_instructions" && entry.injected));
-    assert!(runtime
-        .assembly
-        .entries
-        .iter()
-        .any(|entry| entry.layer == "compacted_history" && entry.injected));
-    assert!(runtime
-        .assembly
-        .entries
-        .iter()
-        .any(|entry| entry.layer == "retrieval_ready" && !entry.injected));
+    assert!(
+        runtime
+            .assembly
+            .entries
+            .iter()
+            .any(|entry| entry.layer == "stable_instructions" && entry.injected)
+    );
+    assert!(
+        runtime
+            .assembly
+            .entries
+            .iter()
+            .any(|entry| entry.layer == "compacted_history" && entry.injected)
+    );
+    assert!(
+        runtime
+            .assembly
+            .entries
+            .iter()
+            .any(|entry| entry.layer == "retrieval_ready" && !entry.injected)
+    );
 }
 
 #[test]

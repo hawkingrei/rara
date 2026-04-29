@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use serde_json::json;
 
-use super::{state_db_status_error, InteractionKind, StateDb, TranscriptTurn, TuiApp};
+use super::{InteractionKind, StateDb, TranscriptTurn, TuiApp, state_db_status_error};
 use crate::state_db::{
     PersistedCompactState, PersistedInteraction, PersistedPlanStep, PersistedPromptRuntimeState,
     PersistedStructuredRolloutEvent, PersistedTurnEntry,

@@ -1,10 +1,10 @@
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use futures::{Stream, StreamExt};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
     Arc,
+    atomic::{AtomicBool, Ordering},
 };
 use std::time::Duration;
 use url::Url;

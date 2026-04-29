@@ -1,1 +1,1 @@
-pub use rara_sandbox::{sandbox_failure_hint, SandboxManager, WrappedCommand};
+pub use rara_sandbox::{SandboxManager, WrappedCommand, sandbox_failure_hint};

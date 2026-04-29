@@ -1,10 +1,10 @@
 mod codex;
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use eventsource_stream::Eventsource;
 use secrecy::{ExposeSecret, SecretString};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::agent::Message;
 use crate::config::OpenAiEndpointKind;
@@ -12,9 +12,9 @@ use crate::llm::{ContentBlock, LlmResponse, TokenUsage};
 use crate::redaction::{redact_secrets, sanitize_url_for_display};
 
 use super::shared::{
-    collect_assistant_content, extract_message_text, http_client_for_target, model_context_budget,
+    ContextBudget, LlmBackend, LlmStreamEvent, LlmTurnMetadata, collect_assistant_content,
+    extract_message_text, http_client_for_target, model_context_budget,
     next_stream_item_with_idle_timeout, parse_tool_arguments, render_openai_message_content,
-    ContextBudget, LlmBackend, LlmStreamEvent, LlmTurnMetadata,
 };
 
 #[cfg(test)]

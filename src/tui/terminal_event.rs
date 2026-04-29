@@ -487,7 +487,7 @@ fn strip_ansi_control_sequences(input: &str) -> String {
 mod tests {
     use serde_json::json;
 
-    use super::{output_tail_preview, TerminalEvent, TerminalTarget};
+    use super::{TerminalEvent, TerminalTarget, output_tail_preview};
 
     #[test]
     fn builds_background_start_event_from_bash_result() {

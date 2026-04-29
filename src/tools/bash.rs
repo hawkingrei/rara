@@ -1739,7 +1739,9 @@ mod tests {
             Some(1)
         );
         assert_eq!(
-            listed.pointer("/tasks/0/network_access").and_then(Value::as_bool),
+            listed
+                .pointer("/tasks/0/network_access")
+                .and_then(Value::as_bool),
             Some(wrapped.network_access)
         );
 

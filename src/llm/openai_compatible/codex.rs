@@ -1,22 +1,22 @@
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use codex_login::default_client::default_headers as codex_default_headers;
 use eventsource_stream::Eventsource;
 use secrecy::{ExposeSecret, SecretString};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::agent::Message;
 use crate::llm::{ContentBlock, LlmResponse, TokenUsage};
 use crate::redaction::{redact_secrets, sanitize_url_for_display};
 
+use super::super::codex_tools_compat::ToolDefinition;
+use super::super::codex_tools_compat::ToolSpec;
 use super::super::codex_tools_compat::create_tools_json_for_responses_api;
 use super::super::codex_tools_compat::parse_tool_input_schema;
 use super::super::codex_tools_compat::tool_definition_to_responses_api_tool;
-use super::super::codex_tools_compat::ToolDefinition;
-use super::super::codex_tools_compat::ToolSpec;
 use super::super::shared::{
-    collect_assistant_content, model_context_budget, next_stream_item_with_idle_timeout,
-    parse_tool_arguments, render_openai_message_content, ContextBudget, LlmBackend, LlmStreamEvent,
+    ContextBudget, LlmBackend, LlmStreamEvent, collect_assistant_content, model_context_budget,
+    next_stream_item_with_idle_timeout, parse_tool_arguments, render_openai_message_content,
 };
 use super::{CodexBackend, OpenAiCompatibleBackend};
 

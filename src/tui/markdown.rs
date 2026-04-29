@@ -76,9 +76,11 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert!(rendered.iter().any(|line| line.contains("Risk")));
-        assert!(rendered
-            .iter()
-            .any(|line| line.contains("OpenAI embedding API cost")));
+        assert!(
+            rendered
+                .iter()
+                .any(|line| line.contains("OpenAI embedding API cost"))
+        );
         assert!(!pipe_columns.is_empty());
         assert!(pipe_columns.iter().all(|column| *column == pipe_columns[0]));
     }

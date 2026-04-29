@@ -28,7 +28,7 @@ use std::sync::Arc;
 
 use crossterm::{event::EventStream, terminal::enable_raw_mode, terminal::size as terminal_size};
 use futures::StreamExt;
-use tokio::time::{interval, Duration};
+use tokio::time::{Duration, interval};
 
 use crate::agent::Agent;
 use crate::oauth::OAuthManager;
@@ -36,7 +36,7 @@ use crate::state_db::StateDb;
 
 use self::app_event::AppEvent;
 use self::command::{palette_command_by_index, palette_commands, parse_local_command};
-use self::event_stream::{translate_event, UiEvent};
+use self::event_stream::{UiEvent, translate_event};
 use self::keymap::map_key_to_event;
 use self::provider_flow::{
     open_provider_family_overlay, should_open_codex_auth_guide,
@@ -52,7 +52,7 @@ use self::session_restore::{
     provider_requires_api_key, restore_latest_thread, restore_thread_by_id,
 };
 use self::state::{
-    LocalCommandKind, OpenAiModelPickerAction, Overlay, TaskKind, TuiApp, PROVIDER_FAMILIES,
+    LocalCommandKind, OpenAiModelPickerAction, Overlay, PROVIDER_FAMILIES, TaskKind, TuiApp,
 };
 use self::terminal_ui::{
     build_terminal, flush_committed_history, handle_paste, is_ssh_session, teardown_terminal,

@@ -7,7 +7,7 @@ use crate::vectordb::VectorDB;
 use crate::workspace::WorkspaceMemory;
 use anyhow::Result;
 use async_trait::async_trait;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::sync::{Arc, Mutex};
 use tempfile::tempdir;
 
