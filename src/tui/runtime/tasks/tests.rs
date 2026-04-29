@@ -1,11 +1,11 @@
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
     Arc,
+    atomic::{AtomicBool, Ordering},
 };
 use std::time::{Duration, Instant};
 
 use tempfile::tempdir;
-use tokio::sync::mpsc;
+use tokio::sync::{Mutex, mpsc};
 
 use crate::agent::{
     Agent, AgentExecutionMode, BashApprovalMode, Message, PlanStep, PlanStepStatus,
@@ -16,6 +16,7 @@ use crate::oauth::OAuthManager;
 use crate::prompt::PromptRuntimeConfig;
 use crate::session::SessionManager;
 use crate::tool::ToolManager;
+use crate::tools::planning::EnterPlanModeTool;
 use crate::tui::state::{
     OAuthLoginMode, RunningTask, RuntimePhase, TaskCompletion, TaskKind, TuiApp,
 };
@@ -60,6 +61,58 @@ impl LlmBackend for PlainAnswerBackend {
     }
 }
 
+struct AgentDrivenPlanBackend {
+    calls: Mutex<usize>,
+}
+
+#[async_trait::async_trait]
+impl LlmBackend for AgentDrivenPlanBackend {
+    async fn ask(
+        &self,
+        _messages: &[crate::agent::Message],
+        _tools: &[serde_json::Value],
+    ) -> anyhow::Result<LlmResponse> {
+        let mut calls = self.calls.lock().await;
+        *calls += 1;
+        if *calls == 1 {
+            return Ok(LlmResponse {
+                content: vec![ContentBlock::ToolUse {
+                    id: "enter-plan".to_string(),
+                    name: "enter_plan_mode".to_string(),
+                    input: json!({}),
+                }],
+                stop_reason: Some("tool_use".to_string()),
+                usage: Some(TokenUsage::default()),
+            });
+        }
+        let text = match *calls {
+            2 => {
+                "<proposed_plan>\n- [pending] Inspect the TUI state machine\n- [pending] Update focused tests\n</proposed_plan>"
+            }
+            _ => "Implemented the auto-approved plan and reviewed the changes.",
+        };
+        Ok(LlmResponse {
+            content: vec![ContentBlock::Text {
+                text: text.to_string(),
+            }],
+            stop_reason: Some("end_turn".to_string()),
+            usage: Some(TokenUsage::default()),
+        })
+    }
+
+    async fn embed(&self, _text: &str) -> anyhow::Result<Vec<f32>> {
+        Ok(vec![0.0; 8])
+    }
+
+    async fn summarize(
+        &self,
+        _messages: &[crate::agent::Message],
+        _instruction: &str,
+    ) -> anyhow::Result<String> {
+        Ok("summary".to_string())
+    }
+}
+
 #[test]
 fn browser_oauth_is_rejected_before_task_start_in_ssh() {
     let temp = tempdir().unwrap();
@@ -76,10 +129,11 @@ fn browser_oauth_is_rejected_before_task_start_in_ssh() {
     start_oauth_task(&mut app, oauth_manager, OAuthLoginMode::Browser);
 
     assert!(app.running_task.is_none());
-    assert!(app
-        .notice
-        .as_deref()
-        .is_some_and(|value| value.contains("Browser login is unavailable")));
+    assert!(
+        app.notice
+            .as_deref()
+            .is_some_and(|value| value.contains("Browser login is unavailable"))
+    );
 }
 
 #[test]
@@ -304,6 +358,70 @@ async fn plan_turn_completion_keeps_plan_mode_after_plain_answer() {
 }
 
 #[tokio::test]
+async fn agent_driven_plan_mode_auto_approves_and_resumes_execution() {
+    let temp = tempdir().unwrap();
+    let workspace_root = temp.path().join("workspace");
+    let rara_dir = workspace_root.join(".rara");
+    std::fs::create_dir_all(rara_dir.join("rollouts")).expect("rollouts");
+    std::fs::create_dir_all(rara_dir.join("sessions")).expect("sessions");
+    std::fs::create_dir_all(rara_dir.join("tool-results")).expect("tool results");
+
+    let mut app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("build tui app");
+    app.set_agent_execution_mode(AgentExecutionMode::Execute);
+
+    let workspace = Arc::new(WorkspaceMemory::from_paths(
+        workspace_root.clone(),
+        rara_dir.clone(),
+    ));
+    let session_manager = Arc::new(SessionManager {
+        storage_dir: rara_dir.join("rollouts"),
+        legacy_storage_dir: rara_dir.join("sessions"),
+    });
+    let mut tool_manager = ToolManager::new();
+    tool_manager.register(Box::new(EnterPlanModeTool));
+    let mut agent = Agent::new(
+        tool_manager,
+        Arc::new(AgentDrivenPlanBackend {
+            calls: Mutex::new(0),
+        }),
+        Arc::new(VectorDB::new(
+            &rara_dir.join("lancedb").display().to_string(),
+        )),
+        session_manager,
+        workspace,
+    );
+    agent.set_execution_mode(AgentExecutionMode::Execute);
+
+    start_query_task(&mut app, "inspect and plan".to_string(), agent);
+    let mut agent_slot = None;
+    for _ in 0..20 {
+        finish_running_task_if_ready(&mut app, &mut agent_slot)
+            .await
+            .expect("finish task");
+        if app.running_task.is_none() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+
+    assert!(app.running_task.is_none());
+    assert_eq!(app.agent_execution_mode, AgentExecutionMode::Execute);
+    assert!(!app.has_pending_plan_approval());
+    let agent = agent_slot.as_ref().expect("agent should return");
+    assert_eq!(agent.execution_mode, AgentExecutionMode::Execute);
+    assert_eq!(agent.current_plan.len(), 2);
+    assert!(
+        agent
+            .history
+            .last()
+            .is_some_and(|message| message.content.to_string().contains("reviewed the changes"))
+    );
+}
+
+#[tokio::test]
 async fn query_heartbeat_preserves_running_tool_phase() {
     let temp = tempdir().unwrap();
     let mut app = TuiApp::new(ConfigManager {
@@ -361,10 +479,11 @@ async fn query_cancellation_sets_running_task_token() {
     request_running_task_cancellation(&mut app);
 
     assert!(token.load(Ordering::SeqCst));
-    assert!(app
-        .running_task
-        .as_ref()
-        .is_some_and(|task| task.cancellation_requested));
+    assert!(
+        app.running_task
+            .as_ref()
+            .is_some_and(|task| task.cancellation_requested)
+    );
     assert_eq!(app.runtime_phase, RuntimePhase::ProcessingResponse);
     assert_eq!(
         app.runtime_phase_detail.as_deref(),

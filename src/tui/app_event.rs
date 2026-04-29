@@ -16,6 +16,7 @@ pub enum AppEvent {
     MoveCursorEnd,
     MoveCursorUp,
     MoveCursorDown,
+    NavigateInputHistory(i32),
     ScrollTranscript(i32),
     MoveCommandSelection(i32),
     MoveProviderSelection(i32),

@@ -16,10 +16,13 @@ RARA planning mode is a read-only collaboration mode for non-trivial tasks.
 - user imperative wording like "continue" or "implement" does not exit planning mode by itself;
 - planning turns may use read-only repository tools, read-only shell commands, and delegated read-only sub-agents;
 - planning turns may end with a normal final answer for research, review, or planning-advice tasks;
+- when the agent entered planning mode automatically from execute mode, a decision-complete implementation plan is auto-approved by the runtime and resumes execution without a human approval card;
+- manual `/plan` sessions still require explicit human approval before execution resumes from `<proposed_plan>`;
 - structured planning artifacts are reserved for explicit runtime actions:
   - `<proposed_plan>` when the implementation plan is ready for approval;
   - `<request_user_input>` when a key decision still needs user input;
   - `<continue_inspection/>` when more repository inspection is still required.
+- a model message with no tool call and no `<continue_inspection/>` is a final answer for the current turn, not an implicit request for runtime continuation;
 - planning-mode prose should stay in inspected findings and concise progress updates;
 - planning-mode progress updates should stay short and grounded in inspected code instead of narrating each next file-by-file action;
 - planning mode must not describe file edits, patches, or implementation steps as if they are already happening.
@@ -47,6 +50,8 @@ When planning mode needs to continue, runtime records a structured continuation 
 - `plan_approved`
 
 `plan_continuation_required` means the agent explicitly requested another read-only inspection pass before answering or requesting implementation approval.
+
+Execute-mode repository inspection follows the same structured continuation boundary: prior inspection evidence is not enough to keep a turn open after a no-tool model response. The model must either call another inspection tool or emit `<continue_inspection/>`.
 
 ## TUI Expectations
 

@@ -2,7 +2,6 @@ use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use codex_login::default_client::default_headers as codex_default_headers;
 use eventsource_stream::Eventsource;
-use futures::StreamExt;
 use secrecy::{ExposeSecret, SecretString};
 use serde_json::{json, Value};
 
@@ -16,8 +15,8 @@ use super::super::codex_tools_compat::tool_definition_to_responses_api_tool;
 use super::super::codex_tools_compat::ToolDefinition;
 use super::super::codex_tools_compat::ToolSpec;
 use super::super::shared::{
-    collect_assistant_content, model_context_budget, parse_tool_arguments,
-    render_openai_message_content, ContextBudget, LlmBackend,
+    collect_assistant_content, model_context_budget, next_stream_item_with_idle_timeout,
+    parse_tool_arguments, render_openai_message_content, ContextBudget, LlmBackend, LlmStreamEvent,
 };
 use super::{CodexBackend, OpenAiCompatibleBackend};
 
@@ -48,7 +47,7 @@ impl CodexBackend {
         messages: &[Message],
         tools: &[Value],
         metadata: crate::llm::LlmTurnMetadata,
-        mut on_text_delta: Option<&mut (dyn FnMut(String) + Send)>,
+        mut on_event: Option<&mut (dyn FnMut(LlmStreamEvent) + Send)>,
     ) -> Result<LlmResponse> {
         let body = build_codex_responses_request(
             &self.model,
@@ -82,7 +81,8 @@ impl CodexBackend {
         let mut completed = false;
         let mut streamed_text = String::new();
 
-        while let Some(event) = stream.next().await {
+        while let Some(event) = next_stream_item_with_idle_timeout(&mut stream, "Codex SSE").await?
+        {
             metadata.ensure_not_cancelled()?;
             let event =
                 event.map_err(|error| anyhow!("Failed to decode Codex SSE event: {error}"))?;
@@ -96,7 +96,7 @@ impl CodexBackend {
                 &mut output_items,
                 &mut usage,
                 &mut streamed_text,
-                &mut on_text_delta,
+                &mut on_event,
             )?;
         }
 
@@ -126,13 +126,13 @@ impl LlmBackend for CodexBackend {
         &self,
         messages: &[Message],
         tools: &[Value],
-        on_text_delta: &mut (dyn FnMut(String) + Send),
+        on_event: &mut (dyn FnMut(LlmStreamEvent) + Send),
     ) -> Result<LlmResponse> {
         self.ask_responses_streaming(
             messages,
             tools,
             crate::llm::LlmTurnMetadata::default(),
-            Some(on_text_delta),
+            Some(on_event),
         )
         .await
     }
@@ -142,9 +142,9 @@ impl LlmBackend for CodexBackend {
         messages: &[Message],
         tools: &[Value],
         metadata: crate::llm::LlmTurnMetadata,
-        on_text_delta: &mut (dyn FnMut(String) + Send),
+        on_event: &mut (dyn FnMut(LlmStreamEvent) + Send),
     ) -> Result<LlmResponse> {
-        self.ask_responses_streaming(messages, tools, metadata, Some(on_text_delta))
+        self.ask_responses_streaming(messages, tools, metadata, Some(on_event))
             .await
     }
 
@@ -280,14 +280,22 @@ pub(crate) fn apply_codex_stream_event(
     output_items: &mut Vec<Value>,
     usage: &mut Option<Value>,
     streamed_text: &mut String,
-    on_text_delta: &mut Option<&mut (dyn FnMut(String) + Send)>,
+    on_event: &mut Option<&mut (dyn FnMut(LlmStreamEvent) + Send)>,
 ) -> Result<bool> {
     match payload.get("type").and_then(Value::as_str) {
         Some("response.output_text.delta") => {
             if let Some(delta) = payload.get("delta").and_then(Value::as_str) {
                 streamed_text.push_str(delta);
-                if let Some(callback) = on_text_delta.as_mut() {
-                    callback(delta.to_string());
+                if let Some(callback) = on_event.as_mut() {
+                    callback(LlmStreamEvent::TextDelta(delta.to_string()));
+                }
+            }
+            Ok(false)
+        }
+        Some("response.reasoning_summary_text.delta") | Some("response.reasoning_text.delta") => {
+            if let Some(delta) = payload.get("delta").and_then(Value::as_str) {
+                if let Some(callback) = on_event.as_mut() {
+                    callback(LlmStreamEvent::ReasoningDelta(delta.to_string()));
                 }
             }
             Ok(false)

@@ -186,6 +186,36 @@ impl HistoryCell for RunningCell {
     }
 }
 
+pub(super) struct ThinkingCell<'a> {
+    lines: &'a [Line<'static>],
+    max_lines: usize,
+}
+
+impl<'a> ThinkingCell<'a> {
+    pub(super) fn new(lines: &'a [Line<'static>], max_lines: usize) -> Self {
+        Self { lines, max_lines }
+    }
+}
+
+impl HistoryCell for ThinkingCell<'_> {
+    fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
+        let start = self.lines.len().saturating_sub(self.max_lines);
+        let body = markdown_body_lines(&self.lines[start..], self.max_lines);
+        let mut lines = vec![Line::from(section_span("Thinking", Color::LightBlue))];
+        if start > 0 {
+            lines.push(Line::from(Span::styled(
+                format!("  ... {start} more line(s)"),
+                Style::default().fg(Color::DarkGray),
+            )));
+        }
+        lines.extend(body.into_iter().map(|mut line| {
+            line.spans.insert(0, Span::raw("  "));
+            line
+        }));
+        lines
+    }
+}
+
 pub(super) struct TerminalCell {
     command: String,
     output: Vec<String>,

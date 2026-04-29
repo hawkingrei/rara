@@ -12,7 +12,7 @@ use crate::redaction::{redact_secrets, sanitize_url_for_display};
 use super::shared::{
     collect_assistant_content, context_budget_from_window, extract_single_tool_result,
     hashed_embedding, http_client_for_target, parse_tool_arguments, render_openai_message_content,
-    ContextBudget, LlmBackend,
+    ContextBudget, LlmBackend, LlmStreamEvent,
 };
 
 pub struct OllamaBackend {
@@ -126,13 +126,13 @@ impl LlmBackend for OllamaBackend {
         &self,
         messages: &[Message],
         tools: &[Value],
-        on_text_delta: &mut (dyn FnMut(String) + Send),
+        on_event: &mut (dyn FnMut(LlmStreamEvent) + Send),
     ) -> Result<LlmResponse> {
         self.ask_streaming_with_context(
             messages,
             tools,
             crate::llm::LlmTurnMetadata::default(),
-            on_text_delta,
+            on_event,
         )
         .await
     }
@@ -142,7 +142,7 @@ impl LlmBackend for OllamaBackend {
         messages: &[Message],
         tools: &[Value],
         metadata: crate::llm::LlmTurnMetadata,
-        on_text_delta: &mut (dyn FnMut(String) + Send),
+        on_event: &mut (dyn FnMut(LlmStreamEvent) + Send),
     ) -> Result<LlmResponse> {
         let endpoint = format!("{}/api/chat", self.base_url.trim_end_matches('/'));
         let mut body = json!({
@@ -209,7 +209,7 @@ impl LlmBackend for OllamaBackend {
                     &mut stop_reason,
                     &mut input_tokens,
                     &mut output_tokens,
-                    on_text_delta,
+                    on_event,
                 )?;
             }
         }
@@ -224,7 +224,7 @@ impl LlmBackend for OllamaBackend {
                 &mut stop_reason,
                 &mut input_tokens,
                 &mut output_tokens,
-                on_text_delta,
+                on_event,
             )?;
         }
 
@@ -299,7 +299,7 @@ pub(super) fn apply_ollama_stream_event(
     stop_reason: &mut Option<String>,
     input_tokens: &mut u32,
     output_tokens: &mut u32,
-    on_text_delta: &mut (dyn FnMut(String) + Send),
+    on_event: &mut (dyn FnMut(LlmStreamEvent) + Send),
 ) -> Result<bool> {
     if let Some(delta) = event
         .get("message")
@@ -307,7 +307,7 @@ pub(super) fn apply_ollama_stream_event(
         .and_then(Value::as_str)
     {
         if !delta.is_empty() {
-            on_text_delta(delta.to_string());
+            on_event(LlmStreamEvent::TextDelta(delta.to_string()));
             streamed_text.push_str(delta);
         }
     }

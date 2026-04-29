@@ -452,12 +452,10 @@ impl Agent {
         _agentic_turns: usize,
         continue_inspection: bool,
     ) -> bool {
-        let inspection_intent = continue_inspection || self.inspection_progress.has_any_evidence();
         matches!(self.execution_mode, AgentExecutionMode::Execute)
-            && inspection_intent
+            && continue_inspection
             && self.pending_user_input.is_none()
             && self.pending_approval.is_none()
-            && (continue_inspection || !self.inspection_progress.has_minimum_review_evidence())
     }
 
     pub(super) fn ensure_active_plan_step(&mut self) {
@@ -736,10 +734,11 @@ impl RuntimeContinuationPhase {
                 "Do not ask the user to continue.",
             ],
             Self::PlanApproved => vec![
-                "The user approved the current plan. Continue the same task immediately.",
+                "The current plan was approved. Continue the same task immediately.",
                 "Implement the approved plan using the existing plan state and repository context.",
                 "Do not restate the plan back to the user unless a short reminder is necessary.",
                 "Start with the next concrete implementation step or tool call.",
+                "After the implementation is complete, review your own changes for correctness, scope control, and missing validation before giving the final answer.",
                 "Do not ask the user to continue.",
             ],
         }

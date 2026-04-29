@@ -3,7 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use uuid::Uuid;
 
 pub struct SandboxManager {
@@ -514,9 +514,9 @@ fn cleanup_profiles_older_than(profile_dir: &Path, max_age: Duration) -> Result<
 #[cfg(test)]
 mod tests {
     use super::{
+        DEFAULT_SHELL, MACOS_SANDBOX_EXEC, SandboxBackend, SandboxManager,
         cleanup_profiles_older_than, cleanup_stale_profiles, sanitize_shell_program,
-        shell_command_flag, shell_program, SandboxBackend, SandboxManager, DEFAULT_SHELL,
-        MACOS_SANDBOX_EXEC,
+        shell_command_flag, shell_program,
     };
     use std::env;
     use std::path::PathBuf;
@@ -532,6 +532,23 @@ mod tests {
         }
     }
 
+    fn set_env_var<K, V>(key: K, value: V)
+    where
+        K: AsRef<std::ffi::OsStr>,
+        V: AsRef<std::ffi::OsStr>,
+    {
+        // These tests restore PATH immediately after the scoped assertion.
+        unsafe { std::env::set_var(key, value) };
+    }
+
+    fn remove_env_var<K>(key: K)
+    where
+        K: AsRef<std::ffi::OsStr>,
+    {
+        // These tests restore PATH immediately after the scoped assertion.
+        unsafe { std::env::remove_var(key) };
+    }
+
     #[test]
     fn wrap_command_fails_closed_on_unsupported_platform() {
         let manager = manager(
@@ -545,9 +562,10 @@ mod tests {
             .wrap_shell_command("echo test", "/tmp", false)
             .expect_err("unsupported platforms should not fall back to unsandboxed execution");
 
-        assert!(err
-            .to_string()
-            .contains("sandboxed command execution is unsupported on platform freebsd"));
+        assert!(
+            err.to_string()
+                .contains("sandboxed command execution is unsupported on platform freebsd")
+        );
     }
 
     #[test]
@@ -567,12 +585,12 @@ mod tests {
     #[test]
     fn detect_fails_closed_when_linux_bwrap_is_unavailable() {
         let original_path = std::env::var_os("PATH");
-        std::env::set_var("PATH", "");
+        set_env_var("PATH", "");
         let backend = SandboxBackend::detect("linux");
         if let Some(path) = original_path {
-            std::env::set_var("PATH", path);
+            set_env_var("PATH", path);
         } else {
-            std::env::remove_var("PATH");
+            remove_env_var("PATH");
         }
 
         assert!(matches!(
@@ -874,7 +892,7 @@ mod tests {
         let original_path = std::env::var_os("PATH");
         let test_path =
             env::join_paths([PathBuf::from("."), custom_bin.clone()]).expect("build test PATH");
-        std::env::set_var("PATH", test_path);
+        set_env_var("PATH", test_path);
 
         let manager = manager("linux", SandboxBackend::LinuxBubblewrap);
         let wrapped = manager
@@ -882,9 +900,9 @@ mod tests {
             .expect("linux sandbox wrapper");
 
         if let Some(path) = original_path {
-            std::env::set_var("PATH", path);
+            set_env_var("PATH", path);
         } else {
-            std::env::remove_var("PATH");
+            remove_env_var("PATH");
         }
 
         assert!(

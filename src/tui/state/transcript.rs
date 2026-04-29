@@ -80,8 +80,27 @@ impl TuiApp {
         self.reset_transcript_scroll_if_following_tail();
     }
 
+    pub fn append_agent_thinking_delta(&mut self, delta: &str) {
+        let cwd = if !self.snapshot.cwd.is_empty() {
+            PathBuf::from(self.snapshot.cwd.as_str())
+        } else {
+            std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+        };
+        let stream = self
+            .agent_thinking_stream
+            .get_or_insert_with(|| super::AgentMarkdownStreamState::new(cwd));
+        stream.push_delta(delta);
+        self.reset_transcript_scroll_if_following_tail();
+    }
+
     pub fn agent_stream_lines(&self) -> Option<&[Line<'static>]> {
         self.agent_markdown_stream
+            .as_ref()
+            .map(|stream| stream.display_lines.as_slice())
+    }
+
+    pub fn agent_thinking_stream_lines(&self) -> Option<&[Line<'static>]> {
+        self.agent_thinking_stream
             .as_ref()
             .map(|stream| stream.display_lines.as_slice())
     }
@@ -90,7 +109,12 @@ impl TuiApp {
         self.agent_markdown_stream.is_some()
     }
 
+    pub fn has_agent_thinking_stream(&self) -> bool {
+        self.agent_thinking_stream.is_some()
+    }
+
     pub fn finalize_agent_stream(&mut self, final_message: Option<String>) {
+        self.agent_thinking_stream = None;
         let fallback = self
             .agent_markdown_stream
             .take()
@@ -129,6 +153,7 @@ impl TuiApp {
         self.invalidate_committed_render_cache();
         self.transcript_scroll = 0;
         self.agent_markdown_stream = None;
+        self.agent_thinking_stream = None;
         self.clear_active_live_sections();
         self.pending_planning_suggestion = None;
         self.pending_follow_up_messages.clear();
@@ -257,6 +282,7 @@ impl TuiApp {
         self.invalidate_committed_render_cache();
         self.transcript_scroll = 0;
         self.agent_markdown_stream = None;
+        self.agent_thinking_stream = None;
         self.clear_active_live_sections();
     }
 

@@ -1,7 +1,12 @@
 use std::io;
 
 use anyhow::Result;
-use crossterm::{cursor::Show, execute, terminal::disable_raw_mode};
+use crossterm::{
+    cursor::Show,
+    event::{DisableMouseCapture, EnableMouseCapture},
+    execute,
+    terminal::disable_raw_mode,
+};
 use ratatui::{backend::CrosstermBackend, layout::Rect, text::Line};
 
 use super::custom_terminal::Terminal;
@@ -17,9 +22,20 @@ pub(super) fn build_terminal(
     viewport_height: u16,
 ) -> Result<Terminal<CrosstermBackend<std::io::Stdout>>> {
     let mut terminal = Terminal::new(CrosstermBackend::new(io::stdout()))?;
-    let size = terminal.size()?;
-    terminal.set_viewport_area(viewport_area(size.width, size.height, viewport_height));
-    terminal.clear_visible_screen()?;
+    execute!(terminal.backend_mut(), EnableMouseCapture)?;
+
+    let result = (|| -> Result<()> {
+        let size = terminal.size()?;
+        terminal.set_viewport_area(viewport_area(size.width, size.height, viewport_height));
+        terminal.clear_visible_screen()?;
+        Ok(())
+    })();
+
+    if let Err(err) = result {
+        let _ = execute!(terminal.backend_mut(), DisableMouseCapture);
+        return Err(err);
+    }
+
     Ok(terminal)
 }
 
@@ -39,6 +55,7 @@ pub(super) fn update_terminal_viewport(
 pub(super) fn teardown_terminal(
     mut terminal: Terminal<CrosstermBackend<std::io::Stdout>>,
 ) -> Result<()> {
+    execute!(terminal.backend_mut(), DisableMouseCapture)?;
     disable_raw_mode()?;
     execute!(terminal.backend_mut(), Show)?;
     terminal.show_cursor()?;
@@ -101,11 +118,11 @@ pub(crate) mod test_env {
         let old_ssh_tty = std::env::var_os("SSH_TTY");
 
         if enabled {
-            std::env::set_var("SSH_CONNECTION", "test");
-            std::env::remove_var("SSH_TTY");
+            set_env_var("SSH_CONNECTION", "test");
+            remove_env_var("SSH_TTY");
         } else {
-            std::env::remove_var("SSH_CONNECTION");
-            std::env::remove_var("SSH_TTY");
+            remove_env_var("SSH_CONNECTION");
+            remove_env_var("SSH_TTY");
         }
 
         SshEnvGuard {
@@ -118,15 +135,32 @@ pub(crate) mod test_env {
     impl Drop for SshEnvGuard {
         fn drop(&mut self) {
             if let Some(value) = self.old_ssh_connection.as_ref() {
-                std::env::set_var("SSH_CONNECTION", value);
+                set_env_var("SSH_CONNECTION", value);
             } else {
-                std::env::remove_var("SSH_CONNECTION");
+                remove_env_var("SSH_CONNECTION");
             }
             if let Some(value) = self.old_ssh_tty.as_ref() {
-                std::env::set_var("SSH_TTY", value);
+                set_env_var("SSH_TTY", value);
             } else {
-                std::env::remove_var("SSH_TTY");
+                remove_env_var("SSH_TTY");
             }
         }
+    }
+
+    fn set_env_var<K, V>(key: K, value: V)
+    where
+        K: AsRef<std::ffi::OsStr>,
+        V: AsRef<std::ffi::OsStr>,
+    {
+        // Tests serialize SSH env mutation through SSH_ENV_LOCK.
+        unsafe { std::env::set_var(key, value) };
+    }
+
+    fn remove_env_var<K>(key: K)
+    where
+        K: AsRef<std::ffi::OsStr>,
+    {
+        // Tests serialize SSH env mutation through SSH_ENV_LOCK.
+        unsafe { std::env::remove_var(key) };
     }
 }

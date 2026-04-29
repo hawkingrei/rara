@@ -1,5 +1,6 @@
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
+use futures::{Stream, StreamExt};
 use serde_json::{json, Value};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -29,6 +30,12 @@ pub struct ContextBudget {
 pub enum LlmExecutionMode {
     Execute,
     Plan,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LlmStreamEvent {
+    TextDelta(String),
+    ReasoningDelta(String),
 }
 
 #[derive(Debug, Clone)]
@@ -100,7 +107,7 @@ pub trait LlmBackend: Send + Sync {
         &self,
         messages: &[Message],
         tools: &[Value],
-        _on_text_delta: &mut (dyn FnMut(String) + Send),
+        _on_event: &mut (dyn FnMut(LlmStreamEvent) + Send),
     ) -> Result<LlmResponse> {
         self.ask(messages, tools).await
     }
@@ -109,9 +116,9 @@ pub trait LlmBackend: Send + Sync {
         messages: &[Message],
         tools: &[Value],
         _metadata: LlmTurnMetadata,
-        on_text_delta: &mut (dyn FnMut(String) + Send),
+        on_event: &mut (dyn FnMut(LlmStreamEvent) + Send),
     ) -> Result<LlmResponse> {
-        self.ask_streaming(messages, tools, on_text_delta).await
+        self.ask_streaming(messages, tools, on_event).await
     }
 
     async fn embed(&self, text: &str) -> Result<Vec<f32>>;
@@ -275,6 +282,7 @@ pub(super) fn parse_tool_arguments(arguments: &Value) -> Result<Value> {
 
 const HTTP_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 const HTTP_READ_TIMEOUT: Duration = Duration::from_secs(300);
+const STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(120);
 
 pub(super) fn http_client_for_target(base_url: &str) -> Result<reqwest::Client> {
     let mut builder = reqwest::Client::builder()
@@ -284,6 +292,23 @@ pub(super) fn http_client_for_target(base_url: &str) -> Result<reqwest::Client> 
         builder = builder.no_proxy();
     }
     builder.build().map_err(Into::into)
+}
+
+pub(super) async fn next_stream_item_with_idle_timeout<S, T>(
+    stream: &mut S,
+    label: &str,
+) -> Result<Option<T>>
+where
+    S: Stream<Item = T> + Unpin,
+{
+    tokio::time::timeout(STREAM_IDLE_TIMEOUT, stream.next())
+        .await
+        .map_err(|_| {
+            anyhow!(
+                "{label} stream produced no events for {} seconds",
+                STREAM_IDLE_TIMEOUT.as_secs()
+            )
+        })
 }
 
 pub(super) fn should_bypass_proxy(base_url: &str) -> bool {
@@ -305,20 +330,34 @@ pub(super) fn context_budget_from_window(context_window_tokens: usize) -> Contex
     }
 }
 
+const DEEPSEEK_LONG_CONTEXT_WINDOW_TOKENS: usize = 1_000_000;
+const OPENAI_LONG_CONTEXT_WINDOW_TOKENS: usize = 200_000;
+const OPENAI_GPT4_CONTEXT_WINDOW_TOKENS: usize = 128_000;
+const DEEPSEEK_LONG_CONTEXT_MODEL_MARKERS: &[&str] = &["deepseek-v4"];
+
 pub(super) fn model_context_budget(model: &str) -> Option<ContextBudget> {
     let canonical = model.trim().to_ascii_lowercase();
-    let context_window_tokens = if canonical.contains("gpt-5")
+    let context_window_tokens = if is_deepseek_long_context_model(&canonical) {
+        DEEPSEEK_LONG_CONTEXT_WINDOW_TOKENS
+    } else if canonical.contains("gpt-5")
         || canonical.contains("codex")
         || canonical.contains("gpt-4.1")
         || canonical.contains("gpt-4o")
     {
-        200_000
+        OPENAI_LONG_CONTEXT_WINDOW_TOKENS
     } else if canonical.contains("gpt-4") {
-        128_000
+        OPENAI_GPT4_CONTEXT_WINDOW_TOKENS
     } else {
         return None;
     };
     Some(context_budget_from_window(context_window_tokens))
+}
+
+fn is_deepseek_long_context_model(canonical_model: &str) -> bool {
+    canonical_model.contains("deepseek")
+        && DEEPSEEK_LONG_CONTEXT_MODEL_MARKERS
+            .iter()
+            .any(|marker| canonical_model.contains(marker))
 }
 
 pub(crate) fn hashed_embedding(text: &str, dim: usize) -> Vec<f32> {

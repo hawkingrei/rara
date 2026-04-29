@@ -380,6 +380,9 @@ pub struct ActiveLiveSections {
 pub struct TuiApp {
     pub input: String,
     pub input_cursor_offset: Option<usize>,
+    pub input_history: Vec<String>,
+    pub input_history_cursor: Option<usize>,
+    pub input_history_draft: Option<String>,
     pub committed_turns: Vec<TranscriptTurn>,
     pub active_turn: TranscriptTurn,
     pub inserted_turns: usize,
@@ -421,6 +424,7 @@ pub struct TuiApp {
     pub transcript_scroll: usize,
     pub terminal_width: u16,
     pub agent_markdown_stream: Option<AgentMarkdownStreamState>,
+    pub agent_thinking_stream: Option<AgentMarkdownStreamState>,
     pub active_live: ActiveLiveSections,
     pub pending_planning_suggestion: Option<String>,
     pub pending_follow_up_messages: Vec<PendingFollowUpMessage>,

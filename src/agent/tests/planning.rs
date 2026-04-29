@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
 use async_trait::async_trait;
@@ -19,7 +19,7 @@ use crate::tools::planning::EnterPlanModeTool;
 use crate::vectordb::VectorDB;
 use crate::workspace::WorkspaceMemory;
 
-use super::support::{test_runtime_storage, SequencedBackend, StubBashTool, StubTool};
+use super::support::{SequencedBackend, StubBashTool, StubTool, test_runtime_storage};
 
 struct CheckpointObserverBackend {
     session_manager: Arc<SessionManager>,
@@ -43,6 +43,66 @@ impl LlmBackend for CheckpointObserverBackend {
         Ok(LlmResponse {
             content: vec![ContentBlock::Text {
                 text: "checkpoint observed".to_string(),
+            }],
+            stop_reason: Some("end_turn".to_string()),
+            usage: Some(TokenUsage::default()),
+        })
+    }
+
+    async fn embed(&self, _text: &str) -> Result<Vec<f32>> {
+        Ok(vec![0.0; 8])
+    }
+
+    async fn summarize(
+        &self,
+        _messages: &[crate::agent::Message],
+        _instruction: &str,
+    ) -> Result<String> {
+        Ok("summary".to_string())
+    }
+}
+
+struct RecoverableRuntimeErrorBackend {
+    calls: Mutex<usize>,
+    observed_messages: Mutex<Vec<Vec<crate::agent::Message>>>,
+}
+
+impl RecoverableRuntimeErrorBackend {
+    fn new() -> Self {
+        Self {
+            calls: Mutex::new(0),
+            observed_messages: Mutex::new(Vec::new()),
+        }
+    }
+
+    fn observed_messages(&self) -> Vec<Vec<crate::agent::Message>> {
+        self.observed_messages.lock().expect("lock").clone()
+    }
+}
+
+#[async_trait]
+impl LlmBackend for RecoverableRuntimeErrorBackend {
+    async fn ask(
+        &self,
+        messages: &[crate::agent::Message],
+        _tools: &[serde_json::Value],
+    ) -> Result<LlmResponse> {
+        self.observed_messages
+            .lock()
+            .expect("lock")
+            .push(messages.to_vec());
+        let mut calls = self.calls.lock().expect("lock");
+        *calls += 1;
+        if *calls == 1 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::StorageFull,
+                "No space left on device (os error 28)",
+            )
+            .into());
+        }
+        Ok(LlmResponse {
+            content: vec![ContentBlock::Text {
+                text: "Recovered after inspecting the runtime error.".to_string(),
             }],
             stop_reason: Some("end_turn".to_string()),
             usage: Some(TokenUsage::default()),
@@ -104,12 +164,54 @@ async fn appends_continuation_after_tool_result() {
     let second_round = &observed[1];
     let continuation =
         agent.runtime_continuation_message(RuntimeContinuationPhase::ToolResultsAvailable, 1);
-    assert!(second_round
+    assert!(
+        second_round
+            .iter()
+            .any(|message| message.content == continuation.content)
+    );
+    assert!(
+        second_round
+            .iter()
+            .any(|message| { message.content.to_string().contains("tool_result") })
+    );
+}
+
+#[tokio::test]
+async fn recoverable_runtime_error_is_returned_to_model_once() {
+    let backend = Arc::new(RecoverableRuntimeErrorBackend::new());
+    let (_temp, session_manager, workspace, rara_dir) = test_runtime_storage();
+    let mut agent = Agent::new(
+        ToolManager::new(),
+        backend.clone(),
+        Arc::new(VectorDB::new(&rara_dir.join("lancedb").to_string_lossy())),
+        session_manager,
+        workspace,
+    );
+
+    agent
+        .query_with_mode(
+            "continue after local failure".to_string(),
+            super::super::AgentOutputMode::Silent,
+        )
+        .await
+        .expect("recoverable runtime error should be surfaced to the model");
+
+    let observed = backend.observed_messages();
+    assert_eq!(observed.len(), 2);
+    let second_round = observed[1]
         .iter()
-        .any(|message| message.content == continuation.content));
-    assert!(second_round
-        .iter()
-        .any(|message| { message.content.to_string().contains("tool_result") }));
+        .map(|message| message.content.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(second_round.contains("<agent_runtime_error>"));
+    assert!(second_round.contains("storage_full"));
+    assert!(second_round.contains("No space left on device"));
+    assert!(agent.history.last().is_some_and(|message| {
+        message
+            .content
+            .to_string()
+            .contains("Recovered after inspecting the runtime error.")
+    }));
 }
 
 #[tokio::test]
@@ -279,10 +381,12 @@ async fn plan_mode_rejects_mutating_bash_commands_without_approval() {
     assert_eq!(agent.execution_mode, AgentExecutionMode::Plan);
     assert!(agent.pending_approval.is_none());
     assert_eq!(backend.observed_messages().len(), 2);
-    assert!(agent.history.iter().any(|message| message
-        .content
-        .to_string()
-        .contains("bash is read-only in plan mode")));
+    assert!(agent.history.iter().any(|message| {
+        message
+            .content
+            .to_string()
+            .contains("bash is read-only in plan mode")
+    }));
 }
 
 #[tokio::test]
@@ -437,15 +541,19 @@ async fn resumes_after_plan_approval_via_structured_continuation() {
         .flat_map(|blocks| blocks.iter())
         .filter_map(|block| block.get("text").and_then(serde_json::Value::as_str))
         .collect::<Vec<_>>();
-    assert!(runtime_texts
-        .iter()
-        .any(|text| text.contains("\"phase\": \"plan_approved\"")));
-    assert!(runtime_texts
-        .iter()
-        .any(|text| text.contains("\"mode\": \"execute\"")));
-    assert!(!runtime_texts.iter().any(
-        |text| text.contains("Implement the approved plan using the current repository state")
-    ));
+    assert!(
+        runtime_texts
+            .iter()
+            .any(|text| text.contains("\"phase\": \"plan_approved\""))
+    );
+    assert!(
+        runtime_texts
+            .iter()
+            .any(|text| text.contains("\"mode\": \"execute\""))
+    );
+    assert!(!runtime_texts.iter().any(|text| {
+        text.contains("Implement the approved plan using the current repository state")
+    }));
 }
 
 #[tokio::test]
@@ -472,10 +580,12 @@ async fn does_not_append_continuation_without_tools() {
         .expect("query should succeed");
 
     assert_eq!(backend.observed_messages().len(), 1);
-    assert!(!agent.history.iter().any(|message| message
-        .content
-        .to_string()
-        .contains("\"phase\": \"tool_results_available\"")));
+    assert!(!agent.history.iter().any(|message| {
+        message
+            .content
+            .to_string()
+            .contains("\"phase\": \"tool_results_available\"")
+    }));
 }
 
 #[tokio::test]
@@ -632,14 +742,18 @@ async fn continues_tool_loop_without_fixed_turn_cap() {
         tool_turns + 1,
         "the agent should continue past the former fixed turn cap before the final answer"
     );
-    assert!(agent.history.last().is_some_and(|message| message
-        .content
-        .to_string()
-        .contains("Final answer after reviewing the tool results.")));
-    assert!(agent
-        .history
-        .iter()
-        .any(|message| message.content.to_string().contains("tool-204")));
+    assert!(agent.history.last().is_some_and(|message| {
+        message
+            .content
+            .to_string()
+            .contains("Final answer after reviewing the tool results.")
+    }));
+    assert!(
+        agent
+            .history
+            .iter()
+            .any(|message| message.content.to_string().contains("tool-204"))
+    );
     assert_no_unresolved_tool_uses(&agent.history);
 }
 
@@ -735,6 +849,19 @@ fn missing_minimum_review_evidence_continues_without_plan_update() {
     agent.inspection_progress.source_reads = 1;
 
     assert!(agent.should_continue_plan_without_tools(false, false, true, 1,));
+}
+
+#[test]
+fn execute_mode_continuation_requires_structured_inspection_marker() {
+    let mut agent = new_planning_agent();
+    agent.set_execution_mode(AgentExecutionMode::Execute);
+    agent.inspection_progress.source_reads = 1;
+
+    assert!(!agent.should_continue_execute_without_tools(1, false));
+    assert!(agent.should_continue_execute_without_tools(1, true));
+
+    agent.inspection_progress.source_reads = 2;
+    assert!(agent.should_continue_execute_without_tools(1, true));
 }
 
 #[test]

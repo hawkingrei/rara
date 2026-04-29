@@ -241,14 +241,16 @@ pub(super) fn map_key_to_event(key: KeyEvent, app: &TuiApp) -> AppEvent {
             (KeyCode::End, _) | (KeyCode::Char('e'), KeyModifiers::CONTROL) => {
                 AppEvent::MoveCursorEnd
             }
-            (KeyCode::Up | KeyCode::Char('k'), _) if app.input.is_empty() => {
-                AppEvent::ScrollTranscript(-1)
+            (KeyCode::Up, _) if app.should_handle_input_history_navigation(-1) => {
+                AppEvent::NavigateInputHistory(-1)
             }
             (KeyCode::Up, _) => AppEvent::MoveCursorUp,
-            (KeyCode::Down | KeyCode::Char('j'), _) if app.input.is_empty() => {
-                AppEvent::ScrollTranscript(1)
+            (KeyCode::Down, _) if app.should_handle_input_history_navigation(1) => {
+                AppEvent::NavigateInputHistory(1)
             }
             (KeyCode::Down, _) => AppEvent::MoveCursorDown,
+            (KeyCode::Char('k'), _) if app.input.is_empty() => AppEvent::ScrollTranscript(-1),
+            (KeyCode::Char('j'), _) if app.input.is_empty() => AppEvent::ScrollTranscript(1),
             (KeyCode::PageUp, _) if app.input.is_empty() => AppEvent::ScrollTranscript(-8),
             (KeyCode::PageDown, _) if app.input.is_empty() => AppEvent::ScrollTranscript(8),
             (KeyCode::Char('1'), _)
