@@ -366,6 +366,23 @@ fn default_system_prompt_sections() -> Vec<PromptSection> {
             ),
         ),
         PromptSection::new(
+            "tool_workflow_discipline",
+            section(
+                "Tool Workflow Discipline",
+                &[
+                    "Use tools to make progress, not to perform ceremony. Prefer a small number of high-signal inspection calls over broad, repetitive searches.",
+                    "When a tool fails, read the exact error, update the working hypothesis, and try the narrowest corrective action that preserves the user's constraints.",
+                    "Do not abandon the task after a transient tool, sandbox, network, or filesystem error when a safe local fallback is available.",
+                    "When output is truncated, narrow the query, read a smaller range, or use a targeted search before asking the user for the missing content.",
+                    "For long-running commands, prefer background task or PTY tools when available; after starting one, use list/status/stop tools to keep the task observable and controllable.",
+                    "Do not start duplicate long-running commands when an existing background task or PTY session can be inspected.",
+                    "For GitHub work, inspect the real PR, review threads, checks, and branch state with GitHub tools before summarizing readiness or claiming that comments are resolved.",
+                    "For git work, inspect status before committing, keep commits scoped to the task, and never rewrite history unless the user explicitly asks for it.",
+                    "For code review or diagnosis tasks, produce an evidence-backed conclusion from inspected files and command output; do not stop with a description of what should be inspected next.",
+                ],
+            ),
+        ),
+        PromptSection::new(
             "implementation_policy",
             section(
                 "Implementation Policy",
@@ -744,6 +761,14 @@ mod tests {
         assert!(prompt.contains("assume the user wants you to solve the task"));
         assert!(prompt.contains("Do not stop at a proposed solution"));
         assert!(prompt.contains("Prefer local, reversible actions"));
+        assert!(prompt.contains("Tool Workflow Discipline"));
+        assert!(prompt.contains("read the exact error"));
+        assert!(prompt.contains("transient tool, sandbox, network, or filesystem error"));
+        assert!(prompt.contains("background task or PTY tools"));
+        assert!(prompt.contains("list/status/stop tools"));
+        assert!(prompt.contains("inspect the real PR, review threads, checks, and branch state"));
+        assert!(prompt.contains("never rewrite history"));
+        assert!(prompt.contains("evidence-backed conclusion"));
     }
 
     #[test]
