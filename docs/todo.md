@@ -108,12 +108,15 @@ Priority order for this phase:
 ## Security / Reliability / Performance
 
 - [ ] Replace the current string-based shell execution path in `src/tools/bash.rs` and `crates/sandbox` with a structured command model (`program`, `args`, `cwd`, `allow_net`).
+- [ ] Implement the classifier and routing model from `docs/features/classifier-and-routing.md`: keep auto-permission classification, background-task state classification, and plan-mode entry as separate surfaces instead of one generic router.
 - [ ] Design an auditable command permission and sandbox-bypass rule model inspired by Codex and Claude Code:
   - keep approval rules separate from sandbox rules;
   - make deny rules take precedence over allow / bypass rules;
   - support explicit command-prefix or command-pattern rules for trusted commands;
   - allow unsandboxed execution only when policy permits it and the transcript/status surface makes the bypass visible;
   - document that convenience exclusions are not a security boundary.
+- [ ] Add a structured auto-permission classifier side query after deterministic deny rules, with compact transcript projection that includes user intent and tool actions but excludes assistant prose.
+- [ ] Add a background-task state classifier for long-running agents that reports `working` / `blocked` / `done` / `failed` as derived status while keeping persisted task transcript as source of truth.
 - [ ] Move API key handling in config/backend paths to `secrecy::SecretString` end to end and audit error/reporting paths so secrets are never echoed.
 - [ ] Replace `.expect(...)` around provider credential/model setup with structured `anyhow::Context` errors that remain useful without leaking sensitive values.
 - [ ] Review path and command validation around `bash`, file tools, and sandbox handoff instead of relying on minimal escaping.
