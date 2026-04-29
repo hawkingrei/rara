@@ -1,0 +1,47 @@
+# Structured Inspection Continuation
+
+RARA's agent loop now treats repository-inspection continuation as an explicit
+runtime contract instead of an inferred prose intent.
+
+## Changes
+
+- Tightened the default and plan-mode prompts so additional repository evidence
+  requires either a same-response inspection tool call or `<continue_inspection/>`.
+- Changed execute-mode no-tool continuation so prior inspection evidence does
+  not keep the turn open by itself.
+- Added an SSE idle timeout for OpenAI-compatible and Codex streaming backends
+  so a provider stream that stops producing events fails the turn instead of
+  leaving the TUI in an indefinite streaming state.
+- Added a timeout boundary for automatic history compaction. If automatic
+  compaction times out, the query continues without compaction; manual
+  `/compact` still reports the timeout as a failed compaction.
+- Added automatic compaction failure backoff. After an automatic compaction
+  timeout or summarization failure, RARA records the failure and skips
+  automatic retry until the conversation grows by another token interval. A
+  later successful compaction clears the backoff state.
+- Added a DeepSeek v4 context budget override so 1M-token models do not fall
+  back to the default 10k-token budget and compact too early.
+- Added a focused agent planning regression test for the execute-mode
+  structured continuation boundary.
+
+## Reference Behavior
+
+- Codex-style planning relies on explicit plan artifacts and non-mutating tool
+  exploration rather than natural-language intent detection.
+- Codex-style compaction treats automatic and manual compaction as explicit
+  trigger kinds, emits structured lifecycle events, and keeps failures scoped to
+  the compaction task instead of leaving the main query loop ambiguous.
+- Claude-style query loops continue from structured `tool_use` / `tool_result`
+  / follow-up state and stop when no structured continuation remains. Automatic
+  compaction returns both a compaction result and consecutive failure state, so
+  repeated compaction failures can be handled without blocking every turn.
+
+## Validation
+
+- `cargo test execute_mode_continuation_requires_structured_inspection_marker -- --nocapture`
+- `cargo test automatic_compaction_timeout_does_not_block_query -- --nocapture`
+- `cargo test automatic_compaction_failure_suspends_retry_until_history_grows -- --nocapture`
+- `cargo test successful_compaction_clears_auto_failure_backoff -- --nocapture`
+- `cargo test derives_context_budget_for_deepseek_v4_models -- --nocapture`
+- `cargo check`
+- `git diff --check`

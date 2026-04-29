@@ -738,6 +738,16 @@ fn missing_minimum_review_evidence_continues_without_plan_update() {
 }
 
 #[test]
+fn execute_mode_continuation_requires_structured_inspection_marker() {
+    let mut agent = new_planning_agent();
+    agent.set_execution_mode(AgentExecutionMode::Execute);
+    agent.inspection_progress.source_reads = 1;
+
+    assert!(!agent.should_continue_execute_without_tools(1, false));
+    assert!(agent.should_continue_execute_without_tools(1, true));
+}
+
+#[test]
 fn advances_plan_steps_during_execute_mode() {
     let mut agent = Agent::new(
         ToolManager::new(),

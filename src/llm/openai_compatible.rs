@@ -3,7 +3,6 @@ mod codex;
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use eventsource_stream::Eventsource;
-use futures::StreamExt;
 use secrecy::{ExposeSecret, SecretString};
 use serde_json::{json, Value};
 
@@ -14,8 +13,8 @@ use crate::redaction::{redact_secrets, sanitize_url_for_display};
 
 use super::shared::{
     collect_assistant_content, extract_message_text, http_client_for_target, model_context_budget,
-    parse_tool_arguments, render_openai_message_content, ContextBudget, LlmBackend,
-    LlmTurnMetadata,
+    next_stream_item_with_idle_timeout, parse_tool_arguments, render_openai_message_content,
+    ContextBudget, LlmBackend, LlmTurnMetadata,
 };
 
 #[cfg(test)]
@@ -171,7 +170,9 @@ impl LlmBackend for OpenAiCompatibleBackend {
         let mut stop_reason = None;
         let mut usage = None;
 
-        while let Some(event) = stream.next().await {
+        while let Some(event) =
+            next_stream_item_with_idle_timeout(&mut stream, "OpenAI-compatible SSE").await?
+        {
             metadata.ensure_not_cancelled()?;
             let event = event.map_err(|error| anyhow!("Failed to decode SSE event: {error}"))?;
             let data = event.data.trim();

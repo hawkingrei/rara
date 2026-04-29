@@ -30,12 +30,22 @@ impl SubAgentKind {
     fn append_prompt(self) -> &'static str {
         match self {
             SubAgentKind::General => {
-                "## Sub-Agent Role\n- You are a direct worker sub-agent.\n- Do not delegate to another agent or spawn sub-agents; complete the assigned work directly."
+                concat!(
+                    "## Sub-Agent Role\n",
+                    "- You are a direct worker sub-agent.\n",
+                    "- Treat the assigned instruction as the complete task contract.\n",
+                    "- Honor every constraint in the assigned instruction, including workspace, branch, network, and output limits.\n",
+                    "- Stay inside the current workspace unless the assigned instruction explicitly allows another path.\n",
+                    "- Do not delegate to another agent or spawn sub-agents; complete the assigned work directly."
+                )
             }
             SubAgentKind::Explore => {
                 concat!(
                     "## Sub-Agent Role\n",
                     "- You are a read-only exploration sub-agent.\n",
+                    "- Treat the assigned instruction as the complete task contract.\n",
+                    "- Honor every constraint in the assigned instruction, including workspace, branch, network, and output limits.\n",
+                    "- Stay inside the current workspace unless the assigned instruction explicitly allows another path.\n",
                     "- Inspect the repository and summarize concrete findings.\n",
                     "- Do not propose edits you cannot justify from inspected code.\n",
                     "- Do not narrate each next tool call; call the tool directly.\n",
@@ -47,6 +57,9 @@ impl SubAgentKind {
                 concat!(
                     "## Sub-Agent Role\n",
                     "- You are a read-only planning sub-agent.\n",
+                    "- Treat the assigned instruction as the complete task contract.\n",
+                    "- Honor every constraint in the assigned instruction, including workspace, branch, network, and output limits.\n",
+                    "- Stay inside the current workspace unless the assigned instruction explicitly allows another path.\n",
                     "- Inspect the repository and refine an implementation approach.\n",
                     "- Keep plans shallow and grouped by behavior.\n",
                     "- Use <proposed_plan> only when the plan is decision-complete.\n",
@@ -142,7 +155,7 @@ impl Tool for ExploreAgentTool {
     }
 
     fn description(&self) -> &str {
-        "Spawn a read-only exploration sub-agent for repository inspection"
+        "Spawn a read-only exploration sub-agent for bounded independent sidecar repository inspection. The instruction must be self-contained and include all user constraints."
     }
 
     fn input_schema(&self) -> Value {
@@ -195,7 +208,7 @@ impl Tool for PlanAgentTool {
     }
 
     fn description(&self) -> &str {
-        "Spawn a read-only planning sub-agent for implementation planning"
+        "Spawn a read-only planning sub-agent for bounded independent sidecar plan refinement. The instruction must be self-contained and include all user constraints."
     }
 
     fn input_schema(&self) -> Value {
@@ -458,6 +471,15 @@ mod tests {
             updated.append_system_prompt.as_deref(),
             Some("existing tail\n\nsub-agent")
         );
+    }
+
+    #[test]
+    fn subagent_prompt_requires_instruction_constraints_and_workspace_boundary() {
+        let prompt = SubAgentKind::Explore.append_prompt();
+
+        assert!(prompt.contains("Treat the assigned instruction as the complete task contract."));
+        assert!(prompt.contains("Honor every constraint in the assigned instruction"));
+        assert!(prompt.contains("Stay inside the current workspace"));
     }
 
     #[test]

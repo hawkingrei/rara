@@ -452,12 +452,11 @@ impl Agent {
         _agentic_turns: usize,
         continue_inspection: bool,
     ) -> bool {
-        let inspection_intent = continue_inspection || self.inspection_progress.has_any_evidence();
         matches!(self.execution_mode, AgentExecutionMode::Execute)
-            && inspection_intent
+            && continue_inspection
             && self.pending_user_input.is_none()
             && self.pending_approval.is_none()
-            && (continue_inspection || !self.inspection_progress.has_minimum_review_evidence())
+            && !self.inspection_progress.has_minimum_review_evidence()
     }
 
     pub(super) fn ensure_active_plan_step(&mut self) {

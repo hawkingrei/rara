@@ -1,5 +1,6 @@
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
+use futures::{Stream, StreamExt};
 use serde_json::{json, Value};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -275,6 +276,7 @@ pub(super) fn parse_tool_arguments(arguments: &Value) -> Result<Value> {
 
 const HTTP_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 const HTTP_READ_TIMEOUT: Duration = Duration::from_secs(300);
+const STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(120);
 
 pub(super) fn http_client_for_target(base_url: &str) -> Result<reqwest::Client> {
     let mut builder = reqwest::Client::builder()
@@ -284,6 +286,23 @@ pub(super) fn http_client_for_target(base_url: &str) -> Result<reqwest::Client> 
         builder = builder.no_proxy();
     }
     builder.build().map_err(Into::into)
+}
+
+pub(super) async fn next_stream_item_with_idle_timeout<S, T>(
+    stream: &mut S,
+    label: &str,
+) -> Result<Option<T>>
+where
+    S: Stream<Item = T> + Unpin,
+{
+    tokio::time::timeout(STREAM_IDLE_TIMEOUT, stream.next())
+        .await
+        .map_err(|_| {
+            anyhow!(
+                "{label} stream produced no events for {} seconds",
+                STREAM_IDLE_TIMEOUT.as_secs()
+            )
+        })
 }
 
 pub(super) fn should_bypass_proxy(base_url: &str) -> bool {
@@ -307,7 +326,9 @@ pub(super) fn context_budget_from_window(context_window_tokens: usize) -> Contex
 
 pub(super) fn model_context_budget(model: &str) -> Option<ContextBudget> {
     let canonical = model.trim().to_ascii_lowercase();
-    let context_window_tokens = if canonical.contains("gpt-5")
+    let context_window_tokens = if canonical.contains("deepseek") && canonical.contains("v4") {
+        1_000_000
+    } else if canonical.contains("gpt-5")
         || canonical.contains("codex")
         || canonical.contains("gpt-4.1")
         || canonical.contains("gpt-4o")

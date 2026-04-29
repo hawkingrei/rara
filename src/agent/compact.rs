@@ -2,12 +2,19 @@ use super::*;
 use crate::llm::ContextBudget;
 use crate::session::PersistedCompactionEvent;
 use std::sync::OnceLock;
+use std::time::Duration;
 
 const RECENT_FILE_CARRY_OVER_LIMIT: usize = 5;
 const RECENT_FILE_EXCERPT_LIMIT: usize = 3;
 const RECENT_FILE_EXCERPT_CHAR_LIMIT: usize = 600;
 const COMPACT_BOUNDARY_KIND: &str = "compact_boundary";
 const COMPACT_BOUNDARY_VERSION: u32 = 1;
+const AUTO_COMPACTION_RETRY_GROWTH_TOKENS: usize = 8_192;
+#[cfg(not(test))]
+const COMPACTION_SUMMARY_TIMEOUT: Duration = Duration::from_secs(120);
+
+#[cfg(test)]
+const TEST_COMPACTION_SUMMARY_TIMEOUT: Duration = Duration::from_millis(10);
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct CompactBoundaryMetadata {
@@ -34,6 +41,8 @@ pub struct CompactState {
     pub last_compaction_after_tokens: Option<usize>,
     pub last_compaction_recent_files: Vec<String>,
     pub last_compaction_boundary: Option<CompactBoundaryMetadata>,
+    pub consecutive_auto_compaction_failures: usize,
+    pub auto_compaction_retry_after_tokens: Option<usize>,
 }
 
 impl Agent {
@@ -87,6 +96,18 @@ impl Agent {
         if self.history.len() < 2 {
             return Ok(());
         }
+        if !force
+            && self
+                .compact_state
+                .auto_compaction_retry_after_tokens
+                .is_some_and(|retry_after| current_tokens < retry_after)
+        {
+            report(AgentEvent::Status(
+                "Automatic history compaction is temporarily suspended after a previous failure."
+                    .to_string(),
+            ));
+            return Ok(());
+        }
 
         report(AgentEvent::Status(if force {
             "Compacting conversation history on demand.".to_string()
@@ -96,13 +117,41 @@ impl Agent {
 
         let split_idx = (self.history.len() as f64 * 0.8) as usize;
         let split_idx = split_idx.clamp(1, self.history.len().saturating_sub(1));
-        let summary = self
-            .llm_backend
-            .summarize(
+        let summary_result = tokio::time::timeout(
+            compaction_summary_timeout(),
+            self.llm_backend.summarize(
                 &self.history[..split_idx],
                 &self.context_assembler().compact_instruction(),
-            )
-            .await?;
+            ),
+        )
+        .await;
+        let summary = match summary_result {
+            Ok(summary) => match summary {
+                Ok(summary) => summary,
+                Err(err) if !force => {
+                    self.record_auto_compaction_failure(current_tokens);
+                    report(AgentEvent::Status(format!(
+                        "Automatic history compaction failed; continuing without compaction. {err}"
+                    )));
+                    return Ok(());
+                }
+                Err(err) => return Err(err),
+            },
+            Err(_) if !force => {
+                self.record_auto_compaction_failure(current_tokens);
+                report(AgentEvent::Status(
+                    "Automatic history compaction timed out; continuing without compaction."
+                        .to_string(),
+                ));
+                return Ok(());
+            }
+            Err(_) => {
+                return Err(anyhow::anyhow!(
+                    "history compaction timed out after {} seconds",
+                    compaction_summary_timeout().as_secs()
+                ));
+            }
+        };
         let recent_files =
             collect_recent_files(&self.history[..split_idx], RECENT_FILE_CARRY_OVER_LIMIT);
         let recent_file_excerpts = collect_recent_file_excerpts(
@@ -163,6 +212,8 @@ impl Agent {
             before_tokens: current_tokens,
             recent_file_count: self.compact_state.last_compaction_recent_files.len(),
         });
+        self.compact_state.consecutive_auto_compaction_failures = 0;
+        self.compact_state.auto_compaction_retry_after_tokens = None;
         self.session_manager.save_compaction_event(
             &self.session_id,
             &PersistedCompactionEvent {
@@ -175,6 +226,12 @@ impl Agent {
             },
         )?;
         Ok(())
+    }
+
+    fn record_auto_compaction_failure(&mut self, current_tokens: usize) {
+        self.compact_state.consecutive_auto_compaction_failures += 1;
+        self.compact_state.auto_compaction_retry_after_tokens =
+            Some(current_tokens.saturating_add(AUTO_COMPACTION_RETRY_GROWTH_TOKENS));
     }
 
     pub(super) fn current_compact_budget(&self) -> Option<ContextBudget> {
@@ -223,6 +280,17 @@ impl Agent {
     fn recompute_history_token_estimate(&mut self) {
         self.compact_state.estimated_history_tokens =
             estimate_history_tokens(&self.history).unwrap_or_default();
+    }
+}
+
+fn compaction_summary_timeout() -> Duration {
+    #[cfg(test)]
+    {
+        TEST_COMPACTION_SUMMARY_TIMEOUT
+    }
+    #[cfg(not(test))]
+    {
+        COMPACTION_SUMMARY_TIMEOUT
     }
 }
 

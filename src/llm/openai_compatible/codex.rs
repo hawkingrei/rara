@@ -2,7 +2,6 @@ use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use codex_login::default_client::default_headers as codex_default_headers;
 use eventsource_stream::Eventsource;
-use futures::StreamExt;
 use secrecy::{ExposeSecret, SecretString};
 use serde_json::{json, Value};
 
@@ -16,8 +15,8 @@ use super::super::codex_tools_compat::tool_definition_to_responses_api_tool;
 use super::super::codex_tools_compat::ToolDefinition;
 use super::super::codex_tools_compat::ToolSpec;
 use super::super::shared::{
-    collect_assistant_content, model_context_budget, parse_tool_arguments,
-    render_openai_message_content, ContextBudget, LlmBackend,
+    collect_assistant_content, model_context_budget, next_stream_item_with_idle_timeout,
+    parse_tool_arguments, render_openai_message_content, ContextBudget, LlmBackend,
 };
 use super::{CodexBackend, OpenAiCompatibleBackend};
 
@@ -82,7 +81,8 @@ impl CodexBackend {
         let mut completed = false;
         let mut streamed_text = String::new();
 
-        while let Some(event) = stream.next().await {
+        while let Some(event) = next_stream_item_with_idle_timeout(&mut stream, "Codex SSE").await?
+        {
             metadata.ensure_not_cancelled()?;
             let event =
                 event.map_err(|error| anyhow!("Failed to decode Codex SSE event: {error}"))?;

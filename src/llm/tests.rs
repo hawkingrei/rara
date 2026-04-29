@@ -1174,6 +1174,13 @@ fn derives_context_budget_for_codex_like_models() {
 }
 
 #[test]
+fn derives_context_budget_for_deepseek_v4_models() {
+    let budget = model_context_budget("deepseek-v4-preview").expect("budget");
+    assert_eq!(budget.context_window_tokens, 1_000_000);
+    assert!(budget.compact_threshold_tokens > 900_000);
+}
+
+#[test]
 fn applies_ollama_stream_event_deltas_and_tool_calls() {
     let mut text = String::new();
     let mut tool_calls = Vec::new();

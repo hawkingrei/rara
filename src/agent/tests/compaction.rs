@@ -1,14 +1,45 @@
 use std::sync::Arc;
 
+use anyhow::Result;
+use async_trait::async_trait;
 use serde_json::json;
 
-use crate::agent::{Agent, Message};
+use crate::agent::{Agent, AgentEvent, CompactState, ContentBlock, Message};
+use crate::llm::{LlmBackend, LlmResponse, TokenUsage};
 use crate::session::SessionManager;
 use crate::tool::ToolManager;
 use crate::vectordb::VectorDB;
 use crate::workspace::WorkspaceMemory;
 
 use super::support::SequencedBackend;
+
+struct SlowSummarizeBackend;
+
+#[async_trait]
+impl LlmBackend for SlowSummarizeBackend {
+    async fn ask(
+        &self,
+        _messages: &[Message],
+        _tools: &[serde_json::Value],
+    ) -> Result<LlmResponse> {
+        Ok(LlmResponse {
+            content: vec![ContentBlock::Text {
+                text: "query completed".to_string(),
+            }],
+            stop_reason: Some("end_turn".to_string()),
+            usage: Some(TokenUsage::default()),
+        })
+    }
+
+    async fn embed(&self, _text: &str) -> Result<Vec<f32>> {
+        Ok(vec![0.0; 8])
+    }
+
+    async fn summarize(&self, _messages: &[Message], _instruction: &str) -> Result<String> {
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        Ok("slow summary".to_string())
+    }
+}
 
 #[tokio::test]
 async fn manual_compact_replaces_older_history_with_summary() {
@@ -51,6 +82,138 @@ async fn manual_compact_replaces_older_history_with_summary() {
         .content
         .to_string()
         .contains("STRUCTURED SUMMARY OF PREVIOUS CONVERSATION"));
+}
+
+#[tokio::test]
+async fn automatic_compaction_timeout_does_not_block_query() {
+    let backend = Arc::new(SlowSummarizeBackend);
+    let mut agent = Agent::new(
+        ToolManager::new(),
+        backend,
+        Arc::new(VectorDB::new("data/lancedb")),
+        Arc::new(SessionManager::new().expect("session manager")),
+        Arc::new(WorkspaceMemory::new().expect("workspace memory")),
+    );
+    agent.history = vec![
+        Message {
+            role: "user".to_string(),
+            content: json!("x".repeat(50_000)),
+        },
+        Message {
+            role: "assistant".to_string(),
+            content: json!("y".repeat(50_000)),
+        },
+    ];
+
+    let mut statuses = Vec::new();
+    agent
+        .query_with_mode_and_events(
+            "continue".to_string(),
+            crate::agent::AgentOutputMode::Silent,
+            |event| {
+                if let AgentEvent::Status(status) = event {
+                    statuses.push(status);
+                }
+            },
+        )
+        .await
+        .expect("query should continue after automatic compaction timeout");
+
+    assert!(statuses
+        .iter()
+        .any(|status| status.contains("Automatic history compaction timed out")));
+    assert!(agent
+        .history
+        .last()
+        .is_some_and(|message| message.content.to_string().contains("query completed")));
+}
+
+#[tokio::test]
+async fn automatic_compaction_failure_suspends_retry_until_history_grows() {
+    let backend = Arc::new(SlowSummarizeBackend);
+    let mut agent = Agent::new(
+        ToolManager::new(),
+        backend,
+        Arc::new(VectorDB::new("data/lancedb")),
+        Arc::new(SessionManager::new().expect("session manager")),
+        Arc::new(WorkspaceMemory::new().expect("workspace memory")),
+    );
+    agent.history = vec![
+        Message {
+            role: "user".to_string(),
+            content: json!("x".repeat(50_000)),
+        },
+        Message {
+            role: "assistant".to_string(),
+            content: json!("y".repeat(50_000)),
+        },
+    ];
+
+    agent
+        .compact_if_needed_with_reporter(|_| {})
+        .await
+        .expect("automatic compaction timeout should be non-fatal");
+    let after_failure = agent.compact_state.clone();
+    assert_eq!(after_failure.consecutive_auto_compaction_failures, 1);
+    assert!(after_failure.auto_compaction_retry_after_tokens.is_some());
+
+    let mut statuses = Vec::new();
+    agent
+        .compact_if_needed_with_reporter(|event| {
+            if let AgentEvent::Status(status) = event {
+                statuses.push(status);
+            }
+        })
+        .await
+        .expect("suspended auto compaction should be non-fatal");
+
+    assert!(statuses
+        .iter()
+        .any(|status| status.contains("temporarily suspended")));
+    assert_eq!(
+        agent.compact_state.consecutive_auto_compaction_failures,
+        after_failure.consecutive_auto_compaction_failures
+    );
+    assert_eq!(
+        agent.compact_state.auto_compaction_retry_after_tokens,
+        after_failure.auto_compaction_retry_after_tokens
+    );
+}
+
+#[tokio::test]
+async fn successful_compaction_clears_auto_failure_backoff() {
+    let backend = Arc::new(SequencedBackend::new(Vec::new()));
+    let mut agent = Agent::new(
+        ToolManager::new(),
+        backend,
+        Arc::new(VectorDB::new("data/lancedb")),
+        Arc::new(SessionManager::new().expect("session manager")),
+        Arc::new(WorkspaceMemory::new().expect("workspace memory")),
+    );
+    agent.compact_state = CompactState {
+        consecutive_auto_compaction_failures: 2,
+        auto_compaction_retry_after_tokens: Some(100_000),
+        ..Default::default()
+    };
+    agent.history = vec![
+        Message {
+            role: "user".to_string(),
+            content: json!("inspect the repo"),
+        },
+        Message {
+            role: "assistant".to_string(),
+            content: json!("I checked Cargo.toml and src/main.rs"),
+        },
+    ];
+
+    let compacted = agent
+        .compact_now_with_reporter(|_| {})
+        .await
+        .expect("manual compaction should succeed");
+
+    assert!(compacted);
+    assert_eq!(agent.compact_state.consecutive_auto_compaction_failures, 0);
+    assert_eq!(agent.compact_state.auto_compaction_retry_after_tokens, None);
 }
 
 #[tokio::test]
