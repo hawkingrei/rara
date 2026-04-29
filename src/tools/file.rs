@@ -4,11 +4,12 @@ use serde_json::{Value, json};
 use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
-use tokio::io::{AsyncBufReadExt, BufReader as AsyncBufReader};
+use tokio::io::{AsyncBufRead, AsyncBufReadExt, BufReader as AsyncBufReader};
 use walkdir::WalkDir;
 
 const DEFAULT_READ_LINE_LIMIT: usize = 2_000;
 const MAX_READ_LINE_CHARS: usize = 4_000;
+const MAX_READ_LINE_BYTES: usize = MAX_READ_LINE_CHARS * 4;
 
 pub struct ReadFileTool;
 #[async_trait]
@@ -77,6 +78,12 @@ struct ReadFileOutput {
     next_offset: Option<usize>,
     line_truncated: bool,
     bytes_read: usize,
+}
+
+struct BoundedLineRead {
+    bytes_read: usize,
+    eof: bool,
+    truncated: bool,
 }
 
 fn read_file_window_from_input(input: &Value) -> Result<ReadFileWindow, ToolError> {
@@ -154,13 +161,15 @@ async fn read_file_window(path: &str, window: ReadFileWindow) -> Result<ReadFile
 
     loop {
         line.clear();
-        let bytes = reader.read_line(&mut line).await?;
-        if bytes == 0 {
+        let read = read_bounded_line(&mut reader, &mut line).await?;
+        if read.eof {
             total_lines_exact = true;
             break;
         }
+        let bytes = read.bytes_read;
         bytes_read += bytes;
         observed_lines += 1;
+        line_truncated |= read.truncated;
 
         if observed_lines > last_requested_line {
             break;
@@ -210,6 +219,53 @@ async fn read_file_window(path: &str, window: ReadFileWindow) -> Result<ReadFile
         line_truncated,
         bytes_read,
     })
+}
+
+async fn read_bounded_line<R>(
+    reader: &mut R,
+    line: &mut String,
+) -> Result<BoundedLineRead, ToolError>
+where
+    R: AsyncBufRead + Unpin,
+{
+    let mut captured = Vec::new();
+    let mut bytes_read = 0usize;
+    let mut truncated = false;
+    line.clear();
+
+    loop {
+        let available = reader.fill_buf().await?;
+        if available.is_empty() {
+            *line = String::from_utf8_lossy(&captured).into_owned();
+            return Ok(BoundedLineRead {
+                bytes_read,
+                eof: bytes_read == 0,
+                truncated,
+            });
+        }
+
+        let newline_pos = available.iter().position(|byte| *byte == b'\n');
+        let chunk_len = newline_pos.map_or(available.len(), |pos| pos + 1);
+        let remaining = MAX_READ_LINE_BYTES.saturating_sub(captured.len());
+        if remaining > 0 {
+            let take = remaining.min(chunk_len);
+            captured.extend_from_slice(&available[..take]);
+            truncated |= take < chunk_len;
+        } else {
+            truncated = true;
+        }
+        bytes_read += chunk_len;
+        reader.consume(chunk_len);
+
+        if newline_pos.is_some() {
+            *line = String::from_utf8_lossy(&captured).into_owned();
+            return Ok(BoundedLineRead {
+                bytes_read,
+                eof: false,
+                truncated,
+            });
+        }
+    }
 }
 
 fn truncate_read_line(line: &str) -> (String, bool) {
@@ -498,8 +554,8 @@ fn existing_file_summary(path: &str) -> Result<Option<(u64, usize)>, ToolError> 
 #[cfg(test)]
 mod tests {
     use super::{
-        ListFilesTool, MAX_READ_LINE_CHARS, ReadFileTool, ReplaceLinesTool, ReplaceTool,
-        WriteFileTool,
+        ListFilesTool, MAX_READ_LINE_BYTES, MAX_READ_LINE_CHARS, ReadFileTool, ReplaceLinesTool,
+        ReplaceTool, WriteFileTool,
     };
     use crate::tool::Tool;
     use serde_json::{Value, json};
@@ -630,6 +686,31 @@ mod tests {
                 .unwrap()
                 .ends_with("... [line truncated]")
         );
+    }
+
+    #[tokio::test]
+    async fn read_file_bounds_memory_for_very_long_lines() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("sample.txt");
+        let content = format!("{}\nsecond\n", "x".repeat(MAX_READ_LINE_BYTES * 2));
+        std::fs::write(&path, content).expect("write sample");
+
+        let tool = ReadFileTool;
+        let result = tool
+            .call(json!({
+                "path": path.display().to_string(),
+                "offset": 1,
+                "limit": 1
+            }))
+            .await
+            .expect("read file");
+
+        let content = result["content"].as_str().expect("content");
+        assert!(content.ends_with("... [line truncated]"));
+        assert!(content.chars().count() < MAX_READ_LINE_BYTES);
+        assert_eq!(result["line_truncated"], true);
+        assert_eq!(result["truncated"], true);
+        assert_eq!(result["next_offset"], 2);
     }
 
     #[tokio::test]

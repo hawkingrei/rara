@@ -457,11 +457,13 @@ fn read_file_line_range(input: &serde_json::Map<String, Value>) -> Option<(usize
         input.get("limit").and_then(Value::as_u64),
     ) {
         (Some(offset), Some(limit)) if limit > 0 => {
-            let start = offset as usize;
-            return Some((start, start + limit as usize - 1));
+            let start = usize::try_from(offset).ok()?;
+            let limit = usize::try_from(limit).ok()?;
+            let end = start.checked_add(limit)?.checked_sub(1)?;
+            return Some((start, end));
         }
         (Some(offset), None) => {
-            let start = offset as usize;
+            let start = usize::try_from(offset).ok()?;
             return Some((start, start));
         }
         _ => {}
@@ -471,8 +473,15 @@ fn read_file_line_range(input: &serde_json::Map<String, Value>) -> Option<(usize
         input.get("start_line").and_then(Value::as_u64),
         input.get("end_line").and_then(Value::as_u64),
     ) {
-        (Some(start), Some(end)) => Some((start as usize, end as usize)),
-        (Some(start), None) => Some((start as usize, start as usize)),
+        (Some(start), Some(end)) => {
+            let start = usize::try_from(start).ok()?;
+            let end = usize::try_from(end).ok()?;
+            Some((start, end))
+        }
+        (Some(start), None) => {
+            let start = usize::try_from(start).ok()?;
+            Some((start, start))
+        }
         _ => None,
     }
 }
@@ -530,4 +539,34 @@ pub fn latest_compact_boundary_metadata(history: &[Message]) -> Option<CompactBo
                 .unwrap_or_default() as usize,
         })
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::read_file_line_range;
+    use serde_json::{Map, Value, json};
+
+    fn object(value: Value) -> Map<String, Value> {
+        value.as_object().expect("object").clone()
+    }
+
+    #[test]
+    fn read_file_line_range_rejects_overflowing_offset_limit() {
+        let input = object(json!({
+            "offset": usize::MAX,
+            "limit": 2,
+        }));
+
+        assert_eq!(read_file_line_range(&input), None);
+    }
+
+    #[test]
+    fn read_file_line_range_accepts_checked_offset_limit() {
+        let input = object(json!({
+            "offset": 10,
+            "limit": 3,
+        }));
+
+        assert_eq!(read_file_line_range(&input), Some((10, 12)));
+    }
 }

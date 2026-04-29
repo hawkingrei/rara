@@ -530,13 +530,23 @@ fn summarize_tool_result(tool_name: &str, input: &Value, result: &Value) -> Stri
                 .get("truncated")
                 .and_then(Value::as_bool)
                 .unwrap_or(false);
+            let line_truncated = result
+                .get("line_truncated")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
             let next_offset = result.get("next_offset").and_then(Value::as_u64);
-            let continuation = match (truncated, next_offset) {
-                (true, Some(next_offset)) => {
+            let continuation = match (next_offset, line_truncated) {
+                (Some(next_offset), true) => {
+                    format!(
+                        " Truncated line(s); continue with offset={next_offset} for more lines."
+                    )
+                }
+                (Some(next_offset), false) => {
                     format!(" Truncated; continue with offset={next_offset}.")
                 }
-                (true, None) => " Truncated.".to_string(),
-                _ => String::new(),
+                (None, true) => " Truncated line(s).".to_string(),
+                (None, false) if truncated => " Truncated.".to_string(),
+                (None, false) => String::new(),
             };
             let total_label = if total_lines_exact {
                 total_lines.to_string()
@@ -709,6 +719,27 @@ mod tests {
         );
         assert!(summary.contains("Read file src/main.rs"));
         assert!(summary.contains("truncated"));
+    }
+
+    #[test]
+    fn read_file_summary_distinguishes_line_truncation_from_more_lines() {
+        let summary = compact_read_file(
+            &json!({ "path": "src/generated.json" }),
+            &json!({
+                "content": "x".repeat(4_020),
+                "total_lines": 1,
+                "total_lines_exact": true,
+                "start_line": 1,
+                "end_line": 1,
+                "truncated": true,
+                "line_truncated": true,
+                "next_offset": null,
+            }),
+        );
+
+        assert!(summary.contains("Read file src/generated.json"));
+        assert!(summary.contains("Truncated line(s)."));
+        assert!(!summary.contains("continue with offset"));
     }
 
     #[test]
