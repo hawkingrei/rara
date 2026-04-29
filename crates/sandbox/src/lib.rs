@@ -23,6 +23,7 @@ pub struct WrappedCommand {
     pub sandboxed: bool,
     pub sandbox_backend: String,
     pub sandbox_home: Option<PathBuf>,
+    pub network_access: bool,
 }
 
 const LINUX_RUNTIME_READ_ROOTS: &[&str] = &[
@@ -266,6 +267,7 @@ impl SandboxManager {
                     sandboxed: true,
                     sandbox_backend: self.backend.name().to_string(),
                     sandbox_home: Some(self.sandbox_home.clone()),
+                    network_access: allow_net,
                 })
             }
             SandboxBackend::LinuxBubblewrap => {
@@ -281,6 +283,7 @@ impl SandboxManager {
                     sandboxed: true,
                     sandbox_backend: self.backend.name().to_string(),
                     sandbox_home: Some(self.sandbox_home.clone()),
+                    network_access: allow_net,
                 })
             }
             SandboxBackend::Direct => Ok(wrap_direct_shell_command(original_cmd)),
@@ -329,6 +332,7 @@ impl SandboxManager {
                     sandboxed: true,
                     sandbox_backend: self.backend.name().to_string(),
                     sandbox_home: Some(self.sandbox_home.clone()),
+                    network_access: allow_net,
                 })
             }
             SandboxBackend::LinuxBubblewrap => {
@@ -343,6 +347,7 @@ impl SandboxManager {
                     sandboxed: true,
                     sandbox_backend: self.backend.name().to_string(),
                     sandbox_home: Some(self.sandbox_home.clone()),
+                    network_access: allow_net,
                 })
             }
             SandboxBackend::Direct => Ok(wrap_direct_exec_command(program, args)),
@@ -406,6 +411,7 @@ fn wrap_direct_shell_command(original_cmd: &str) -> WrappedCommand {
         sandboxed: false,
         sandbox_backend: SandboxBackend::Direct.name().to_string(),
         sandbox_home: None,
+        network_access: true,
     }
 }
 
@@ -417,6 +423,7 @@ fn wrap_direct_exec_command(program: &str, args: &[String]) -> WrappedCommand {
         sandboxed: false,
         sandbox_backend: SandboxBackend::Direct.name().to_string(),
         sandbox_home: None,
+        network_access: true,
     }
 }
 
@@ -905,6 +912,21 @@ mod tests {
             wrapped.sandbox_home.as_deref(),
             Some(manager.sandbox_home.as_path())
         );
+    }
+
+    #[test]
+    fn linux_sandbox_keeps_network_when_allowed() {
+        let manager = manager("linux", SandboxBackend::LinuxBubblewrap);
+
+        let wrapped = manager
+            .wrap_shell_command("curl https://example.com", "/workspace/project", true)
+            .expect("linux sandbox wrapper");
+
+        assert!(
+            !wrapped.args.contains(&"--unshare-net".to_string()),
+            "linux sandbox should not isolate networking when allow_net is true"
+        );
+        assert!(wrapped.network_access);
     }
 
     #[test]

@@ -39,6 +39,7 @@ pub(super) fn create_full_tool_manager(
     skill_manager: Arc<SkillManager>,
     prompt_config: PromptRuntimeConfig,
     shell_env: Arc<HashMap<String, String>>,
+    sandbox_network_access: bool,
 ) -> ToolManager {
     let mut tm = ToolManager::new();
     let vector_db_uri = vector_db_uri_for_workspace(&workspace);
@@ -54,6 +55,7 @@ pub(super) fn create_full_tool_manager(
         sandbox: sandbox.clone(),
         background_tasks: background_tasks.clone(),
         base_env: shell_env.clone(),
+        sandbox_network_access,
     }));
     tm.register(Box::new(BackgroundTaskListTool {
         background_tasks: background_tasks.clone(),
@@ -66,6 +68,7 @@ pub(super) fn create_full_tool_manager(
         sessions: pty_sessions.clone(),
         sandbox: sandbox.clone(),
         base_env: shell_env.clone(),
+        sandbox_network_access,
     }));
     tm.register(Box::new(PtyReadTool {
         sessions: pty_sessions.clone(),

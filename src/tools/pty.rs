@@ -17,6 +17,7 @@ pub struct PtyStartTool {
     pub sessions: Arc<PtySessionStore>,
     pub sandbox: Arc<SandboxManager>,
     pub base_env: Arc<HashMap<String, String>>,
+    pub sandbox_network_access: bool,
 }
 
 pub struct PtyReadTool {
@@ -54,6 +55,7 @@ struct PtySessionRecord {
     output_path: PathBuf,
     sandboxed: bool,
     sandbox_backend: String,
+    network_access: bool,
     writer: Arc<Mutex<Box<dyn Write + Send>>>,
     child: Arc<Mutex<Box<dyn portable_pty::Child + Send + Sync>>>,
     status: Arc<Mutex<PtySessionStatus>>,
@@ -172,6 +174,7 @@ impl PtySessionStore {
             output_path,
             sandboxed: wrapped.sandboxed,
             sandbox_backend: wrapped.sandbox_backend,
+            network_access: wrapped.network_access,
             writer: Arc::new(Mutex::new(writer)),
             child,
             status,
@@ -261,6 +264,7 @@ struct PtySessionSnapshot {
     output_path: PathBuf,
     sandboxed: bool,
     sandbox_backend: String,
+    network_access: bool,
     status: PtySessionStatus,
 }
 
@@ -272,6 +276,7 @@ impl PtySessionRecord {
             output_path: self.output_path.clone(),
             sandboxed: self.sandboxed,
             sandbox_backend: self.sandbox_backend.clone(),
+            network_access: self.network_access,
             status: *self.status.lock().expect("pty status lock"),
         }
     }
@@ -286,6 +291,7 @@ impl PtySessionSnapshot {
             "output_path": self.output_path,
             "sandboxed": self.sandboxed,
             "sandbox_backend": self.sandbox_backend,
+            "network_access": self.network_access,
         })
     }
 
@@ -298,6 +304,7 @@ impl PtySessionSnapshot {
             "output_path": self.output_path,
             "sandboxed": self.sandboxed,
             "sandbox_backend": self.sandbox_backend,
+            "network_access": self.network_access,
             "output": output,
         }))
     }
@@ -324,7 +331,11 @@ impl Tool for PtyStartTool {
                     "additionalProperties": { "type": "string" },
                     "description": "Optional environment overrides."
                 },
-                "allow_net": { "type": "boolean", "default": false },
+                "allow_net": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Request network access for this PTY session. PTY sessions already have network access when sandbox_workspace_write.network_access is enabled in config."
+                },
                 "rows": { "type": "integer", "default": 24, "minimum": 1, "maximum": 65535 },
                 "cols": { "type": "integer", "default": 120, "minimum": 1, "maximum": 65535 }
             },
@@ -353,6 +364,7 @@ impl Tool for PtyStartTool {
             .get("allow_net")
             .and_then(Value::as_bool)
             .unwrap_or(false);
+        let allow_net = self.sandbox_network_access || allow_net;
         let wrapped = self
             .sandbox
             .wrap_pty_shell_command(&command, &cwd, allow_net)
@@ -610,6 +622,9 @@ fn command_env_for_wrapped(
     );
     if wrapped.sandboxed {
         ensure_usable_path(&mut env_map);
+        if !wrapped.network_access {
+            env_map.insert("RARA_SANDBOX_NETWORK_DISABLED".to_string(), "1".to_string());
+        }
     }
     Ok(env_map)
 }
@@ -708,6 +723,7 @@ mod tests {
             sandboxed: true,
             sandbox_backend: "linux-bubblewrap".to_string(),
             sandbox_home: Some(temp.path().join("home")),
+            network_access: false,
         };
         let env_map = command_env_for_wrapped(
             &wrapped,
@@ -719,6 +735,12 @@ mod tests {
         assert!(
             env_map.get("PATH").is_some_and(|path| !path.is_empty()),
             "sandboxed PTY env must keep a usable PATH after env_clear"
+        );
+        assert_eq!(
+            env_map
+                .get("RARA_SANDBOX_NETWORK_DISABLED")
+                .map(String::as_str),
+            Some("1")
         );
     }
 
@@ -744,6 +766,7 @@ mod tests {
                     sandboxed: false,
                     sandbox_backend: "direct".to_string(),
                     sandbox_home: None,
+                    network_access: true,
                 },
                 temp.path().display().to_string(),
                 &HashMap::new(),
@@ -760,6 +783,7 @@ mod tests {
             .and_then(Value::as_str)
             .expect("session id")
             .to_string();
+        assert_eq!(started.get("network_access").and_then(Value::as_bool), Some(true));
 
         write
             .call(json!({
@@ -821,6 +845,7 @@ mod tests {
                     sandboxed: false,
                     sandbox_backend: "direct".to_string(),
                     sandbox_home: None,
+                    network_access: true,
                 },
                 temp.path().display().to_string(),
                 &HashMap::new(),
@@ -837,6 +862,7 @@ mod tests {
             .and_then(Value::as_str)
             .expect("session id")
             .to_string();
+        assert_eq!(started.get("network_access").and_then(Value::as_bool), Some(true));
 
         let listed = list.call(json!({})).await.expect("list ptys");
         assert_eq!(
@@ -845,6 +871,12 @@ mod tests {
                 .and_then(Value::as_array)
                 .map(Vec::len),
             Some(1)
+        );
+        assert_eq!(
+            listed
+                .pointer("/sessions/0/network_access")
+                .and_then(Value::as_bool),
+            Some(true)
         );
 
         let inspected = status
@@ -855,11 +887,21 @@ mod tests {
             inspected.get("status").and_then(Value::as_str),
             Some("running")
         );
+        assert_eq!(
+            inspected.get("network_access").and_then(Value::as_bool),
+            Some(true)
+        );
 
         let stopped = stop.call(json!({})).await.expect("stop all ptys");
         assert_eq!(
             stopped.pointer("/stopped/0/status").and_then(Value::as_str),
             Some("killed")
+        );
+        assert_eq!(
+            stopped
+                .pointer("/stopped/0/network_access")
+                .and_then(Value::as_bool),
+            Some(true)
         );
     }
 }

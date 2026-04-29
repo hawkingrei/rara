@@ -22,6 +22,7 @@ pub struct BashTool {
     pub sandbox: Arc<SandboxManager>,
     pub background_tasks: Arc<BackgroundTaskStore>,
     pub base_env: Arc<HashMap<String, String>>,
+    pub sandbox_network_access: bool,
 }
 
 pub struct BackgroundTaskStatusTool {
@@ -52,6 +53,7 @@ pub struct BackgroundTaskRecord {
     exit_code: Option<i32>,
     sandboxed: bool,
     sandbox_backend: String,
+    network_access: bool,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
@@ -520,6 +522,7 @@ impl BackgroundTaskStore {
         command: String,
         sandboxed: bool,
         sandbox_backend: String,
+        network_access: bool,
     ) -> Result<(BackgroundTaskRecord, oneshot::Receiver<()>), ToolError> {
         let id = format!("bash-{}", Uuid::new_v4());
         let output_path = self.dir.join(format!("{id}.log"));
@@ -531,6 +534,7 @@ impl BackgroundTaskStore {
             exit_code: None,
             sandboxed,
             sandbox_backend,
+            network_access,
         };
         let (stop_tx, stop_rx) = oneshot::channel();
         self.tasks
@@ -622,6 +626,7 @@ fn sandbox_command_env(
     sandbox_home: &Path,
     base_env: &HashMap<String, String>,
     overrides: &HashMap<String, String>,
+    network_access: bool,
 ) -> HashMap<String, String> {
     let sandbox_home = sandbox_home.to_string_lossy();
     let mut env_map = HashMap::from([
@@ -654,6 +659,9 @@ fn sandbox_command_env(
             .map(|(key, value)| (key.clone(), value.clone())),
     );
     ensure_usable_path(&mut env_map);
+    if !network_access {
+        env_map.insert("RARA_SANDBOX_NETWORK_DISABLED".to_string(), "1".to_string());
+    }
     env_map
 }
 
@@ -677,7 +685,12 @@ fn command_env_for_wrapped(
         let sandbox_home = wrapped.sandbox_home.as_deref().ok_or_else(|| {
             ToolError::ExecutionFailed("sandboxed command is missing sandbox home".into())
         })?;
-        Ok(sandbox_command_env(sandbox_home, base_env, overrides))
+        Ok(sandbox_command_env(
+            sandbox_home,
+            base_env,
+            overrides,
+            wrapped.network_access,
+        ))
     } else {
         let mut env_map = HashMap::with_capacity(base_env.len() + overrides.len());
         env_map.extend(
@@ -728,7 +741,11 @@ impl Tool for BashTool {
                     "additionalProperties": { "type": "string" },
                     "description": "Optional environment overrides."
                 },
-                "allow_net": { "type": "boolean", "default": false },
+                "allow_net": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Request network access for this command. Commands already have network access when sandbox_workspace_write.network_access is enabled in config."
+                },
                 "run_in_background": {
                     "type": "boolean",
                     "default": false,
@@ -752,9 +769,10 @@ impl Tool for BashTool {
     ) -> Result<Value, ToolError> {
         let request = BashCommandInput::from_value(i)?;
         let cwd = request.working_dir()?;
+        let allow_net = self.sandbox_network_access || request.allow_net;
         let wrapped = if let Some(command) = request.command.as_deref() {
             self.sandbox
-                .wrap_shell_command(command, &cwd, request.allow_net)
+                .wrap_shell_command(command, &cwd, allow_net)
                 .map_err(|e| {
                     ToolError::ExecutionFailed(format!("{} {}", e, sandbox_failure_hint()))
                 })?
@@ -765,7 +783,7 @@ impl Tool for BashTool {
                 .filter(|value| !value.trim().is_empty())
                 .ok_or_else(|| ToolError::InvalidInput("program".into()))?;
             self.sandbox
-                .wrap_exec_command(program, &request.args, &cwd, request.allow_net)
+                .wrap_exec_command(program, &request.args, &cwd, allow_net)
                 .map_err(|e| {
                     ToolError::ExecutionFailed(format!("{} {}", e, sandbox_failure_hint()))
                 })?
@@ -809,6 +827,7 @@ impl Tool for BashTool {
                 request.summary(),
                 wrapped.sandboxed,
                 wrapped.sandbox_backend.clone(),
+                wrapped.network_access,
             )?;
             spawn_background_bash_task(
                 child,
@@ -827,6 +846,7 @@ impl Tool for BashTool {
                 "background_task_id": record.id,
                 "output_path": record.output_path,
                 "status": record.status,
+                "network_access": record.network_access,
             }));
         }
 
@@ -978,6 +998,7 @@ impl Tool for BackgroundTaskStatusTool {
             "output": output,
             "sandboxed": record.sandboxed,
             "sandbox_backend": record.sandbox_backend,
+            "network_access": record.network_access,
         }))
     }
 }
@@ -1382,7 +1403,7 @@ mod tests {
     fn sandbox_command_env_defaults_home_and_xdg_roots() {
         let sandbox_home = Path::new("/tmp/rara-test-home");
         let base_env = HashMap::from([("PATH".to_string(), "/custom/bin:/usr/bin".to_string())]);
-        let env_map = sandbox_command_env(sandbox_home, &base_env, &HashMap::new());
+        let env_map = sandbox_command_env(sandbox_home, &base_env, &HashMap::new(), true);
 
         assert_eq!(
             env_map.get("HOME").map(String::as_str),
@@ -1416,6 +1437,7 @@ mod tests {
                 ),
                 ("PATH".to_string(), "/override/bin".to_string()),
             ]),
+            true,
         );
 
         assert_eq!(
@@ -1443,11 +1465,29 @@ mod tests {
             sandbox_home,
             &HashMap::from([("PATH".to_string(), String::new())]),
             &HashMap::new(),
+            true,
         );
 
         assert!(
             env_map.get("PATH").is_some_and(|path| !path.is_empty()),
             "sandbox env must keep a usable PATH after env_clear"
+        );
+    }
+
+    #[test]
+    fn sandbox_command_env_marks_disabled_network() {
+        let env_map = sandbox_command_env(
+            Path::new("/tmp/rara-test-home"),
+            &HashMap::new(),
+            &HashMap::new(),
+            false,
+        );
+
+        assert_eq!(
+            env_map
+                .get("RARA_SANDBOX_NETWORK_DISABLED")
+                .map(String::as_str),
+            Some("1")
         );
     }
 
@@ -1469,6 +1509,7 @@ mod tests {
             sandboxed: false,
             sandbox_backend: "direct".to_string(),
             sandbox_home: None,
+            network_access: true,
         };
         let env_map = command_env_for_wrapped(
             &wrapped,
@@ -1497,6 +1538,7 @@ mod tests {
             sandboxed: false,
             sandbox_backend: "direct".to_string(),
             sandbox_home: None,
+            network_access: true,
         };
 
         let warning = unsandboxed_execution_warning(&wrapped);
@@ -1530,6 +1572,7 @@ mod tests {
                     .expect("background task store"),
             ),
             base_env: Arc::new(HashMap::new()),
+            sandbox_network_access: false,
         };
         let mut events = Vec::new();
         let result = tool
@@ -1592,6 +1635,7 @@ mod tests {
             sandbox: Arc::new(sandbox),
             background_tasks: background_tasks.clone(),
             base_env: Arc::new(HashMap::new()),
+            sandbox_network_access: false,
         };
         let status_tool = BackgroundTaskStatusTool {
             background_tasks: background_tasks.clone(),
@@ -1614,6 +1658,10 @@ mod tests {
             started.get("status"),
             Some(&json!(BackgroundTaskStatus::Running))
         );
+        assert_eq!(
+            started.get("network_access").and_then(Value::as_bool),
+            Some(wrapped.network_access)
+        );
 
         let mut last = Value::Null;
         for _ in 0..50 {
@@ -1632,6 +1680,10 @@ mod tests {
             Some(&json!(BackgroundTaskStatus::Running))
         );
         assert!(last.get("output_path").and_then(Value::as_str).is_some());
+        assert_eq!(
+            last.get("network_access").and_then(Value::as_bool),
+            Some(wrapped.network_access)
+        );
     }
 
     #[tokio::test]
@@ -1658,6 +1710,7 @@ mod tests {
             sandbox: Arc::new(sandbox),
             background_tasks: background_tasks.clone(),
             base_env: Arc::new(HashMap::new()),
+            sandbox_network_access: false,
         };
         let list_tool = BackgroundTaskListTool {
             background_tasks: background_tasks.clone(),
@@ -1685,6 +1738,10 @@ mod tests {
             listed.get("tasks").and_then(Value::as_array).map(Vec::len),
             Some(1)
         );
+        assert_eq!(
+            listed.pointer("/tasks/0/network_access").and_then(Value::as_bool),
+            Some(wrapped.network_access)
+        );
 
         let stopped = stop_tool
             .call(json!({ "task_id": task_id }))
@@ -1693,6 +1750,12 @@ mod tests {
         assert_eq!(
             stopped.pointer("/stopped/0/status"),
             Some(&json!(BackgroundTaskStatus::Killed))
+        );
+        assert_eq!(
+            stopped
+                .pointer("/stopped/0/network_access")
+                .and_then(Value::as_bool),
+            Some(wrapped.network_access)
         );
     }
 

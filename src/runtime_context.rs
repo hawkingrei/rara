@@ -87,6 +87,7 @@ pub(crate) async fn initialize_rara_context(
         skill_manager,
         prompt_config.clone(),
         Arc::new(shell_env.env),
+        config.sandbox_workspace_write.network_access,
     );
     let warnings = prompt_config.warnings.clone();
 
