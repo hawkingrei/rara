@@ -21,7 +21,6 @@ static PLAN_MODE_PROMPT: LazyLock<String> = LazyLock::new(|| {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PromptSourceKind {
     ProjectInstruction,
-    LocalInstruction,
     LocalMemory,
     CustomSystemPrompt,
     AppendSystemPrompt,
@@ -40,7 +39,6 @@ impl PromptSource {
     pub fn kind_label(&self) -> &'static str {
         match self.kind {
             PromptSourceKind::ProjectInstruction => "project_instruction",
-            PromptSourceKind::LocalInstruction => "local_instruction",
             PromptSourceKind::LocalMemory => "local_memory",
             PromptSourceKind::CustomSystemPrompt => "custom_system_prompt",
             PromptSourceKind::AppendSystemPrompt => "append_system_prompt",
@@ -52,9 +50,6 @@ impl PromptSource {
         match self.kind {
             PromptSourceKind::ProjectInstruction => {
                 format!("project instruction: {}", self.display_path)
-            }
-            PromptSourceKind::LocalInstruction => {
-                format!("local instruction: {}", self.display_path)
             }
             PromptSourceKind::LocalMemory => format!("local memory: {}", self.display_path),
             PromptSourceKind::CustomSystemPrompt => {
@@ -71,9 +66,6 @@ impl PromptSource {
         match self.kind {
             PromptSourceKind::ProjectInstruction => {
                 "included as a repository instruction discovered while walking from the workspace root toward the current focus directory"
-            }
-            PromptSourceKind::LocalInstruction => {
-                "included as a workspace-local RARA instruction override"
             }
             PromptSourceKind::LocalMemory => {
                 "included as durable workspace memory from the local RARA memory file"
@@ -447,12 +439,7 @@ fn dynamic_system_prompt_sections(
     let (cwd, branch) = workspace.get_env_info();
     let instruction_sections = sources
         .iter()
-        .filter(|source| {
-            matches!(
-                source.kind,
-                PromptSourceKind::ProjectInstruction | PromptSourceKind::LocalInstruction
-            )
-        })
+        .filter(|source| matches!(source.kind, PromptSourceKind::ProjectInstruction))
         .map(|source| format!("## {}\n{}", source.label, source.content))
         .collect::<Vec<_>>();
     let instruction_block = if instruction_sections.is_empty() {

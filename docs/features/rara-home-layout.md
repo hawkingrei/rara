@@ -63,7 +63,7 @@ Workspace data currently includes:
 - `state.sqlite3`
 - `sandbox/`
 - `tool-results/`
-- workspace memory files such as `instructions.md` and `memory.md`
+- workspace memory files such as `memory.md`
 
 ## Config Model
 

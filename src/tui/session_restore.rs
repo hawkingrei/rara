@@ -3,8 +3,8 @@ use std::sync::Arc;
 use anyhow::Result;
 
 use crate::agent::{
-    latest_compact_boundary_metadata, Agent, BashApprovalMode, CompactBoundaryMetadata,
-    CompletedInteraction, PendingApproval, PendingUserInput, PlanStep, PlanStepStatus,
+    Agent, BashApprovalMode, CompactBoundaryMetadata, CompletedInteraction, PendingApproval,
+    PendingUserInput, PlanStep, PlanStepStatus, latest_compact_boundary_metadata,
 };
 use crate::state_db::StateDb;
 use crate::thread_store::{CompactionRecord, RolloutItem, ThreadStore};
@@ -248,7 +248,6 @@ mod tests {
         fs::create_dir_all(rara_dir.join("sessions")).expect("sessions");
         fs::create_dir_all(rara_dir.join("tool-results")).expect("tool results");
         fs::write(root.join("AGENTS.md"), "repo rules").expect("agents");
-        fs::write(rara_dir.join("instructions.md"), "local instructions").expect("instructions");
 
         let session_manager = Arc::new(crate::session::SessionManager {
             storage_dir: rara_dir.join("rollouts"),
@@ -565,20 +564,24 @@ mod tests {
 
         let restored_agent = restored_slot.expect("restored agent");
         let runtime = restored_agent.shared_runtime_context();
-        assert!(runtime
-            .assembly
-            .entries
-            .iter()
-            .any(|entry| entry.layer == "active_turn_state"
-                && entry.kind == "request_input"
-                && entry.injected));
-        assert!(runtime
-            .assembly
-            .entries
-            .iter()
-            .any(|entry| entry.layer == "active_turn_state"
-                && entry.kind == "approval"
-                && entry.injected));
+        assert!(
+            runtime
+                .assembly
+                .entries
+                .iter()
+                .any(|entry| entry.layer == "active_turn_state"
+                    && entry.kind == "request_input"
+                    && entry.injected)
+        );
+        assert!(
+            runtime
+                .assembly
+                .entries
+                .iter()
+                .any(|entry| entry.layer == "active_turn_state"
+                    && entry.kind == "approval"
+                    && entry.injected)
+        );
         assert_eq!(
             restored_app.snapshot.assembly_entries,
             runtime.assembly.entries

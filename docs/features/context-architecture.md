@@ -83,7 +83,6 @@ Examples:
 
 - base runtime/system instructions;
 - project instruction files such as `AGENTS.md`;
-- workspace-local instruction files such as `.rara/instructions.md`;
 - runtime policy fields such as plan mode or bash approval mode.
 
 Properties:
