@@ -118,7 +118,6 @@ The first implementation should be additive:
 - Unit-test transcript projection so assistant prose cannot affect permission
   classification input.
 - Unit-test static deny precedence over classifier allow.
-- Unit-test background-state transitions for working, idle waiting, blocked
-  user action, done deliverable, and failed impossible task.
+- Unit-test background-state transitions (state: working/blocked/done/failed; tempo: active/idle/blocked) and verify that detail, needs, and result fields are correctly derived.
 - Add TUI/status snapshot coverage for visible classifier decisions before
   enabling auto-approval behavior by default.
