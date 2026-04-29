@@ -230,6 +230,40 @@ impl HistoryCell for ThinkingCell<'_> {
     }
 }
 
+pub(super) struct ThinkingTextCell {
+    lines: Vec<Line<'static>>,
+    max_lines: usize,
+}
+
+impl ThinkingTextCell {
+    pub(super) fn new(message: &str, max_lines: usize) -> Self {
+        let lines = message
+            .lines()
+            .map(|line| Line::from(line.to_string()))
+            .collect::<Vec<_>>();
+        Self { lines, max_lines }
+    }
+}
+
+impl HistoryCell for ThinkingTextCell {
+    fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
+        let start = self.lines.len().saturating_sub(self.max_lines);
+        let body = markdown_body_lines(&self.lines[start..], self.max_lines);
+        let mut lines = vec![Line::from(section_span("Thinking", Color::LightBlue))];
+        if start > 0 {
+            lines.push(Line::from(Span::styled(
+                format!("  ... {start} more line(s)"),
+                Style::default().fg(Color::DarkGray),
+            )));
+        }
+        lines.extend(body.into_iter().map(|mut line| {
+            line.spans.insert(0, Span::raw("  "));
+            line
+        }));
+        lines
+    }
+}
+
 pub(super) struct TerminalCell {
     command: String,
     output: Vec<String>,
@@ -263,11 +297,7 @@ impl TerminalCell {
     }
 
     fn title(&self) -> &'static str {
-        if self.active {
-            "Running"
-        } else {
-            "Ran"
-        }
+        if self.active { "Running" } else { "Ran" }
     }
 
     fn output_lines(&self) -> Vec<String> {

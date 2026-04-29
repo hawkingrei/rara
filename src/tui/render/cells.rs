@@ -7,8 +7,8 @@ use crate::tui::interaction_text::{
 };
 use crate::tui::plan_display::should_show_updated_plan;
 use crate::tui::state::{
-    contains_structured_planning_output, RuntimePhase, TranscriptEntry, TranscriptEntryPayload,
-    TuiApp,
+    RuntimePhase, TranscriptEntry, TranscriptEntryPayload, TuiApp,
+    contains_structured_planning_output,
 };
 use crate::tui::terminal_event::{
     TerminalCollectionEvent, TerminalCommandEvent, TerminalEvent, TerminalTarget,
@@ -19,9 +19,9 @@ mod components;
 
 pub(crate) use self::components::StartupCardCell;
 use self::components::{
-    planning_suggestion_text, CommittedInteractionCell, ExploredCell, ExploringCell, MessageCell,
-    PendingInteractionCell, PlanModeCell, PlanSummaryCell, PlanningCell, PlanningSuggestionCell,
-    RanCell, RespondingCell, RunningCell, TerminalCell, ThinkingCell, UserCell,
+    CommittedInteractionCell, ExploredCell, ExploringCell, MessageCell, PendingInteractionCell,
+    PlanModeCell, PlanSummaryCell, PlanningCell, PlanningSuggestionCell, RanCell, RespondingCell,
+    RunningCell, TerminalCell, ThinkingCell, ThinkingTextCell, UserCell, planning_suggestion_text,
 };
 use super::{
     compact_progress_summary_lines, compact_recent_first_summary_lines, compact_summary_lines,
@@ -71,8 +71,138 @@ fn line_plain_text(line: &Line<'static>) -> String {
 fn is_progress_stack_title(line: &Line<'static>) -> bool {
     matches!(
         line_plain_text(line).trim(),
-        "Plan Mode" | "Exploring" | "Planning" | "Running"
+        "Plan Mode" | "Thinking" | "Exploring" | "Planning" | "Running"
     )
+}
+
+fn progress_entry_role(role: &str) -> bool {
+    matches!(role, "Thinking" | "Exploring" | "Planning" | "Running")
+}
+
+fn active_live_event_groups(
+    events: &[crate::tui::state::ActiveLiveEvent],
+) -> Vec<(&'static str, Vec<crate::tui::state::ActiveLiveEvent>)> {
+    let mut groups: Vec<(&'static str, Vec<crate::tui::state::ActiveLiveEvent>)> = Vec::new();
+    for event in events {
+        let role = event.role();
+        if let Some((last_role, messages)) = groups.last_mut()
+            && *last_role == role
+        {
+            messages.push(event.clone());
+            continue;
+        }
+        groups.push((role, vec![event.clone()]));
+    }
+    groups
+}
+
+fn explicit_progress_entry_groups<'a>(
+    entries: impl Iterator<Item = &'a TranscriptEntry>,
+) -> Vec<(&'a str, Vec<String>)> {
+    let mut groups: Vec<(&str, Vec<String>)> = Vec::new();
+    for entry in entries.filter(|entry| progress_entry_role(entry.role.as_str())) {
+        let role = entry.role.as_str();
+        let messages = entry
+            .message
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .map(|line| {
+                line.trim_start_matches("└")
+                    .trim_start_matches('•')
+                    .trim()
+                    .to_string()
+            })
+            .filter(|line| !line.is_empty())
+            .collect::<Vec<_>>();
+        if messages.is_empty() {
+            continue;
+        }
+        if let Some((last_role, last_messages)) = groups.last_mut()
+            && *last_role == role
+        {
+            last_messages.extend(messages);
+            continue;
+        }
+        groups.push((role, messages));
+    }
+    groups
+}
+
+fn push_progress_group<'a>(
+    cells: &mut Vec<Box<dyn HistoryCell + 'a>>,
+    role: &str,
+    messages: Vec<String>,
+    active: bool,
+) {
+    match role {
+        "Thinking" => cells.push(Box::new(ThinkingTextCell::new(&messages.join("\n"), 4))),
+        "Exploring" => cells.push(Box::new(ExploringCell::new(
+            compact_summary_lines(messages.as_slice(), 4, "more exploration step(s)"),
+            active,
+        ))),
+        "Planning" => cells.push(Box::new(PlanningCell::new(
+            compact_summary_lines(messages.as_slice(), 4, "more planning step(s)"),
+            active,
+        ))),
+        "Running" => cells.push(Box::new(RunningCell::new(
+            compact_summary_lines(messages.as_slice(), 4, "more running step(s)"),
+            active,
+        ))),
+        _ => {}
+    }
+}
+
+fn push_live_event_group<'a>(
+    cells: &mut Vec<Box<dyn HistoryCell + 'a>>,
+    role: &str,
+    events: Vec<crate::tui::state::ActiveLiveEvent>,
+    active: bool,
+) {
+    let actions = events
+        .iter()
+        .filter(|event| !event.is_note())
+        .map(|event| event.message().to_string())
+        .collect::<Vec<_>>();
+    let notes = events
+        .iter()
+        .filter(|event| event.is_note())
+        .map(|event| event.message().to_string())
+        .collect::<Vec<_>>();
+    match role {
+        "Thinking" => cells.push(Box::new(ThinkingTextCell::new(
+            &actions
+                .iter()
+                .chain(notes.iter())
+                .cloned()
+                .collect::<Vec<_>>()
+                .join("\n"),
+            4,
+        ))),
+        "Exploring" => cells.push(Box::new(ExploringCell::new(
+            compact_progress_summary_lines(
+                actions.as_slice(),
+                notes.as_slice(),
+                4,
+                "more exploration step(s)",
+            ),
+            active,
+        ))),
+        "Planning" => cells.push(Box::new(PlanningCell::new(
+            compact_progress_summary_lines(
+                actions.as_slice(),
+                notes.as_slice(),
+                4,
+                "more planning step(s)",
+            ),
+            active,
+        ))),
+        "Running" => cells.push(Box::new(RunningCell::new(
+            compact_recent_first_summary_lines(actions.as_slice(), 4, "more running step(s)"),
+            active,
+        ))),
+        _ => {}
+    }
 }
 
 fn split_progress_sentences(message: &str) -> Vec<String> {
@@ -625,46 +755,34 @@ impl HistoryCell for CommittedTurnCell<'_> {
         }
 
         let entry_refs = self.entries.iter().collect::<Vec<_>>();
-        let explicit_exploration = self
-            .entries
-            .iter()
-            .find(|entry| entry.role == "Exploring")
-            .map(|entry| entry.message.clone());
-        let explicit_planning = self
-            .entries
-            .iter()
-            .find(|entry| entry.role == "Planning")
-            .map(|entry| entry.message.clone());
-        let explicit_running = self
-            .entries
-            .iter()
-            .find(|entry| entry.role == "Running")
-            .map(|entry| entry.message.clone());
+        let explicit_progress_groups = explicit_progress_entry_groups(self.entries.iter());
         let has_tool_activity = entry_refs.iter().any(|entry| {
             matches!(
                 entry.role.as_str(),
                 "Tool" | "Tool Result" | "Tool Error" | "Tool Progress"
             ) || matches!(entry.payload, Some(TranscriptEntryPayload::Terminal(_)))
         });
-        if let Some(summary) = explicit_exploration
-            .map(|summary| compact_summary_text(&summary, 4, "more exploration step(s)"))
-            .or_else(|| {
+        if explicit_progress_groups.is_empty() {
+            if let Some(summary) =
                 current_turn_exploration_summary_from_entries(entry_refs.as_slice(), false, None)
-            })
-        {
-            cells.push(Box::new(ExploredCell::new(summary)));
-        }
+            {
+                cells.push(Box::new(ExploredCell::new(summary)));
+            }
 
-        if let Some(summary) = explicit_planning {
-            cells.push(Box::new(PlanningCell::new(summary, false)));
-        }
-
-        if let Some(cell) = terminal_cell_from_entries(self.entries.iter()) {
-            cells.push(Box::new(cell));
-        } else if let Some(summary) = explicit_running
-            .or_else(|| current_turn_tool_summary(entry_refs.as_slice(), false, None))
-        {
-            cells.push(Box::new(RanCell::new(summary)));
+            if let Some(cell) = terminal_cell_from_entries(self.entries.iter()) {
+                cells.push(Box::new(cell));
+            } else if let Some(summary) =
+                current_turn_tool_summary(entry_refs.as_slice(), false, None)
+            {
+                cells.push(Box::new(RanCell::new(summary)));
+            }
+        } else {
+            for (role, messages) in explicit_progress_groups {
+                push_progress_group(&mut cells, role, messages, false);
+            }
+            if let Some(cell) = terminal_cell_from_entries(self.entries.iter()) {
+                cells.push(Box::new(cell));
+            }
         }
 
         let completion_entries = ordered_completion_entries(self.entries);
@@ -814,6 +932,8 @@ impl ActiveCell for ActiveTurnCell<'_> {
         let has_live_planning = !self.app.active_live.planning_actions.is_empty()
             || !self.app.active_live.planning_notes.is_empty();
         let has_live_running = !self.app.active_live.running_actions.is_empty();
+        let live_event_groups = active_live_event_groups(self.app.active_live.events.as_slice());
+        let has_live_event_groups = !live_event_groups.is_empty();
 
         if !user_message.is_empty() {
             cells.push(Box::new(UserCell::new(user_message)));
@@ -830,12 +950,15 @@ impl ActiveCell for ActiveTurnCell<'_> {
             }
         }
 
-        let ordered_exploration_agent_segments =
-            if !has_live_exploration && !has_live_planning && !has_live_running {
-                ordered_exploration_agent_segments(current_turn.as_slice())
-            } else {
-                None
-            };
+        let ordered_exploration_agent_segments = if !has_live_event_groups
+            && !has_live_exploration
+            && !has_live_planning
+            && !has_live_running
+        {
+            ordered_exploration_agent_segments(current_turn.as_slice())
+        } else {
+            None
+        };
         let uses_ordered_exploration_agent_segments = ordered_exploration_agent_segments.is_some();
 
         if let Some(segments) = ordered_exploration_agent_segments.as_ref() {
@@ -858,12 +981,41 @@ impl ActiveCell for ActiveTurnCell<'_> {
             }
         }
 
+        let mut has_event_exploration_summary = false;
+        let mut has_event_planning_summary = false;
+        let mut has_event_running_summary = false;
+        if has_live_event_groups {
+            for (role, messages) in live_event_groups {
+                match role {
+                    "Exploring" => has_event_exploration_summary = true,
+                    "Planning" => has_event_planning_summary = true,
+                    "Running" => has_event_running_summary = true,
+                    _ => {}
+                }
+                push_live_event_group(&mut cells, role, messages, true);
+            }
+        }
+
+        let explicit_progress_groups = (!has_live_event_groups)
+            .then(|| explicit_progress_entry_groups(current_turn.iter().copied()));
+        if let Some(groups) = explicit_progress_groups.as_ref() {
+            for (role, messages) in groups {
+                push_progress_group(&mut cells, role, messages.clone(), turn_live);
+            }
+        }
+        let has_explicit_progress_groups = explicit_progress_groups
+            .as_ref()
+            .is_some_and(|groups| !groups.is_empty());
+
         let explicit_exploration = current_turn
             .iter()
             .find(|entry| entry.role == "Exploring")
             .map(|entry| entry.message.clone());
 
-        let exploration_summary = if uses_ordered_exploration_agent_segments {
+        let exploration_summary = if has_live_event_groups
+            || has_explicit_progress_groups
+            || uses_ordered_exploration_agent_segments
+        {
             None
         } else if has_live_exploration {
             Some(compact_progress_summary_lines(
@@ -892,7 +1044,9 @@ impl ActiveCell for ActiveTurnCell<'_> {
             .find(|entry| entry.role == "Planning")
             .map(|entry| entry.message.clone());
 
-        let planning_summary = if has_live_planning {
+        let planning_summary = if has_live_event_groups || has_explicit_progress_groups {
+            None
+        } else if has_live_planning {
             Some(compact_progress_summary_lines(
                 self.app.active_live.planning_actions.as_slice(),
                 self.app.active_live.planning_notes.as_slice(),
@@ -913,7 +1067,9 @@ impl ActiveCell for ActiveTurnCell<'_> {
             .find(|entry| entry.role == "Running")
             .map(|entry| entry.message.clone());
 
-        let running_summary = if has_live_running {
+        let running_summary = if has_live_event_groups || has_explicit_progress_groups {
+            None
+        } else if has_live_running {
             Some(compact_recent_first_summary_lines(
                 self.app.active_live.running_actions.as_slice(),
                 4,
@@ -937,8 +1093,13 @@ impl ActiveCell for ActiveTurnCell<'_> {
         } else if let Some(summary) = running_summary {
             cells.push(Box::new(RunningCell::new(summary, running_active)));
         }
-        let compact_live_response =
-            turn_live && (has_exploration_summary || has_planning_summary || has_running_summary);
+        let compact_live_response = turn_live
+            && (has_exploration_summary
+                || has_planning_summary
+                || has_running_summary
+                || has_event_exploration_summary
+                || has_event_planning_summary
+                || has_event_running_summary);
 
         let inline_plan_summary = latest_agent
             .and_then(|message| parse_render_plan_block(message))
@@ -1014,6 +1175,9 @@ impl ActiveCell for ActiveTurnCell<'_> {
             && !has_exploration_summary
             && !has_planning_summary
             && !has_running_summary
+            && !has_event_exploration_summary
+            && !has_event_planning_summary
+            && !has_event_running_summary
             && self.app.snapshot.plan_steps.is_empty()
             && !suppress_planning_chatter
             && !suppress_structured_plan_response
@@ -1107,6 +1271,9 @@ impl ActiveCell for ActiveTurnCell<'_> {
             && !has_exploration_summary
             && !has_planning_summary
             && !has_running_summary
+            && !has_event_exploration_summary
+            && !has_event_planning_summary
+            && !has_event_running_summary
             && self.app.pending_request_input().is_none()
             && !self.app.has_pending_plan_approval()
             && self.app.pending_command_approval().is_none()

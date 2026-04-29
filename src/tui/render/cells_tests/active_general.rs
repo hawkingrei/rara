@@ -844,6 +844,48 @@ fn active_turn_cell_shows_live_thinking_stream() {
 }
 
 #[test]
+fn active_turn_cell_flattens_thinking_and_running_events_in_order() {
+    let temp = tempdir().unwrap();
+    let mut app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("build tui app");
+    app.runtime_phase = RuntimePhase::RunningTool;
+    app.active_turn = TranscriptTurn {
+        entries: vec![TranscriptEntry {
+            role: "You".into(),
+            message: "Run a long task".into(),
+            payload: None,
+        }],
+    };
+
+    app.append_agent_thinking_delta("first reasoning block\n");
+    app.flush_agent_thinking_stream_to_live_event();
+    app.record_running_action("Run cargo check");
+    app.append_agent_thinking_delta("second reasoning block\n");
+    app.flush_agent_thinking_stream_to_live_event();
+    app.record_running_action("Run cargo test");
+
+    let rendered = ActiveTurnCell::new(&app, Some(Path::new(".")))
+        .display_lines(100)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let first_thinking = rendered.find("first reasoning block").unwrap();
+    let first_running = rendered.find("Run cargo check").unwrap();
+    let second_thinking = rendered.find("second reasoning block").unwrap();
+    let second_running = rendered.find("Run cargo test").unwrap();
+
+    assert!(first_thinking < first_running);
+    assert!(first_running < second_thinking);
+    assert!(second_thinking < second_running);
+    assert_eq!(rendered.matches(" Thinking ").count(), 2);
+    assert_eq!(rendered.matches(" Running ").count(), 2);
+}
+
+#[test]
 fn active_turn_cell_shows_live_thinking_tail_without_cloning_full_body() {
     let temp = tempdir().unwrap();
     let mut app = TuiApp::new(ConfigManager {
