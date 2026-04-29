@@ -33,8 +33,9 @@ runtime contract instead of an inferred prose intent.
 - Added Codex-style TUI input recall for the composer. Submitted inputs are
   kept in local session history, `Up` / `Down` browse those entries, and moving
   past the newest entry restores the draft that was active before browsing.
-- Enabled TUI mouse capture and mapped mouse wheel events to transcript scroll,
-  keeping mouse history browsing separate from composer input recall.
+- Mapped TUI mouse wheel events to transcript scroll when the terminal sends
+  mouse events, but left mouse capture disabled by default so terminal text
+  selection and copy keep working normally.
 - Added a focused agent planning regression test for the execute-mode
   structured continuation boundary.
 
