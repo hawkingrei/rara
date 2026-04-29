@@ -93,7 +93,7 @@ impl Tool for WebFetchTool {
     async fn call(&self, input: Value) -> Result<Value, ToolError> {
         let request = FetchRequest::parse(&input)?;
         let client = reqwest::Client::builder()
-            .redirect(reqwest::redirect::Policy::limited(10))
+            .redirect(public_redirect_policy())
             .timeout(Duration::from_secs(request.timeout_secs))
             .build()
             .map_err(|err| ToolError::ExecutionFailed(err.to_string()))?;
@@ -254,15 +254,28 @@ fn validate_public_web_url(url: &Url) -> Result<(), ToolError> {
     let host = url
         .host_str()
         .ok_or_else(|| ToolError::InvalidInput("url host is required".to_string()))?;
-    if host.eq_ignore_ascii_case("localhost") {
+    let normalized_host = host.trim_end_matches('.');
+    if normalized_host.eq_ignore_ascii_case("localhost") {
         return Err(ToolError::InvalidInput(
             "url host must not be localhost".to_string(),
         ));
     }
-    if let Ok(ip) = host.parse::<IpAddr>() {
+    if let Ok(ip) = normalized_host.parse::<IpAddr>() {
         validate_public_ip(ip)?;
     }
     Ok(())
+}
+
+fn public_redirect_policy() -> reqwest::redirect::Policy {
+    reqwest::redirect::Policy::custom(|attempt| {
+        if attempt.previous().len() > 10 {
+            return attempt.error("too many redirects");
+        }
+        match validate_public_web_url(attempt.url()) {
+            Ok(()) => attempt.follow(),
+            Err(err) => attempt.error(format!("blocked redirect target: {err}")),
+        }
+    })
 }
 
 fn validate_public_ip(ip: IpAddr) -> Result<(), ToolError> {
@@ -361,10 +374,13 @@ mod tests {
     fn fetch_request_rejects_localhost_and_private_ip_literals() {
         let localhost = FetchRequest::parse(&json!({ "url": "http://localhost:8080" }))
             .expect_err("localhost rejected");
+        let localhost_trailing_dot = FetchRequest::parse(&json!({ "url": "http://localhost." }))
+            .expect_err("localhost with trailing dot rejected");
         let private_ip = FetchRequest::parse(&json!({ "url": "http://169.254.169.254" }))
             .expect_err("link-local rejected");
 
         assert!(localhost.to_string().contains("localhost"));
+        assert!(localhost_trailing_dot.to_string().contains("localhost"));
         assert!(private_ip.to_string().contains("private"));
     }
 

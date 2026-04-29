@@ -25,7 +25,7 @@ use self::viewport::TranscriptViewport;
 use super::custom_terminal::Frame;
 use super::line_utils::prefix_lines;
 use super::state::{TranscriptEntry, TuiApp};
-use super::tool_text::compact_delegate_rest;
+use super::tool_text::{compact_delegate_rest, compact_instruction};
 
 pub fn render(f: &mut Frame, app: &TuiApp) {
     let bottom_pane_height = desired_bottom_pane_height(app, f.area().width, f.area().height);
@@ -699,9 +699,9 @@ fn tool_action_label(message: &str) -> Option<String> {
         "web_search" => Some(format!(
             "Search {}",
             if rest.is_empty() {
-                "web"
+                "web".to_string()
             } else {
-                rest.as_str()
+                compact_instruction(&rest)
             }
         )),
         other => Some(format!(

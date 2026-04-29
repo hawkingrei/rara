@@ -158,9 +158,9 @@ pub(super) fn tool_action_label(message: &str) -> Option<String> {
         "web_search" => Some(format!(
             "Search {}",
             if rest.is_empty() {
-                "web"
+                "web".to_string()
             } else {
-                rest.as_str()
+                compact_instruction(&rest)
             }
         )),
         other => Some(format!(
@@ -424,7 +424,7 @@ pub(super) fn format_tool_use(name: &str, input: &serde_json::Value) -> String {
         "web_search" => input
             .get("query")
             .and_then(serde_json::Value::as_str)
-            .map(|query| format!("web_search {query}"))
+            .map(|query| format!("web_search {}", compact_instruction(query)))
             .unwrap_or_else(|| format!("{name} {input}")),
         "explore_agent" => format_instruction_tool_use("explore_agent", input),
         "plan_agent" => format_instruction_tool_use("plan_agent", input),
