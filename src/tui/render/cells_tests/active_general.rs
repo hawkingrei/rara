@@ -731,6 +731,61 @@ fn active_turn_cell_preserves_exploration_agent_exploration_order() {
 }
 
 #[test]
+fn active_turn_cell_preserves_duplicate_restored_exploration_segments() {
+    let temp = tempdir().unwrap();
+    let mut app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("build tui app");
+    app.runtime_phase = RuntimePhase::RunningTool;
+    app.active_turn = TranscriptTurn {
+        entries: vec![
+            TranscriptEntry {
+                role: "You".into(),
+                message: "Inspect the repository".into(),
+                payload: None,
+            },
+            TranscriptEntry {
+                role: "Tool".into(),
+                message: "read_file src/main.rs".into(),
+                payload: None,
+            },
+            TranscriptEntry {
+                role: "Tool".into(),
+                message: "read_file src/main.rs".into(),
+                payload: None,
+            },
+            TranscriptEntry {
+                role: "Agent".into(),
+                message: "The main entrypoint is thin.".into(),
+                payload: None,
+            },
+            TranscriptEntry {
+                role: "Tool".into(),
+                message: "read_file src/runtime_context.rs".into(),
+                payload: None,
+            },
+            TranscriptEntry {
+                role: "Tool".into(),
+                message: "read_file src/runtime_context.rs".into(),
+                payload: None,
+            },
+        ],
+    };
+
+    let rendered = ActiveTurnCell::new(&app, Some(Path::new(".")))
+        .display_lines(100)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert_eq!(rendered.matches("Read src/main.rs").count(), 2);
+    assert_eq!(rendered.matches("Read src/runtime_context.rs").count(), 2);
+    assert_eq!(rendered.matches(" Exploring ").count(), 2);
+}
+
+#[test]
 fn active_turn_cell_preserves_agent_then_exploration_order() {
     let temp = tempdir().unwrap();
     let mut app = TuiApp::new(ConfigManager {
