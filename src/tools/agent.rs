@@ -27,6 +27,7 @@ macro_rules! strict_read_only_subagent_prompt {
             "- Do not create temporary files anywhere, including /tmp.\n",
             "- Do not run shell commands, scripts, redirection, heredocs, or any workaround that changes filesystem, process, network, git, or repository state.\n",
             "- Bash, PTY, editing, patching, and agent-spawning tools are intentionally unavailable.\n",
+            // Keep this prompt list synchronized with build_read_only_tool_manager().
             "- Use only the read-only repository inspection tools available to you: read_file, list_files, glob, grep.\n",
             "- If the assigned instruction requires mutation, report the limitation and provide the evidence-backed findings or plan instead of attempting a workaround."
         )
@@ -348,6 +349,7 @@ async fn run_sub_agent(
 }
 
 fn build_read_only_tool_manager() -> ToolManager {
+    // Keep this registration set synchronized with strict_read_only_subagent_prompt!().
     let mut tool_manager = ToolManager::new();
     tool_manager.register(Box::new(ReadFileTool));
     tool_manager.register(Box::new(ListFilesTool));
