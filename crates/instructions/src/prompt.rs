@@ -350,7 +350,7 @@ fn default_system_prompt_sections() -> Vec<PromptSection> {
                     "Use 'replace_lines' only for large deletions or replacements when you have verified exact line numbers from the current file contents; do not pass hundreds of lines through 'replace.old_string'.",
                     "Use 'write_file' only for new files or intentional full-file rewrites after reading the current file when it already exists.",
                     "Do not use shell redirection, sed, perl, or ad-hoc scripts to edit files when direct edit tools or 'apply_patch' can do the job.",
-                    "If a 'read_file' result is truncated, retry with narrower start_line/end_line ranges instead of asking the user to paste the file.",
+                    "If a 'read_file' result is truncated, continue with offset=next_offset and a narrower limit instead of asking the user to paste the file.",
                     "If sandboxed bash is unavailable or blocked, continue with direct file tools such as read_file, apply_patch, and replace_lines before asking the user for help.",
                     "Use 'remember_experience' for global vector memory.",
                     "Use 'update_project_memory' to record facts into memory.md.",

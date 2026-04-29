@@ -1,21 +1,23 @@
 use crate::tool::{Tool, ToolError};
 use async_trait::async_trait;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::fs;
 use std::path::Path;
 
 pub struct ApplyPatchTool;
 
+const PATCH_PREVIEW_LINE_LIMIT: usize = 120;
+
 #[derive(Debug)]
 enum PatchOp {
-    AddFile {
+    Add {
         path: String,
         lines: Vec<String>,
     },
-    DeleteFile {
+    Delete {
         path: String,
     },
-    UpdateFile {
+    Update {
         path: String,
         move_to: Option<String>,
         chunks: Vec<Chunk>,
@@ -87,7 +89,7 @@ impl Tool for ApplyPatchTool {
 
         for op in ops {
             match op {
-                PatchOp::AddFile { path, lines } => {
+                PatchOp::Add { path, lines } => {
                     if Path::new(&path).exists() {
                         return Err(ToolError::ExecutionFailed(format!(
                             "Cannot add existing file {path}"
@@ -102,7 +104,7 @@ impl Tool for ApplyPatchTool {
                         write_text_file(&path, &join_lines(&lines))?;
                     }
                 }
-                PatchOp::DeleteFile { path } => {
+                PatchOp::Delete { path } => {
                     if !Path::new(&path).exists() {
                         return Err(ToolError::ExecutionFailed(format!(
                             "Cannot delete missing file {path}"
@@ -118,7 +120,7 @@ impl Tool for ApplyPatchTool {
                         fs::remove_file(&path)?;
                     }
                 }
-                PatchOp::UpdateFile {
+                PatchOp::Update {
                     path,
                     move_to,
                     chunks,
@@ -142,19 +144,21 @@ impl Tool for ApplyPatchTool {
                     }
                     if !dry_run {
                         let write_path = move_to.as_deref().unwrap_or(&path);
-                        if let Some(target) = &move_to {
-                            if target != &path {
-                                if let Some(parent) = Path::new(target).parent() {
-                                    fs::create_dir_all(parent)?;
-                                }
-                                fs::remove_file(&path)?;
+                        if let Some(target) = &move_to
+                            && target != &path
+                        {
+                            if let Some(parent) = Path::new(target).parent() {
+                                fs::create_dir_all(parent)?;
                             }
+                            fs::remove_file(&path)?;
                         }
                         write_text_file(write_path, &updated)?;
                     }
                 }
             }
         }
+
+        let (diff_preview, diff_truncated) = patch_preview(patch);
 
         Ok(json!({
             "status": if dry_run { "validated" } else { "applied" },
@@ -169,9 +173,23 @@ impl Tool for ApplyPatchTool {
                 "removed": stats.removed_lines,
             },
             "summary": previews,
-            "diff_preview": previews.join("\n"),
+            "diff_preview": diff_preview,
+            "diff_truncated": diff_truncated,
         }))
     }
+}
+
+fn patch_preview(patch: &str) -> (String, bool) {
+    let lines = patch
+        .lines()
+        .take(PATCH_PREVIEW_LINE_LIMIT)
+        .collect::<Vec<_>>();
+    let truncated = patch.lines().count() > lines.len();
+    let mut preview = lines.join("\n");
+    if truncated {
+        preview.push_str("\n... diff truncated");
+    }
+    (preview, truncated)
 }
 
 fn parse_patch(patch: &str) -> Result<Vec<PatchOp>, ToolError> {
@@ -204,7 +222,7 @@ fn parse_patch(patch: &str) -> Result<Vec<PatchOp>, ToolError> {
                 add_lines.push(text.to_string());
                 index += 1;
             }
-            ops.push(PatchOp::AddFile {
+            ops.push(PatchOp::Add {
                 path: path.to_string(),
                 lines: add_lines,
             });
@@ -212,7 +230,7 @@ fn parse_patch(patch: &str) -> Result<Vec<PatchOp>, ToolError> {
         }
 
         if let Some(path) = line.strip_prefix("*** Delete File: ") {
-            ops.push(PatchOp::DeleteFile {
+            ops.push(PatchOp::Delete {
                 path: path.to_string(),
             });
             index += 1;
@@ -222,11 +240,11 @@ fn parse_patch(patch: &str) -> Result<Vec<PatchOp>, ToolError> {
         if let Some(path) = line.strip_prefix("*** Update File: ") {
             index += 1;
             let mut move_to = None;
-            if index < lines.len() {
-                if let Some(target) = lines[index].strip_prefix("*** Move to: ") {
-                    move_to = Some(target.to_string());
-                    index += 1;
-                }
+            if index < lines.len()
+                && let Some(target) = lines[index].strip_prefix("*** Move to: ")
+            {
+                move_to = Some(target.to_string());
+                index += 1;
             }
 
             let mut chunks = Vec::new();
@@ -259,7 +277,7 @@ fn parse_patch(patch: &str) -> Result<Vec<PatchOp>, ToolError> {
             if let Some(chunk) = current_chunk.take() {
                 chunks.push(chunk);
             }
-            ops.push(PatchOp::UpdateFile {
+            ops.push(PatchOp::Update {
                 path: path.to_string(),
                 move_to,
                 chunks,
@@ -376,6 +394,12 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&file).expect("read"), "hi\nworld\n");
         assert_eq!(result["status"], "applied");
         assert_eq!(result["files_changed"], 1);
+        assert!(
+            result["diff_preview"]
+                .as_str()
+                .expect("diff preview")
+                .contains("-hello\n+hi")
+        );
     }
 
     #[tokio::test]

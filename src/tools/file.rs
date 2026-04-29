@@ -1,10 +1,13 @@
 use crate::tool::{Tool, ToolError};
 use async_trait::async_trait;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
 use walkdir::WalkDir;
+
+const DEFAULT_READ_LINE_LIMIT: usize = 2_000;
+const MAX_READ_LINE_CHARS: usize = 4_000;
 
 pub struct ReadFileTool;
 #[async_trait]
@@ -13,15 +16,17 @@ impl Tool for ReadFileTool {
         "read_file"
     }
     fn description(&self) -> &str {
-        "Read a file, optionally with 1-based inclusive line ranges for large files"
+        "Read a file with Codex-style 1-based offset/limit windows. Defaults to the first 2000 lines and reports next_offset when more content remains."
     }
     fn input_schema(&self) -> Value {
         json!({
             "type": "object",
             "properties": {
                 "path": { "type": "string", "description": "Path to read." },
-                "start_line": { "type": "integer", "minimum": 1, "description": "Optional 1-based first line to include." },
-                "end_line": { "type": "integer", "minimum": 1, "description": "Optional 1-based last line to include." }
+                "offset": { "type": "integer", "minimum": 1, "description": "Optional 1-based first line to include. Use next_offset from a truncated result to continue." },
+                "limit": { "type": "integer", "minimum": 1, "description": "Optional maximum number of lines to return. Defaults to 2000." },
+                "start_line": { "type": "integer", "minimum": 1, "description": "Legacy alias for offset." },
+                "end_line": { "type": "integer", "minimum": 1, "description": "Legacy 1-based inclusive last line. Prefer offset/limit for new calls." }
             },
             "required": ["path"]
         })
@@ -30,50 +35,178 @@ impl Tool for ReadFileTool {
         let p = i["path"]
             .as_str()
             .ok_or(ToolError::InvalidInput("path".into()))?;
-        let content = fs::read_to_string(p)?;
-        let lines = content.lines().collect::<Vec<_>>();
-        let total_lines = lines.len();
-        let start_line = i
-            .get("start_line")
-            .and_then(Value::as_u64)
-            .map(|v| v as usize);
-        let end_line = i
-            .get("end_line")
-            .and_then(Value::as_u64)
-            .map(|v| v as usize);
-
-        let sliced_content = match (start_line, end_line) {
-            (None, None) => content,
-            (start, end) => {
-                let start = start.unwrap_or(1);
-                let end = end.unwrap_or(total_lines.max(1));
-                if start == 0 || end == 0 {
-                    return Err(ToolError::InvalidInput(
-                        "start_line/end_line must be >= 1".into(),
-                    ));
-                }
-                if start > end {
-                    return Err(ToolError::InvalidInput(
-                        "start_line must be <= end_line".into(),
-                    ));
-                }
-                if total_lines == 0 {
-                    String::new()
-                } else {
-                    let bounded_start = start.min(total_lines);
-                    let bounded_end = end.min(total_lines);
-                    lines[bounded_start - 1..bounded_end].join("\n")
-                }
-            }
-        };
+        let window = read_file_window_from_input(&i)?;
+        let output = read_file_window(p, window)?;
 
         Ok(json!({
-            "content": sliced_content,
-            "total_lines": total_lines,
-            "start_line": start_line.unwrap_or(1),
-            "end_line": end_line.unwrap_or(total_lines),
+            "content": output.content,
+            "total_lines": output.total_lines,
+            "start_line": output.start_line,
+            "end_line": output.end_line,
+            "offset": output.start_line,
+            "limit": output.limit,
+            "num_lines": output.num_lines,
+            "truncated": output.truncated,
+            "next_offset": output.next_offset,
+            "line_truncated": output.line_truncated,
+            "line_format": "L{line}: {text}",
+            "bytes_read": output.bytes_read,
         }))
     }
+}
+
+#[derive(Clone, Copy)]
+struct ReadFileWindow {
+    offset: usize,
+    limit: usize,
+}
+
+struct ReadFileOutput {
+    content: String,
+    total_lines: usize,
+    start_line: usize,
+    end_line: usize,
+    limit: usize,
+    num_lines: usize,
+    truncated: bool,
+    next_offset: Option<usize>,
+    line_truncated: bool,
+    bytes_read: usize,
+}
+
+fn read_file_window_from_input(input: &Value) -> Result<ReadFileWindow, ToolError> {
+    let offset = optional_positive_usize(input, "offset")?;
+    let limit = optional_positive_usize(input, "limit")?;
+    let start_line = optional_positive_usize(input, "start_line")?;
+    let end_line = optional_positive_usize(input, "end_line")?;
+
+    if (offset.is_some() || limit.is_some()) && (start_line.is_some() || end_line.is_some()) {
+        return Err(ToolError::InvalidInput(
+            "Use either offset/limit or start_line/end_line, not both".into(),
+        ));
+    }
+
+    if let Some(offset) = offset {
+        return Ok(ReadFileWindow {
+            offset,
+            limit: limit.unwrap_or(DEFAULT_READ_LINE_LIMIT),
+        });
+    }
+
+    if let Some(limit) = limit {
+        return Ok(ReadFileWindow { offset: 1, limit });
+    }
+
+    if start_line.is_some() || end_line.is_some() {
+        let start = start_line.unwrap_or(1);
+        let limit = match end_line {
+            Some(end) if start > end => {
+                return Err(ToolError::InvalidInput(
+                    "start_line must be <= end_line".into(),
+                ));
+            }
+            Some(end) => end - start + 1,
+            None => DEFAULT_READ_LINE_LIMIT,
+        };
+        return Ok(ReadFileWindow {
+            offset: start,
+            limit,
+        });
+    }
+
+    Ok(ReadFileWindow {
+        offset: 1,
+        limit: DEFAULT_READ_LINE_LIMIT,
+    })
+}
+
+fn optional_positive_usize(input: &Value, key: &str) -> Result<Option<usize>, ToolError> {
+    let Some(value) = input.get(key) else {
+        return Ok(None);
+    };
+    let Some(value) = value.as_u64() else {
+        return Err(ToolError::InvalidInput(format!("{key} must be an integer")));
+    };
+    if value == 0 {
+        return Err(ToolError::InvalidInput(format!("{key} must be >= 1")));
+    }
+    Ok(Some(value as usize))
+}
+
+fn read_file_window(path: &str, window: ReadFileWindow) -> Result<ReadFileOutput, ToolError> {
+    let file = fs::File::open(path)?;
+    let mut reader = BufReader::new(file);
+    let mut line = String::new();
+    let mut total_lines = 0usize;
+    let mut selected = Vec::new();
+    let mut line_truncated = false;
+    let mut bytes_read = 0usize;
+    let last_requested_line = window
+        .offset
+        .checked_add(window.limit - 1)
+        .ok_or_else(|| ToolError::InvalidInput("offset + limit overflows".into()))?;
+
+    loop {
+        line.clear();
+        let bytes = reader.read_line(&mut line)?;
+        if bytes == 0 {
+            break;
+        }
+        bytes_read += bytes;
+        total_lines += 1;
+
+        if total_lines < window.offset || total_lines > last_requested_line {
+            continue;
+        }
+
+        let text = line.trim_end_matches(['\r', '\n']);
+        let (text, truncated) = truncate_read_line(text);
+        line_truncated |= truncated;
+        selected.push(format!("L{total_lines}: {text}"));
+    }
+
+    if window.offset > total_lines.max(1) {
+        return Err(ToolError::ExecutionFailed(format!(
+            "offset {} exceeds file length {}",
+            window.offset, total_lines
+        )));
+    }
+
+    let num_lines = selected.len();
+    let end_line = if num_lines == 0 {
+        0
+    } else {
+        window.offset + num_lines - 1
+    };
+    let has_more_lines = total_lines > end_line;
+    let next_offset = if has_more_lines {
+        Some(end_line + 1)
+    } else {
+        None
+    };
+
+    Ok(ReadFileOutput {
+        content: selected.join("\n"),
+        total_lines,
+        start_line: window.offset,
+        end_line,
+        limit: window.limit,
+        num_lines,
+        truncated: has_more_lines || line_truncated,
+        next_offset,
+        line_truncated,
+        bytes_read,
+    })
+}
+
+fn truncate_read_line(line: &str) -> (String, bool) {
+    if line.chars().count() <= MAX_READ_LINE_CHARS {
+        return (line.to_string(), false);
+    }
+
+    let mut truncated = line.chars().take(MAX_READ_LINE_CHARS).collect::<String>();
+    truncated.push_str("... [line truncated]");
+    (truncated, true)
 }
 
 pub struct WriteFileTool;
@@ -351,7 +484,10 @@ fn existing_file_summary(path: &str) -> Result<Option<(u64, usize)>, ToolError> 
 
 #[cfg(test)]
 mod tests {
-    use super::{ListFilesTool, ReadFileTool, ReplaceLinesTool, ReplaceTool, WriteFileTool};
+    use super::{
+        ListFilesTool, MAX_READ_LINE_CHARS, ReadFileTool, ReplaceLinesTool, ReplaceTool,
+        WriteFileTool,
+    };
     use crate::tool::Tool;
     use serde_json::json;
 
@@ -371,10 +507,119 @@ mod tests {
             .await
             .expect("read file");
 
-        assert_eq!(result["content"], "b\nc");
+        assert_eq!(result["content"], "L2: b\nL3: c");
         assert_eq!(result["total_lines"], 4);
         assert_eq!(result["start_line"], 2);
         assert_eq!(result["end_line"], 3);
+        assert_eq!(result["offset"], 2);
+        assert_eq!(result["limit"], 2);
+        assert_eq!(result["num_lines"], 2);
+        assert_eq!(result["truncated"], true);
+        assert_eq!(result["next_offset"], 4);
+    }
+
+    #[tokio::test]
+    async fn read_file_supports_offset_limit_windows() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("sample.txt");
+        std::fs::write(&path, "alpha\nbeta\ngamma\n").expect("write sample");
+
+        let tool = ReadFileTool;
+        let result = tool
+            .call(json!({
+                "path": path.display().to_string(),
+                "offset": 2,
+                "limit": 1
+            }))
+            .await
+            .expect("read file");
+
+        assert_eq!(result["content"], "L2: beta");
+        assert_eq!(result["total_lines"], 3);
+        assert_eq!(result["start_line"], 2);
+        assert_eq!(result["end_line"], 2);
+        assert_eq!(result["num_lines"], 1);
+        assert_eq!(result["truncated"], true);
+        assert_eq!(result["next_offset"], 3);
+    }
+
+    #[tokio::test]
+    async fn read_file_defaults_to_limited_first_window() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("large.txt");
+        let content = (1..=2002)
+            .map(|line| format!("line {line}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(&path, content).expect("write sample");
+
+        let tool = ReadFileTool;
+        let result = tool
+            .call(json!({ "path": path.display().to_string() }))
+            .await
+            .expect("read file");
+
+        assert!(result["content"].as_str().unwrap().contains("L1: line 1"));
+        assert!(
+            result["content"]
+                .as_str()
+                .unwrap()
+                .contains("L2000: line 2000")
+        );
+        assert!(
+            !result["content"]
+                .as_str()
+                .unwrap()
+                .contains("L2001: line 2001")
+        );
+        assert_eq!(result["total_lines"], 2002);
+        assert_eq!(result["start_line"], 1);
+        assert_eq!(result["end_line"], 2000);
+        assert_eq!(result["limit"], 2000);
+        assert_eq!(result["num_lines"], 2000);
+        assert_eq!(result["truncated"], true);
+        assert_eq!(result["next_offset"], 2001);
+    }
+
+    #[tokio::test]
+    async fn read_file_errors_when_offset_exceeds_file_length() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("sample.txt");
+        std::fs::write(&path, "one\ntwo\n").expect("write sample");
+
+        let tool = ReadFileTool;
+        let error = tool
+            .call(json!({
+                "path": path.display().to_string(),
+                "offset": 3
+            }))
+            .await
+            .expect_err("offset should fail");
+
+        assert!(error.to_string().contains("offset 3 exceeds file length 2"));
+    }
+
+    #[tokio::test]
+    async fn read_file_marks_truncated_long_lines() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("sample.txt");
+        std::fs::write(&path, "x".repeat(MAX_READ_LINE_CHARS + 1)).expect("write sample");
+
+        let tool = ReadFileTool;
+        let result = tool
+            .call(json!({ "path": path.display().to_string() }))
+            .await
+            .expect("read file");
+
+        assert_eq!(result["total_lines"], 1);
+        assert_eq!(result["line_truncated"], true);
+        assert_eq!(result["truncated"], true);
+        assert!(
+            result["content"]
+                .as_str()
+                .unwrap()
+                .ends_with("... [line truncated]")
+        );
     }
 
     #[tokio::test]
@@ -487,8 +732,10 @@ mod tests {
         assert!(write_tool.description().contains("read the file first"));
         assert!(replace_tool.description().contains("exact, unique string"));
         assert!(replace_tool.description().contains("Read the file first"));
-        assert!(replace_lines_tool
-            .description()
-            .contains("verifying the current line numbers"));
+        assert!(
+            replace_lines_tool
+                .description()
+                .contains("verifying the current line numbers")
+        );
     }
 }

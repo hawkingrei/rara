@@ -1,5 +1,6 @@
 mod bottom_pane;
 pub(crate) mod cells;
+pub(crate) mod diff;
 mod history_pipeline;
 mod overlay;
 #[cfg(test)]

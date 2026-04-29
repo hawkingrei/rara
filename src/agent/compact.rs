@@ -298,15 +298,15 @@ fn compaction_summary_timeout() -> Duration {
 
 fn estimate_history_tokens(history: &[Message]) -> Result<usize> {
     let bpe = tokenizer()?;
-    Ok(history
+    history
         .iter()
-        .map(|message| estimate_message_tokens_with_bpe(message, &bpe))
-        .sum::<Result<usize>>()?)
+        .map(|message| estimate_message_tokens_with_bpe(message, bpe))
+        .sum::<Result<usize>>()
 }
 
 fn estimate_message_tokens(message: &Message) -> Result<usize> {
     let bpe = tokenizer()?;
-    estimate_message_tokens_with_bpe(message, &bpe)
+    estimate_message_tokens_with_bpe(message, bpe)
 }
 
 fn estimate_message_tokens_with_bpe(
@@ -403,14 +403,7 @@ fn collect_recent_file_excerpts(
                     let Some(path) = input.get("path").and_then(Value::as_str) else {
                         continue;
                     };
-                    let line_range = match (
-                        input.get("start_line").and_then(Value::as_u64),
-                        input.get("end_line").and_then(Value::as_u64),
-                    ) {
-                        (Some(start), Some(end)) => Some((start as usize, end as usize)),
-                        (Some(start), None) => Some((start as usize, start as usize)),
-                        _ => None,
-                    };
+                    let line_range = read_file_line_range(input);
                     pending_reads.insert(
                         tool_use_id.to_string(),
                         (path.replace('\\', "/"), line_range),
@@ -456,6 +449,32 @@ fn collect_recent_file_excerpts(
     }
     excerpts.reverse();
     excerpts
+}
+
+fn read_file_line_range(input: &serde_json::Map<String, Value>) -> Option<(usize, usize)> {
+    match (
+        input.get("offset").and_then(Value::as_u64),
+        input.get("limit").and_then(Value::as_u64),
+    ) {
+        (Some(offset), Some(limit)) if limit > 0 => {
+            let start = offset as usize;
+            return Some((start, start + limit as usize - 1));
+        }
+        (Some(offset), None) => {
+            let start = offset as usize;
+            return Some((start, start));
+        }
+        _ => {}
+    }
+
+    match (
+        input.get("start_line").and_then(Value::as_u64),
+        input.get("end_line").and_then(Value::as_u64),
+    ) {
+        (Some(start), Some(end)) => Some((start as usize, end as usize)),
+        (Some(start), None) => Some((start as usize, start as usize)),
+        _ => None,
+    }
 }
 
 fn render_recent_file_excerpt(excerpt: &RecentFileExcerpt) -> String {

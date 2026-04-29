@@ -214,13 +214,17 @@ fn formats_apply_patch_tool_result_as_diff_summary() {
         "summary": [
             "updated src/tui/render.rs",
             "created src/tui/render/bottom_pane.rs"
-        ]
+        ],
+        "diff_preview": "*** Begin Patch\n*** Update File: src/tui/render.rs\n@@\n-old\n+new\n*** End Patch"
     }));
 
     assert!(rendered.contains("apply_patch ok 2 file(s) (+12 -3)"));
     assert!(rendered.contains("updated: src/tui/render.rs"));
     assert!(rendered.contains("created: src/tui/render/bottom_pane.rs"));
     assert!(rendered.contains("changes:"));
+    assert!(rendered.contains("diff:"));
+    assert!(rendered.contains("-old"));
+    assert!(rendered.contains("+new"));
 }
 
 #[test]
@@ -314,7 +318,7 @@ fn formats_bash_tool_result_with_output_tail() {
 }
 
 #[test]
-fn formats_live_bash_tool_result_without_duplicate_tail() {
+fn formats_live_bash_tool_result_with_output_tail() {
     let rendered = format_tool_result(
         "bash",
         &json!({
@@ -328,7 +332,8 @@ fn formats_live_bash_tool_result_without_duplicate_tail() {
 
     assert!(rendered.contains("bash finished with exit code 0"));
     assert!(rendered.contains("output streamed above"));
-    assert!(!rendered.contains("stdout:"));
+    assert!(rendered.contains("stdout:"));
+    assert!(rendered.contains("line 2"));
 }
 
 #[test]
