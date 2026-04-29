@@ -696,6 +696,14 @@ fn tool_action_label(message: &str) -> Option<String> {
                 rest.as_str()
             }
         )),
+        "web_search" => Some(format!(
+            "Search {}",
+            if rest.is_empty() {
+                "web"
+            } else {
+                rest.as_str()
+            }
+        )),
         other => Some(format!(
             "Run {}",
             if rest.is_empty() { other } else { message }
