@@ -149,7 +149,9 @@ fn push_progress_group<'a>(
             compact_summary_lines(messages.as_slice(), 4, "more running step(s)"),
             active,
         ))),
-        _ => {}
+        _ => {
+            // Callers filter to known progress roles; ignore unknown roles defensively.
+        }
     }
 }
 
@@ -201,7 +203,9 @@ fn push_live_event_group<'a>(
             compact_recent_first_summary_lines(actions.as_slice(), 4, "more running step(s)"),
             active,
         ))),
-        _ => {}
+        _ => {
+            // Active live events currently produce only known progress roles.
+        }
     }
 }
 
