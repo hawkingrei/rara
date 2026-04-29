@@ -488,7 +488,7 @@ fn deepseek_reasoner_plan_with_explicit_thinking_uses_max_effort() {
 }
 
 #[test]
-fn deepseek_explicit_thinking_disables_for_legacy_assistant_history_without_reasoning() {
+fn deepseek_explicit_thinking_folds_legacy_assistant_history_without_reasoning() {
     let body = build_chat_completion_request_body(
         "deepseek-v4-pro",
         &[
@@ -511,8 +511,17 @@ fn deepseek_explicit_thinking_disables_for_legacy_assistant_history_without_reas
         LlmTurnMetadata::default(),
     );
 
-    assert_eq!(body["thinking"]["type"], "disabled");
-    assert!(body.get("reasoning_effort").is_none());
+    assert_eq!(body["thinking"]["type"], "enabled");
+    assert_eq!(body["reasoning_effort"], "high");
+    let messages = body["messages"].as_array().expect("messages");
+    assert_eq!(messages.len(), 2);
+    assert_eq!(messages[0]["role"], "system");
+    assert!(messages[0]["content"]
+        .as_str()
+        .expect("folded note")
+        .contains("Legacy answer without provider metadata."));
+    assert_eq!(messages[1]["role"], "user");
+    assert_eq!(messages[1]["content"], "Continue.");
 }
 
 #[test]
@@ -548,6 +557,61 @@ fn deepseek_explicit_thinking_stays_enabled_for_reasoning_compatible_history() {
 
     assert_eq!(body["thinking"]["type"], "enabled");
     assert_eq!(body["reasoning_effort"], "high");
+}
+
+#[test]
+fn deepseek_explicit_thinking_keeps_compatible_suffix_after_legacy_prefix() {
+    let body = build_chat_completion_request_body(
+        "deepseek-v4-pro",
+        &[
+            Message {
+                role: "system".to_string(),
+                content: json!("System prompt."),
+            },
+            Message {
+                role: "assistant".to_string(),
+                content: serde_json::to_value(vec![ContentBlock::Text {
+                    text: "Legacy answer.".to_string(),
+                }])
+                .expect("content"),
+            },
+            Message {
+                role: "assistant".to_string(),
+                content: serde_json::to_value(vec![
+                    ContentBlock::Text {
+                        text: "Fresh answer.".to_string(),
+                    },
+                    ContentBlock::ProviderMetadata {
+                        provider: "deepseek".to_string(),
+                        key: "reasoning_content".to_string(),
+                        value: json!("fresh reasoning"),
+                    },
+                ])
+                .expect("content"),
+            },
+            Message {
+                role: "user".to_string(),
+                content: json!("Continue."),
+            },
+        ],
+        &[],
+        OpenAiEndpointKind::Deepseek,
+        None,
+        Some(true),
+        LlmTurnMetadata::default(),
+    );
+
+    assert_eq!(body["thinking"]["type"], "enabled");
+    let messages = body["messages"].as_array().expect("messages");
+    assert_eq!(messages.len(), 4);
+    assert_eq!(messages[0]["content"], "System prompt.");
+    assert!(messages[1]["content"]
+        .as_str()
+        .expect("folded note")
+        .contains("Legacy answer."));
+    assert_eq!(messages[2]["content"], "Fresh answer.");
+    assert_eq!(messages[2]["reasoning_content"], "fresh reasoning");
+    assert_eq!(messages[3]["content"], "Continue.");
 }
 
 #[test]

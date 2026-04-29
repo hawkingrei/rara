@@ -26,8 +26,10 @@ runtime contract instead of an inferred prose intent.
   as transient live Thinking output while still preserving DeepSeek
   `reasoning_content` in provider metadata for API roundtrip.
 - Added DeepSeek thinking compatibility fallback for legacy histories. If an
-  old assistant message has no preserved `reasoning_content`, RARA disables
-  thinking for that request instead of sending a body DeepSeek rejects.
+  old assistant message has no preserved `reasoning_content`, RARA folds the
+  incompatible prefix into a normal system context note and keeps later
+  reasoning-compatible history intact. This keeps thinking enabled without
+  fabricating provider reasoning content.
 - Added a focused agent planning regression test for the execute-mode
   structured continuation boundary.
 
@@ -59,7 +61,8 @@ runtime contract instead of an inferred prose intent.
 - `cargo test active_turn_cell_shows_live_thinking_stream -- --nocapture`
 - `cargo test deepseek_streaming_reasoning_content_preserves_exact_bytes -- --nocapture`
 - `cargo test deepseek_tool_call_reasoning_content_roundtrips_without_trimming -- --nocapture`
-- `cargo test deepseek_explicit_thinking_disables_for_legacy_assistant_history_without_reasoning -- --nocapture`
+- `cargo test deepseek_explicit_thinking_folds_legacy_assistant_history_without_reasoning -- --nocapture`
 - `cargo test deepseek_explicit_thinking_stays_enabled_for_reasoning_compatible_history -- --nocapture`
+- `cargo test deepseek_explicit_thinking_keeps_compatible_suffix_after_legacy_prefix -- --nocapture`
 - `cargo check`
 - `git diff --check`

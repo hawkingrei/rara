@@ -314,7 +314,7 @@ pub(super) fn build_chat_completion_request_body(
     thinking: Option<bool>,
     metadata: LlmTurnMetadata,
 ) -> Value {
-    let openai_messages = to_openai_messages_for_endpoint(messages, endpoint_kind);
+    let mut openai_messages = to_openai_messages_for_endpoint(messages, endpoint_kind);
     let openai_tools: Vec<Value> = tools
         .iter()
         .map(|t| {
@@ -334,7 +334,13 @@ pub(super) fn build_chat_completion_request_body(
         body["tools"] = json!(openai_tools);
     }
     let strong_reasoning = !openai_tools.is_empty() || metadata.prefers_strong_reasoning();
-    normalize_deepseek_thinking_tool_history(&mut body, model, endpoint_kind, thinking);
+    if thinking == Some(true)
+        && endpoint_kind == OpenAiEndpointKind::Deepseek
+        && deepseek_supports_thinking(model)
+    {
+        openai_messages = fold_deepseek_legacy_reasoning_history(openai_messages);
+        body["messages"] = Value::Array(openai_messages);
+    }
     apply_deepseek_thinking_options(
         &mut body,
         model,
@@ -346,33 +352,103 @@ pub(super) fn build_chat_completion_request_body(
     body
 }
 
-fn normalize_deepseek_thinking_tool_history(
-    body: &mut Value,
-    model: &str,
-    endpoint_kind: OpenAiEndpointKind,
-    thinking: Option<bool>,
-) {
-    if endpoint_kind != OpenAiEndpointKind::Deepseek
-        || !deepseek_supports_thinking(model)
-        || matches!(thinking, Some(false))
+fn fold_deepseek_legacy_reasoning_history(openai_messages: Vec<Value>) -> Vec<Value> {
+    let Some(last_legacy_assistant_idx) = openai_messages.iter().rposition(|message| {
+        message.get("role").and_then(Value::as_str) == Some("assistant")
+            && !message
+                .get("reasoning_content")
+                .and_then(Value::as_str)
+                .is_some_and(|reasoning| !reasoning.is_empty())
+    }) else {
+        return openai_messages;
+    };
+
+    let mut fold_end = last_legacy_assistant_idx;
+    while openai_messages
+        .get(fold_end + 1)
+        .and_then(|message| message.get("role"))
+        .and_then(Value::as_str)
+        == Some("tool")
     {
-        return;
+        fold_end += 1;
     }
 
-    let Some(messages) = body.get_mut("messages").and_then(Value::as_array_mut) else {
-        return;
-    };
-    for message in messages {
-        if message.get("role").and_then(Value::as_str) != Some("assistant") {
-            continue;
+    let leading_system_count = openai_messages
+        .iter()
+        .take_while(|message| message.get("role").and_then(Value::as_str) == Some("system"))
+        .count();
+    let mut folded = Vec::with_capacity(openai_messages.len() - fold_end + leading_system_count);
+    folded.extend(openai_messages.iter().take(leading_system_count).cloned());
+
+    let note = deepseek_legacy_history_note(&openai_messages[leading_system_count..=fold_end]);
+    if !note.is_empty() {
+        folded.push(json!({
+            "role": "system",
+            "content": note,
+        }));
+    }
+    folded.extend(openai_messages.into_iter().skip(fold_end + 1));
+    folded
+}
+
+fn deepseek_legacy_history_note(messages: &[Value]) -> String {
+    let entries = messages
+        .iter()
+        .filter_map(deepseek_legacy_history_entry)
+        .collect::<Vec<_>>();
+    if entries.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "Previous conversation context folded because earlier assistant messages were created before DeepSeek reasoning metadata was preserved. Do not treat this note as model reasoning.\n{}",
+            entries.join("\n")
+        )
+    }
+}
+
+fn deepseek_legacy_history_entry(message: &Value) -> Option<String> {
+    let role = message.get("role").and_then(Value::as_str)?;
+    let mut parts = Vec::new();
+    if let Some(content) = message.get("content") {
+        let content = render_legacy_openai_content(content);
+        if !content.is_empty() {
+            parts.push(content);
         }
-        let has_tool_calls = message
-            .get("tool_calls")
-            .and_then(Value::as_array)
-            .is_some_and(|tool_calls| !tool_calls.is_empty());
-        if has_tool_calls && message.get("reasoning_content").is_none() {
-            message["reasoning_content"] = Value::String(String::new());
+    }
+    if let Some(tool_calls) = message.get("tool_calls").and_then(Value::as_array) {
+        for tool_call in tool_calls {
+            if let Some(name) = tool_call
+                .get("function")
+                .and_then(|function| function.get("name"))
+                .and_then(Value::as_str)
+            {
+                parts.push(format!("tool_call: {name}"));
+            }
         }
+    }
+    if parts.is_empty() {
+        None
+    } else {
+        Some(format!("{role}: {}", parts.join(" | ")))
+    }
+}
+
+fn render_legacy_openai_content(content: &Value) -> String {
+    match content {
+        Value::String(text) => text.trim().to_string(),
+        Value::Array(items) => items
+            .iter()
+            .filter_map(|item| {
+                item.get("text")
+                    .and_then(Value::as_str)
+                    .or_else(|| item.get("content").and_then(Value::as_str))
+            })
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n"),
+        Value::Null => String::new(),
+        other => other.to_string(),
     }
 }
 
