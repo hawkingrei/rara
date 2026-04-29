@@ -9,7 +9,9 @@ const RECENT_FILE_EXCERPT_LIMIT: usize = 3;
 const RECENT_FILE_EXCERPT_CHAR_LIMIT: usize = 600;
 const COMPACT_BOUNDARY_KIND: &str = "compact_boundary";
 const COMPACT_BOUNDARY_VERSION: u32 = 1;
-const AUTO_COMPACTION_RETRY_GROWTH_TOKENS: usize = 8_192;
+// Wait for about two 4K chunks of new context before retrying automatic
+// compaction after a timeout or backend failure.
+const AUTO_COMPACTION_RETRY_HYSTERESIS_TOKENS: usize = 8_192;
 #[cfg(not(test))]
 const COMPACTION_SUMMARY_TIMEOUT: Duration = Duration::from_secs(120);
 
@@ -231,7 +233,7 @@ impl Agent {
     fn record_auto_compaction_failure(&mut self, current_tokens: usize) {
         self.compact_state.consecutive_auto_compaction_failures += 1;
         self.compact_state.auto_compaction_retry_after_tokens =
-            Some(current_tokens.saturating_add(AUTO_COMPACTION_RETRY_GROWTH_TOKENS));
+            Some(current_tokens.saturating_add(AUTO_COMPACTION_RETRY_HYSTERESIS_TOKENS));
     }
 
     pub(super) fn current_compact_budget(&self) -> Option<ContextBudget> {

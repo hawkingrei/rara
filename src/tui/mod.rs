@@ -790,16 +790,17 @@ async fn handle_submit(
     if app.input.is_empty() {
         return Ok(false);
     }
+    let input = std::mem::take(&mut app.input);
+    app.input_cursor_offset = None;
+    let trimmed = input.trim().to_string();
+    if trimmed.is_empty() {
+        return Ok(false);
+    }
+    app.record_input_history(&trimmed);
+
     if app.is_busy() {
-        let input = std::mem::take(&mut app.input);
-        app.input_cursor_offset = None;
-        let trimmed = input.trim();
-        if trimmed.is_empty() {
-            return Ok(false);
-        }
-        app.record_input_history(trimmed);
         if trimmed.starts_with('/') {
-            if let Some(command) = parse_local_command(trimmed) {
+            if let Some(command) = parse_local_command(&trimmed) {
                 if matches!(command.kind, LocalCommandKind::Quit) {
                     return execute_local_command(command, app, agent_slot, oauth_manager).await;
                 }
@@ -813,9 +814,9 @@ async fn handle_submit(
                 .as_ref()
                 .is_some_and(|task| matches!(&task.kind, TaskKind::Query));
             let queued = if pending_for_tool_boundary {
-                app.queue_follow_up_message_after_next_tool_boundary(trimmed.to_string())
+                app.queue_follow_up_message_after_next_tool_boundary(trimmed.clone())
             } else {
-                app.queue_follow_up_message(trimmed.to_string())
+                app.queue_follow_up_message(trimmed.clone())
             };
             let suffix = if queued > 1 {
                 format!(" {queued} follow-up messages are queued.")
@@ -834,24 +835,18 @@ async fn handle_submit(
         return Ok(false);
     }
 
-    let input = std::mem::take(&mut app.input);
-    app.input_cursor_offset = None;
-    if app.has_pending_plan_approval() && !input.trim_start().starts_with('/') {
-        app.record_input_history(input.trim());
-        if handle_pending_plan_approval_submit(app, agent_slot, input.trim()).await? {
+    if app.has_pending_plan_approval() && !trimmed.starts_with('/') {
+        if handle_pending_plan_approval_submit(app, agent_slot, &trimmed).await? {
             return Ok(false);
         }
     }
-    if let Some(command) = parse_local_command(&input) {
-        app.record_input_history(input.trim());
+    if let Some(command) = parse_local_command(&trimmed) {
         if execute_local_command(command, app, agent_slot, oauth_manager).await? {
             return Ok(true);
         }
-    } else if input.trim_start().starts_with('/') {
-        app.record_input_history(input.trim());
-        app.push_notice(format!("Unknown command '{}'. Use /help.", input.trim()));
+    } else if trimmed.starts_with('/') {
+        app.push_notice(format!("Unknown command '{}'. Use /help.", trimmed));
     } else if let Some(agent) = agent_slot.take() {
-        app.record_input_history(input.trim());
         let mut agent = agent;
         if app.pending_request_input().is_some() {
             if app.has_local_pending_request_input() {
@@ -861,7 +856,7 @@ async fn handle_submit(
                         .source
                         .clone()
                         .unwrap_or_else(|| "sub-agent".to_string());
-                    let answer = input.trim().to_string();
+                    let answer = trimmed.clone();
                     app.record_completed_interaction(
                         crate::tui::state::InteractionKind::RequestInput,
                         interaction.title.clone(),
@@ -882,10 +877,10 @@ async fn handle_submit(
                     return Ok(false);
                 }
             } else {
-                agent.consume_pending_user_input(input.trim());
+                agent.consume_pending_user_input(&trimmed);
             }
         }
-        let prompt = input.trim().to_string();
+        let prompt = trimmed;
         app.clear_pending_planning_suggestion();
         start_query_task(app, prompt, agent);
     }

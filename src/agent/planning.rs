@@ -456,7 +456,6 @@ impl Agent {
             && continue_inspection
             && self.pending_user_input.is_none()
             && self.pending_approval.is_none()
-            && !self.inspection_progress.has_minimum_review_evidence()
     }
 
     pub(super) fn ensure_active_plan_step(&mut self) {

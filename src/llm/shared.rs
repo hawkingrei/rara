@@ -330,22 +330,34 @@ pub(super) fn context_budget_from_window(context_window_tokens: usize) -> Contex
     }
 }
 
+const DEEPSEEK_LONG_CONTEXT_WINDOW_TOKENS: usize = 1_000_000;
+const OPENAI_LONG_CONTEXT_WINDOW_TOKENS: usize = 200_000;
+const OPENAI_GPT4_CONTEXT_WINDOW_TOKENS: usize = 128_000;
+const DEEPSEEK_LONG_CONTEXT_MODEL_MARKERS: &[&str] = &["deepseek-v4"];
+
 pub(super) fn model_context_budget(model: &str) -> Option<ContextBudget> {
     let canonical = model.trim().to_ascii_lowercase();
-    let context_window_tokens = if canonical.contains("deepseek") && canonical.contains("v4") {
-        1_000_000
+    let context_window_tokens = if is_deepseek_long_context_model(&canonical) {
+        DEEPSEEK_LONG_CONTEXT_WINDOW_TOKENS
     } else if canonical.contains("gpt-5")
         || canonical.contains("codex")
         || canonical.contains("gpt-4.1")
         || canonical.contains("gpt-4o")
     {
-        200_000
+        OPENAI_LONG_CONTEXT_WINDOW_TOKENS
     } else if canonical.contains("gpt-4") {
-        128_000
+        OPENAI_GPT4_CONTEXT_WINDOW_TOKENS
     } else {
         return None;
     };
     Some(context_budget_from_window(context_window_tokens))
+}
+
+fn is_deepseek_long_context_model(canonical_model: &str) -> bool {
+    canonical_model.contains("deepseek")
+        && DEEPSEEK_LONG_CONTEXT_MODEL_MARKERS
+            .iter()
+            .any(|marker| canonical_model.contains(marker))
 }
 
 pub(crate) fn hashed_embedding(text: &str, dim: usize) -> Vec<f32> {

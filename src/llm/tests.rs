@@ -347,7 +347,7 @@ fn deepseek_reasoner_defaults_preserve_standard_body() {
 }
 
 #[test]
-fn deepseek_thinking_tool_history_backfills_missing_reasoning_content() {
+fn deepseek_thinking_tool_history_folds_missing_reasoning_content() {
     let body = build_chat_completion_request_body(
         "deepseek-reasoner",
         &[
@@ -376,9 +376,14 @@ fn deepseek_thinking_tool_history_backfills_missing_reasoning_content() {
         LlmTurnMetadata::default(),
     );
 
-    assert_eq!(body["messages"][0]["role"], "assistant");
-    assert_eq!(body["messages"][0]["reasoning_content"], "");
-    assert_eq!(body["messages"][0]["tool_calls"][0]["id"], "tool-1");
+    let messages = body["messages"].as_array().expect("messages");
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0]["role"], "system");
+    let folded_note = messages[0]["content"].as_str().expect("folded note");
+    assert!(folded_note.contains("tool_call: read_file"));
+    assert!(folded_note.contains("id=tool-1"));
+    assert!(folded_note.contains("Cargo.toml"));
+    assert!(folded_note.contains("[package]"));
 }
 
 #[test]
@@ -522,6 +527,39 @@ fn deepseek_explicit_thinking_folds_legacy_assistant_history_without_reasoning()
         .contains("Legacy answer without provider metadata."));
     assert_eq!(messages[1]["role"], "user");
     assert_eq!(messages[1]["content"], "Continue.");
+}
+
+#[test]
+fn deepseek_folds_legacy_tool_calls_with_id_and_arguments() {
+    let body = build_chat_completion_request_body(
+        "deepseek-v4-pro",
+        &[
+            Message {
+                role: "assistant".to_string(),
+                content: serde_json::to_value(vec![ContentBlock::ToolUse {
+                    id: "call-1".to_string(),
+                    name: "read_file".to_string(),
+                    input: json!({"path": "Cargo.toml"}),
+                }])
+                .expect("content"),
+            },
+            Message {
+                role: "user".to_string(),
+                content: json!("Continue."),
+            },
+        ],
+        &[],
+        OpenAiEndpointKind::Deepseek,
+        None,
+        Some(true),
+        LlmTurnMetadata::default(),
+    );
+
+    let messages = body["messages"].as_array().expect("messages");
+    let folded_note = messages[0]["content"].as_str().expect("folded note");
+    assert!(folded_note.contains("tool_call: read_file"));
+    assert!(folded_note.contains("id=call-1"));
+    assert!(folded_note.contains("Cargo.toml"));
 }
 
 #[test]
@@ -1367,6 +1405,11 @@ fn derives_context_budget_for_deepseek_v4_models() {
     let budget = model_context_budget("deepseek-v4-preview").expect("budget");
     assert_eq!(budget.context_window_tokens, 1_000_000);
     assert!(budget.compact_threshold_tokens > 900_000);
+}
+
+#[test]
+fn does_not_infer_deepseek_long_context_from_unlisted_versions() {
+    assert!(model_context_budget("deepseek-v3").is_none());
 }
 
 #[test]

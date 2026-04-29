@@ -413,6 +413,8 @@ fn deepseek_legacy_history_note(messages: &[Value]) -> String {
     }
 }
 
+const DEEPSEEK_FOLDED_TOOL_ARGUMENTS_MAX_CHARS: usize = 240;
+
 fn deepseek_legacy_history_entry(message: &Value) -> Option<String> {
     let role = message.get("role").and_then(Value::as_str)?;
     let mut parts = Vec::new();
@@ -424,12 +426,8 @@ fn deepseek_legacy_history_entry(message: &Value) -> Option<String> {
     }
     if let Some(tool_calls) = message.get("tool_calls").and_then(Value::as_array) {
         for tool_call in tool_calls {
-            if let Some(name) = tool_call
-                .get("function")
-                .and_then(|function| function.get("name"))
-                .and_then(Value::as_str)
-            {
-                parts.push(format!("tool_call: {name}"));
+            if let Some(rendered) = render_deepseek_folded_tool_call(tool_call) {
+                parts.push(rendered);
             }
         }
     }
@@ -438,6 +436,47 @@ fn deepseek_legacy_history_entry(message: &Value) -> Option<String> {
     } else {
         Some(format!("{role}: {}", parts.join(" | ")))
     }
+}
+
+fn render_deepseek_folded_tool_call(tool_call: &Value) -> Option<String> {
+    let function = tool_call.get("function")?;
+    let name = function.get("name").and_then(Value::as_str)?;
+    let mut rendered = format!("tool_call: {name}");
+    if let Some(id) = tool_call
+        .get("id")
+        .and_then(Value::as_str)
+        .filter(|id| !id.is_empty())
+    {
+        rendered.push_str(&format!(" id={id}"));
+    }
+    if let Some(arguments) = function.get("arguments") {
+        let arguments = render_deepseek_folded_tool_arguments(arguments);
+        if !arguments.is_empty() {
+            rendered.push_str(&format!(" arguments={arguments}"));
+        }
+    }
+    Some(rendered)
+}
+
+fn render_deepseek_folded_tool_arguments(arguments: &Value) -> String {
+    let raw = match arguments {
+        Value::String(text) => text.clone(),
+        other => other.to_string(),
+    };
+    truncate_deepseek_folded_tool_arguments(redact_secrets(raw).trim())
+}
+
+fn truncate_deepseek_folded_tool_arguments(arguments: &str) -> String {
+    let char_count = arguments.chars().count();
+    if char_count <= DEEPSEEK_FOLDED_TOOL_ARGUMENTS_MAX_CHARS {
+        return arguments.to_string();
+    }
+    let mut truncated = arguments
+        .chars()
+        .take(DEEPSEEK_FOLDED_TOOL_ARGUMENTS_MAX_CHARS)
+        .collect::<String>();
+    truncated.push_str("... [truncated]");
+    truncated
 }
 
 fn render_legacy_openai_content(content: &Value) -> String {

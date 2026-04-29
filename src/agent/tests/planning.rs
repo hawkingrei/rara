@@ -745,6 +745,9 @@ fn execute_mode_continuation_requires_structured_inspection_marker() {
 
     assert!(!agent.should_continue_execute_without_tools(1, false));
     assert!(agent.should_continue_execute_without_tools(1, true));
+
+    agent.inspection_progress.source_reads = 2;
+    assert!(agent.should_continue_execute_without_tools(1, true));
 }
 
 #[test]

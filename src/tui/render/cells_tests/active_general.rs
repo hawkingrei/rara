@@ -844,6 +844,37 @@ fn active_turn_cell_shows_live_thinking_stream() {
 }
 
 #[test]
+fn active_turn_cell_shows_live_thinking_tail_without_cloning_full_body() {
+    let temp = tempdir().unwrap();
+    let mut app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("build tui app");
+    app.runtime_phase = RuntimePhase::ProcessingResponse;
+    app.active_turn = TranscriptTurn {
+        entries: vec![TranscriptEntry {
+            role: "You".into(),
+            message: "Review this repository".into(),
+            payload: None,
+        }],
+    };
+    app.append_agent_thinking_delta("line 1\nline 2\nline 3\nline 4\nline 5\n");
+
+    let rendered = ActiveTurnCell::new(&app, Some(Path::new(".")))
+        .display_lines(100)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(rendered.contains(" Thinking "));
+    assert!(rendered.contains("... 1 more line(s)"));
+    assert!(!rendered.contains("line 1"));
+    assert!(rendered.contains("line 2"));
+    assert!(rendered.contains("line 5"));
+}
+
+#[test]
 fn active_turn_cell_renders_live_response_as_lightweight_message() {
     let temp = tempdir().unwrap();
     let mut app = TuiApp::new(ConfigManager {

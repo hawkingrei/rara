@@ -199,10 +199,16 @@ impl<'a> ThinkingCell<'a> {
 
 impl HistoryCell for ThinkingCell<'_> {
     fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
-        let body = markdown_body_lines(self.lines, usize::MAX);
-        let start = body.len().saturating_sub(self.max_lines);
+        let start = self.lines.len().saturating_sub(self.max_lines);
+        let body = markdown_body_lines(&self.lines[start..], self.max_lines);
         let mut lines = vec![Line::from(section_span("Thinking", Color::LightBlue))];
-        lines.extend(body.into_iter().skip(start).map(|mut line| {
+        if start > 0 {
+            lines.push(Line::from(Span::styled(
+                format!("  ... {start} more line(s)"),
+                Style::default().fg(Color::DarkGray),
+            )));
+        }
+        lines.extend(body.into_iter().map(|mut line| {
             line.spans.insert(0, Span::raw("  "));
             line
         }));
