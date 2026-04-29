@@ -12,6 +12,7 @@ mod redaction;
 mod runtime_context;
 mod sandbox;
 mod session;
+mod shell_env;
 mod skill;
 mod state_db;
 mod thread_cli;

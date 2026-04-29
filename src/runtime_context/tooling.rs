@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::llm::LlmBackend;
@@ -37,6 +38,7 @@ pub(super) fn create_full_tool_manager(
     sandbox: Arc<SandboxManager>,
     skill_manager: Arc<SkillManager>,
     prompt_config: PromptRuntimeConfig,
+    shell_env: Arc<HashMap<String, String>>,
 ) -> ToolManager {
     let mut tm = ToolManager::new();
     let vector_db_uri = vector_db_uri_for_workspace(&workspace);
@@ -51,6 +53,7 @@ pub(super) fn create_full_tool_manager(
     tm.register(Box::new(BashTool {
         sandbox: sandbox.clone(),
         background_tasks: background_tasks.clone(),
+        base_env: shell_env.clone(),
     }));
     tm.register(Box::new(BackgroundTaskListTool {
         background_tasks: background_tasks.clone(),
@@ -62,6 +65,7 @@ pub(super) fn create_full_tool_manager(
     tm.register(Box::new(PtyStartTool {
         sessions: pty_sessions.clone(),
         sandbox: sandbox.clone(),
+        base_env: shell_env.clone(),
     }));
     tm.register(Box::new(PtyReadTool {
         sessions: pty_sessions.clone(),

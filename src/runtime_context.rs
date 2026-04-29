@@ -17,6 +17,7 @@ use crate::local_backend::{LocalLlmBackend, LocalProgressReporter};
 use crate::prompt::{PromptRuntimeConfig, PromptSkillSummary};
 use crate::sandbox::SandboxManager;
 use crate::session::SessionManager;
+use crate::shell_env::capture_shell_environment_snapshot;
 use crate::tool::ToolManager;
 use crate::vectordb::VectorDB;
 use crate::workspace::WorkspaceMemory;
@@ -60,7 +61,10 @@ pub(crate) async fn initialize_rara_context(
     let workspace = Arc::new(WorkspaceMemory::new()?);
     let vdb = Arc::new(VectorDB::new(&vector_db_uri_for_workspace(&workspace)));
     let session_manager = Arc::new(SessionManager::new()?);
-    let sandbox_manager = Arc::new(SandboxManager::new()?);
+    let shell_env = capture_shell_environment_snapshot().await;
+    let sandbox_manager = Arc::new(SandboxManager::new_with_command_path(
+        shell_env.env.get("PATH").cloned(),
+    )?);
 
     let mut prompt_config = PromptRuntimeConfig::from_config(config);
     let skill_manager = load_skill_manager(&mut prompt_config.warnings);
@@ -82,6 +86,7 @@ pub(crate) async fn initialize_rara_context(
         sandbox_manager,
         skill_manager,
         prompt_config.clone(),
+        Arc::new(shell_env.env),
     );
     let warnings = prompt_config.warnings.clone();
 

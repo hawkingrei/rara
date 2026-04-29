@@ -21,6 +21,7 @@ use uuid::Uuid;
 pub struct BashTool {
     pub sandbox: Arc<SandboxManager>,
     pub background_tasks: Arc<BackgroundTaskStore>,
+    pub base_env: Arc<HashMap<String, String>>,
 }
 
 pub struct BackgroundTaskStatusTool {
@@ -619,6 +620,7 @@ impl BackgroundTaskStore {
 
 fn sandbox_command_env(
     sandbox_home: &Path,
+    base_env: &HashMap<String, String>,
     overrides: &HashMap<String, String>,
 ) -> HashMap<String, String> {
     let sandbox_home = sandbox_home.to_string_lossy();
@@ -641,24 +643,42 @@ fn sandbox_command_env(
             format!("{sandbox_home}/.local/share"),
         ),
     ]);
-    if let Ok(path) = env::var("PATH") {
-        env_map.insert("PATH".to_string(), path);
-    }
-    env_map.extend(overrides.clone());
+    env_map.extend(
+        base_env
+            .iter()
+            .map(|(key, value)| (key.clone(), value.clone())),
+    );
+    env_map.extend(
+        overrides
+            .iter()
+            .map(|(key, value)| (key.clone(), value.clone())),
+    );
     env_map
 }
 
 fn command_env_for_wrapped(
     wrapped: &WrappedCommand,
+    base_env: &HashMap<String, String>,
     overrides: &HashMap<String, String>,
 ) -> Result<HashMap<String, String>, ToolError> {
     if wrapped.sandboxed {
         let sandbox_home = wrapped.sandbox_home.as_deref().ok_or_else(|| {
             ToolError::ExecutionFailed("sandboxed command is missing sandbox home".into())
         })?;
-        Ok(sandbox_command_env(sandbox_home, overrides))
+        Ok(sandbox_command_env(sandbox_home, base_env, overrides))
     } else {
-        Ok(overrides.clone())
+        let mut env_map = HashMap::with_capacity(base_env.len() + overrides.len());
+        env_map.extend(
+            base_env
+                .iter()
+                .map(|(key, value)| (key.clone(), value.clone())),
+        );
+        env_map.extend(
+            overrides
+                .iter()
+                .map(|(key, value)| (key.clone(), value.clone())),
+        );
+        Ok(env_map)
     }
 }
 
@@ -738,7 +758,7 @@ impl Tool for BashTool {
                     ToolError::ExecutionFailed(format!("{} {}", e, sandbox_failure_hint()))
                 })?
         };
-        let command_env = command_env_for_wrapped(&wrapped, &request.env)?;
+        let command_env = command_env_for_wrapped(&wrapped, &self.base_env, &request.env)?;
 
         if wrapped.sandboxed && wrapped.sandbox_backend == "macos-seatbelt" {
             let sandbox_home = wrapped.sandbox_home.as_deref().ok_or_else(|| {
@@ -1202,23 +1222,6 @@ mod tests {
     use std::sync::Arc;
     use tempfile::tempdir;
 
-    fn set_env_var<K, V>(key: K, value: V)
-    where
-        K: AsRef<std::ffi::OsStr>,
-        V: AsRef<std::ffi::OsStr>,
-    {
-        // This test restores PATH before returning.
-        unsafe { std::env::set_var(key, value) };
-    }
-
-    fn remove_env_var<K>(key: K)
-    where
-        K: AsRef<std::ffi::OsStr>,
-    {
-        // This test restores PATH before returning.
-        unsafe { std::env::remove_var(key) };
-    }
-
     #[test]
     fn parses_legacy_shell_payload() {
         let input = BashCommandInput::from_value(json!({
@@ -1366,9 +1369,8 @@ mod tests {
     #[test]
     fn sandbox_command_env_defaults_home_and_xdg_roots() {
         let sandbox_home = Path::new("/tmp/rara-test-home");
-        let original_path = std::env::var_os("PATH");
-        set_env_var("PATH", "/custom/bin:/usr/bin");
-        let env_map = sandbox_command_env(sandbox_home, &HashMap::new());
+        let base_env = HashMap::from([("PATH".to_string(), "/custom/bin:/usr/bin".to_string())]);
+        let env_map = sandbox_command_env(sandbox_home, &base_env, &HashMap::new());
 
         assert_eq!(
             env_map.get("HOME").map(String::as_str),
@@ -1386,11 +1388,6 @@ mod tests {
             env_map.get("PATH").map(String::as_str),
             Some("/custom/bin:/usr/bin")
         );
-        if let Some(path) = original_path {
-            set_env_var("PATH", path);
-        } else {
-            remove_env_var("PATH");
-        }
     }
 
     #[test]
@@ -1398,6 +1395,7 @@ mod tests {
         let sandbox_home = Path::new("/tmp/rara-test-home");
         let env_map = sandbox_command_env(
             sandbox_home,
+            &HashMap::from([("PATH".to_string(), "/snapshot/bin".to_string())]),
             &HashMap::from([
                 ("HOME".to_string(), "/custom/home".to_string()),
                 (
@@ -1447,11 +1445,16 @@ mod tests {
         };
         let env_map = command_env_for_wrapped(
             &wrapped,
+            &HashMap::from([("PATH".to_string(), "/snapshot/bin".to_string())]),
             &HashMap::from([("HOME".to_string(), "/real/home".to_string())]),
         )
         .expect("direct env");
 
         assert_eq!(env_map.get("HOME").map(String::as_str), Some("/real/home"));
+        assert_eq!(
+            env_map.get("PATH").map(String::as_str),
+            Some("/snapshot/bin")
+        );
         assert!(
             !env_map.contains_key("XDG_CONFIG_HOME"),
             "direct fallback should not apply sandbox-only XDG roots"
@@ -1499,6 +1502,7 @@ mod tests {
                 BackgroundTaskStore::new(temp.path().join(".rara/background-tasks"))
                     .expect("background task store"),
             ),
+            base_env: Arc::new(HashMap::new()),
         };
         let mut events = Vec::new();
         let result = tool
@@ -1560,6 +1564,7 @@ mod tests {
         let tool = BashTool {
             sandbox: Arc::new(sandbox),
             background_tasks: background_tasks.clone(),
+            base_env: Arc::new(HashMap::new()),
         };
         let status_tool = BackgroundTaskStatusTool {
             background_tasks: background_tasks.clone(),
@@ -1625,6 +1630,7 @@ mod tests {
         let tool = BashTool {
             sandbox: Arc::new(sandbox),
             background_tasks: background_tasks.clone(),
+            base_env: Arc::new(HashMap::new()),
         };
         let list_tool = BackgroundTaskListTool {
             background_tasks: background_tasks.clone(),

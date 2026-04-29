@@ -1,8 +1,8 @@
-use crate::sandbox::{sandbox_failure_hint, SandboxManager, WrappedCommand};
+use crate::sandbox::{SandboxManager, WrappedCommand, sandbox_failure_hint};
 use crate::tool::{Tool, ToolError};
 use async_trait::async_trait;
 use portable_pty::{CommandBuilder, NativePtySystem, PtySize, PtySystem};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::env;
 use std::fs::OpenOptions;
@@ -16,6 +16,7 @@ use uuid::Uuid;
 pub struct PtyStartTool {
     pub sessions: Arc<PtySessionStore>,
     pub sandbox: Arc<SandboxManager>,
+    pub base_env: Arc<HashMap<String, String>>,
 }
 
 pub struct PtyReadTool {
@@ -89,6 +90,7 @@ impl PtySessionStore {
         command: String,
         wrapped: WrappedCommand,
         cwd: String,
+        base_env: &HashMap<String, String>,
         env: HashMap<String, String>,
         rows: u16,
         cols: u16,
@@ -104,7 +106,7 @@ impl PtySessionStore {
                 pixel_height: 0,
             })
             .map_err(|err| ToolError::ExecutionFailed(format!("open pty: {err}")))?;
-        let command_env = command_env_for_wrapped(&wrapped, &env)?;
+        let command_env = command_env_for_wrapped(&wrapped, base_env, &env)?;
         if wrapped.sandboxed && wrapped.sandbox_backend == "macos-seatbelt" {
             let sandbox_home = wrapped.sandbox_home.as_deref().ok_or_else(|| {
                 ToolError::ExecutionFailed("sandboxed pty is missing sandbox home".into())
@@ -360,7 +362,7 @@ impl Tool for PtyStartTool {
         let rows = parse_pty_dimension(input.get("rows"), 24, "rows")?;
         let cols = parse_pty_dimension(input.get("cols"), 120, "cols")?;
         self.sessions
-            .start(command, wrapped, cwd, env, rows, cols)?
+            .start(command, wrapped, cwd, &self.base_env, env, rows, cols)?
             .into_json(12_000)
             .await
     }
@@ -574,9 +576,15 @@ fn parse_env(value: Option<&Value>) -> Result<HashMap<String, String>, ToolError
 
 fn command_env_for_wrapped(
     wrapped: &WrappedCommand,
+    base_env: &HashMap<String, String>,
     overrides: &HashMap<String, String>,
 ) -> Result<HashMap<String, String>, ToolError> {
-    let mut env_map = HashMap::new();
+    let mut env_map = HashMap::with_capacity(base_env.len() + overrides.len() + 4);
+    env_map.extend(
+        base_env
+            .iter()
+            .map(|(key, value)| (key.clone(), value.clone())),
+    );
     if wrapped.sandboxed {
         let sandbox_home = wrapped.sandbox_home.as_deref().ok_or_else(|| {
             ToolError::ExecutionFailed("sandboxed pty is missing sandbox home".into())
@@ -595,10 +603,11 @@ fn command_env_for_wrapped(
             sandbox_home.join(".local/share").display().to_string(),
         );
     }
-    if let Ok(path) = env::var("PATH") {
-        env_map.insert("PATH".to_string(), path);
-    }
-    env_map.extend(overrides.clone());
+    env_map.extend(
+        overrides
+            .iter()
+            .map(|(key, value)| (key.clone(), value.clone())),
+    );
     Ok(env_map)
 }
 
@@ -699,6 +708,7 @@ mod tests {
                     sandbox_home: None,
                 },
                 temp.path().display().to_string(),
+                &HashMap::new(),
                 HashMap::new(),
                 24,
                 120,
@@ -775,6 +785,7 @@ mod tests {
                     sandbox_home: None,
                 },
                 temp.path().display().to_string(),
+                &HashMap::new(),
                 HashMap::new(),
                 24,
                 120,
