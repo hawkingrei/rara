@@ -324,7 +324,7 @@ fn active_turn_cell_compacts_live_response_when_process_sections_exist() {
 }
 
 #[test]
-fn active_turn_cell_compacts_long_live_exploration_sections() {
+fn active_turn_cell_appends_long_live_exploration_events() {
     let temp = tempdir().unwrap();
     let mut app = TuiApp::new(ConfigManager {
         path: temp.path().join("config.json"),
@@ -352,19 +352,18 @@ fn active_turn_cell_compacts_long_live_exploration_sections() {
 
     assert!(rendered.contains(" Exploring "));
     assert!(rendered.contains("Cross-check the auth entrypoint."));
-    assert!(rendered.contains("... 1 more exploration step(s)"));
-    assert!(!rendered.contains("module_1.rs"));
+    assert!(!rendered.contains("more exploration step(s)"));
+    assert!(rendered.contains("module_1.rs"));
     assert!(rendered.contains("module_2.rs"));
     assert!(rendered.contains("module_3.rs"));
     assert!(rendered.contains("module_5.rs"));
-    assert!(
-        rendered.find("Cross-check the auth entrypoint.")
-            < rendered.find("... 1 more exploration step(s)")
-    );
+    assert_eq!(rendered.matches(" Exploring ").count(), 6);
+    assert!(rendered.find("module_1.rs") < rendered.find("module_5.rs"));
+    assert!(rendered.find("module_5.rs") < rendered.find("Cross-check the auth entrypoint."));
 }
 
 #[test]
-fn active_turn_cell_compacts_long_live_planning_sections() {
+fn active_turn_cell_appends_long_live_planning_events() {
     let temp = tempdir().unwrap();
     let mut app = TuiApp::new(ConfigManager {
         path: temp.path().join("config.json"),
@@ -392,19 +391,18 @@ fn active_turn_cell_compacts_long_live_planning_sections() {
 
     assert!(rendered.contains(" Planning "));
     assert!(rendered.contains("Reuse the shared auth bridge."));
-    assert!(rendered.contains("... 1 more planning step(s)"));
-    assert!(!rendered.contains("planning module 1"));
+    assert!(!rendered.contains("more planning step(s)"));
+    assert!(rendered.contains("planning module 1"));
     assert!(rendered.contains("planning module 2"));
-    assert!(
-        rendered.find("Reuse the shared auth bridge.")
-            < rendered.find("... 1 more planning step(s)")
-    );
     assert!(rendered.contains("planning module 3"));
     assert!(rendered.contains("planning module 5"));
+    assert_eq!(rendered.matches(" Planning ").count(), 6);
+    assert!(rendered.find("planning module 1") < rendered.find("planning module 5"));
+    assert!(rendered.find("planning module 5") < rendered.find("Reuse the shared auth bridge."));
 }
 
 #[test]
-fn active_turn_cell_compacts_long_live_running_sections() {
+fn active_turn_cell_appends_long_live_running_events() {
     let temp = tempdir().unwrap();
     let mut app = TuiApp::new(ConfigManager {
         path: temp.path().join("config.json"),
@@ -430,12 +428,13 @@ fn active_turn_cell_compacts_long_live_running_sections() {
         .join("\n");
 
     assert!(rendered.contains(" Running "));
-    assert!(rendered.contains("Run task 6"));
-    assert!(rendered.contains("... 2 more running step(s)"));
-    assert!(!rendered.contains("Run task 1"));
-    assert!(!rendered.contains("Run task 2"));
+    assert!(rendered.contains("Run task 1"));
+    assert!(rendered.contains("Run task 2"));
     assert!(rendered.contains("Run task 3"));
-    assert!(rendered.find("Run task 6") < rendered.find("... 2 more running step(s)"));
+    assert!(rendered.contains("Run task 6"));
+    assert!(!rendered.contains("more running step(s)"));
+    assert_eq!(rendered.matches(" Running ").count(), 6);
+    assert!(rendered.find("Run task 1") < rendered.find("Run task 6"));
 }
 
 #[test]

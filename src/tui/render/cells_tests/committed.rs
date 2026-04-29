@@ -190,6 +190,55 @@ fn committed_turn_cell_keeps_progress_segments_and_terminal_output() {
 }
 
 #[test]
+fn committed_turn_cell_appends_adjacent_progress_entries() {
+    let entries = vec![
+        TranscriptEntry {
+            role: "You".into(),
+            message: "Inspect the split".into(),
+            payload: None,
+        },
+        TranscriptEntry {
+            role: "Exploring".into(),
+            message: "Read src/context/assembler.rs".into(),
+            payload: None,
+        },
+        TranscriptEntry {
+            role: "Exploring".into(),
+            message: "Read src/context/mod.rs".into(),
+            payload: None,
+        },
+        TranscriptEntry {
+            role: "Running".into(),
+            message: "Run cargo test active_turn_cell".into(),
+            payload: None,
+        },
+        TranscriptEntry {
+            role: "Running".into(),
+            message: "Run cargo check".into(),
+            payload: None,
+        },
+    ];
+
+    let rendered = CommittedTurnCell::new(entries.as_slice(), Some(Path::new(".")))
+        .display_lines(100)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let first_explored = rendered.find("Read src/context/assembler.rs").unwrap();
+    let second_explored = rendered.find("Read src/context/mod.rs").unwrap();
+    let first_ran = rendered.find("Run cargo test active_turn_cell").unwrap();
+    let second_ran = rendered.find("Run cargo check").unwrap();
+
+    assert_eq!(rendered.matches(" Explored ").count(), 2);
+    assert_eq!(rendered.matches(" Ran ").count(), 2);
+    assert!(first_explored < second_explored);
+    assert!(second_explored < first_ran);
+    assert!(first_ran < second_ran);
+}
+
+#[test]
 fn committed_turn_cell_places_completion_records_before_final_agent_message() {
     let entries = vec![
         TranscriptEntry { role: "You".into(), message: "Inspect the repo and decide whether to run the migration".into(), payload: None },
