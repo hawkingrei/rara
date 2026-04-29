@@ -9,6 +9,9 @@ web search surface is available.
 
 - endpoint: `https://mcp.exa.ai/mcp`;
 - optional API key: `EXA_API_KEY`, passed as the `exaApiKey` query parameter;
+- API key transport follows Exa's MCP endpoint shape, but RARA does not store
+  the key-bearing URL and redacts sensitive URL query parameters in surfaced
+  errors;
 - protocol: JSON-RPC `tools/call`;
 - MCP tool name: `web_search_exa`;
 - accepted response formats: JSON and server-sent events;
@@ -33,6 +36,8 @@ The tool result is normalized to:
 `web_fetch` fetches a single HTTP or HTTPS URL with bounded runtime behavior:
 
 - allowed schemes: `http`, `https`;
+- blocked literal hosts: `localhost`, private IPs, loopback IPs, link-local
+  IPs, documentation IPs, and unspecified IPs;
 - default timeout: 30 seconds;
 - maximum timeout: 120 seconds;
 - default response cap: 5 MiB;

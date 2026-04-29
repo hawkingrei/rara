@@ -2,6 +2,7 @@ use crate::tool::{Tool, ToolError};
 use async_trait::async_trait;
 use futures::StreamExt;
 use serde_json::{Value, json};
+use std::net::IpAddr;
 use std::time::Duration;
 use url::Url;
 
@@ -103,6 +104,7 @@ impl Tool for WebFetchTool {
             .send()
             .await
             .map_err(|err| ToolError::ExecutionFailed(format!("fetch failed: {err}")))?;
+        validate_public_web_url(response.url())?;
 
         let status = response.status();
         let final_url = response.url().to_string();
@@ -139,14 +141,7 @@ impl FetchRequest {
             .ok_or_else(|| ToolError::InvalidInput("url".to_string()))?;
         let url = Url::parse(raw_url)
             .map_err(|err| ToolError::InvalidInput(format!("invalid url: {err}")))?;
-        match url.scheme() {
-            "http" | "https" => {}
-            scheme => {
-                return Err(ToolError::InvalidInput(format!(
-                    "url scheme must be http or https; got {scheme}"
-                )));
-            }
-        }
+        validate_public_web_url(&url)?;
         let format = FetchFormat::parse(input.get("format").and_then(Value::as_str))?;
         let timeout_secs = input
             .get("timeout_seconds")
@@ -179,18 +174,12 @@ async fn read_limited_body(
     response: reqwest::Response,
     max_bytes: u64,
 ) -> Result<LimitedBody, ToolError> {
-    if let Some(length) = response.content_length()
-        && length > max_bytes
-    {
-        return Err(ToolError::ExecutionFailed(format!(
-            "response content-length {length} exceeds max_bytes {max_bytes}"
-        )));
-    }
-
     let limit = max_bytes as usize;
     let mut bytes = Vec::new();
+    let mut truncated = response
+        .content_length()
+        .is_some_and(|length| length > max_bytes);
     let mut stream = response.bytes_stream();
-    let mut truncated = false;
     while let Some(chunk) = stream.next().await {
         let chunk = chunk.map_err(|err| ToolError::ExecutionFailed(err.to_string()))?;
         let remaining = limit.saturating_sub(bytes.len());
@@ -230,6 +219,7 @@ fn convert_content(input: &str, format: FetchFormat) -> String {
 }
 
 fn html_to_text(input: &str) -> String {
+    let input = strip_non_text_blocks(input);
     let mut output = String::new();
     let mut in_tag = false;
     let mut last_was_space = false;
@@ -249,6 +239,92 @@ fn html_to_text(input: &str) -> String {
         }
     }
     decode_basic_entities(output.trim()).to_string()
+}
+
+fn validate_public_web_url(url: &Url) -> Result<(), ToolError> {
+    match url.scheme() {
+        "http" | "https" => {}
+        scheme => {
+            return Err(ToolError::InvalidInput(format!(
+                "url scheme must be http or https; got {scheme}"
+            )));
+        }
+    }
+
+    let host = url
+        .host_str()
+        .ok_or_else(|| ToolError::InvalidInput("url host is required".to_string()))?;
+    if host.eq_ignore_ascii_case("localhost") {
+        return Err(ToolError::InvalidInput(
+            "url host must not be localhost".to_string(),
+        ));
+    }
+    if let Ok(ip) = host.parse::<IpAddr>() {
+        validate_public_ip(ip)?;
+    }
+    Ok(())
+}
+
+fn validate_public_ip(ip: IpAddr) -> Result<(), ToolError> {
+    let blocked = match ip {
+        IpAddr::V4(ip) => {
+            ip.is_private()
+                || ip.is_loopback()
+                || ip.is_link_local()
+                || ip.is_broadcast()
+                || ip.is_documentation()
+                || ip.is_unspecified()
+        }
+        IpAddr::V6(ip) => {
+            ip.is_loopback()
+                || ip.is_unspecified()
+                || ip.is_unique_local()
+                || ip.is_unicast_link_local()
+        }
+    };
+    if blocked {
+        return Err(ToolError::InvalidInput(
+            "url host must not be a private, loopback, link-local, documentation, or unspecified IP address"
+                .to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn strip_non_text_blocks(input: &str) -> String {
+    let mut output = String::new();
+    let mut remaining = input;
+    loop {
+        let lower = remaining.to_ascii_lowercase();
+        let script_pos = lower.find("<script");
+        let style_pos = lower.find("<style");
+        let Some(start) = min_present(script_pos, style_pos) else {
+            output.push_str(remaining);
+            break;
+        };
+        output.push_str(&remaining[..start]);
+        let tag_name = if Some(start) == script_pos {
+            "script"
+        } else {
+            "style"
+        };
+        let close = format!("</{tag_name}>");
+        if let Some(end) = lower[start..].find(&close) {
+            remaining = &remaining[start + end + close.len()..];
+        } else {
+            break;
+        }
+    }
+    output
+}
+
+fn min_present(left: Option<usize>, right: Option<usize>) -> Option<usize> {
+    match (left, right) {
+        (Some(left), Some(right)) => Some(left.min(right)),
+        (Some(left), None) => Some(left),
+        (None, Some(right)) => Some(right),
+        (None, None) => None,
+    }
 }
 
 fn push_space(output: &mut String, last_was_space: &mut bool) {
@@ -282,6 +358,17 @@ mod tests {
     }
 
     #[test]
+    fn fetch_request_rejects_localhost_and_private_ip_literals() {
+        let localhost = FetchRequest::parse(&json!({ "url": "http://localhost:8080" }))
+            .expect_err("localhost rejected");
+        let private_ip = FetchRequest::parse(&json!({ "url": "http://169.254.169.254" }))
+            .expect_err("link-local rejected");
+
+        assert!(localhost.to_string().contains("localhost"));
+        assert!(private_ip.to_string().contains("private"));
+    }
+
+    #[test]
     fn fetch_request_applies_limits_and_defaults() {
         let request = FetchRequest::parse(&json!({
             "url": "https://example.com",
@@ -300,5 +387,14 @@ mod tests {
         let text = html_to_text("<h1>RARA &amp; Search</h1><p>hello&nbsp;world</p>");
 
         assert_eq!(text, "RARA & Search hello world");
+    }
+
+    #[test]
+    fn html_to_text_skips_script_and_style_content() {
+        let text = html_to_text(
+            "<style>.hidden{display:none}</style><h1>RARA</h1><script>alert('x')</script><p>Search</p>",
+        );
+
+        assert_eq!(text, "RARA Search");
     }
 }

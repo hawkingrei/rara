@@ -9,6 +9,7 @@ const SENSITIVE_URL_QUERY_KEYS: &[&str] = &[
     "client_secret",
     "code",
     "code_verifier",
+    "exaApiKey",
     "id_token",
     "key",
     "refresh_token",
@@ -116,6 +117,17 @@ mod tests {
         assert_eq!(
             rendered,
             "https://example.com/path?token=%3Credacted%3E&env=prod".to_string()
+        );
+    }
+
+    #[test]
+    fn sanitizes_exa_api_key_query_param() {
+        let rendered =
+            sanitize_url_for_display("https://mcp.exa.ai/mcp?exaApiKey=secret&mode=search");
+
+        assert_eq!(
+            rendered,
+            "https://mcp.exa.ai/mcp?exaApiKey=%3Credacted%3E&mode=search".to_string()
         );
     }
 }

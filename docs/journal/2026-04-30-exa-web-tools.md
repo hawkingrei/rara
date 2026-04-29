@@ -10,6 +10,9 @@ shape:
 - split the web tool implementation into focused modules;
 - hardened `web_fetch` with URL scheme validation, timeout, byte limits,
   redirect metadata, status metadata, and output format selection;
+- blocked localhost and private/link-local literal IPs for `web_fetch`, including
+  redirect target validation;
+- redacted Exa key-bearing URL query parameters in surfaced errors;
 - added tool-result compaction and TUI labels for `web_search`.
 
 Validation:
