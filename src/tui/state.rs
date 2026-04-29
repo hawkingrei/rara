@@ -28,6 +28,7 @@ const OPENAI_PROFILE_SETUP_KINDS: [OpenAiEndpointKind; 3] = [
     OpenAiEndpointKind::Kimi,
     OpenAiEndpointKind::Openrouter,
 ];
+const INPUT_HISTORY_LIMIT: usize = 200;
 
 pub fn openai_profile_setup_kinds() -> &'static [OpenAiEndpointKind] {
     &OPENAI_PROFILE_SETUP_KINDS
@@ -208,6 +209,10 @@ impl TuiApp {
             return;
         }
         self.input_history.push(input.to_string());
+        if self.input_history.len() > INPUT_HISTORY_LIMIT {
+            let excess = self.input_history.len() - INPUT_HISTORY_LIMIT;
+            self.input_history.drain(..excess);
+        }
         self.reset_input_history_navigation();
     }
 
@@ -229,7 +234,7 @@ impl TuiApp {
             && self
                 .input_history_cursor
                 .is_some_and(|idx| self.input_history.get(idx) == Some(&self.input))
-            && (delta < 0 || delta > 0)
+            && delta != 0
     }
 
     pub fn navigate_input_history(&mut self, delta: i32) {

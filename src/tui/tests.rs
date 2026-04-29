@@ -407,6 +407,29 @@ fn input_history_navigation_recalls_previous_submissions_and_restores_draft() {
 }
 
 #[test]
+fn input_history_keeps_recent_entries_bounded() {
+    let temp = tempdir().expect("tempdir");
+    let mut app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("app");
+
+    for idx in 0..250 {
+        app.record_input_history(&format!("request {idx}"));
+    }
+
+    assert_eq!(app.input_history.len(), 200);
+    assert_eq!(
+        app.input_history.first().map(String::as_str),
+        Some("request 50")
+    );
+    assert_eq!(
+        app.input_history.last().map(String::as_str),
+        Some("request 249")
+    );
+}
+
+#[test]
 fn input_history_navigation_keeps_multiline_cursor_movement_for_unrecalled_text() {
     let temp = tempdir().expect("tempdir");
     let mut app = TuiApp::new(ConfigManager {

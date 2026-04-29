@@ -378,8 +378,9 @@ fn deepseek_thinking_tool_history_folds_missing_reasoning_content() {
 
     let messages = body["messages"].as_array().expect("messages");
     assert_eq!(messages.len(), 1);
-    assert_eq!(messages[0]["role"], "system");
+    assert_eq!(messages[0]["role"], "user");
     let folded_note = messages[0]["content"].as_str().expect("folded note");
+    assert!(folded_note.contains("context only"));
     assert!(folded_note.contains("tool_call: read_file"));
     assert!(folded_note.contains("id=tool-1"));
     assert!(folded_note.contains("Cargo.toml"));
@@ -520,7 +521,7 @@ fn deepseek_explicit_thinking_folds_legacy_assistant_history_without_reasoning()
     assert_eq!(body["reasoning_effort"], "high");
     let messages = body["messages"].as_array().expect("messages");
     assert_eq!(messages.len(), 2);
-    assert_eq!(messages[0]["role"], "system");
+    assert_eq!(messages[0]["role"], "user");
     assert!(messages[0]["content"]
         .as_str()
         .expect("folded note")
@@ -556,6 +557,7 @@ fn deepseek_folds_legacy_tool_calls_with_id_and_arguments() {
     );
 
     let messages = body["messages"].as_array().expect("messages");
+    assert_eq!(messages[0]["role"], "user");
     let folded_note = messages[0]["content"].as_str().expect("folded note");
     assert!(folded_note.contains("tool_call: read_file"));
     assert!(folded_note.contains("id=call-1"));
@@ -589,7 +591,7 @@ fn deepseek_default_thinking_folds_legacy_assistant_history_without_reasoning() 
     assert!(body.get("thinking").is_none());
     let messages = body["messages"].as_array().expect("messages");
     assert_eq!(messages.len(), 2);
-    assert_eq!(messages[0]["role"], "system");
+    assert_eq!(messages[0]["role"], "user");
     assert!(messages[0]["content"]
         .as_str()
         .expect("folded note")
@@ -678,7 +680,9 @@ fn deepseek_explicit_thinking_keeps_compatible_suffix_after_legacy_prefix() {
     assert_eq!(body["thinking"]["type"], "enabled");
     let messages = body["messages"].as_array().expect("messages");
     assert_eq!(messages.len(), 4);
+    assert_eq!(messages[0]["role"], "system");
     assert_eq!(messages[0]["content"], "System prompt.");
+    assert_eq!(messages[1]["role"], "user");
     assert!(messages[1]["content"]
         .as_str()
         .expect("folded note")
