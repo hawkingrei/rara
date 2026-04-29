@@ -347,6 +347,69 @@ fn deepseek_reasoner_defaults_preserve_standard_body() {
 }
 
 #[test]
+fn deepseek_thinking_tool_history_backfills_missing_reasoning_content() {
+    let body = build_chat_completion_request_body(
+        "deepseek-reasoner",
+        &[
+            Message {
+                role: "assistant".to_string(),
+                content: json!([
+                    {"type":"text","text":""},
+                    {"type":"tool_use","id":"tool-1","name":"read_file","input":{"path":"Cargo.toml"}}
+                ]),
+            },
+            Message {
+                role: "user".to_string(),
+                content: json!([
+                    {"type":"tool_result","tool_use_id":"tool-1","content":"[package]"}
+                ]),
+            },
+        ],
+        &[json!({
+            "name": "read_file",
+            "description": "Read a file",
+            "input_schema": {"type":"object"}
+        })],
+        OpenAiEndpointKind::Deepseek,
+        None,
+        Some(true),
+        LlmTurnMetadata::default(),
+    );
+
+    assert_eq!(body["messages"][0]["role"], "assistant");
+    assert_eq!(body["messages"][0]["reasoning_content"], "");
+    assert_eq!(body["messages"][0]["tool_calls"][0]["id"], "tool-1");
+}
+
+#[test]
+fn deepseek_thinking_tool_history_preserves_existing_reasoning_content() {
+    let body = build_chat_completion_request_body(
+        "deepseek-reasoner",
+        &[Message {
+            role: "assistant".to_string(),
+            content: json!([
+                {"type":"provider_metadata","provider":"deepseek","key":"reasoning_content","value":"keep this reasoning"},
+                {"type":"tool_use","id":"tool-1","name":"read_file","input":{"path":"Cargo.toml"}}
+            ]),
+        }],
+        &[json!({
+            "name": "read_file",
+            "description": "Read a file",
+            "input_schema": {"type":"object"}
+        })],
+        OpenAiEndpointKind::Deepseek,
+        None,
+        Some(true),
+        LlmTurnMetadata::default(),
+    );
+
+    assert_eq!(
+        body["messages"][0]["reasoning_content"],
+        "keep this reasoning"
+    );
+}
+
+#[test]
 fn deepseek_reasoner_explicit_thinking_enables_controls_for_tools() {
     let body = build_chat_completion_request_body(
         "deepseek-reasoner",

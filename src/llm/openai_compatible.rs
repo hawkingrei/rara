@@ -330,6 +330,7 @@ pub(super) fn build_chat_completion_request_body(
         body["tools"] = json!(openai_tools);
     }
     let strong_reasoning = !openai_tools.is_empty() || metadata.prefers_strong_reasoning();
+    normalize_deepseek_thinking_tool_history(&mut body, model, endpoint_kind, thinking);
     apply_deepseek_thinking_options(
         &mut body,
         model,
@@ -339,6 +340,36 @@ pub(super) fn build_chat_completion_request_body(
         strong_reasoning,
     );
     body
+}
+
+fn normalize_deepseek_thinking_tool_history(
+    body: &mut Value,
+    model: &str,
+    endpoint_kind: OpenAiEndpointKind,
+    thinking: Option<bool>,
+) {
+    if endpoint_kind != OpenAiEndpointKind::Deepseek
+        || !deepseek_supports_thinking(model)
+        || matches!(thinking, Some(false))
+    {
+        return;
+    }
+
+    let Some(messages) = body.get_mut("messages").and_then(Value::as_array_mut) else {
+        return;
+    };
+    for message in messages {
+        if message.get("role").and_then(Value::as_str) != Some("assistant") {
+            continue;
+        }
+        let has_tool_calls = message
+            .get("tool_calls")
+            .and_then(Value::as_array)
+            .is_some_and(|tool_calls| !tool_calls.is_empty());
+        if has_tool_calls && message.get("reasoning_content").is_none() {
+            message["reasoning_content"] = Value::String(String::new());
+        }
+    }
 }
 
 fn apply_deepseek_thinking_options(
