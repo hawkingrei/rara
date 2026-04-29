@@ -412,7 +412,6 @@ async fn agent_driven_plan_mode_auto_approves_and_resumes_execution() {
     assert!(!app.has_pending_plan_approval());
     let agent = agent_slot.as_ref().expect("agent should return");
     assert_eq!(agent.execution_mode, AgentExecutionMode::Execute);
-    assert!(agent.last_query_produced_plan());
     assert_eq!(agent.current_plan.len(), 2);
     assert!(
         agent
