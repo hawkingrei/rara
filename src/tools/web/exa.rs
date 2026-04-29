@@ -70,6 +70,12 @@ impl ExaMcpClient {
                 truncate_error(&body)
             )));
         }
+        if let Some(error) = parse_mcp_response_error(&body) {
+            return Err(ToolError::ExecutionFailed(format!(
+                "Exa MCP returned JSON-RPC error: {}",
+                truncate_error(&error)
+            )));
+        }
 
         parse_mcp_response_text(&body).ok_or_else(|| {
             ToolError::ExecutionFailed("Exa MCP response did not include text content".to_string())
@@ -100,6 +106,10 @@ pub(super) fn parse_mcp_response_text(body: &str) -> Option<String> {
     parse_json_rpc_text(body).or_else(|| parse_sse_text(body))
 }
 
+fn parse_mcp_response_error(body: &str) -> Option<String> {
+    parse_json_rpc_error(body).or_else(|| parse_sse_error(body))
+}
+
 fn parse_sse_text(body: &str) -> Option<String> {
     for line in body.lines().map(str::trim) {
         let Some(data) = line.strip_prefix("data:") else {
@@ -116,17 +126,50 @@ fn parse_sse_text(body: &str) -> Option<String> {
     None
 }
 
+fn parse_sse_error(body: &str) -> Option<String> {
+    for line in body.lines().map(str::trim) {
+        let Some(data) = line.strip_prefix("data:") else {
+            continue;
+        };
+        let data = data.trim();
+        if data.is_empty() || data == "[DONE]" {
+            continue;
+        }
+        if let Some(error) = parse_json_rpc_error(data) {
+            return Some(error);
+        }
+    }
+    None
+}
+
 fn parse_json_rpc_text(input: &str) -> Option<String> {
     let value = serde_json::from_str::<Value>(input).ok()?;
-    value
-        .pointer("/result/content/0/text")
-        .and_then(Value::as_str)
-        .map(ToString::to_string)
+    let content = value.pointer("/result/content")?.as_array()?;
+    let text = content
+        .iter()
+        .filter(|item| item.get("type").and_then(Value::as_str) == Some("text"))
+        .filter_map(|item| item.get("text").and_then(Value::as_str))
+        .filter(|text| !text.trim().is_empty())
+        .collect::<Vec<_>>()
+        .join("\n");
+    (!text.is_empty()).then_some(text)
+}
+
+fn parse_json_rpc_error(input: &str) -> Option<String> {
+    let value = serde_json::from_str::<Value>(input).ok()?;
+    let error = value.get("error")?;
+    if let Some(message) = error.get("message").and_then(Value::as_str) {
+        return Some(message.to_string());
+    }
+    if let Some(text) = error.as_str() {
+        return Some(text.to_string());
+    }
+    Some(error.to_string())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{ExaMcpClient, parse_mcp_response_text};
+    use super::{ExaMcpClient, parse_mcp_response_error, parse_mcp_response_text};
 
     #[test]
     fn parses_sse_mcp_text_response() {
@@ -147,6 +190,23 @@ data: {"result":{"content":[{"type":"text","text":"search result"}]}}
         assert_eq!(
             parse_mcp_response_text(body).as_deref(),
             Some("json result")
+        );
+    }
+
+    #[test]
+    fn concatenates_multiple_text_content_blocks() {
+        let body = r#"{"result":{"content":[{"type":"text","text":"one"},{"type":"image","data":"ignored"},{"type":"text","text":"two"}]}}"#;
+
+        assert_eq!(parse_mcp_response_text(body).as_deref(), Some("one\ntwo"));
+    }
+
+    #[test]
+    fn parses_json_rpc_error_message() {
+        let body = r#"{"error":{"code":-32000,"message":"bad request"}}"#;
+
+        assert_eq!(
+            parse_mcp_response_error(body).as_deref(),
+            Some("bad request")
         );
     }
 

@@ -13,6 +13,8 @@ shape:
 - blocked localhost and private/link-local literal IPs for `web_fetch`, including
   redirect target validation;
 - redacted Exa key-bearing URL query parameters in surfaced errors;
+- handled JSON-RPC error payloads and multiple text content blocks in Exa MCP
+  responses;
 - added tool-result compaction and TUI labels for `web_search`.
 
 Validation:
