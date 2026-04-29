@@ -951,6 +951,40 @@ fn active_turn_cell_preserves_repeated_progress_events_when_interleaved() {
 }
 
 #[test]
+fn active_turn_cell_preserves_consecutive_duplicate_progress_events() {
+    let temp = tempdir().unwrap();
+    let mut app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("build tui app");
+    app.runtime_phase = RuntimePhase::RunningTool;
+    app.active_turn = TranscriptTurn {
+        entries: vec![TranscriptEntry {
+            role: "You".into(),
+            message: "Run checks".into(),
+            payload: None,
+        }],
+    };
+
+    app.record_exploration_action("Read src/tui/render/cells.rs");
+    app.record_exploration_action("Read src/tui/render/cells.rs");
+    app.record_running_action("Run cargo check");
+    app.record_running_action("Run cargo check");
+
+    let rendered = ActiveTurnCell::new(&app, Some(Path::new(".")))
+        .display_lines(100)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert_eq!(rendered.matches("Read src/tui/render/cells.rs").count(), 2);
+    assert_eq!(rendered.matches("Run cargo check").count(), 2);
+    assert_eq!(rendered.matches(" Exploring ").count(), 2);
+    assert_eq!(rendered.matches(" Running ").count(), 2);
+}
+
+#[test]
 fn active_turn_cell_shows_live_thinking_tail_without_cloning_full_body() {
     let temp = tempdir().unwrap();
     let mut app = TuiApp::new(ConfigManager {

@@ -324,79 +324,36 @@ impl TuiApp {
     }
 
     fn push_active_live_event(&mut self, event: ActiveLiveEvent) {
-        if self
-            .active_live
-            .events
-            .last()
-            .is_some_and(|last| last.role() == event.role() && last.message() == event.message())
-        {
-            return;
-        }
         self.active_live.events.push(event);
     }
 
     pub fn record_exploration_action(&mut self, action: impl Into<String>) {
         let action = action.into();
-        if !self
-            .active_live
-            .exploration_actions
-            .iter()
-            .any(|item| item == &action)
-        {
-            self.active_live.exploration_actions.push(action.clone());
-        }
+        self.active_live.exploration_actions.push(action.clone());
         self.push_active_live_event(ActiveLiveEvent::ExplorationAction(action));
     }
 
     pub fn record_exploration_note(&mut self, note: impl Into<String>) {
         let note = note.into();
-        if !self
-            .active_live
-            .exploration_notes
-            .iter()
-            .any(|item| item == &note)
-        {
-            self.active_live.exploration_notes.push(note.clone());
-        }
+        self.active_live.exploration_notes.push(note.clone());
         self.push_active_live_event(ActiveLiveEvent::ExplorationNote(note));
     }
 
     pub fn record_running_action(&mut self, action: impl Into<String>) {
         let action = action.into();
-        if !self
-            .active_live
-            .running_actions
-            .iter()
-            .any(|item| item == &action)
-        {
-            self.active_live.running_actions.push(action.clone());
-        }
+        self.active_live.running_actions.push(action.clone());
         self.push_active_live_event(ActiveLiveEvent::RunningAction(action));
     }
 
     pub fn record_planning_action(&mut self, action: impl Into<String>) {
         let action = action.into();
-        if !self
-            .active_live
-            .planning_actions
-            .iter()
-            .any(|item| item == &action)
-        {
-            self.active_live.planning_actions.push(action.clone());
-        }
+        self.active_live.planning_actions.push(action.clone());
         self.push_active_live_event(ActiveLiveEvent::PlanningAction(action));
     }
 
     pub fn record_planning_note(&mut self, note: impl Into<String>) {
         let note = note.into();
-        if !self
-            .active_live
-            .planning_notes
-            .iter()
-            .any(|item| item == &note)
-        {
-            self.active_live.planning_notes.push(note.clone());
-        }
+        self.active_live.planning_notes.push(note.clone());
         self.push_active_live_event(ActiveLiveEvent::PlanningNote(note));
     }
 
