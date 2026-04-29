@@ -1,11 +1,11 @@
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
     Arc,
+    atomic::{AtomicBool, Ordering},
 };
 use std::time::{Duration, Instant};
 
 use tempfile::tempdir;
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{Mutex, mpsc};
 
 use crate::agent::{
     Agent, AgentExecutionMode, BashApprovalMode, Message, PlanStep, PlanStepStatus,
@@ -85,9 +85,15 @@ impl LlmBackend for AgentDrivenPlanBackend {
                 usage: Some(TokenUsage::default()),
             });
         }
+        let text = match *calls {
+            2 => {
+                "<proposed_plan>\n- [pending] Inspect the TUI state machine\n- [pending] Update focused tests\n</proposed_plan>"
+            }
+            _ => "Implemented the auto-approved plan and reviewed the changes.",
+        };
         Ok(LlmResponse {
             content: vec![ContentBlock::Text {
-                text: "<proposed_plan>\n- [pending] Inspect the TUI state machine\n- [pending] Update focused tests\n</proposed_plan>".to_string(),
+                text: text.to_string(),
             }],
             stop_reason: Some("end_turn".to_string()),
             usage: Some(TokenUsage::default()),
@@ -123,10 +129,11 @@ fn browser_oauth_is_rejected_before_task_start_in_ssh() {
     start_oauth_task(&mut app, oauth_manager, OAuthLoginMode::Browser);
 
     assert!(app.running_task.is_none());
-    assert!(app
-        .notice
-        .as_deref()
-        .is_some_and(|value| value.contains("Browser login is unavailable")));
+    assert!(
+        app.notice
+            .as_deref()
+            .is_some_and(|value| value.contains("Browser login is unavailable"))
+    );
 }
 
 #[test]
@@ -351,7 +358,7 @@ async fn plan_turn_completion_keeps_plan_mode_after_plain_answer() {
 }
 
 #[tokio::test]
-async fn agent_driven_plan_mode_does_not_request_tui_approval() {
+async fn agent_driven_plan_mode_auto_approves_and_resumes_execution() {
     let temp = tempdir().unwrap();
     let workspace_root = temp.path().join("workspace");
     let rara_dir = workspace_root.join(".rara");
@@ -401,12 +408,18 @@ async fn agent_driven_plan_mode_does_not_request_tui_approval() {
     }
 
     assert!(app.running_task.is_none());
-    assert_eq!(app.agent_execution_mode, AgentExecutionMode::Plan);
+    assert_eq!(app.agent_execution_mode, AgentExecutionMode::Execute);
     assert!(!app.has_pending_plan_approval());
     let agent = agent_slot.as_ref().expect("agent should return");
-    assert_eq!(agent.execution_mode, AgentExecutionMode::Plan);
+    assert_eq!(agent.execution_mode, AgentExecutionMode::Execute);
     assert!(agent.last_query_produced_plan());
     assert_eq!(agent.current_plan.len(), 2);
+    assert!(
+        agent
+            .history
+            .last()
+            .is_some_and(|message| message.content.to_string().contains("reviewed the changes"))
+    );
 }
 
 #[tokio::test]
@@ -467,10 +480,11 @@ async fn query_cancellation_sets_running_task_token() {
     request_running_task_cancellation(&mut app);
 
     assert!(token.load(Ordering::SeqCst));
-    assert!(app
-        .running_task
-        .as_ref()
-        .is_some_and(|task| task.cancellation_requested));
+    assert!(
+        app.running_task
+            .as_ref()
+            .is_some_and(|task| task.cancellation_requested)
+    );
     assert_eq!(app.runtime_phase, RuntimePhase::ProcessingResponse);
     assert_eq!(
         app.runtime_phase_detail.as_deref(),

@@ -5,13 +5,13 @@ mod tests;
 
 use secrecy::ExposeSecret;
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
     Arc,
+    atomic::{AtomicBool, Ordering},
 };
 use std::time::Instant;
 
 use rara_provider_catalog::{
-    fallback_models, load_model_catalog, ModelCatalogProvider, ModelCatalogRequest,
+    ModelCatalogProvider, ModelCatalogRequest, fallback_models, load_model_catalog,
 };
 use tokio::sync::mpsc;
 
@@ -222,7 +222,42 @@ pub(super) fn start_pending_approval_task(
 pub(super) fn start_plan_approval_resume_task(
     app: &mut TuiApp,
     continue_planning: bool,
+    agent: Agent,
+) {
+    let (decision_summary, notice) = if continue_planning {
+        ("Continued planning", "Continuing plan refinement.")
+    } else {
+        (
+            "Approved and started implementation",
+            "Plan approved. Continuing with implementation.",
+        )
+    };
+
+    start_plan_resume_task(
+        app,
+        continue_planning,
+        agent,
+        decision_summary,
+        notice.to_string(),
+    );
+}
+
+fn start_automatic_plan_implementation_task(app: &mut TuiApp, agent: Agent) {
+    start_plan_resume_task(
+        app,
+        false,
+        agent,
+        "Auto-approved agent-generated plan",
+        "Plan generated automatically. Continuing with implementation.".into(),
+    );
+}
+
+fn start_plan_resume_task(
+    app: &mut TuiApp,
+    continue_planning: bool,
     mut agent: Agent,
+    decision_summary: &'static str,
+    notice: String,
 ) {
     let (sender, receiver) = mpsc::unbounded_channel();
     let cancellation_token = Arc::new(AtomicBool::new(false));
@@ -231,18 +266,10 @@ pub(super) fn start_plan_approval_resume_task(
     app.record_completed_interaction(
         crate::tui::state::InteractionKind::PlanApproval,
         "Plan Decision",
-        if continue_planning {
-            "Continued planning"
-        } else {
-            "Approved and started implementation"
-        },
+        decision_summary,
         None,
     );
-    app.notice = Some(if continue_planning {
-        "Continuing plan refinement.".into()
-    } else {
-        "Plan approved. Continuing with implementation.".into()
-    });
+    app.notice = Some(notice);
     app.set_runtime_phase(
         RuntimePhase::ProcessingResponse,
         Some(if continue_planning {
@@ -447,11 +474,15 @@ pub(super) async fn finish_running_task_if_ready(
                     if finished_plan_turn {
                         agent.set_execution_mode(crate::agent::AgentExecutionMode::Plan);
                         app.set_agent_execution_mode(crate::agent::AgentExecutionMode::Plan);
-                        app.set_pending_plan_approval(
-                            query_started_in_plan_mode
-                                && agent.last_query_produced_plan()
-                                && !agent.current_plan.is_empty(),
-                        );
+                        let plan_ready =
+                            agent.last_query_produced_plan() && !agent.current_plan.is_empty();
+                        app.set_pending_plan_approval(query_started_in_plan_mode && plan_ready);
+                        if plan_ready && !query_started_in_plan_mode {
+                            app.release_pending_follow_ups();
+                            app.finalize_agent_stream(None);
+                            start_automatic_plan_implementation_task(app, agent);
+                            return Ok(());
+                        }
                     }
                     *agent_slot = Some(agent);
                     if let Some(agent) = agent_slot.as_ref() {

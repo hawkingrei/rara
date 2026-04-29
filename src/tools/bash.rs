@@ -1,8 +1,8 @@
-use crate::sandbox::{sandbox_failure_hint, SandboxManager, WrappedCommand};
+use crate::sandbox::{SandboxManager, WrappedCommand, sandbox_failure_hint};
 use crate::tool::{Tool, ToolError, ToolOutputStream, ToolProgressEvent};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::env;
 use std::io::SeekFrom;
@@ -1156,7 +1156,9 @@ fn sandbox_output_hint(stderr: &str) -> Option<&'static str> {
         || lower.contains("no such file or directory")
         || lower.contains("permission denied")
     {
-        Some("\n\nhint: Sandboxed bash appears blocked or missing a runtime path. Prefer direct file tools such as read_file, apply_patch, and replace_lines; ask the user only if a real shell command is required.\n")
+        Some(
+            "\n\nhint: Sandboxed bash appears blocked or missing a runtime path. Prefer direct file tools such as read_file, apply_patch, and replace_lines; ask the user only if a real shell command is required.\n",
+        )
     } else {
         None
     }
@@ -1186,19 +1188,36 @@ async fn ensure_sandbox_home_dirs(sandbox_home: &Path) -> Result<(), ToolError> 
 #[cfg(test)]
 mod tests {
     use super::{
+        BackgroundTaskListTool, BackgroundTaskStatus, BackgroundTaskStatusTool,
+        BackgroundTaskStopTool, BackgroundTaskStore, BashCommandInput, BashTool,
         command_env_for_wrapped, read_output_tail, sandbox_command_env, sandbox_output_hint,
-        unsandboxed_execution_warning, BackgroundTaskListTool, BackgroundTaskStatus,
-        BackgroundTaskStatusTool, BackgroundTaskStopTool, BackgroundTaskStore, BashCommandInput,
-        BashTool,
+        unsandboxed_execution_warning,
     };
     use crate::sandbox::{SandboxManager, WrappedCommand};
     use crate::tool::{Tool, ToolOutputStream, ToolProgressEvent};
-    use serde_json::{json, Value};
+    use serde_json::{Value, json};
     use std::collections::HashMap;
     use std::env;
     use std::path::Path;
     use std::sync::Arc;
     use tempfile::tempdir;
+
+    fn set_env_var<K, V>(key: K, value: V)
+    where
+        K: AsRef<std::ffi::OsStr>,
+        V: AsRef<std::ffi::OsStr>,
+    {
+        // This test restores PATH before returning.
+        unsafe { std::env::set_var(key, value) };
+    }
+
+    fn remove_env_var<K>(key: K)
+    where
+        K: AsRef<std::ffi::OsStr>,
+    {
+        // This test restores PATH before returning.
+        unsafe { std::env::remove_var(key) };
+    }
 
     #[test]
     fn parses_legacy_shell_payload() {
@@ -1348,7 +1367,7 @@ mod tests {
     fn sandbox_command_env_defaults_home_and_xdg_roots() {
         let sandbox_home = Path::new("/tmp/rara-test-home");
         let original_path = std::env::var_os("PATH");
-        std::env::set_var("PATH", "/custom/bin:/usr/bin");
+        set_env_var("PATH", "/custom/bin:/usr/bin");
         let env_map = sandbox_command_env(sandbox_home, &HashMap::new());
 
         assert_eq!(
@@ -1368,9 +1387,9 @@ mod tests {
             Some("/custom/bin:/usr/bin")
         );
         if let Some(path) = original_path {
-            std::env::set_var("PATH", path);
+            set_env_var("PATH", path);
         } else {
-            std::env::remove_var("PATH");
+            remove_env_var("PATH");
         }
     }
 

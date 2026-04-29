@@ -14,7 +14,7 @@ const PLAN_MODE_PROMPT_MARKER: &str = "Planning mode is active.";
 
 static PLAN_MODE_PROMPT: LazyLock<String> = LazyLock::new(|| {
     format!(
-        "## Current Execution Mode\n- {PLAN_MODE_PROMPT_MARKER}\n- You are in Plan mode until the runtime explicitly switches you back to execute mode.\n- User intent, tone, or imperative wording does not change the mode by itself.\n- If the user asks you to implement while still in Plan mode, treat it as a request to refine the implementation plan, not as permission to edit files.\n- Use this mode to inspect the codebase, clarify constraints, and refine an implementation approach before execution.\n\n## Allowed Work In Plan Mode\n- You may inspect files, search the repository, read documentation, and run read-only shell commands such as status, listing, search, test, build, or check commands.\n- Tests, builds, and checks are allowed only when they do not intentionally modify repository-tracked files.\n- Do not call tools that edit files, apply patches, update project memory, save experience, spawn general-purpose sub-agents, run background tasks, or perform side-effectful shell commands.\n- Prefer 'explore_agent' when you want a delegated read-only repo inspection.\n- Prefer 'plan_agent' when you want a delegated read-only sub-plan or implementation-planning pass.\n\n## Planning Progress Style\n- Explore first with targeted non-mutating tool calls when local repository context can answer the question.\n- While you are still exploring or refining tradeoffs, keep progress updates short, concrete, and grounded in inspected code.\n- Do not narrate every next action with phrases like 'I will now read ...' or 'I will inspect ...'. Let the tool transcript show inspection steps.\n- Do not turn planning updates into long prose status reports.\n- If more repository evidence is needed, either call a non-mutating inspection tool in the same response or end with <continue_inspection/>.\n- A message with no tool call and no <continue_inspection/> is treated as the final answer for the current turn.\n- If code changes are needed, express them only as inspected findings, plan steps, or a structured clarification request.\n- Do not claim that you are applying patches, writing files, or making code edits in this turn.\n\n## Planning Outcomes\n- For research, review, diagnosis, or planning-advice tasks, provide the final answer directly without a structured plan block.\n- Use <continue_inspection/> only when you are explicitly asking runtime to keep the same planning turn open for more inspection.\n- Use <request_user_input> only when a material decision or unknown blocks a good plan and cannot be discovered locally.\n- Inside <request_user_input>, write one 'question: ...' line and up to three 'option: label | description' lines.\n- Use <proposed_plan> only when the plan is decision-complete and ready for an implementation approval flow.\n\n## Proposed Plan Contract\n- Do not emit a <proposed_plan> block until the plan is decision-complete and ready for approval.\n- When the plan is ready, start your response with <proposed_plan> and keep the artifact concise.\n- Include a short title or summary, the public APIs/interfaces/types affected when relevant, concrete implementation steps, and test cases or scenarios.\n- Prefer one step per line in the form '- [pending] Step', '- [in_progress] Step', or '- [completed] Step'. Plain bullet and numbered steps are also accepted.\n- After </proposed_plan>, provide at most one or two short sentences grounded in the inspected code.\n- Do not restate the entire plan in prose before or after the block.\n- Do not ask 'should I proceed?' or request approval in ordinary prose."
+        "## Current Execution Mode\n- {PLAN_MODE_PROMPT_MARKER}\n- You are in Plan mode until the runtime explicitly switches you back to execute mode.\n- User intent, tone, or imperative wording does not change the mode by itself.\n- If the user asks you to implement while still in Plan mode, treat it as a request to refine the implementation plan, not as permission to edit files.\n- Use this mode to inspect the codebase, clarify constraints, answer analysis questions, and refine an implementation approach before execution.\n\n## Allowed Work In Plan Mode\n- You may inspect files, search the repository, read documentation, and run read-only shell commands such as status, listing, search, test, build, or check commands.\n- Tests, builds, and checks are allowed only when they do not intentionally modify repository-tracked files.\n- Do not call tools that edit files, apply patches, update project memory, save experience, spawn general-purpose sub-agents, run background tasks, or perform side-effectful shell commands.\n- Prefer 'explore_agent' when you want a delegated read-only repo inspection.\n- Prefer 'plan_agent' when you want a delegated read-only sub-plan or implementation-planning pass.\n\n## Planning Progress Style\n- Explore first with targeted non-mutating tool calls when local repository context can answer the question.\n- While you are still exploring or refining tradeoffs, keep progress updates short, concrete, and grounded in inspected code.\n- Do not narrate every next action with phrases like 'I will now read ...' or 'I will inspect ...'. Let the tool transcript show inspection steps.\n- Do not turn planning updates into long prose status reports.\n- If more repository evidence is needed, either call a non-mutating inspection tool in the same response or end with <continue_inspection/>.\n- A message with no tool call and no <continue_inspection/> is treated as the final answer for the current turn.\n- If code changes are needed, express them only as inspected findings, plan steps, or a structured clarification request.\n- Do not claim that you are applying patches, writing files, or making code edits in this turn.\n\n## Planning Outcomes\n- For research, review, diagnosis, planning-advice, or code-inspection tasks, provide the final answer directly without a structured plan block.\n- If you entered Plan mode yourself because the task needed inspection, continue inspecting and then write the answer yourself. Do not wait for the user to tell you to analyze, refine, or finalize.\n- In automated planning, when implementation is clearly needed and the plan is decision-complete, emit <proposed_plan>; the runtime may auto-approve it and continue execution without a human approval step.\n- Use <continue_inspection/> only when you are explicitly asking runtime to keep the same planning turn open for more inspection.\n- Use <request_user_input> only when a material decision or unknown blocks a good plan and cannot be discovered locally.\n- Inside <request_user_input>, write one 'question: ...' line and up to three 'option: label | description' lines.\n- Use <proposed_plan> only when the user has asked for implementation or the task clearly requires code changes, and the plan is decision-complete and ready for implementation.\n\n## Proposed Plan Contract\n- Do not emit a <proposed_plan> block for analysis-only, review-only, diagnosis-only, or planning-advice tasks.\n- Do not emit a <proposed_plan> block until the plan is decision-complete and ready for the runtime to continue.\n- When the plan is ready, start your response with <proposed_plan> and keep the artifact concise.\n- Include a short title or summary, the public APIs/interfaces/types affected when relevant, concrete implementation steps, and test cases or scenarios.\n- Prefer one step per line in the form '- [pending] Step', '- [in_progress] Step', or '- [completed] Step'. Plain bullet and numbered steps are also accepted.\n- After </proposed_plan>, provide at most one or two short sentences grounded in the inspected code.\n- Do not restate the entire plan in prose before or after the block.\n- Do not ask 'should I proceed?' or request approval in ordinary prose."
     )
 });
 
@@ -78,9 +78,7 @@ impl PromptSource {
             PromptSourceKind::LocalMemory => {
                 "included as durable workspace memory from the local RARA memory file"
             }
-            PromptSourceKind::CustomSystemPrompt => {
-                "included as the configured base system prompt"
-            }
+            PromptSourceKind::CustomSystemPrompt => "included as the configured base system prompt",
             PromptSourceKind::AppendSystemPrompt => {
                 "included as an appended system prompt after the base and discovered workspace sources"
             }
@@ -306,7 +304,10 @@ fn default_system_prompt() -> String {
 
 fn default_system_prompt_sections() -> Vec<PromptSection> {
     vec![
-        PromptSection::new("identity", "# Identity\nYou are RARA, an autonomous Rust-based AI agent."),
+        PromptSection::new(
+            "identity",
+            "# Identity\nYou are RARA, an autonomous Rust-based AI agent.",
+        ),
         PromptSection::new(
             "workspace_behavior",
             section(
@@ -518,8 +519,8 @@ fn section(title: &str, items: &[&str]) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_compact_instruction, build_system_prompt, discover_prompt_sources, PromptMode,
-        PromptRuntimeConfig, PromptSourceKind,
+        PromptMode, PromptRuntimeConfig, PromptSourceKind, build_compact_instruction,
+        build_system_prompt, discover_prompt_sources,
     };
     use crate::workspace::WorkspaceMemory;
     use std::fs;
@@ -553,15 +554,21 @@ mod tests {
         };
 
         let sources = discover_prompt_sources(&workspace, &runtime);
-        assert!(sources
-            .iter()
-            .any(|source| matches!(source.kind, PromptSourceKind::ProjectInstruction)));
-        assert!(sources
-            .iter()
-            .any(|source| matches!(source.kind, PromptSourceKind::LocalMemory)));
-        assert!(sources
-            .iter()
-            .any(|source| matches!(source.kind, PromptSourceKind::AppendSystemPrompt)));
+        assert!(
+            sources
+                .iter()
+                .any(|source| matches!(source.kind, PromptSourceKind::ProjectInstruction))
+        );
+        assert!(
+            sources
+                .iter()
+                .any(|source| matches!(source.kind, PromptSourceKind::LocalMemory))
+        );
+        assert!(
+            sources
+                .iter()
+                .any(|source| matches!(source.kind, PromptSourceKind::AppendSystemPrompt))
+        );
     }
 
     #[test]
@@ -587,9 +594,12 @@ mod tests {
         assert!(prompt.contains("Do not narrate every next action"));
         assert!(prompt.contains("until the runtime explicitly switches you back"));
         assert!(prompt.contains("treat it as a request to refine the implementation plan"));
+        assert!(prompt.contains("In automated planning"));
         assert!(prompt.contains("run read-only shell commands"));
-        assert!(prompt.contains("For research, review, diagnosis, or planning-advice tasks"));
-        assert!(prompt.contains("Use <proposed_plan> only when the plan is decision-complete"));
+        assert!(prompt.contains(
+            "For research, review, diagnosis, planning-advice, or code-inspection tasks"
+        ));
+        assert!(prompt.contains("the plan is decision-complete"));
         assert!(prompt.contains("Do not ask 'should I proceed?'"));
     }
 

@@ -12,7 +12,7 @@ use crate::config::{DEFAULT_CODEX_BASE_URL, DEFAULT_CODEX_CHATGPT_BASE_URL, DEFA
 use crate::tui::command::palette_commands;
 
 use super::app_event::AppEvent;
-use super::event_stream::{translate_event, UiEvent};
+use super::event_stream::{UiEvent, translate_event};
 use super::provider_flow::{
     codex_auth_is_available, open_provider_family_overlay, sync_codex_credential_from_auth_store,
 };
@@ -35,8 +35,8 @@ fn mouse_scroll(kind: MouseEventKind) -> Event {
 }
 use super::state::{Overlay, ProviderFamily, RunningTask, TaskKind, TuiApp};
 use super::{
-    classify_pending_plan_approval_input, dispatch_event, map_key_to_event,
-    PendingPlanApprovalAction,
+    PendingPlanApprovalAction, classify_pending_plan_approval_input, dispatch_event,
+    map_key_to_event,
 };
 
 fn provider_family_idx(family: ProviderFamily) -> usize {
@@ -109,10 +109,11 @@ async fn busy_submit_queues_follow_up_message() {
         app.queued_follow_up_preview(),
         Some("continue with the follow-up")
     );
-    assert!(app
-        .notice
-        .as_deref()
-        .is_some_and(|value| value.contains("Queued for after the next tool call boundary")));
+    assert!(
+        app.notice
+            .as_deref()
+            .is_some_and(|value| value.contains("Queued for after the next tool call boundary"))
+    );
     assert_eq!(
         app.pending_follow_up_preview(),
         Some("continue with the follow-up")
@@ -469,6 +470,25 @@ fn mouse_wheel_scrolls_transcript() {
 }
 
 #[test]
+fn mouse_wheel_scrolls_transcript_in_ssh_session() {
+    let _ssh_env = super::terminal_ui::test_env::set_ssh_session(true);
+    let temp = tempdir().expect("tempdir");
+    let app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("app");
+
+    match translate_event(mouse_scroll(MouseEventKind::ScrollUp), &app) {
+        Some(UiEvent::App(AppEvent::ScrollTranscript(delta))) => assert_eq!(delta, -3),
+        event => panic!("unexpected event: {event:?}"),
+    }
+    match translate_event(mouse_scroll(MouseEventKind::ScrollDown), &app) {
+        Some(UiEvent::App(AppEvent::ScrollTranscript(delta))) => assert_eq!(delta, 3),
+        event => panic!("unexpected event: {event:?}"),
+    }
+}
+
+#[test]
 fn mouse_wheel_does_not_scroll_transcript_behind_overlay() {
     let temp = tempdir().expect("tempdir");
     let mut app = TuiApp::new(ConfigManager {
@@ -596,10 +616,11 @@ fn app_starts_with_warning_instead_of_api_key_editor_for_hosted_provider_without
 
     let app = TuiApp::new(cm).expect("app");
     assert!(app.overlay.is_none());
-    assert!(app
-        .notice
-        .as_deref()
-        .is_some_and(|value| value.starts_with("Warning:")));
+    assert!(
+        app.notice
+            .as_deref()
+            .is_some_and(|value| value.starts_with("Warning:"))
+    );
 }
 
 #[test]
@@ -1131,10 +1152,11 @@ async fn saving_openai_profile_label_creates_new_openrouter_profile() {
         app.config.active_openai_profile_kind(),
         Some(OpenAiEndpointKind::Openrouter)
     );
-    assert!(app
-        .config
-        .openai_profiles
-        .contains_key("openrouter-openrouter-backup"));
+    assert!(
+        app.config
+            .openai_profiles
+            .contains_key("openrouter-openrouter-backup")
+    );
     assert!(matches!(app.overlay, Some(Overlay::ApiKeyEditor)));
     assert_eq!(app.openai_setup_steps, vec![Overlay::ModelNameEditor]);
 }
@@ -1168,10 +1190,11 @@ async fn save_api_key_input_allows_clearing_openai_compatible_credentials() {
 
     assert!(!should_quit);
     assert_eq!(app.config.api_key(), None);
-    assert!(app
-        .notice
-        .as_deref()
-        .is_some_and(|value| value.contains("Cleared API key")));
+    assert!(
+        app.notice
+            .as_deref()
+            .is_some_and(|value| value.contains("Cleared API key"))
+    );
 }
 
 #[test]

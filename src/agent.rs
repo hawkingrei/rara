@@ -7,26 +7,29 @@ mod tests;
 
 use crate::llm::{ContentBlock, LlmBackend, LlmStreamEvent, LlmTurnMetadata};
 use crate::prompt::{self, PromptMode, PromptRuntimeConfig};
+use crate::redaction::redact_secrets;
 use crate::session::SessionManager;
 use crate::tool::ToolManager;
 use crate::tool::ToolOutputStream;
 use crate::tool_result::{
-    default_tool_result_store_dir, repair_tool_result_history, ToolResultStore,
+    ToolResultStore, default_tool_result_store_dir, repair_tool_result_history,
 };
 use crate::tools::bash::BashCommandInput;
 use crate::vectordb::{MemoryMetadata, VectorDB};
 use crate::workspace::WorkspaceMemory;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
-use std::sync::{atomic::AtomicBool, Arc};
+use serde_json::{Value, json};
+use std::sync::{Arc, atomic::AtomicBool};
 use uuid::Uuid;
 
-pub use self::compact::{latest_compact_boundary_metadata, CompactBoundaryMetadata, CompactState};
-use self::planning::{tool_result_message, InspectionProgress, RuntimeContinuationPhase};
+const MAX_RUNTIME_ERROR_RECOVERY_ATTEMPTS: usize = 1;
+
+pub use self::compact::{CompactBoundaryMetadata, CompactState, latest_compact_boundary_metadata};
 pub use self::planning::{
     CompletedInteraction, PendingApproval, PendingUserInput, PlanStep, PlanStepStatus,
 };
+use self::planning::{InspectionProgress, RuntimeContinuationPhase, tool_result_message};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AgentExecutionMode {
@@ -190,6 +193,7 @@ impl Agent {
     {
         let turn_start_idx = self.history.len();
         let mut agentic_turns = 0usize;
+        let mut runtime_error_recoveries = 0usize;
         self.inspection_progress = InspectionProgress::default();
         self.last_query_plan_updated = false;
         self.compact_if_needed_with_reporter(&mut report).await?;
@@ -206,8 +210,31 @@ impl Agent {
         });
         self.checkpoint_session()?;
 
-        self.run_agent_loop_with_limit(output_mode, &mut report, &mut agentic_turns)
-            .await?;
+        match self
+            .run_agent_loop_with_limit(output_mode, &mut report, &mut agentic_turns)
+            .await
+        {
+            Ok(()) => {}
+            Err(err) => {
+                if self
+                    .try_continue_after_recoverable_runtime_error(
+                        &err,
+                        output_mode,
+                        &mut report,
+                        &mut agentic_turns,
+                        &mut runtime_error_recoveries,
+                    )
+                    .await?
+                {
+                    report(AgentEvent::Status(
+                        "Runtime error was surfaced to the model and the turn continued."
+                            .to_string(),
+                    ));
+                } else {
+                    return Err(err);
+                }
+            }
+        }
 
         self.checkpoint_session()?;
         let turn_text = format!(
@@ -457,6 +484,33 @@ impl Agent {
         Ok(())
     }
 
+    async fn try_continue_after_recoverable_runtime_error<F>(
+        &mut self,
+        err: &anyhow::Error,
+        output_mode: AgentOutputMode,
+        report: &mut F,
+        agentic_turns: &mut usize,
+        runtime_error_recoveries: &mut usize,
+    ) -> Result<bool>
+    where
+        F: FnMut(AgentEvent) + Send,
+    {
+        let Some(kind) = recoverable_runtime_error_kind(err) else {
+            return Ok(false);
+        };
+        if *runtime_error_recoveries >= MAX_RUNTIME_ERROR_RECOVERY_ATTEMPTS {
+            return Ok(false);
+        }
+        *runtime_error_recoveries += 1;
+        report(AgentEvent::Status(format!(
+            "Recoverable local runtime error detected ({kind}). Asking the model to handle it."
+        )));
+        self.push_history_message(recoverable_runtime_error_message(kind, err));
+        self.run_agent_loop_with_limit(output_mode, report, agentic_turns)
+            .await?;
+        Ok(true)
+    }
+
     async fn execute_tool_calls<F>(
         &mut self,
         tool_calls: Vec<ToolCall>,
@@ -683,4 +737,53 @@ impl Agent {
 fn is_compact_boundary_message(message: &Message) -> bool {
     message.role == "system"
         && message.content.get("type").and_then(Value::as_str) == Some("compact_boundary")
+}
+
+fn recoverable_runtime_error_kind(err: &anyhow::Error) -> Option<&'static str> {
+    for cause in err.chain() {
+        if let Some(io_err) = cause.downcast_ref::<std::io::Error>() {
+            return match io_err.kind() {
+                std::io::ErrorKind::PermissionDenied => Some("permission_denied"),
+                std::io::ErrorKind::NotFound => Some("path_not_found"),
+                std::io::ErrorKind::AlreadyExists => Some("path_already_exists"),
+                std::io::ErrorKind::Interrupted => Some("interrupted"),
+                std::io::ErrorKind::WouldBlock => Some("would_block"),
+                std::io::ErrorKind::WriteZero => Some("write_zero"),
+                std::io::ErrorKind::UnexpectedEof => Some("unexpected_eof"),
+                _ => {
+                    let text = io_err.to_string().to_ascii_lowercase();
+                    if text.contains("no space left on device") {
+                        Some("storage_full")
+                    } else if text.contains("operation not permitted") {
+                        Some("operation_not_permitted")
+                    } else {
+                        Some("io_error")
+                    }
+                }
+            };
+        }
+    }
+    let text = err.to_string().to_ascii_lowercase();
+    if text.contains("no space left on device") {
+        Some("storage_full")
+    } else if text.contains("sandbox") || text.contains("operation not permitted") {
+        Some("operation_not_permitted")
+    } else {
+        None
+    }
+}
+
+fn recoverable_runtime_error_message(kind: &str, err: &anyhow::Error) -> Message {
+    let error = redact_secrets(
+        err.chain()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\ncaused by: "),
+    );
+    Message {
+        role: "user".to_string(),
+        content: json!([{"type": "text", "text": format!(
+            "<agent_runtime_error>\nkind: {kind}\nerror:\n{error}\n\ninstructions:\n- Treat this as a recoverable local runtime or filesystem error from the previous step.\n- Explain the likely cause briefly, then choose the safest next action.\n- If the error came from disk space, sandboxing, or file permissions, inspect or suggest remediation instead of repeating the exact failing operation blindly.\n- Continue the same user task when it is safe to do so.\n</agent_runtime_error>"
+        )}]),
+    }
 }

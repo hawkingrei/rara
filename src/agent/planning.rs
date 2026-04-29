@@ -734,10 +734,11 @@ impl RuntimeContinuationPhase {
                 "Do not ask the user to continue.",
             ],
             Self::PlanApproved => vec![
-                "The user approved the current plan. Continue the same task immediately.",
+                "The current plan was approved. Continue the same task immediately.",
                 "Implement the approved plan using the existing plan state and repository context.",
                 "Do not restate the plan back to the user unless a short reminder is necessary.",
                 "Start with the next concrete implementation step or tool call.",
+                "After the implementation is complete, review your own changes for correctness, scope control, and missing validation before giving the final answer.",
                 "Do not ask the user to continue.",
             ],
         }
