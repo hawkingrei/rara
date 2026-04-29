@@ -53,6 +53,7 @@ Priority order for this phase:
 
 ## Architecture / Runtime
 
+- [x] Split `src/context/assembler.rs` into `assembler/{mod,memory_selection,view,compaction}.rs` to stay under the roughly-800-line module guideline (2026-04-29).
 - [ ] Promote the current `MemorySelection` skeleton into the authoritative bounded retrieval-selection pipeline for thread and workspace recall.
 - [ ] Finish the first non-vector cut of `MemorySelection` so thread memory, workspace memory, active thread state, pending interaction state, and recent tool results all flow through one selected/available/dropped explanation path.
 
