@@ -4,6 +4,7 @@ use serde_json::{Value, json};
 use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
+use tokio::io::{AsyncBufReadExt, BufReader as AsyncBufReader};
 use walkdir::WalkDir;
 
 const DEFAULT_READ_LINE_LIMIT: usize = 2_000;
@@ -36,11 +37,13 @@ impl Tool for ReadFileTool {
             .as_str()
             .ok_or(ToolError::InvalidInput("path".into()))?;
         let window = read_file_window_from_input(&i)?;
-        let output = read_file_window(p, window)?;
+        let output = read_file_window(p, window).await?;
 
         Ok(json!({
             "content": output.content,
             "total_lines": output.total_lines,
+            "total_lines_exact": output.total_lines_exact,
+            "observed_lines": output.observed_lines,
             "start_line": output.start_line,
             "end_line": output.end_line,
             "offset": output.start_line,
@@ -49,7 +52,7 @@ impl Tool for ReadFileTool {
             "truncated": output.truncated,
             "next_offset": output.next_offset,
             "line_truncated": output.line_truncated,
-            "line_format": "L{line}: {text}",
+            "line_format": "raw",
             "bytes_read": output.bytes_read,
         }))
     }
@@ -63,7 +66,9 @@ struct ReadFileWindow {
 
 struct ReadFileOutput {
     content: String,
-    total_lines: usize,
+    total_lines: Option<usize>,
+    total_lines_exact: bool,
+    observed_lines: usize,
     start_line: usize,
     end_line: usize,
     limit: usize,
@@ -133,11 +138,12 @@ fn optional_positive_usize(input: &Value, key: &str) -> Result<Option<usize>, To
     Ok(Some(value as usize))
 }
 
-fn read_file_window(path: &str, window: ReadFileWindow) -> Result<ReadFileOutput, ToolError> {
-    let file = fs::File::open(path)?;
-    let mut reader = BufReader::new(file);
+async fn read_file_window(path: &str, window: ReadFileWindow) -> Result<ReadFileOutput, ToolError> {
+    let file = tokio::fs::File::open(path).await?;
+    let mut reader = AsyncBufReader::new(file);
     let mut line = String::new();
-    let mut total_lines = 0usize;
+    let mut observed_lines = 0usize;
+    let mut total_lines_exact = false;
     let mut selected = Vec::new();
     let mut line_truncated = false;
     let mut bytes_read = 0usize;
@@ -148,27 +154,32 @@ fn read_file_window(path: &str, window: ReadFileWindow) -> Result<ReadFileOutput
 
     loop {
         line.clear();
-        let bytes = reader.read_line(&mut line)?;
+        let bytes = reader.read_line(&mut line).await?;
         if bytes == 0 {
+            total_lines_exact = true;
             break;
         }
         bytes_read += bytes;
-        total_lines += 1;
+        observed_lines += 1;
 
-        if total_lines < window.offset || total_lines > last_requested_line {
+        if observed_lines > last_requested_line {
+            break;
+        }
+
+        if observed_lines < window.offset {
             continue;
         }
 
         let text = line.trim_end_matches(['\r', '\n']);
         let (text, truncated) = truncate_read_line(text);
         line_truncated |= truncated;
-        selected.push(format!("L{total_lines}: {text}"));
+        selected.push(text);
     }
 
-    if window.offset > total_lines.max(1) {
+    if window.offset > observed_lines.max(1) {
         return Err(ToolError::ExecutionFailed(format!(
             "offset {} exceeds file length {}",
-            window.offset, total_lines
+            window.offset, observed_lines
         )));
     }
 
@@ -178,7 +189,7 @@ fn read_file_window(path: &str, window: ReadFileWindow) -> Result<ReadFileOutput
     } else {
         window.offset + num_lines - 1
     };
-    let has_more_lines = total_lines > end_line;
+    let has_more_lines = observed_lines > end_line;
     let next_offset = if has_more_lines {
         Some(end_line + 1)
     } else {
@@ -187,7 +198,9 @@ fn read_file_window(path: &str, window: ReadFileWindow) -> Result<ReadFileOutput
 
     Ok(ReadFileOutput {
         content: selected.join("\n"),
-        total_lines,
+        total_lines: total_lines_exact.then_some(observed_lines),
+        total_lines_exact,
+        observed_lines,
         start_line: window.offset,
         end_line,
         limit: window.limit,
@@ -489,7 +502,7 @@ mod tests {
         WriteFileTool,
     };
     use crate::tool::Tool;
-    use serde_json::json;
+    use serde_json::{Value, json};
 
     #[tokio::test]
     async fn read_file_supports_line_ranges() {
@@ -507,8 +520,10 @@ mod tests {
             .await
             .expect("read file");
 
-        assert_eq!(result["content"], "L2: b\nL3: c");
-        assert_eq!(result["total_lines"], 4);
+        assert_eq!(result["content"], "b\nc");
+        assert_eq!(result["total_lines"], Value::Null);
+        assert_eq!(result["total_lines_exact"], false);
+        assert_eq!(result["observed_lines"], 4);
         assert_eq!(result["start_line"], 2);
         assert_eq!(result["end_line"], 3);
         assert_eq!(result["offset"], 2);
@@ -534,8 +549,10 @@ mod tests {
             .await
             .expect("read file");
 
-        assert_eq!(result["content"], "L2: beta");
-        assert_eq!(result["total_lines"], 3);
+        assert_eq!(result["content"], "beta");
+        assert_eq!(result["total_lines"], Value::Null);
+        assert_eq!(result["total_lines_exact"], false);
+        assert_eq!(result["observed_lines"], 3);
         assert_eq!(result["start_line"], 2);
         assert_eq!(result["end_line"], 2);
         assert_eq!(result["num_lines"], 1);
@@ -559,20 +576,12 @@ mod tests {
             .await
             .expect("read file");
 
-        assert!(result["content"].as_str().unwrap().contains("L1: line 1"));
-        assert!(
-            result["content"]
-                .as_str()
-                .unwrap()
-                .contains("L2000: line 2000")
-        );
-        assert!(
-            !result["content"]
-                .as_str()
-                .unwrap()
-                .contains("L2001: line 2001")
-        );
-        assert_eq!(result["total_lines"], 2002);
+        assert!(result["content"].as_str().unwrap().contains("line 1"));
+        assert!(result["content"].as_str().unwrap().contains("line 2000"));
+        assert!(!result["content"].as_str().unwrap().contains("line 2001"));
+        assert_eq!(result["total_lines"], Value::Null);
+        assert_eq!(result["total_lines_exact"], false);
+        assert_eq!(result["observed_lines"], 2001);
         assert_eq!(result["start_line"], 1);
         assert_eq!(result["end_line"], 2000);
         assert_eq!(result["limit"], 2000);
@@ -612,6 +621,7 @@ mod tests {
             .expect("read file");
 
         assert_eq!(result["total_lines"], 1);
+        assert_eq!(result["total_lines_exact"], true);
         assert_eq!(result["line_truncated"], true);
         assert_eq!(result["truncated"], true);
         assert!(

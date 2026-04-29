@@ -333,8 +333,9 @@ fn wrap_plain_text(text: &str, width: usize) -> Vec<String> {
     let mut rows = Vec::new();
     let mut current = String::new();
     let mut current_width = 0usize;
+    let mut ch_buf = [0u8; 4];
     for ch in text.chars() {
-        let ch_width = display_width(ch.to_string().as_str()).max(1);
+        let ch_width = display_width(ch.encode_utf8(&mut ch_buf)).max(1);
         if current_width > 0 && current_width + ch_width > width {
             rows.push(current);
             current = String::new();

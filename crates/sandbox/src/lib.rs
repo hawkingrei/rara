@@ -432,6 +432,9 @@ fn command_exists(program: &str) -> bool {
 }
 
 fn command_search_path_dirs(command_path: Option<&std::ffi::OsStr>) -> Vec<PathBuf> {
+    let home_dir = env::var_os("HOME")
+        .map(PathBuf::from)
+        .and_then(|path| fs::canonicalize(&path).ok().or(Some(path)));
     command_path
         .map(OsString::from)
         .or_else(|| env::var_os("PATH"))
@@ -448,6 +451,9 @@ fn command_search_path_dirs(command_path: Option<&std::ffi::OsStr>) -> Vec<PathB
                 if path_contains_control_chars(&dir) {
                     continue;
                 }
+                if is_broad_command_search_dir(&dir, home_dir.as_deref()) {
+                    continue;
+                }
                 if !dirs.iter().any(|existing| existing == &dir) {
                     dirs.push(dir);
                 }
@@ -455,6 +461,10 @@ fn command_search_path_dirs(command_path: Option<&std::ffi::OsStr>) -> Vec<PathB
             dirs
         })
         .unwrap_or_default()
+}
+
+fn is_broad_command_search_dir(dir: &Path, home_dir: Option<&Path>) -> bool {
+    dir == Path::new("/") || home_dir == Some(dir)
 }
 
 fn command_search_install_roots(command_path: Option<&std::ffi::OsStr>) -> Vec<PathBuf> {
@@ -467,7 +477,7 @@ fn command_search_install_roots(command_path: Option<&std::ffi::OsStr>) -> Vec<P
             dir.file_name().and_then(|name| name.to_str()),
             Some("bin" | "sbin")
         ) {
-            let parent = dir.parent().unwrap_or_else(|| dir.as_path());
+            let parent = dir.parent().unwrap_or(dir.as_path());
             if parent == Path::new("/") || home_dir.as_deref() == Some(parent) {
                 dir.clone()
             } else {
@@ -1104,6 +1114,33 @@ mod tests {
         }
 
         assert_eq!(roots, vec![home_bin]);
+    }
+
+    #[test]
+    fn command_search_install_roots_rejects_broad_path_entries() {
+        let tempdir = tempdir().expect("tempdir");
+        let home = tempdir.path().join("home");
+        let tool_root = tempdir.path().join("toolchain");
+        let tool_bin = tool_root.join("bin");
+        std::fs::create_dir_all(&home).expect("home dir");
+        std::fs::create_dir_all(&tool_bin).expect("tool bin dir");
+        let home = std::fs::canonicalize(&home).expect("canonical home");
+        let tool_root = std::fs::canonicalize(&tool_root).expect("canonical tool root");
+        let tool_bin = tool_root.join("bin");
+        let original_home = std::env::var_os("HOME");
+        set_env_var("HOME", &home);
+
+        let path = env::join_paths([PathBuf::from("/"), home.clone(), tool_bin.clone()])
+            .expect("build test PATH");
+        let roots = command_search_install_roots(Some(path.as_os_str()));
+
+        if let Some(home) = original_home {
+            set_env_var("HOME", home);
+        } else {
+            remove_env_var("HOME");
+        }
+
+        assert_eq!(roots, vec![tool_root]);
     }
 
     #[test]

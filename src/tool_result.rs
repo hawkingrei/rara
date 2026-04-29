@@ -512,7 +512,12 @@ fn summarize_tool_result(tool_name: &str, input: &Value, result: &Value) -> Stri
             let total_lines = result
                 .get("total_lines")
                 .and_then(Value::as_u64)
+                .or_else(|| result.get("observed_lines").and_then(Value::as_u64))
                 .unwrap_or_default();
+            let total_lines_exact = result
+                .get("total_lines_exact")
+                .and_then(Value::as_bool)
+                .unwrap_or(true);
             let start_line = result
                 .get("start_line")
                 .and_then(Value::as_u64)
@@ -533,13 +538,18 @@ fn summarize_tool_result(tool_name: &str, input: &Value, result: &Value) -> Stri
                 (true, None) => " Truncated.".to_string(),
                 _ => String::new(),
             };
+            let total_label = if total_lines_exact {
+                total_lines.to_string()
+            } else {
+                format!("at least {total_lines}")
+            };
             if total_lines > 0 && (start_line != 1 || end_line != total_lines) {
                 format!(
-                    "Read file {path} lines {start_line}-{end_line} of {total_lines} ({total_chars} chars).{continuation}"
+                    "Read file {path} lines {start_line}-{end_line} of {total_label} ({total_chars} chars).{continuation}"
                 )
             } else {
                 format!(
-                    "Read file {path} ({total_lines} lines, {total_chars} chars).{continuation}"
+                    "Read file {path} ({total_label} lines, {total_chars} chars).{continuation}"
                 )
             }
         }

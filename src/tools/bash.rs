@@ -653,7 +653,19 @@ fn sandbox_command_env(
             .iter()
             .map(|(key, value)| (key.clone(), value.clone())),
     );
+    ensure_usable_path(&mut env_map);
     env_map
+}
+
+fn ensure_usable_path(env_map: &mut HashMap<String, String>) {
+    let needs_path = env_map.get("PATH").is_none_or(|value| value.is_empty());
+    if needs_path {
+        let fallback_path = env::var("PATH")
+            .ok()
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| "/usr/bin:/bin".to_string());
+        env_map.insert("PATH".to_string(), fallback_path);
+    }
 }
 
 fn command_env_for_wrapped(
@@ -1421,6 +1433,21 @@ mod tests {
         assert_eq!(
             env_map.get("PATH").map(String::as_str),
             Some("/override/bin")
+        );
+    }
+
+    #[test]
+    fn sandbox_command_env_falls_back_to_process_path_when_snapshot_path_is_missing() {
+        let sandbox_home = Path::new("/tmp/rara-test-home");
+        let env_map = sandbox_command_env(
+            sandbox_home,
+            &HashMap::from([("PATH".to_string(), String::new())]),
+            &HashMap::new(),
+        );
+
+        assert!(
+            env_map.get("PATH").is_some_and(|path| !path.is_empty()),
+            "sandbox env must keep a usable PATH after env_clear"
         );
     }
 

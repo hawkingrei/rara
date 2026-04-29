@@ -184,7 +184,7 @@ fn patch_preview(patch: &str) -> (String, bool) {
         .lines()
         .take(PATCH_PREVIEW_LINE_LIMIT)
         .collect::<Vec<_>>();
-    let truncated = patch.lines().count() > lines.len();
+    let truncated = patch.lines().nth(PATCH_PREVIEW_LINE_LIMIT).is_some();
     let mut preview = lines.join("\n");
     if truncated {
         preview.push_str("\n... diff truncated");

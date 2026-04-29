@@ -608,7 +608,21 @@ fn command_env_for_wrapped(
             .iter()
             .map(|(key, value)| (key.clone(), value.clone())),
     );
+    if wrapped.sandboxed {
+        ensure_usable_path(&mut env_map);
+    }
     Ok(env_map)
+}
+
+fn ensure_usable_path(env_map: &mut HashMap<String, String>) {
+    let needs_path = env_map.get("PATH").is_none_or(|value| value.is_empty());
+    if needs_path {
+        let fallback_path = env::var("PATH")
+            .ok()
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| "/usr/bin:/bin".to_string());
+        env_map.insert("PATH".to_string(), fallback_path);
+    }
 }
 
 fn ensure_sandbox_home_dirs(sandbox_home: &Path) -> Result<(), ToolError> {
@@ -682,6 +696,30 @@ mod tests {
         let err = parse_pty_dimension(Some(&value), 24, "rows").expect_err("overflow rejected");
 
         assert!(matches!(err, ToolError::InvalidInput(_)));
+    }
+
+    #[test]
+    fn sandboxed_pty_env_falls_back_to_process_path_when_snapshot_path_is_missing() {
+        let temp = tempdir().expect("tempdir");
+        let wrapped = WrappedCommand {
+            program: "bwrap".to_string(),
+            args: vec!["--version".to_string()],
+            cleanup_path: None,
+            sandboxed: true,
+            sandbox_backend: "linux-bubblewrap".to_string(),
+            sandbox_home: Some(temp.path().join("home")),
+        };
+        let env_map = command_env_for_wrapped(
+            &wrapped,
+            &HashMap::from([("PATH".to_string(), String::new())]),
+            &HashMap::new(),
+        )
+        .expect("pty env");
+
+        assert!(
+            env_map.get("PATH").is_some_and(|path| !path.is_empty()),
+            "sandboxed PTY env must keep a usable PATH after env_clear"
+        );
     }
 
     #[tokio::test]
