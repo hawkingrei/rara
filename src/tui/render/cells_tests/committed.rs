@@ -232,7 +232,7 @@ fn committed_turn_cell_appends_adjacent_progress_entries() {
     let second_ran = rendered.find("Run cargo check").unwrap();
 
     assert_eq!(rendered.matches(" Explored ").count(), 1);
-    assert_eq!(rendered.matches(" Ran ").count(), 2);
+    assert_eq!(rendered.matches(" Ran ").count(), 1);
     assert!(first_explored < second_explored);
     assert!(second_explored < first_ran);
     assert!(first_ran < second_ran);

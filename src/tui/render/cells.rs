@@ -113,9 +113,9 @@ fn explicit_progress_entry_groups<'a>(
         if messages.is_empty() {
             continue;
         }
-        if role == "Exploring"
+        if matches!(role, "Exploring" | "Running")
             && let Some((last_role, last_messages)) = groups.last_mut()
-            && *last_role == "Exploring"
+            && *last_role == role
         {
             last_messages.extend(messages);
             continue;
@@ -216,6 +216,7 @@ fn push_live_events<'a>(
     let mut thinking_messages = Vec::new();
     let mut exploration_actions = Vec::new();
     let mut exploration_notes = Vec::new();
+    let mut running_actions = Vec::new();
 
     for event in events {
         if event.role() == "Thinking" {
@@ -225,17 +226,31 @@ fn push_live_events<'a>(
                 &mut exploration_notes,
                 active,
             );
+            push_live_running_group(cells, &mut running_actions, active);
             thinking_messages.push(event.message().to_string());
             continue;
         }
 
         if event.role() == "Exploring" {
             push_live_thinking_group(cells, &mut thinking_messages, None);
+            push_live_running_group(cells, &mut running_actions, active);
             if event.is_note() {
                 exploration_notes.push(event.message().to_string());
             } else {
                 exploration_actions.push(event.message().to_string());
             }
+            continue;
+        }
+
+        if event.role() == "Running" {
+            push_live_thinking_group(cells, &mut thinking_messages, None);
+            push_live_exploration_group(
+                cells,
+                &mut exploration_actions,
+                &mut exploration_notes,
+                active,
+            );
+            running_actions.push(event.message().to_string());
             continue;
         }
 
@@ -246,16 +261,18 @@ fn push_live_events<'a>(
             &mut exploration_notes,
             active,
         );
+        push_live_running_group(cells, &mut running_actions, active);
         push_live_event(cells, event, active);
     }
 
-    push_live_thinking_group(cells, &mut thinking_messages, streaming_thinking_lines);
     push_live_exploration_group(
         cells,
         &mut exploration_actions,
         &mut exploration_notes,
         active,
     );
+    push_live_running_group(cells, &mut running_actions, active);
+    push_live_thinking_group(cells, &mut thinking_messages, streaming_thinking_lines);
 }
 
 fn push_live_thinking_group<'a>(
@@ -298,6 +315,21 @@ fn push_live_exploration_group<'a>(
     )));
     actions.clear();
     notes.clear();
+}
+
+fn push_live_running_group<'a>(
+    cells: &mut Vec<Box<dyn HistoryCell + 'a>>,
+    actions: &mut Vec<String>,
+    active: bool,
+) {
+    if actions.is_empty() {
+        return;
+    }
+    cells.push(Box::new(RunningCell::new(
+        compact_recent_first_summary_lines(actions.as_slice(), 4, "more running step(s)"),
+        active,
+    )));
+    actions.clear();
 }
 
 fn split_progress_sentences(message: &str) -> Vec<String> {

@@ -428,13 +428,13 @@ fn active_turn_cell_appends_long_live_running_events() {
         .join("\n");
 
     assert!(rendered.contains(" Running "));
-    assert!(rendered.contains("Run task 1"));
-    assert!(rendered.contains("Run task 2"));
+    assert!(!rendered.contains("Run task 1"));
+    assert!(!rendered.contains("Run task 2"));
     assert!(rendered.contains("Run task 3"));
     assert!(rendered.contains("Run task 6"));
-    assert!(!rendered.contains("more running step(s)"));
-    assert_eq!(rendered.matches(" Running ").count(), 6);
-    assert!(rendered.find("Run task 1") < rendered.find("Run task 6"));
+    assert!(rendered.contains("more running step(s)"));
+    assert_eq!(rendered.matches(" Running ").count(), 1);
+    assert!(rendered.find("Run task 6") < rendered.find("Run task 3"));
 }
 
 #[test]
@@ -978,6 +978,44 @@ fn active_turn_cell_places_streaming_thinking_after_latest_progress_event() {
 }
 
 #[test]
+fn active_turn_cell_places_streaming_thinking_after_latest_exploration_event() {
+    let temp = tempdir().unwrap();
+    let mut app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("build tui app");
+    app.runtime_phase = RuntimePhase::ProcessingResponse;
+    app.active_turn = TranscriptTurn {
+        entries: vec![TranscriptEntry {
+            role: "You".into(),
+            message: "Inspect before reasoning again".into(),
+            payload: None,
+        }],
+    };
+
+    app.append_agent_thinking_delta("first reasoning block\n");
+    app.flush_agent_thinking_stream_to_live_event();
+    app.record_exploration_action("Read src/tui/render/cells.rs");
+    app.append_agent_thinking_delta("second reasoning block\n");
+
+    let rendered = ActiveTurnCell::new(&app, Some(Path::new(".")))
+        .display_lines(100)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let first_thinking = rendered.find("first reasoning block").unwrap();
+    let exploring = rendered.find("Read src/tui/render/cells.rs").unwrap();
+    let second_thinking = rendered.find("second reasoning block").unwrap();
+
+    assert!(first_thinking < exploring);
+    assert!(exploring < second_thinking);
+    assert_eq!(rendered.matches(" Thinking ").count(), 2);
+    assert_eq!(rendered.matches(" Exploring ").count(), 1);
+}
+
+#[test]
 fn active_turn_cell_groups_consecutive_thinking_events_with_stream() {
     let temp = tempdir().unwrap();
     let mut app = TuiApp::new(ConfigManager {
@@ -1156,7 +1194,7 @@ fn active_turn_cell_preserves_consecutive_duplicate_progress_events() {
     assert_eq!(rendered.matches("Read src/tui/render/cells.rs").count(), 2);
     assert_eq!(rendered.matches("Run cargo check").count(), 2);
     assert_eq!(rendered.matches(" Exploring ").count(), 1);
-    assert_eq!(rendered.matches(" Running ").count(), 2);
+    assert_eq!(rendered.matches(" Running ").count(), 1);
 }
 
 #[test]
