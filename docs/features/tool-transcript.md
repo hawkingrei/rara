@@ -29,6 +29,18 @@ The transcript should move toward Codex/Claude-style tool visibility:
 
 - `bash` tool execution must emit live transcript updates while stdout/stderr are still being produced.
 - The final `bash` tool result should keep the exit code and avoid duplicating large output that was already streamed live.
+- When shell execution pauses on a human approval request, the approval card should take visual priority over older live stdout/stderr progress from the same turn.
+- Approval choices should describe both the action and its scope, such as:
+  - allow only the current command;
+  - allow commands with the matching prefix for the current session;
+  - allow shell commands for the current session;
+  - deny the command.
+- OpenAI-compatible chat endpoints must keep approved shell command results as
+  protocol-level tool messages before the runtime continuation message. DeepSeek
+  v4/pro history folding for missing reasoning metadata is only valid when
+  DeepSeek thinking mode is explicitly enabled; the default DeepSeek request body
+  must preserve assistant tool calls and adjacent tool results so the model can
+  continue after approval.
 - background bash tasks must be inspectable without imposing a fixed task-count limit:
   - `background_task_list` lists known background tasks;
   - `background_task_status` reads status and recent output for one task;

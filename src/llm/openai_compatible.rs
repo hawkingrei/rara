@@ -395,7 +395,7 @@ fn deepseek_history_requires_reasoning_content(
 ) -> bool {
     endpoint_kind == OpenAiEndpointKind::Deepseek
         && deepseek_supports_thinking(model)
-        && thinking != Some(false)
+        && thinking == Some(true)
 }
 
 fn deepseek_legacy_history_note(messages: &[Value]) -> String {

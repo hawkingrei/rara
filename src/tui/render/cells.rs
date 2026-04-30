@@ -924,6 +924,7 @@ impl ActiveCell for ActiveTurnCell<'_> {
         let has_live_running = !self.app.active_live.running_actions.is_empty();
         let live_events = self.app.active_live.events.as_slice();
         let has_live_events = !live_events.is_empty();
+        let has_active_pending_interaction = self.app.active_pending_interaction().is_some();
 
         if !user_message.is_empty() {
             cells.push(Box::new(UserCell::new(user_message)));
@@ -984,7 +985,7 @@ impl ActiveCell for ActiveTurnCell<'_> {
             }
         }
 
-        let explicit_progress_groups = (!has_live_events)
+        let explicit_progress_groups = (!has_live_events && !has_active_pending_interaction)
             .then(|| explicit_progress_entry_groups(current_turn.iter().copied()));
         if let Some(groups) = explicit_progress_groups.as_ref() {
             for (role, messages) in groups {
@@ -1249,7 +1250,9 @@ impl ActiveCell for ActiveTurnCell<'_> {
                 14,
                 self.cwd,
             )));
-        } else if let Some((role, tool_result)) = latest_tool_result {
+        } else if !has_active_pending_interaction
+            && let Some((role, tool_result)) = latest_tool_result
+        {
             cells.push(Box::new(RespondingCell::from_tool_result(
                 role,
                 tool_result,

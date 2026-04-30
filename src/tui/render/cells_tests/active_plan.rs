@@ -154,11 +154,18 @@ fn active_turn_cell_renders_shell_approval_as_interaction_card() {
     })
     .expect("build tui app");
     app.active_turn = TranscriptTurn {
-        entries: vec![TranscriptEntry {
-            role: "You".into(),
-            message: "Run the migration helper".into(),
-            payload: None,
-        }],
+        entries: vec![
+            TranscriptEntry {
+                role: "You".into(),
+                message: "Run the migration helper".into(),
+                payload: None,
+            },
+            TranscriptEntry {
+                role: "Tool Progress".into(),
+                message: "background task stdout:\n    Checking nix v0.30.1".into(),
+                payload: None,
+            },
+        ],
     };
     app.snapshot
         .pending_interactions
@@ -194,9 +201,13 @@ fn active_turn_cell_renders_shell_approval_as_interaction_card() {
         .join("\n");
 
     assert!(rendered.contains(" Shell Approval "));
-    assert!(rendered.contains("command:"));
-    assert!(rendered.contains("cwd:"));
+    assert!(rendered.contains("Review this shell command before RARA runs it."));
+    assert!(rendered.contains("Command:"));
+    assert!(rendered.contains("Working directory:"));
     assert!(rendered.contains("bash ./scripts/migrate.sh"));
+    assert!(rendered.contains("1. Allow once"));
+    assert!(!rendered.contains("Tool Progress"));
+    assert!(!rendered.contains("background task stdout"));
 }
 
 #[test]

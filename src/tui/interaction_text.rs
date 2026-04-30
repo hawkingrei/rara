@@ -24,8 +24,12 @@ pub fn pending_interaction_card_title(kind: ActivePendingInteractionKind) -> &'s
 
 pub fn pending_interaction_hint_text(kind: ActivePendingInteractionKind) -> &'static str {
     match kind {
-        ActivePendingInteractionKind::PlanApproval => "type reply  1 yes  2 plan",
-        ActivePendingInteractionKind::ShellApproval => "type reply  1 yes  2 prefix  3 on  4 no",
+        ActivePendingInteractionKind::PlanApproval => {
+            "plan ready  1 start implementation  2 continue planning"
+        }
+        ActivePendingInteractionKind::ShellApproval => {
+            "approval required  1 allow once  2 allow prefix  3 allow session  4 deny"
+        }
         ActivePendingInteractionKind::PlanningQuestion
         | ActivePendingInteractionKind::ExplorationQuestion
         | ActivePendingInteractionKind::SubAgentQuestion
@@ -35,13 +39,15 @@ pub fn pending_interaction_hint_text(kind: ActivePendingInteractionKind) -> &'st
 
 pub fn status_plan_approval_text(app: &TuiApp) -> String {
     let _ = app;
-    "Start implementation with this plan?\n\n1. yes\n2. keep planning".to_string()
+    "Plan ready for implementation.\n\n1. Start implementation now\n2. Continue planning and refine the plan".to_string()
 }
 
 pub fn pending_interaction_shortcut_text(kind: ActivePendingInteractionKind) -> &'static str {
     match kind {
-        ActivePendingInteractionKind::PlanApproval => "1 yes  2 plan",
-        ActivePendingInteractionKind::ShellApproval => "1 yes  2 prefix  3 on  4 no",
+        ActivePendingInteractionKind::PlanApproval => "1 start implementation  2 continue planning",
+        ActivePendingInteractionKind::ShellApproval => {
+            "1 allow once  2 allow prefix  3 allow session  4 deny"
+        }
         ActivePendingInteractionKind::PlanningQuestion
         | ActivePendingInteractionKind::ExplorationQuestion
         | ActivePendingInteractionKind::SubAgentQuestion
@@ -131,17 +137,15 @@ pub fn status_command_approval_text(app: &TuiApp) -> String {
         .approval_prefix()
         .unwrap_or_else(|| approval.command.clone());
 
+    let network = if approval.allow_net {
+        "enabled for this command"
+    } else {
+        "disabled unless already allowed by the sandbox"
+    };
+
     format!(
-        "command:\n{}\n\ncwd:\n{}\n\nnetwork:\n{}\n\nenv:\n{} override(s)\n\nmatching prefix:\n{}\n\n1. yes\n2. prefix\n3. on\n4. no",
-        approval.command,
-        cwd,
-        if approval.allow_net {
-            "allowed"
-        } else {
-            "disabled"
-        },
-        env_count,
-        prefix,
+        "Review this shell command before RARA runs it.\n\nCommand:\n  {}\n\nWorking directory:\n  {}\n\nNetwork access: {}\nEnvironment overrides: {}\nMatching prefix: {}\n\n1. Allow once - run only this command now\n2. Allow matching prefix - trust commands that start with `{}` for this session\n3. Allow for this session - stop asking for shell commands until the session changes\n4. Deny - do not run the command",
+        approval.command, cwd, network, env_count, prefix, prefix,
     )
 }
 
@@ -150,12 +154,17 @@ mod tests {
     use tempfile::tempdir;
 
     use crate::config::ConfigManager;
-    use crate::tui::state::TuiApp;
+    use crate::tools::bash::BashCommandInput;
+    use crate::tui::state::{
+        InteractionKind, PendingApprovalSnapshot, PendingInteractionSnapshot, TuiApp,
+    };
 
-    use super::{pending_interaction_hint_text, status_plan_approval_text};
+    use super::{
+        pending_interaction_hint_text, status_command_approval_text, status_plan_approval_text,
+    };
 
     #[test]
-    fn plan_approval_text_uses_compact_choice_labels() {
+    fn plan_approval_text_uses_action_oriented_choice_labels() {
         let temp = tempdir().unwrap();
         let app = TuiApp::new(ConfigManager {
             path: temp.path().join("config.json"),
@@ -163,24 +172,64 @@ mod tests {
         .expect("app");
 
         let rendered = status_plan_approval_text(&app);
-        assert!(rendered.contains("1. yes"));
-        assert!(rendered.contains("2. keep planning"));
-        assert!(!rendered.contains("Start implementation now"));
+        assert!(rendered.contains("Plan ready for implementation."));
+        assert!(rendered.contains("1. Start implementation now"));
+        assert!(rendered.contains("2. Continue planning and refine the plan"));
+        assert!(!rendered.contains("1. yes"));
     }
 
     #[test]
-    fn pending_interaction_hint_text_is_compact_for_plan_and_shell_approval() {
+    fn pending_interaction_hint_text_describes_approval_scope() {
         assert_eq!(
             pending_interaction_hint_text(
                 crate::tui::state::ActivePendingInteractionKind::PlanApproval
             ),
-            "type reply  1 yes  2 plan"
+            "plan ready  1 start implementation  2 continue planning"
         );
         assert_eq!(
             pending_interaction_hint_text(
                 crate::tui::state::ActivePendingInteractionKind::ShellApproval
             ),
-            "type reply  1 yes  2 prefix  3 on  4 no"
+            "approval required  1 allow once  2 allow prefix  3 allow session  4 deny"
         );
+    }
+
+    #[test]
+    fn command_approval_text_uses_explicit_decision_labels() {
+        let temp = tempdir().unwrap();
+        let mut app = TuiApp::new(ConfigManager {
+            path: temp.path().join("config.json"),
+        })
+        .expect("app");
+        app.snapshot
+            .pending_interactions
+            .push(PendingInteractionSnapshot {
+                kind: InteractionKind::Approval,
+                title: "Pending Approval".into(),
+                summary: "cargo check".into(),
+                options: Vec::new(),
+                note: None,
+                approval: Some(PendingApprovalSnapshot {
+                    tool_use_id: "toolu_123".into(),
+                    command: "cargo check".into(),
+                    allow_net: false,
+                    payload: BashCommandInput {
+                        command: Some("cargo check".into()),
+                        cwd: Some("/repo".into()),
+                        ..Default::default()
+                    },
+                }),
+                source: None,
+            });
+
+        let rendered = status_command_approval_text(&app);
+        assert!(rendered.contains("Review this shell command before RARA runs it."));
+        assert!(rendered.contains("1. Allow once"));
+        assert!(rendered.contains("2. Allow matching prefix"));
+        assert!(rendered.contains("3. Allow for this session"));
+        assert!(rendered.contains("4. Deny"));
+        assert!(!rendered.contains("1. yes"));
+        assert!(!rendered.contains("3. on"));
+        assert!(!rendered.contains("4. no"));
     }
 }
