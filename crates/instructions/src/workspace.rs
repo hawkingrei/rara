@@ -149,12 +149,7 @@ impl WorkspaceMemory {
     }
 
     pub fn get_env_info(&self) -> (String, String) {
-        let cwd = self
-            .root
-            .file_name()
-            .and_then(|s| s.to_str())
-            .unwrap_or("unknown")
-            .to_string();
+        let cwd = self.root.display().to_string();
         let marker = self.git_head_marker();
         let mut cache = self.cache.lock().expect("workspace cache poisoned");
         if let Some(cached) = cache.env_info.as_ref() {

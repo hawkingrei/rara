@@ -740,7 +740,7 @@ impl Tool for BashTool {
         "bash"
     }
     fn description(&self) -> &str {
-        "Run shell command in sandbox"
+        "Run a shell command in the sandbox. Use the cwd field for the working directory when needed, and avoid cd unless it is necessary for the command itself."
     }
     fn input_schema(&self) -> Value {
         json!({
@@ -761,7 +761,7 @@ impl Tool for BashTool {
                 },
                 "cwd": {
                     "type": "string",
-                    "description": "Optional working directory override."
+                    "description": "Optional working directory override. Defaults to the current turn cwd."
                 },
                 "env": {
                     "type": "object",

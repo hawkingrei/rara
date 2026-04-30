@@ -1,10 +1,22 @@
 use crate::tool::{Tool, ToolError};
+use crate::tools::file::{FileReadState, SharedFileReadState};
 use async_trait::async_trait;
 use serde_json::{Value, json};
 use std::fs;
 use std::path::Path;
 
-pub struct ApplyPatchTool;
+#[derive(Default)]
+pub struct ApplyPatchTool {
+    read_state: Option<SharedFileReadState>,
+}
+
+impl ApplyPatchTool {
+    pub fn new(read_state: SharedFileReadState) -> Self {
+        Self {
+            read_state: Some(read_state),
+        }
+    }
+}
 
 const PATCH_PREVIEW_LINE_LIMIT: usize = 120;
 
@@ -54,7 +66,7 @@ impl Tool for ApplyPatchTool {
     }
 
     fn description(&self) -> &str {
-        "Apply structured file edits using Begin Patch syntax. Prefer this for editing existing files."
+        "Apply structured file edits using Begin Patch syntax. Prefer this for editing existing files. For update or delete operations, read the full target file first."
     }
 
     fn input_schema(&self) -> Value {
@@ -84,6 +96,9 @@ impl Tool for ApplyPatchTool {
             .and_then(Value::as_bool)
             .unwrap_or(false);
         let ops = parse_patch(patch)?;
+        if let Some(read_state) = &self.read_state {
+            validate_patch_read_state(read_state, &ops)?;
+        }
         let mut stats = PatchStats::default();
         let mut previews = Vec::new();
 
@@ -101,7 +116,11 @@ impl Tool for ApplyPatchTool {
                     stats.added_lines += lines.len();
                     previews.push(format!("Add file {path}"));
                     if !dry_run {
-                        write_text_file(&path, &join_lines(&lines))?;
+                        let content = join_lines(&lines);
+                        write_text_file(&path, &content)?;
+                        if let Some(read_state) = &self.read_state {
+                            record_patch_write_best_effort(read_state, &path, &content);
+                        }
                     }
                 }
                 PatchOp::Delete { path } => {
@@ -117,6 +136,9 @@ impl Tool for ApplyPatchTool {
                     stats.removed_lines += removed_lines;
                     previews.push(format!("Delete file {path}"));
                     if !dry_run {
+                        if let Some(read_state) = &self.read_state {
+                            read_state.forget(&path)?;
+                        }
                         fs::remove_file(&path)?;
                     }
                 }
@@ -150,9 +172,15 @@ impl Tool for ApplyPatchTool {
                             if let Some(parent) = Path::new(target).parent() {
                                 fs::create_dir_all(parent)?;
                             }
+                            if let Some(read_state) = &self.read_state {
+                                read_state.forget(&path)?;
+                            }
                             fs::remove_file(&path)?;
                         }
                         write_text_file(write_path, &updated)?;
+                        if let Some(read_state) = &self.read_state {
+                            record_patch_write_best_effort(read_state, write_path, &updated);
+                        }
                     }
                 }
             }
@@ -176,6 +204,27 @@ impl Tool for ApplyPatchTool {
             "diff_preview": diff_preview,
             "diff_truncated": diff_truncated,
         }))
+    }
+}
+
+fn validate_patch_read_state(
+    read_state: &SharedFileReadState,
+    ops: &[PatchOp],
+) -> Result<(), ToolError> {
+    for op in ops {
+        match op {
+            PatchOp::Add { .. } => {}
+            PatchOp::Delete { path } | PatchOp::Update { path, .. } => {
+                read_state.validate_existing_edit(path)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn record_patch_write_best_effort(read_state: &FileReadState, path: &str, content: &str) {
+    if let Err(err) = read_state.record_write(path, content) {
+        eprintln!("Failed to record file read state after patch write: {err}");
     }
 }
 
@@ -372,7 +421,9 @@ fn read_lines(path: &str) -> Result<Vec<String>, ToolError> {
 mod tests {
     use super::ApplyPatchTool;
     use crate::tool::Tool;
+    use crate::tools::file::{FileReadState, ReadFileTool};
     use serde_json::json;
+    use std::sync::Arc;
 
     #[tokio::test]
     async fn applies_update_patch() {
@@ -380,7 +431,7 @@ mod tests {
         let file = dir.path().join("sample.txt");
         std::fs::write(&file, "hello\nworld\n").expect("write");
 
-        let tool = ApplyPatchTool;
+        let tool = ApplyPatchTool::default();
         let result = tool
             .call(json!({
                 "patch": format!(
@@ -408,7 +459,7 @@ mod tests {
         let file = dir.path().join("sample.txt");
         std::fs::write(&file, "hello\nworld\n").expect("write");
 
-        let tool = ApplyPatchTool;
+        let tool = ApplyPatchTool::default();
         let result = tool
             .call(json!({
                 "patch": format!(
@@ -432,7 +483,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let file = dir.path().join("created.txt");
 
-        let tool = ApplyPatchTool;
+        let tool = ApplyPatchTool::default();
         let result = tool
             .call(json!({
                 "patch": format!(
@@ -449,5 +500,39 @@ mod tests {
         );
         assert_eq!(result["status"], "applied");
         assert_eq!(result["created_files"][0], file.display().to_string());
+    }
+
+    #[tokio::test]
+    async fn update_patch_requires_prior_full_read_when_state_is_enabled() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("sample.txt");
+        std::fs::write(&file, "hello\nworld\n").expect("write");
+        let read_state = Arc::new(FileReadState::default());
+        let patch_tool = ApplyPatchTool::new(read_state.clone());
+        let patch = format!(
+            "*** Begin Patch\n*** Update File: {}\n@@\n-hello\n+hi\n world\n*** End Patch",
+            file.display()
+        );
+
+        let error = patch_tool
+            .call(json!({ "patch": patch }))
+            .await
+            .expect_err("patch should require read");
+        assert!(error.to_string().contains("File has not been read yet"));
+
+        let read_tool = ReadFileTool::new(read_state);
+        read_tool
+            .call(json!({ "path": file.display().to_string() }))
+            .await
+            .expect("read file");
+        let patch = format!(
+            "*** Begin Patch\n*** Update File: {}\n@@\n-hello\n+hi\n world\n*** End Patch",
+            file.display()
+        );
+        patch_tool
+            .call(json!({ "patch": patch }))
+            .await
+            .expect("patch after read");
+        assert_eq!(std::fs::read_to_string(&file).expect("read"), "hi\nworld\n");
     }
 }

@@ -351,7 +351,7 @@ async fn run_sub_agent(
 fn build_read_only_tool_manager() -> ToolManager {
     // Keep this registration set synchronized with strict_read_only_subagent_prompt!().
     let mut tool_manager = ToolManager::new();
-    tool_manager.register(Box::new(ReadFileTool));
+    tool_manager.register(Box::new(ReadFileTool::default()));
     tool_manager.register(Box::new(ListFilesTool));
     tool_manager.register(Box::new(GlobTool));
     tool_manager.register(Box::new(GrepTool));

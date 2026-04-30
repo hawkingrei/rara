@@ -324,6 +324,7 @@ fn default_system_prompt_sections() -> Vec<PromptSection> {
                 "Workspace Behavior",
                 &[
                     "You are already inside the user's workspace and can inspect local files yourself.",
+                    "The environment context's cwd is the current working directory for local tools; relative paths are resolved from that directory unless a tool says otherwise.",
                     "Do not ask the user to paste local file contents or name local files when tools can read them directly.",
                     "For repository review or architecture analysis, inspect the workspace proactively with tools before asking follow-up questions.",
                     "For repository review, avoid repeating the same discovery tool call with the same arguments unless the workspace changed.",
@@ -352,14 +353,21 @@ fn default_system_prompt_sections() -> Vec<PromptSection> {
             section(
                 "Tool Use And Safety",
                 &[
-                    "Before modifying an existing file, inspect the relevant current contents with 'read_file' or repository search unless you already read the exact target in this turn.",
+                    "Before modifying an existing file, read the full current file with 'read_file' in this turn unless the tool result proves that the target was already fully read and has not changed.",
+                    "If a file was only partially read, the edit target is stale, or an edit tool reports that the file changed since it was read, re-read the full file before attempting the edit again.",
+                    "Never write from memory, a search snippet, or a stale summary when the direct file contents can be read locally.",
                     "Prefer 'apply_patch' for editing existing files because it is diff-shaped and reviewable.",
+                    "When using 'apply_patch', send a single patch string that starts with '*** Begin Patch' and ends with '*** End Patch'. Use '*** Add File: path' with '+' lines for new files, '*** Delete File: path' for deletes, and '*** Update File: path' for edits.",
+                    "Inside an update patch, use '@@' hunks and prefix every content line with exactly one marker: space for unchanged context, '-' for removed text, or '+' for inserted text. Preserve indentation exactly after that marker.",
+                    "For update hunks, include enough exact context from the current file for the old lines to match uniquely; if a hunk does not match, re-read the file and make the smallest corrected patch rather than guessing.",
                     "Use 'replace' only for one exact, unique snippet that you have verified from the current file contents.",
+                    "For 'replace', copy 'old_string' exactly from the current file, including whitespace and indentation.",
                     "Use 'replace_lines' only for large deletions or replacements when you have verified exact line numbers from the current file contents; do not pass hundreds of lines through 'replace.old_string'.",
                     "Use 'write_file' only for new files or intentional full-file rewrites after reading the current file when it already exists.",
                     "Do not use shell redirection, sed, perl, or ad-hoc scripts to edit files when direct edit tools or 'apply_patch' can do the job.",
                     "If a 'read_file' result is truncated, continue with offset=next_offset and a narrower limit instead of asking the user to paste the file.",
                     "When a CLI command or its flags are unfamiliar or uncertain, first inspect local usage with a safe read-only command such as '<cmd> --help', '<cmd> help', '<cmd> -h', or '<cmd> --version' before relying on guessed flags.",
+                    "For shell commands, pass the working directory through the tool's cwd field when needed and avoid using 'cd' unless it is necessary for the command itself.",
                     "If sandboxed bash is unavailable or blocked, continue with direct file tools such as read_file, apply_patch, and replace_lines before asking the user for help.",
                     "Use 'remember_experience' for global vector memory.",
                     "Use 'update_project_memory' to record facts into memory.md.",
@@ -396,7 +404,14 @@ fn default_system_prompt_sections() -> Vec<PromptSection> {
                 "Implementation Policy",
                 &[
                     "Read relevant code before proposing changes to it.",
+                    "Let the existing codebase shape the solution: follow local APIs, naming, error handling, module boundaries, and test patterns before introducing a new abstraction.",
+                    "Keep changes small and reviewable. Prefer one focused behavioral fix over broad rewrites, formatting churn, or opportunistic cleanup.",
+                    "For large changes, decompose the work into several smaller behavior-preserving or independently testable changes, then continue one slice at a time.",
                     "Do not add features, refactors, configurability, comments, or abstractions beyond what the task requires.",
+                    "Add an abstraction only when it removes real duplication, clarifies a repeated contract, or matches an established local pattern.",
+                    "Preserve public APIs, persisted formats, and cross-module contracts unless the user explicitly asked to change them or the inspected code proves the change is necessary.",
+                    "When touching non-trivial behavior, add or update focused tests that exercise the changed path and its main edge cases.",
+                    "Run the narrowest useful formatter, test, build, or check commands after making code changes, and report exactly what passed or failed.",
                     "Prefer editing existing files over creating new files unless a new file is clearly necessary.",
                     "When referencing code locations in user-facing text, include file paths and line references when practical.",
                 ],
@@ -488,18 +503,46 @@ fn dynamic_system_prompt_sections(
         PromptSection::optional("instructions", instruction_block),
         PromptSection::optional("memory", memory_block),
         PromptSection::optional("skills", skills_block),
-        PromptSection::new(
-            "runtime_context",
-            format!(
-                "## Runtime Context\n- workspace: {}\n- git branch: {}",
-                cwd, branch
-            ),
-        ),
+        PromptSection::new("runtime_context", render_environment_context(&cwd, &branch)),
         PromptSection::optional(
             "plan_mode",
             matches!(mode, PromptMode::Plan).then(plan_mode_prompt),
         ),
     ]
+}
+
+fn render_environment_context(cwd: &str, branch: &str) -> String {
+    let shell = std::env::var("SHELL")
+        .ok()
+        .and_then(|value| {
+            Path::new(&value)
+                .file_name()
+                .map(|name| name.to_string_lossy().to_string())
+        })
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "unknown".to_string());
+
+    format!(
+        "<environment_context>\n  <cwd>{}</cwd>\n  <shell>{}</shell>\n  <git_branch>{}</git_branch>\n</environment_context>",
+        escape_xml_text(cwd),
+        escape_xml_text(&shell),
+        escape_xml_text(branch),
+    )
+}
+
+fn escape_xml_text(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for ch in value.chars() {
+        match ch {
+            '&' => escaped.push_str("&amp;"),
+            '<' => escaped.push_str("&lt;"),
+            '>' => escaped.push_str("&gt;"),
+            '"' => escaped.push_str("&quot;"),
+            '\'' => escaped.push_str("&apos;"),
+            ch => escaped.push(ch),
+        }
+    }
+    escaped
 }
 
 fn render_available_skills_section(skills: &[PromptSkillSummary]) -> Option<String> {
@@ -672,7 +715,10 @@ mod tests {
             PromptMode::Plan,
         );
         assert!(prompt.contains("Current Execution Mode"));
-        assert!(prompt.contains("Runtime Context"));
+        assert!(prompt.contains("<environment_context>"));
+        assert!(prompt.contains("<cwd>"));
+        assert!(prompt.contains("<shell>"));
+        assert!(prompt.contains("<git_branch>"));
     }
 
     #[test]
@@ -761,15 +807,34 @@ mod tests {
         let prompt = super::default_system_prompt();
         assert!(prompt.contains("prompt injection"));
         assert!(prompt.contains("Conversation history may be compacted"));
+        assert!(prompt.contains("environment context's cwd"));
         assert!(prompt.contains("prefer 'rg' for text search"));
         assert!(prompt.contains("rg --files"));
         assert!(prompt.contains("Before modifying an existing file"));
+        assert!(prompt.contains("read the full current file"));
+        assert!(prompt.contains("If a file was only partially read"));
+        assert!(prompt.contains("Never write from memory"));
         assert!(prompt.contains("Prefer 'apply_patch' for editing existing files"));
+        assert!(prompt.contains("starts with '*** Begin Patch'"));
+        assert!(prompt.contains("'*** Add File: path' with '+' lines"));
+        assert!(prompt.contains("'*** Update File: path' for edits"));
+        assert!(prompt.contains("prefix every content line with exactly one marker"));
+        assert!(prompt.contains("Preserve indentation exactly after that marker"));
+        assert!(prompt.contains("include enough exact context"));
         assert!(prompt.contains("Use 'replace' only for one exact, unique snippet"));
+        assert!(prompt.contains("copy 'old_string' exactly from the current file"));
         assert!(prompt.contains("Use 'write_file' only for new files"));
         assert!(prompt.contains("Do not use shell redirection"));
         assert!(prompt.contains("first inspect local usage"));
         assert!(prompt.contains("<cmd> --help"));
+        assert!(prompt.contains("avoid using 'cd'"));
+        assert!(prompt.contains("Let the existing codebase shape the solution"));
+        assert!(prompt.contains("Keep changes small and reviewable"));
+        assert!(prompt.contains("decompose the work into several smaller"));
+        assert!(prompt.contains("Add an abstraction only when it removes real duplication"));
+        assert!(prompt.contains("Preserve public APIs, persisted formats"));
+        assert!(prompt.contains("add or update focused tests"));
+        assert!(prompt.contains("Run the narrowest useful formatter"));
         assert!(prompt.contains("Autonomy And Execution Bias"));
         assert!(prompt.contains("assume the user wants you to solve the task"));
         assert!(prompt.contains("Do not stop at a proposed solution"));
@@ -791,6 +856,14 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(build_compact_instruction(&runtime), "custom compact");
+    }
+
+    #[test]
+    fn environment_context_escapes_xml_values() {
+        let rendered = super::render_environment_context("/tmp/a&b", "feat/<tag>");
+
+        assert!(rendered.contains("<cwd>/tmp/a&amp;b</cwd>"));
+        assert!(rendered.contains("<git_branch>feat/&lt;tag&gt;</git_branch>"));
     }
 
     #[test]
