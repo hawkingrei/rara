@@ -4,6 +4,10 @@
 //! lightweight enough for branches that only need `mod context;` to compile.
 
 mod assembler;
+mod assembly_view;
+mod compaction_view;
+mod memory_selection;
+mod retrieval_view;
 mod runtime;
 
 pub use self::assembler::{
