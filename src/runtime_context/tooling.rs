@@ -14,7 +14,7 @@ use crate::tools::bash::{
 };
 use crate::tools::context::RetrieveSessionContextTool;
 use crate::tools::file::{
-    ListFilesTool, ReadFileTool, ReplaceLinesTool, ReplaceTool, WriteFileTool,
+    FileReadState, ListFilesTool, ReadFileTool, ReplaceLinesTool, ReplaceTool, WriteFileTool,
 };
 use crate::tools::patch::ApplyPatchTool;
 use crate::tools::planning::EnterPlanModeTool;
@@ -50,6 +50,7 @@ pub(super) fn create_full_tool_manager(
     let pty_sessions = Arc::new(
         PtySessionStore::new(workspace.rara_dir.join("pty-sessions")).expect("pty session store"),
     );
+    let file_read_state = Arc::new(FileReadState::default());
 
     tm.register(Box::new(BashTool {
         sandbox: sandbox.clone(),
@@ -88,12 +89,12 @@ pub(super) fn create_full_tool_manager(
     tm.register(Box::new(PtyStopTool {
         sessions: pty_sessions,
     }));
-    tm.register(Box::new(ReadFileTool));
-    tm.register(Box::new(ApplyPatchTool));
-    tm.register(Box::new(WriteFileTool));
+    tm.register(Box::new(ReadFileTool::new(file_read_state.clone())));
+    tm.register(Box::new(ApplyPatchTool::new(file_read_state.clone())));
+    tm.register(Box::new(WriteFileTool::new(file_read_state.clone())));
     tm.register(Box::new(ListFilesTool));
-    tm.register(Box::new(ReplaceTool));
-    tm.register(Box::new(ReplaceLinesTool));
+    tm.register(Box::new(ReplaceTool::new(file_read_state.clone())));
+    tm.register(Box::new(ReplaceLinesTool::new(file_read_state)));
     tm.register(Box::new(WebFetchTool));
     tm.register(Box::new(WebSearchTool::from_env()));
     tm.register(Box::new(GlobTool));

@@ -1,9 +1,12 @@
 use crate::tool::{Tool, ToolError};
 use async_trait::async_trait;
 use serde_json::{Value, json};
+use std::collections::HashMap;
 use std::fs;
 use std::io::{BufRead, BufReader};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
+use std::time::SystemTime;
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, BufReader as AsyncBufReader};
 use walkdir::WalkDir;
 
@@ -11,7 +14,137 @@ const DEFAULT_READ_LINE_LIMIT: usize = 2_000;
 const MAX_READ_LINE_CHARS: usize = 4_000;
 const MAX_READ_LINE_BYTES: usize = MAX_READ_LINE_CHARS * 4;
 
-pub struct ReadFileTool;
+#[derive(Debug, Default)]
+pub struct FileReadState {
+    files: Mutex<HashMap<PathBuf, FileReadEntry>>,
+}
+
+#[derive(Debug)]
+struct FileReadEntry {
+    modified: SystemTime,
+    content: Option<String>,
+    is_partial: bool,
+}
+
+impl FileReadState {
+    pub(crate) fn record_read(
+        &self,
+        path: &str,
+        output: &ReadFileOutput,
+        content: Option<String>,
+    ) -> Result<(), ToolError> {
+        let key = canonical_existing_path(path)?;
+        let metadata = fs::metadata(&key)?;
+        let entry = FileReadEntry {
+            modified: metadata.modified()?,
+            content,
+            is_partial: output.truncated || output.start_line != 1 || !output.total_lines_exact,
+        };
+        self.files
+            .lock()
+            .expect("file read state lock")
+            .insert(key, entry);
+        Ok(())
+    }
+
+    pub(crate) fn validate_existing_edit(&self, path: &str) -> Result<(), ToolError> {
+        let key = canonical_existing_path(path)?;
+        let files = self.files.lock().expect("file read state lock");
+        let Some(entry) = files.get(&key) else {
+            return Err(ToolError::ExecutionFailed(
+                "File has not been read yet. Read it first before writing to it.".into(),
+            ));
+        };
+        if entry.is_partial {
+            return Err(ToolError::ExecutionFailed(
+                "File was only partially read. Read the full file before writing to it.".into(),
+            ));
+        }
+
+        let metadata = fs::metadata(&key)?;
+        let modified = metadata.modified()?;
+        if modified > entry.modified {
+            if let Some(content) = &entry.content {
+                if fs::read_to_string(&key)? == *content {
+                    return Ok(());
+                }
+            }
+            return Err(ToolError::ExecutionFailed(
+                "File has been modified since read, either by the user or by a formatter. Read it again before attempting to write it.".into(),
+            ));
+        }
+
+        if let Some(content) = &entry.content {
+            let current = fs::read_to_string(&key)?;
+            if current != *content {
+                return Err(ToolError::ExecutionFailed(
+                    "File has changed since read. Read it again before attempting to write it."
+                        .into(),
+                ));
+            }
+        }
+
+        Ok(())
+    }
+
+    pub(crate) fn record_write(&self, path: &str, content: &str) -> Result<(), ToolError> {
+        let key = canonical_existing_path(path)?;
+        let metadata = fs::metadata(&key)?;
+        let entry = FileReadEntry {
+            modified: metadata.modified()?,
+            content: Some(content.to_string()),
+            is_partial: false,
+        };
+        self.files
+            .lock()
+            .expect("file read state lock")
+            .insert(key, entry);
+        Ok(())
+    }
+
+    pub(crate) fn forget(&self, path: &str) -> Result<(), ToolError> {
+        let key = absolute_path(path)?;
+        self.files
+            .lock()
+            .expect("file read state lock")
+            .remove(&key);
+        Ok(())
+    }
+}
+
+pub(crate) type SharedFileReadState = Arc<FileReadState>;
+
+fn canonical_existing_path(path: &str) -> Result<PathBuf, ToolError> {
+    Ok(fs::canonicalize(path)?)
+}
+
+fn absolute_path(path: &str) -> Result<PathBuf, ToolError> {
+    let path = Path::new(path);
+    if path.is_absolute() {
+        Ok(path.to_path_buf())
+    } else {
+        Ok(std::env::current_dir()?.join(path))
+    }
+}
+
+pub struct ReadFileTool {
+    read_state: Option<SharedFileReadState>,
+}
+
+impl ReadFileTool {
+    pub fn new(read_state: SharedFileReadState) -> Self {
+        Self {
+            read_state: Some(read_state),
+        }
+    }
+}
+
+impl Default for ReadFileTool {
+    fn default() -> Self {
+        Self { read_state: None }
+    }
+}
+
 #[async_trait]
 impl Tool for ReadFileTool {
     fn name(&self) -> &str {
@@ -39,6 +172,13 @@ impl Tool for ReadFileTool {
             .ok_or(ToolError::InvalidInput("path".into()))?;
         let window = read_file_window_from_input(&i)?;
         let output = read_file_window(p, window).await?;
+        if let Some(read_state) = &self.read_state {
+            let full_content =
+                (!output.truncated && output.start_line == 1 && output.total_lines_exact)
+                    .then(|| fs::read_to_string(p))
+                    .transpose()?;
+            read_state.record_read(p, &output, full_content)?;
+        }
 
         Ok(json!({
             "content": output.content,
@@ -65,7 +205,7 @@ struct ReadFileWindow {
     limit: usize,
 }
 
-struct ReadFileOutput {
+pub(crate) struct ReadFileOutput {
     content: String,
     total_lines: Option<usize>,
     total_lines_exact: bool,
@@ -278,14 +418,31 @@ fn truncate_read_line(line: &str) -> (String, bool) {
     (truncated, true)
 }
 
-pub struct WriteFileTool;
+pub struct WriteFileTool {
+    read_state: Option<SharedFileReadState>,
+}
+
+impl WriteFileTool {
+    pub fn new(read_state: SharedFileReadState) -> Self {
+        Self {
+            read_state: Some(read_state),
+        }
+    }
+}
+
+impl Default for WriteFileTool {
+    fn default() -> Self {
+        Self { read_state: None }
+    }
+}
+
 #[async_trait]
 impl Tool for WriteFileTool {
     fn name(&self) -> &str {
         "write_file"
     }
     fn description(&self) -> &str {
-        "Create a new file or intentionally rewrite a whole file. For existing files, read the file first and prefer apply_patch for partial edits."
+        "Create a new file or intentionally rewrite a whole file. For existing files, read the full file first and prefer apply_patch for partial edits."
     }
     fn input_schema(&self) -> Value {
         json!({
@@ -305,12 +462,20 @@ impl Tool for WriteFileTool {
             .as_str()
             .ok_or(ToolError::InvalidInput("content".into()))?;
         let existing = existing_file_summary(p)?;
+        if existing.is_some()
+            && let Some(read_state) = &self.read_state
+        {
+            read_state.validate_existing_edit(p)?;
+        }
         let operation = if existing.is_some() {
             "overwritten"
         } else {
             "created"
         };
         fs::write(p, c)?;
+        if let Some(read_state) = &self.read_state {
+            read_state.record_write(p, c)?;
+        }
         Ok(json!({
             "status": "ok",
             "path": p,
@@ -323,14 +488,31 @@ impl Tool for WriteFileTool {
     }
 }
 
-pub struct ReplaceTool;
+pub struct ReplaceTool {
+    read_state: Option<SharedFileReadState>,
+}
+
+impl ReplaceTool {
+    pub fn new(read_state: SharedFileReadState) -> Self {
+        Self {
+            read_state: Some(read_state),
+        }
+    }
+}
+
+impl Default for ReplaceTool {
+    fn default() -> Self {
+        Self { read_state: None }
+    }
+}
+
 #[async_trait]
 impl Tool for ReplaceTool {
     fn name(&self) -> &str {
         "replace"
     }
     fn description(&self) -> &str {
-        "Replace one exact, unique string in a file. Read the file first and prefer apply_patch for structured multi-line edits."
+        "Replace one exact, unique string in a file. Read the full file first and prefer apply_patch for structured multi-line edits."
     }
     fn input_schema(&self) -> Value {
         json!({
@@ -353,12 +535,18 @@ impl Tool for ReplaceTool {
         let n = i["new_string"]
             .as_str()
             .ok_or(ToolError::InvalidInput("new".into()))?;
+        if let Some(read_state) = &self.read_state {
+            read_state.validate_existing_edit(p)?;
+        }
         let c = fs::read_to_string(p)?;
         if c.matches(o).count() != 1 {
             return Err(ToolError::ExecutionFailed("String not unique".into()));
         }
         let updated = c.replace(o, n);
         fs::write(p, &updated)?;
+        if let Some(read_state) = &self.read_state {
+            read_state.record_write(p, &updated)?;
+        }
         Ok(json!({
             "status": "ok",
             "path": p,
@@ -372,14 +560,31 @@ impl Tool for ReplaceTool {
     }
 }
 
-pub struct ReplaceLinesTool;
+pub struct ReplaceLinesTool {
+    read_state: Option<SharedFileReadState>,
+}
+
+impl ReplaceLinesTool {
+    pub fn new(read_state: SharedFileReadState) -> Self {
+        Self {
+            read_state: Some(read_state),
+        }
+    }
+}
+
+impl Default for ReplaceLinesTool {
+    fn default() -> Self {
+        Self { read_state: None }
+    }
+}
+
 #[async_trait]
 impl Tool for ReplaceLinesTool {
     fn name(&self) -> &str {
         "replace_lines"
     }
     fn description(&self) -> &str {
-        "Replace an inclusive line range in a file. Use only after reading the target range and verifying the current line numbers."
+        "Replace an inclusive line range in a file. Use only after reading the full file and verifying the current line numbers."
     }
     fn input_schema(&self) -> Value {
         json!({
@@ -419,6 +624,9 @@ impl Tool for ReplaceLinesTool {
                 "start_line must be <= end_line".into(),
             ));
         }
+        if let Some(read_state) = &self.read_state {
+            read_state.validate_existing_edit(path)?;
+        }
 
         let original = fs::read_to_string(path)?;
         let had_trailing_newline = original.ends_with('\n');
@@ -455,6 +663,9 @@ impl Tool for ReplaceLinesTool {
             updated.push('\n');
         }
         fs::write(path, updated)?;
+        if let Some(read_state) = &self.read_state {
+            read_state.record_write(path, &std::fs::read_to_string(path)?)?;
+        }
 
         Ok(json!({
             "status": "ok",
@@ -554,282 +765,4 @@ fn existing_file_summary(path: &str) -> Result<Option<(u64, usize)>, ToolError> 
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{
-        ListFilesTool, MAX_READ_LINE_BYTES, MAX_READ_LINE_CHARS, ReadFileTool, ReplaceLinesTool,
-        ReplaceTool, WriteFileTool,
-    };
-    use crate::tool::Tool;
-    use serde_json::{Value, json};
-
-    #[tokio::test]
-    async fn read_file_supports_line_ranges() {
-        let tempdir = tempfile::tempdir().expect("tempdir");
-        let path = tempdir.path().join("sample.txt");
-        std::fs::write(&path, "a\nb\nc\nd\n").expect("write sample");
-
-        let tool = ReadFileTool;
-        let result = tool
-            .call(json!({
-                "path": path.display().to_string(),
-                "start_line": 2,
-                "end_line": 3
-            }))
-            .await
-            .expect("read file");
-
-        assert_eq!(result["content"], "b\nc");
-        assert_eq!(result["total_lines"], Value::Null);
-        assert_eq!(result["total_lines_exact"], false);
-        assert_eq!(result["observed_lines"], 4);
-        assert_eq!(result["start_line"], 2);
-        assert_eq!(result["end_line"], 3);
-        assert_eq!(result["offset"], 2);
-        assert_eq!(result["limit"], 2);
-        assert_eq!(result["num_lines"], 2);
-        assert_eq!(result["truncated"], true);
-        assert_eq!(result["next_offset"], 4);
-    }
-
-    #[tokio::test]
-    async fn read_file_supports_offset_limit_windows() {
-        let tempdir = tempfile::tempdir().expect("tempdir");
-        let path = tempdir.path().join("sample.txt");
-        std::fs::write(&path, "alpha\nbeta\ngamma\n").expect("write sample");
-
-        let tool = ReadFileTool;
-        let result = tool
-            .call(json!({
-                "path": path.display().to_string(),
-                "offset": 2,
-                "limit": 1
-            }))
-            .await
-            .expect("read file");
-
-        assert_eq!(result["content"], "beta");
-        assert_eq!(result["total_lines"], Value::Null);
-        assert_eq!(result["total_lines_exact"], false);
-        assert_eq!(result["observed_lines"], 3);
-        assert_eq!(result["start_line"], 2);
-        assert_eq!(result["end_line"], 2);
-        assert_eq!(result["num_lines"], 1);
-        assert_eq!(result["truncated"], true);
-        assert_eq!(result["next_offset"], 3);
-    }
-
-    #[tokio::test]
-    async fn read_file_defaults_to_limited_first_window() {
-        let tempdir = tempfile::tempdir().expect("tempdir");
-        let path = tempdir.path().join("large.txt");
-        let content = (1..=2002)
-            .map(|line| format!("line {line}"))
-            .collect::<Vec<_>>()
-            .join("\n");
-        std::fs::write(&path, content).expect("write sample");
-
-        let tool = ReadFileTool;
-        let result = tool
-            .call(json!({ "path": path.display().to_string() }))
-            .await
-            .expect("read file");
-
-        assert!(result["content"].as_str().unwrap().contains("line 1"));
-        assert!(result["content"].as_str().unwrap().contains("line 2000"));
-        assert!(!result["content"].as_str().unwrap().contains("line 2001"));
-        assert_eq!(result["total_lines"], Value::Null);
-        assert_eq!(result["total_lines_exact"], false);
-        assert_eq!(result["observed_lines"], 2001);
-        assert_eq!(result["start_line"], 1);
-        assert_eq!(result["end_line"], 2000);
-        assert_eq!(result["limit"], 2000);
-        assert_eq!(result["num_lines"], 2000);
-        assert_eq!(result["truncated"], true);
-        assert_eq!(result["next_offset"], 2001);
-    }
-
-    #[tokio::test]
-    async fn read_file_errors_when_offset_exceeds_file_length() {
-        let tempdir = tempfile::tempdir().expect("tempdir");
-        let path = tempdir.path().join("sample.txt");
-        std::fs::write(&path, "one\ntwo\n").expect("write sample");
-
-        let tool = ReadFileTool;
-        let error = tool
-            .call(json!({
-                "path": path.display().to_string(),
-                "offset": 3
-            }))
-            .await
-            .expect_err("offset should fail");
-
-        assert!(error.to_string().contains("offset 3 exceeds file length 2"));
-    }
-
-    #[tokio::test]
-    async fn read_file_marks_truncated_long_lines() {
-        let tempdir = tempfile::tempdir().expect("tempdir");
-        let path = tempdir.path().join("sample.txt");
-        std::fs::write(&path, "x".repeat(MAX_READ_LINE_CHARS + 1)).expect("write sample");
-
-        let tool = ReadFileTool;
-        let result = tool
-            .call(json!({ "path": path.display().to_string() }))
-            .await
-            .expect("read file");
-
-        assert_eq!(result["total_lines"], 1);
-        assert_eq!(result["total_lines_exact"], true);
-        assert_eq!(result["line_truncated"], true);
-        assert_eq!(result["truncated"], true);
-        assert!(
-            result["content"]
-                .as_str()
-                .unwrap()
-                .ends_with("... [line truncated]")
-        );
-    }
-
-    #[tokio::test]
-    async fn read_file_bounds_memory_for_very_long_lines() {
-        let tempdir = tempfile::tempdir().expect("tempdir");
-        let path = tempdir.path().join("sample.txt");
-        let content = format!("{}\nsecond\n", "x".repeat(MAX_READ_LINE_BYTES * 2));
-        std::fs::write(&path, content).expect("write sample");
-
-        let tool = ReadFileTool;
-        let result = tool
-            .call(json!({
-                "path": path.display().to_string(),
-                "offset": 1,
-                "limit": 1
-            }))
-            .await
-            .expect("read file");
-
-        let content = result["content"].as_str().expect("content");
-        assert!(content.ends_with("... [line truncated]"));
-        assert!(content.chars().count() < MAX_READ_LINE_BYTES);
-        assert_eq!(result["line_truncated"], true);
-        assert_eq!(result["truncated"], true);
-        assert_eq!(result["next_offset"], 2);
-    }
-
-    #[tokio::test]
-    async fn list_files_skips_build_artifacts_by_default() {
-        let tempdir = tempfile::tempdir().expect("tempdir");
-        let root = tempdir.path();
-        std::fs::create_dir_all(root.join("src")).expect("mkdir src");
-        std::fs::create_dir_all(root.join("target/debug")).expect("mkdir target");
-        std::fs::write(root.join("src/main.rs"), "fn main() {}\n").expect("write source");
-        std::fs::write(root.join("target/debug/app"), "bin").expect("write artifact");
-
-        let tool = ListFilesTool;
-        let result = tool
-            .call(json!({ "path": root.display().to_string() }))
-            .await
-            .expect("list files");
-        let files = result["files"].as_array().expect("files array");
-        let rendered = files
-            .iter()
-            .filter_map(|value| value.as_str())
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        assert!(rendered.contains("src/main.rs"));
-        assert!(!rendered.contains("target/debug/app"));
-    }
-
-    #[tokio::test]
-    async fn write_file_reports_created_or_overwritten() {
-        let tempdir = tempfile::tempdir().expect("tempdir");
-        let path = tempdir.path().join("sample.txt");
-
-        let tool = WriteFileTool;
-        let created = tool
-            .call(json!({
-                "path": path.display().to_string(),
-                "content": "hello\nworld\n"
-            }))
-            .await
-            .expect("write created");
-        assert_eq!(created["operation"], "created");
-        assert_eq!(created["line_count"], 2);
-
-        let overwritten = tool
-            .call(json!({
-                "path": path.display().to_string(),
-                "content": "updated\n"
-            }))
-            .await
-            .expect("write overwritten");
-        assert_eq!(overwritten["operation"], "overwritten");
-        assert_eq!(overwritten["previous_line_count"], 2);
-    }
-
-    #[tokio::test]
-    async fn replace_reports_preview_and_line_delta() {
-        let tempdir = tempfile::tempdir().expect("tempdir");
-        let path = tempdir.path().join("sample.txt");
-        std::fs::write(&path, "hello old value\n").expect("write sample");
-
-        let tool = ReplaceTool;
-        let result = tool
-            .call(json!({
-                "path": path.display().to_string(),
-                "old_string": "old value",
-                "new_string": "new\nvalue"
-            }))
-            .await
-            .expect("replace content");
-
-        assert_eq!(result["replacements"], 1);
-        assert_eq!(result["old_preview"], "old value");
-        assert_eq!(result["new_preview"], "new\\nvalue");
-        assert_eq!(result["line_delta"], 1);
-    }
-
-    #[tokio::test]
-    async fn replace_lines_replaces_inclusive_range_without_old_string() {
-        let tempdir = tempfile::tempdir().expect("tempdir");
-        let path = tempdir.path().join("sample.txt");
-        std::fs::write(&path, "one\ntwo\nthree\nfour\n").expect("write sample");
-
-        let tool = ReplaceLinesTool;
-        let result = tool
-            .call(json!({
-                "path": path.display().to_string(),
-                "start_line": 2,
-                "end_line": 3,
-                "new_string": "middle"
-            }))
-            .await
-            .expect("replace lines");
-
-        assert_eq!(
-            std::fs::read_to_string(&path).unwrap(),
-            "one\nmiddle\nfour\n"
-        );
-        assert_eq!(result["removed_lines"], 2);
-        assert_eq!(result["removed_string"], "two\nthree");
-        assert_eq!(result["inserted_lines"], 1);
-        assert_eq!(result["line_delta"], -1);
-    }
-
-    #[test]
-    fn file_tool_descriptions_encode_safe_edit_contract() {
-        let write_tool = WriteFileTool;
-        let replace_tool = ReplaceTool;
-        let replace_lines_tool = ReplaceLinesTool;
-
-        assert!(write_tool.description().contains("Create a new file"));
-        assert!(write_tool.description().contains("read the file first"));
-        assert!(replace_tool.description().contains("exact, unique string"));
-        assert!(replace_tool.description().contains("Read the file first"));
-        assert!(
-            replace_lines_tool
-                .description()
-                .contains("verifying the current line numbers")
-        );
-    }
-}
+mod tests;
