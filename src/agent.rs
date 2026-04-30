@@ -435,6 +435,20 @@ impl Agent {
             self.ensure_active_plan_step();
             let mut turn_output = self.run_model_turn(output_mode, report).await?;
             self.last_query_plan_updated = turn_output.plan_updated;
+            if self.current_plan.is_empty()
+                && turn_output
+                    .tool_calls
+                    .iter()
+                    .any(|tool_call| tool_call.name == EXIT_PLAN_MODE_TOOL_NAME)
+            {
+                report(AgentEvent::ToolResult {
+                    name: EXIT_PLAN_MODE_TOOL_NAME.to_string(),
+                    content: missing_proposed_plan_error(),
+                    is_error: true,
+                });
+                self.checkpoint_session()?;
+                break;
+            }
             if let Some(message) = turn_output.assistant_message.take() {
                 self.push_history_message(message);
                 self.checkpoint_session()?;
@@ -562,7 +576,7 @@ impl Agent {
             }
             if tool_name == EXIT_PLAN_MODE_TOOL_NAME {
                 if self.current_plan.is_empty() {
-                    let error_text = "Error: exit_plan_mode requires a proposed plan. Emit a <proposed_plan> block before calling exit_plan_mode.".to_string();
+                    let error_text = missing_proposed_plan_error();
                     report(AgentEvent::ToolResult {
                         name: tool_name.clone(),
                         content: error_text.clone(),
@@ -753,6 +767,10 @@ fn assistant_turn_history_message(content: Vec<ContentBlock>) -> Result<Option<M
         role: "assistant".to_string(),
         content: serde_json::to_value(&content)?,
     }))
+}
+
+fn missing_proposed_plan_error() -> String {
+    "Error: exit_plan_mode requires a proposed plan. Emit a <proposed_plan> block before calling exit_plan_mode.".to_string()
 }
 
 fn is_compact_boundary_message(message: &Message) -> bool {

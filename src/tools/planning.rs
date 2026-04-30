@@ -47,7 +47,7 @@ impl Tool for ExitPlanModeTool {
     }
 
     fn description(&self) -> &str {
-        "Submit the completed proposed plan for user approval before implementation begins"
+        "Submit user approval only after this same assistant response has emitted a complete <proposed_plan>...</proposed_plan> block. Never call this tool without a proposed plan."
     }
 
     fn input_schema(&self) -> Value {
@@ -63,7 +63,7 @@ impl Tool for ExitPlanModeTool {
             "instructions": [
                 "Wait for the user's structured plan decision.",
                 "If approved, continue in execute mode.",
-                "If rejected or continued, refine the plan and call exit_plan_mode again."
+                "If rejected or continued, refine the plan and call exit_plan_mode again only after emitting an updated <proposed_plan> block."
             ]
         }))
     }
