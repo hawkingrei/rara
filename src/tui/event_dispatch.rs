@@ -231,7 +231,7 @@ pub(crate) async fn dispatch_event(
             } else {
                 let was_deepseek = app.selected_provider_family() == ProviderFamily::DeepSeek;
                 app.config.set_api_key(value.to_string());
-                if app.config.provider == "codex" {
+                if app.selected_provider_family() == ProviderFamily::Codex {
                     app.codex_auth_mode = Some(SavedCodexAuthMode::ApiKey);
                     app.config
                         .apply_codex_defaults_for_base_url(DEFAULT_CODEX_BASE_URL);
