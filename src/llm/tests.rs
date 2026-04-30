@@ -627,7 +627,7 @@ fn deepseek_folds_legacy_tool_calls_with_id_and_arguments() {
 }
 
 #[test]
-fn deepseek_default_thinking_folds_legacy_assistant_history_without_reasoning() {
+fn deepseek_default_thinking_preserves_legacy_assistant_history_without_reasoning() {
     let body = build_chat_completion_request_body(
         "deepseek-v4-pro",
         &[
@@ -653,12 +653,10 @@ fn deepseek_default_thinking_folds_legacy_assistant_history_without_reasoning() 
     assert!(body.get("thinking").is_none());
     let messages = body["messages"].as_array().expect("messages");
     assert_eq!(messages.len(), 2);
-    assert_eq!(messages[0]["role"], "user");
-    assert!(
-        messages[0]["content"]
-            .as_str()
-            .expect("folded note")
-            .contains("Legacy answer without provider metadata.")
+    assert_eq!(messages[0]["role"], "assistant");
+    assert_eq!(
+        messages[0]["content"],
+        "Legacy answer without provider metadata."
     );
     assert_eq!(messages[1]["role"], "user");
     assert_eq!(messages[1]["content"], "Continue.");
