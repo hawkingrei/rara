@@ -11,7 +11,7 @@ fn explicit_progress_entry_groups_preserves_thinking_indentation() {
     let groups = explicit_progress_entry_groups(entries.iter());
 
     assert_eq!(groups.len(), 1);
-    assert_eq!(groups[0].0, "Thinking");
+    assert_eq!(groups[0].0, ProgressRole::Thinking);
     assert_eq!(
         groups[0].1,
         vec![
@@ -217,6 +217,16 @@ fn committed_turn_cell_appends_adjacent_progress_entries() {
             message: "Run cargo check".into(),
             payload: None,
         },
+        TranscriptEntry {
+            role: "Planning".into(),
+            message: "Refine the follow-up plan".into(),
+            payload: None,
+        },
+        TranscriptEntry {
+            role: "Planning".into(),
+            message: "Split the UI status work".into(),
+            payload: None,
+        },
     ];
 
     let rendered = CommittedTurnCell::new(entries.as_slice(), Some(Path::new(".")))
@@ -230,12 +240,17 @@ fn committed_turn_cell_appends_adjacent_progress_entries() {
     let second_explored = rendered.find("Read src/context/mod.rs").unwrap();
     let first_ran = rendered.find("Run cargo test active_turn_cell").unwrap();
     let second_ran = rendered.find("Run cargo check").unwrap();
+    let first_planned = rendered.find("Refine the follow-up plan").unwrap();
+    let second_planned = rendered.find("Split the UI status work").unwrap();
 
     assert_eq!(rendered.matches(" Explored ").count(), 1);
     assert_eq!(rendered.matches(" Ran ").count(), 1);
+    assert_eq!(rendered.matches(" Planned ").count(), 1);
     assert!(first_explored < second_explored);
     assert!(second_explored < first_ran);
     assert!(first_ran < second_ran);
+    assert!(second_ran < first_planned);
+    assert!(first_planned < second_planned);
 }
 
 #[test]

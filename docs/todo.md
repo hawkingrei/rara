@@ -60,6 +60,7 @@ Priority order for this phase:
 
 - [ ] Complete `reasoning_summary` rollout across backend requests, switching flows, and status surfaces; retire remaining `thinking`-only behavior outside migration fallback.
 - [ ] Surface provider-scoped reasoning configuration in `/status` and provider/model switching flows, including where the effective value came from.
+- [ ] Study Gemini/Codex-style multi-model routing and add first-class support for using a top-tier model and a flash/fast model together, with `/status` showing the effective routing policy, assigned model roles, and provider/model provenance.
 - [ ] Deepen provider-surface continuity after hot-swap landed: tighten auth-mode/endpoint alignment, provenance reporting, and remaining runtime continuity edge cases.
 - [ ] Align Codex endpoint selection with auth mode so ChatGPT/Codex login and OpenAI API key sessions do not blindly share the same provider URL.
 - [ ] Split Codex-specific persisted auth/config back out to `~/.codex` while keeping provider-agnostic RARA config and runtime/session state under `~/.rara`.
@@ -105,6 +106,8 @@ Priority order for this phase:
 - [ ] Add Codex/Claude-style transcript role cards for `You` / `Agent` / `System` without mixing status chrome into committed transcript history.
 - [ ] Bring the main response UI closer to Codex / Claude Code: stabilize active response blocks while streaming and avoid falling back to generic transcript rows for states that should stay in dedicated response cards.
 - [ ] Rework the built-in command TUI (`/help`, `/model`, `/status`, command palette, setup overlays) to more closely match Codex / Claude Code.
+- [ ] Strengthen the `/context` display with a Claude Code-inspired source breakdown: show active context categories, source paths, ordering, token or budget contribution, cache hit rate, and dropped/omitted sources in a denser inspectable UI.
+- [ ] Refine `/status` into a more detailed runtime status surface that separates provider/model state, reasoning settings, sandbox/network policy, context injection state, tool availability, and pending interaction state.
 - [ ] Continue making tool-action transcript summaries more source-aware and file-aware so edit tools (`write_file`, `replace`, `apply_patch`) consistently show what they touched.
 - [ ] Continue refining the live `bash` transcript path so command execution behaves more like Codex: clearer lifecycle framing, streamed stdout/stderr handling, and better long-output folding.
 - [ ] Add a high-fidelity Claude Code / Codex transcript rendering pass for `write/update`, inline diff display, approval cards, and message-card hierarchy.

@@ -9,7 +9,8 @@ use insta::assert_snapshot;
 use tempfile::tempdir;
 
 use super::{
-    ActiveCell, ActiveTurnCell, CommittedTurnCell, HistoryCell, explicit_progress_entry_groups,
+    ActiveCell, ActiveTurnCell, CommittedTurnCell, HistoryCell, ProgressRole,
+    explicit_progress_entry_groups,
 };
 
 #[path = "cells_tests/active_general.rs"]

@@ -391,14 +391,14 @@ fn active_turn_cell_appends_long_live_planning_events() {
 
     assert!(rendered.contains(" Planning "));
     assert!(rendered.contains("Reuse the shared auth bridge."));
-    assert!(!rendered.contains("more planning step(s)"));
-    assert!(rendered.contains("planning module 1"));
+    assert!(rendered.contains("1 more planning step(s)"));
+    assert!(!rendered.contains("planning module 1"));
     assert!(rendered.contains("planning module 2"));
     assert!(rendered.contains("planning module 3"));
+    assert!(rendered.contains("planning module 4"));
     assert!(rendered.contains("planning module 5"));
-    assert_eq!(rendered.matches(" Planning ").count(), 6);
-    assert!(rendered.find("planning module 1") < rendered.find("planning module 5"));
-    assert!(rendered.find("planning module 5") < rendered.find("Reuse the shared auth bridge."));
+    assert_eq!(rendered.matches(" Planning ").count(), 1);
+    assert!(rendered.find("planning module 2") < rendered.find("planning module 5"));
 }
 
 #[test]

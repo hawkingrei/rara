@@ -7,7 +7,7 @@ use crate::tui::interaction_text::{
 };
 use crate::tui::plan_display::should_show_updated_plan;
 use crate::tui::state::{
-    RuntimePhase, TranscriptEntry, TranscriptEntryPayload, TuiApp,
+    ActiveLiveEvent, RuntimePhase, TranscriptEntry, TranscriptEntryPayload, TuiApp,
     contains_structured_planning_output,
 };
 use crate::tui::terminal_event::{
@@ -76,45 +76,72 @@ fn is_progress_stack_title(line: &Line<'static>) -> bool {
     )
 }
 
-fn progress_entry_role(role: &str) -> bool {
-    matches!(role, "Thinking" | "Exploring" | "Planning" | "Running")
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum ProgressRole {
+    Thinking,
+    Exploring,
+    Planning,
+    Running,
 }
 
-fn progress_entry_message_lines(role: &str, message: &str) -> Vec<String> {
-    if role == "Thinking" {
-        return message
+impl ProgressRole {
+    fn from_entry_role(role: &str) -> Option<Self> {
+        match role {
+            "Thinking" => Some(Self::Thinking),
+            "Exploring" => Some(Self::Exploring),
+            "Planning" => Some(Self::Planning),
+            "Running" => Some(Self::Running),
+            _ => None,
+        }
+    }
+
+    fn from_live_event(event: &ActiveLiveEvent) -> Self {
+        match event {
+            ActiveLiveEvent::Thinking(_) => Self::Thinking,
+            ActiveLiveEvent::ExplorationAction(_) | ActiveLiveEvent::ExplorationNote(_) => {
+                Self::Exploring
+            }
+            ActiveLiveEvent::PlanningAction(_) | ActiveLiveEvent::PlanningNote(_) => Self::Planning,
+            ActiveLiveEvent::RunningAction(_) => Self::Running,
+        }
+    }
+}
+
+fn progress_entry_message_lines(role: ProgressRole, message: &str) -> Vec<String> {
+    match role {
+        ProgressRole::Thinking => message
             .lines()
             .filter(|line| !line.trim().is_empty())
             .map(ToString::to_string)
-            .collect();
+            .collect(),
+        ProgressRole::Exploring | ProgressRole::Planning | ProgressRole::Running => message
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .map(|line| {
+                line.trim_start_matches("└")
+                    .trim_start_matches('•')
+                    .trim()
+                    .to_string()
+            })
+            .filter(|line| !line.is_empty())
+            .collect(),
     }
-
-    message
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .map(|line| {
-            line.trim_start_matches("└")
-                .trim_start_matches('•')
-                .trim()
-                .to_string()
-        })
-        .filter(|line| !line.is_empty())
-        .collect()
 }
 
 fn explicit_progress_entry_groups<'a>(
     entries: impl Iterator<Item = &'a TranscriptEntry>,
-) -> Vec<(&'a str, Vec<String>)> {
-    let mut groups: Vec<(&str, Vec<String>)> = Vec::new();
-    for entry in entries.filter(|entry| progress_entry_role(entry.role.as_str())) {
-        let role = entry.role.as_str();
+) -> Vec<(ProgressRole, Vec<String>)> {
+    let mut groups: Vec<(ProgressRole, Vec<String>)> = Vec::new();
+    for entry in entries {
+        let Some(role) = ProgressRole::from_entry_role(entry.role.as_str()) else {
+            continue;
+        };
         let messages = progress_entry_message_lines(role, &entry.message);
         if messages.is_empty() {
             continue;
         }
-        if matches!(role, "Exploring" | "Running")
-            && let Some((last_role, last_messages)) = groups.last_mut()
+        if let Some((last_role, last_messages)) = groups.last_mut()
             && *last_role == role
         {
             last_messages.extend(messages);
@@ -127,83 +154,26 @@ fn explicit_progress_entry_groups<'a>(
 
 fn push_progress_group<'a>(
     cells: &mut Vec<Box<dyn HistoryCell + 'a>>,
-    role: &str,
+    role: ProgressRole,
     messages: Vec<String>,
     active: bool,
 ) {
     match role {
-        "Thinking" => cells.push(Box::new(ThinkingTextCell::new(&messages.join("\n"), 4))),
-        "Exploring" => cells.push(Box::new(ExploringCell::new(
+        ProgressRole::Thinking => {
+            cells.push(Box::new(ThinkingTextCell::new(&messages.join("\n"), 4)))
+        }
+        ProgressRole::Exploring => cells.push(Box::new(ExploringCell::new(
             compact_summary_lines(messages.as_slice(), 4, "more exploration step(s)"),
             active,
         ))),
-        "Planning" => cells.push(Box::new(PlanningCell::new(
+        ProgressRole::Planning => cells.push(Box::new(PlanningCell::new(
             compact_summary_lines(messages.as_slice(), 4, "more planning step(s)"),
             active,
         ))),
-        "Running" => cells.push(Box::new(RunningCell::new(
+        ProgressRole::Running => cells.push(Box::new(RunningCell::new(
             compact_summary_lines(messages.as_slice(), 4, "more running step(s)"),
             active,
         ))),
-        _ => {
-            // Callers filter to known progress roles; ignore unknown roles defensively.
-        }
-    }
-}
-
-fn push_live_event<'a>(
-    cells: &mut Vec<Box<dyn HistoryCell + 'a>>,
-    event: &crate::tui::state::ActiveLiveEvent,
-    active: bool,
-) {
-    let message = event.message().to_string();
-    match event.role() {
-        "Thinking" => cells.push(Box::new(ThinkingTextCell::new(&message, 4))),
-        "Exploring" => cells.push(Box::new(ExploringCell::new(
-            compact_progress_summary_lines(
-                if event.is_note() {
-                    &[]
-                } else {
-                    std::slice::from_ref(&message)
-                },
-                if event.is_note() {
-                    std::slice::from_ref(&message)
-                } else {
-                    &[]
-                },
-                4,
-                "more exploration step(s)",
-            ),
-            active,
-        ))),
-        "Planning" => cells.push(Box::new(PlanningCell::new(
-            compact_progress_summary_lines(
-                if event.is_note() {
-                    &[]
-                } else {
-                    std::slice::from_ref(&message)
-                },
-                if event.is_note() {
-                    std::slice::from_ref(&message)
-                } else {
-                    &[]
-                },
-                4,
-                "more planning step(s)",
-            ),
-            active,
-        ))),
-        "Running" => cells.push(Box::new(RunningCell::new(
-            compact_recent_first_summary_lines(
-                std::slice::from_ref(&message),
-                4,
-                "more running step(s)",
-            ),
-            active,
-        ))),
-        _ => {
-            // Active live events currently produce only known progress roles.
-        }
     }
 }
 
@@ -216,53 +186,60 @@ fn push_live_events<'a>(
     let mut thinking_messages = Vec::new();
     let mut exploration_actions = Vec::new();
     let mut exploration_notes = Vec::new();
+    let mut planning_actions = Vec::new();
+    let mut planning_notes = Vec::new();
     let mut running_actions = Vec::new();
 
     for event in events {
-        if event.role() == "Thinking" {
-            push_live_exploration_group(
-                cells,
-                &mut exploration_actions,
-                &mut exploration_notes,
-                active,
-            );
-            push_live_running_group(cells, &mut running_actions, active);
-            thinking_messages.push(event.message().to_string());
-            continue;
-        }
-
-        if event.role() == "Exploring" {
-            push_live_thinking_group(cells, &mut thinking_messages, None);
-            push_live_running_group(cells, &mut running_actions, active);
-            if event.is_note() {
-                exploration_notes.push(event.message().to_string());
-            } else {
-                exploration_actions.push(event.message().to_string());
+        match ProgressRole::from_live_event(event) {
+            ProgressRole::Thinking => {
+                push_live_exploration_group(
+                    cells,
+                    &mut exploration_actions,
+                    &mut exploration_notes,
+                    active,
+                );
+                push_live_planning_group(cells, &mut planning_actions, &mut planning_notes, active);
+                push_live_running_group(cells, &mut running_actions, active);
+                thinking_messages.push(event.message().to_string());
             }
-            continue;
+            ProgressRole::Exploring => {
+                push_live_thinking_group(cells, &mut thinking_messages, None);
+                push_live_planning_group(cells, &mut planning_actions, &mut planning_notes, active);
+                push_live_running_group(cells, &mut running_actions, active);
+                if event.is_note() {
+                    exploration_notes.push(event.message().to_string());
+                } else {
+                    exploration_actions.push(event.message().to_string());
+                }
+            }
+            ProgressRole::Planning => {
+                push_live_thinking_group(cells, &mut thinking_messages, None);
+                push_live_exploration_group(
+                    cells,
+                    &mut exploration_actions,
+                    &mut exploration_notes,
+                    active,
+                );
+                push_live_running_group(cells, &mut running_actions, active);
+                if event.is_note() {
+                    planning_notes.push(event.message().to_string());
+                } else {
+                    planning_actions.push(event.message().to_string());
+                }
+            }
+            ProgressRole::Running => {
+                push_live_thinking_group(cells, &mut thinking_messages, None);
+                push_live_exploration_group(
+                    cells,
+                    &mut exploration_actions,
+                    &mut exploration_notes,
+                    active,
+                );
+                push_live_planning_group(cells, &mut planning_actions, &mut planning_notes, active);
+                running_actions.push(event.message().to_string());
+            }
         }
-
-        if event.role() == "Running" {
-            push_live_thinking_group(cells, &mut thinking_messages, None);
-            push_live_exploration_group(
-                cells,
-                &mut exploration_actions,
-                &mut exploration_notes,
-                active,
-            );
-            running_actions.push(event.message().to_string());
-            continue;
-        }
-
-        push_live_thinking_group(cells, &mut thinking_messages, None);
-        push_live_exploration_group(
-            cells,
-            &mut exploration_actions,
-            &mut exploration_notes,
-            active,
-        );
-        push_live_running_group(cells, &mut running_actions, active);
-        push_live_event(cells, event, active);
     }
 
     push_live_exploration_group(
@@ -271,6 +248,7 @@ fn push_live_events<'a>(
         &mut exploration_notes,
         active,
     );
+    push_live_planning_group(cells, &mut planning_actions, &mut planning_notes, active);
     push_live_running_group(cells, &mut running_actions, active);
     push_live_thinking_group(cells, &mut thinking_messages, streaming_thinking_lines);
 }
@@ -310,6 +288,28 @@ fn push_live_exploration_group<'a>(
             notes.as_slice(),
             4,
             "more exploration step(s)",
+        ),
+        active,
+    )));
+    actions.clear();
+    notes.clear();
+}
+
+fn push_live_planning_group<'a>(
+    cells: &mut Vec<Box<dyn HistoryCell + 'a>>,
+    actions: &mut Vec<String>,
+    notes: &mut Vec<String>,
+    active: bool,
+) {
+    if actions.is_empty() && notes.is_empty() {
+        return;
+    }
+    cells.push(Box::new(PlanningCell::new(
+        compact_progress_summary_lines(
+            actions.as_slice(),
+            notes.as_slice(),
+            4,
+            "more planning step(s)",
         ),
         active,
     )));
@@ -788,7 +788,7 @@ fn ordered_exploration_agent_segments<'a>(
                 }
                 segments.push(OrderedActiveSegment::Agent(entry.message.as_str()));
             }
-            role if progress_entry_role(role)
+            role if ProgressRole::from_entry_role(role).is_some()
                 || matches!(
                     role,
                     "Tool Result" | "Tool Error" | "Tool Progress" | "System"
@@ -1114,11 +1114,11 @@ impl ActiveCell for ActiveTurnCell<'_> {
         let has_live_thinking = turn_live && has_thinking_stream;
         if has_live_events || has_live_thinking {
             for event in live_events {
-                match event.role() {
-                    "Exploring" => has_event_exploration_summary = true,
-                    "Planning" => has_event_planning_summary = true,
-                    "Running" => has_event_running_summary = true,
-                    _ => {}
+                match ProgressRole::from_live_event(event) {
+                    ProgressRole::Exploring => has_event_exploration_summary = true,
+                    ProgressRole::Planning => has_event_planning_summary = true,
+                    ProgressRole::Running => has_event_running_summary = true,
+                    ProgressRole::Thinking => {}
                 }
             }
             push_live_events(
@@ -1134,7 +1134,7 @@ impl ActiveCell for ActiveTurnCell<'_> {
                 .then(|| explicit_progress_entry_groups(current_turn.iter().copied()));
         if let Some(groups) = explicit_progress_groups.as_ref() {
             for (role, messages) in groups {
-                push_progress_group(&mut cells, role, messages.clone(), turn_live);
+                push_progress_group(&mut cells, *role, messages.clone(), turn_live);
             }
         }
         let has_explicit_progress_groups = explicit_progress_groups
