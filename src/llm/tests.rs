@@ -241,6 +241,40 @@ fn deepseek_reasoning_content_roundtrips_as_provider_metadata() {
 }
 
 #[test]
+fn deepseek_skips_reasoning_only_assistant_history() {
+    let messages = vec![
+        Message {
+            role: "user".to_string(),
+            content: json!([{"type":"text","text":"List your todo."}]),
+        },
+        Message {
+            role: "assistant".to_string(),
+            content: json!([
+                {"type":"provider_metadata","provider":"deepseek","key":"reasoning_content","value":"internal planning only"}
+            ]),
+        },
+        Message {
+            role: "user".to_string(),
+            content: json!([{"type":"text","text":"Continue."}]),
+        },
+    ];
+
+    let deepseek_messages =
+        to_openai_messages_for_endpoint(&messages, OpenAiEndpointKind::Deepseek);
+
+    assert_eq!(deepseek_messages.len(), 2);
+    assert!(deepseek_messages.iter().all(|message| {
+        !(message["role"] == "assistant"
+            && message.get("tool_calls").is_none()
+            && message
+                .get("content")
+                .is_none_or(|content| content.is_null()))
+    }));
+    assert_eq!(deepseek_messages[0]["role"], "user");
+    assert_eq!(deepseek_messages[1]["role"], "user");
+}
+
+#[test]
 fn deepseek_tool_call_reasoning_content_roundtrips_without_trimming() {
     let reasoning_content = "\n private chain summary \n";
     let response = parse_chat_completion_response(

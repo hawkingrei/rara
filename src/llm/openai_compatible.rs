@@ -579,6 +579,9 @@ pub(super) fn to_openai_messages_for_endpoint(
                 flush_missing_tool_results(&mut openai_messages, &mut pending_tool_call_ids);
                 let assistant_message =
                     render_openai_assistant_message(&message.content, endpoint_kind);
+                if is_empty_openai_assistant_message(&assistant_message) {
+                    continue;
+                }
                 pending_tool_call_ids = assistant_tool_call_ids(&assistant_message);
                 openai_messages.push(assistant_message);
             }
@@ -650,6 +653,20 @@ fn render_openai_assistant_message(content: &Value, endpoint_kind: OpenAiEndpoin
         }
     }
     message
+}
+
+fn is_empty_openai_assistant_message(message: &Value) -> bool {
+    let content_empty = match message.get("content") {
+        None | Some(Value::Null) => true,
+        Some(Value::String(value)) => value.trim().is_empty(),
+        Some(Value::Array(values)) => values.is_empty(),
+        Some(_) => false,
+    };
+    let tool_calls_empty = message
+        .get("tool_calls")
+        .and_then(Value::as_array)
+        .is_none_or(Vec::is_empty);
+    content_empty && tool_calls_empty
 }
 
 fn provider_metadata_string<'a>(content: &'a Value, provider: &str, key: &str) -> Option<&'a str> {

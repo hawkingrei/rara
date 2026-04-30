@@ -96,7 +96,7 @@ struct ToolCall {
 
 #[derive(Debug)]
 struct TurnOutput {
-    assistant_message: Message,
+    assistant_message: Option<Message>,
     tool_calls: Vec<ToolCall>,
     plan_updated: bool,
     continue_inspection: bool,
@@ -389,10 +389,7 @@ impl Agent {
         }
 
         Ok(TurnOutput {
-            assistant_message: Message {
-                role: "assistant".to_string(),
-                content: serde_json::to_value(&sanitized_content)?,
-            },
+            assistant_message: assistant_turn_history_message(sanitized_content)?,
             tool_calls,
             plan_updated,
             continue_inspection,
@@ -438,8 +435,10 @@ impl Agent {
             self.ensure_active_plan_step();
             let turn_output = self.run_model_turn(output_mode, report).await?;
             self.last_query_plan_updated = turn_output.plan_updated;
-            self.push_history_message(turn_output.assistant_message);
-            self.checkpoint_session()?;
+            if let Some(message) = turn_output.assistant_message.clone() {
+                self.push_history_message(message);
+                self.checkpoint_session()?;
+            }
 
             if turn_output.tool_calls.is_empty() {
                 if self.should_continue_plan_without_tools(
@@ -739,6 +738,21 @@ impl Agent {
         }
         Ok(tool_results)
     }
+}
+
+fn assistant_turn_history_message(content: Vec<ContentBlock>) -> Result<Option<Message>> {
+    let has_visible_payload = content.iter().any(|block| match block {
+        ContentBlock::Text { text } => !text.trim().is_empty(),
+        ContentBlock::ToolUse { .. } => true,
+        ContentBlock::ProviderMetadata { .. } => false,
+    });
+    if !has_visible_payload {
+        return Ok(None);
+    }
+    Ok(Some(Message {
+        role: "assistant".to_string(),
+        content: serde_json::to_value(&content)?,
+    }))
 }
 
 fn is_compact_boundary_message(message: &Message) -> bool {
