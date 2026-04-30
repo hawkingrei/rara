@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::llm::LlmBackend;
+use crate::experience_store::ExperienceStore;
 use crate::prompt::PromptRuntimeConfig;
 use crate::sandbox::SandboxManager;
 use crate::session::SessionManager;
@@ -42,7 +43,9 @@ pub(super) fn create_full_tool_manager(
     sandbox_network_access: bool,
 ) -> ToolManager {
     let mut tm = ToolManager::new();
-    let vector_db_uri = vector_db_uri_for_workspace(&workspace);
+    let experience_store = Arc::new(
+        ExperienceStore::new(workspace.rara_dir.clone()).expect("experience store"),
+    );
     let background_tasks = Arc::new(
         BackgroundTaskStore::new(workspace.rara_dir.join("background-tasks"))
             .expect("background task store"),
@@ -102,17 +105,13 @@ pub(super) fn create_full_tool_manager(
     tm.register(Box::new(EnterPlanModeTool));
     tm.register(Box::new(ExitPlanModeTool));
     tm.register(Box::new(RememberExperienceTool {
-        backend: backend.clone(),
-        db_uri: vector_db_uri.clone(),
+        store: experience_store.clone(),
     }));
     tm.register(Box::new(RetrieveExperienceTool {
-        backend: backend.clone(),
-        db_uri: vector_db_uri,
+        store: experience_store.clone(),
     }));
     tm.register(Box::new(RetrieveSessionContextTool {
-        backend: backend.clone(),
-        vdb: vdb.clone(),
-        session_manager: session_manager.clone(),
+        store: experience_store,
     }));
     tm.register(Box::new(UpdateProjectMemoryTool {
         workspace: workspace.clone(),

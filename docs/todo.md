@@ -53,8 +53,8 @@ Priority order for this phase:
 
 ## Architecture / Runtime
 
-- [ ] Promote the current `MemorySelection` skeleton into the authoritative bounded retrieval-selection pipeline for thread and workspace recall.
-- [ ] Finish the first non-vector cut of `MemorySelection` so thread memory, workspace memory, active thread state, pending interaction state, and recent tool results all flow through one selected/available/dropped explanation path.
+- [x] Promote the current `MemorySelection` skeleton into the authoritative bounded retrieval-selection pipeline for thread and workspace recall.
+- [x] Finish the first non-vector cut of `MemorySelection` so thread memory, workspace memory, active thread state, pending interaction state, and recent tool results all flow through one selected/available/dropped explanation path.
 
 ## Configuration / Provider Surface
 

@@ -430,6 +430,81 @@ fn render_memory_selection(app: &TuiApp) -> String {
     )
 }
 
+fn render_context_summary(app: &TuiApp) -> String {
+    let context_window = app
+        .snapshot
+        .context_window_tokens
+        .map(|v| v.to_string())
+        .unwrap_or_else(|| "-".to_string());
+    let total_budgeted = app.snapshot.stable_instructions_budget
+        + app.snapshot.workspace_prompt_budget
+        + app.snapshot.active_turn_budget
+        + app.snapshot.compacted_history_budget
+        + app.snapshot.retrieved_memory_budget;
+    let utilization = app
+        .snapshot
+        .context_window_tokens
+        .and_then(|window| {
+            if window == 0 {
+                None
+            } else {
+                Some(((total_budgeted as f64 / window as f64) * 100.0) as usize)
+            }
+        })
+        .map(|pct| format!("{pct}%"))
+        .unwrap_or_else(|| "-".to_string());
+    let layer_counts = count_assembly_layers(app);
+    let retrieval = retrieval_digest(app);
+
+    format!(
+        "Context Overview\n  window: {} tokens  budgeted: {}  used: {}  remaining: {}\n  layers: {}{retrieval}",
+        context_window,
+        total_budgeted,
+        utilization,
+        app.snapshot.remaining_input_budget.map(|v| v.to_string()).unwrap_or_else(|| "-".to_string()),
+        layer_counts
+    )
+}
+
+fn count_assembly_layers(app: &TuiApp) -> String {
+    let mut layers: Vec<(&str, usize, usize)> = Vec::new();
+    for layer in &["stable_instructions", "workspace_prompt_sources", "active_memory_inputs", "compacted_history", "active_turn_state", "retrieval_ready"] {
+        let entries: Vec<_> = app.snapshot.assembly_entries.iter().filter(|e| e.layer == *layer).collect();
+        if !entries.is_empty() {
+            let token_sum: usize = entries.iter().filter_map(|e| e.budget_impact_tokens).sum();
+            layers.push((layer, entries.len(), token_sum));
+        }
+    }
+    if layers.is_empty() {
+        return "  (none)".to_string();
+    }
+    let lines: Vec<String> = layers
+        .iter()
+        .map(|(layer, count, tokens)| format!("    {layer}: {count} entries, ~{tokens} tokens"))
+        .collect();
+    format!("\n{}", lines.join("\n"))
+}
+
+fn retrieval_digest(app: &TuiApp) -> String {
+    let sel = app.snapshot.memory_selection.selected_items.len();
+    let av = app.snapshot.memory_selection.available_items.len();
+    let dr = app.snapshot.memory_selection.dropped_items.len();
+    let has_workspace_mem = app.snapshot.memory_selection.selected_items.iter().any(|i| i.kind == "workspace_memory");
+    let has_compact = app.snapshot.memory_selection.selected_items.iter().any(|i| i.kind == "compacted_summary" || i.kind == "recent_files");
+    let mut parts = vec![
+        format!("memory selected={sel} available={av} dropped={dr}"),
+    ];
+    if has_workspace_mem {
+        parts.push("workspace_memory=active".to_string());
+    } else {
+        parts.push("workspace_memory=inactive".to_string());
+    }
+    if has_compact {
+        parts.push("compacted_carryover=active".to_string());
+    }
+    format!("\n  {}", parts.join("  "))
+}
+
 pub fn status_context_text(app: &TuiApp) -> String {
     let prompt_warnings = if app.snapshot.prompt_warnings.is_empty() {
         None
@@ -482,11 +557,13 @@ pub fn status_context_text(app: &TuiApp) -> String {
         "-".to_string()
     };
     let mut sections = vec![
+        render_context_summary(app),
         format!(
-            "Current Session\n  cwd: {}\n  branch: {}\n  session: {}\n  history messages: {}\n  transcript entries: {}",
+            "Current Session\n  cwd: {}\n  branch: {}\n  session: {}\n  mode: {}\n  history messages: {}\n  transcript entries: {}",
             app.snapshot.cwd,
             app.snapshot.branch,
             app.snapshot.session_id,
+            app.agent_execution_mode_label(),
             app.snapshot.history_len,
             app.transcript_entry_count(),
         ),
@@ -514,7 +591,6 @@ pub fn status_context_text(app: &TuiApp) -> String {
             "Workspace Prompt Sources",
         ),
         render_context_assembly_entries(app, "active_memory_inputs", "Active Memory Inputs"),
-        render_memory_selection(app),
         render_context_assembly_entries(app, "compacted_history", "Compacted History"),
         render_context_assembly_entries(app, "active_turn_state", "Active Turn State"),
         render_context_assembly_entries(
@@ -522,6 +598,7 @@ pub fn status_context_text(app: &TuiApp) -> String {
             "retrieval_ready",
             "Retrieval-ready but not injected items",
         ),
+        render_memory_selection(app),
         format!(
             "Plan State\n  explanation: {}\n{}",
             app.snapshot.plan_explanation.as_deref().unwrap_or("-"),
