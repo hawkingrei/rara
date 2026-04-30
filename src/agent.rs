@@ -433,9 +433,9 @@ impl Agent {
     {
         loop {
             self.ensure_active_plan_step();
-            let turn_output = self.run_model_turn(output_mode, report).await?;
+            let mut turn_output = self.run_model_turn(output_mode, report).await?;
             self.last_query_plan_updated = turn_output.plan_updated;
-            if let Some(message) = turn_output.assistant_message.clone() {
+            if let Some(message) = turn_output.assistant_message.take() {
                 self.push_history_message(message);
                 self.checkpoint_session()?;
             }
