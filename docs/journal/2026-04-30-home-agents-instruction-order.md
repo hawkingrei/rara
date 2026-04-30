@@ -20,3 +20,8 @@ the existing root-to-focus ordering for repository instructions.
 
 - Added a focused workspace discovery test that asserts user, root, and nested
   instruction sources are returned in prefix-stable order.
+- Tightened skill discovery tests so global skill roots, repo-local roots, and
+  current-directory skill roots keep a deterministic low-to-high precedence
+  order.
+- Made same-root skill loading deterministic; `name/SKILL.md` overrides
+  `name.md` when both exist.
