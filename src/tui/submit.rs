@@ -159,7 +159,9 @@ pub(crate) enum PendingPlanApprovalAction {
     ContinuePlanning,
 }
 
-pub(crate) fn classify_pending_plan_approval_input(input: &str) -> Option<PendingPlanApprovalAction> {
+pub(crate) fn classify_pending_plan_approval_input(
+    input: &str,
+) -> Option<PendingPlanApprovalAction> {
     let trimmed = input.trim();
     if trimmed.is_empty() {
         return None;

@@ -342,9 +342,7 @@ pub(crate) async fn dispatch_event(
         AppEvent::EditOpenAiProfile => {
             if app.is_busy() {
                 app.push_notice("Wait for the current task before editing a profile.");
-            } else if app.selected_provider_family()
-                == ProviderFamily::OpenAiCompatible
-            {
+            } else if app.selected_provider_family() == ProviderFamily::OpenAiCompatible {
                 if app.select_openai_model_picker_profile().is_some() {
                     app.config_manager.save(&app.config)?;
                     app.begin_edit_openai_profile_setup();
@@ -449,15 +447,11 @@ pub(crate) async fn dispatch_event(
                         } else {
                             app.open_overlay(Overlay::ReasoningEffortPicker);
                         }
-                    } else if app.selected_provider_family()
-                        == ProviderFamily::OpenAiCompatible
-                    {
+                    } else if app.selected_provider_family() == ProviderFamily::OpenAiCompatible {
                         if let Some(action) = app.selected_openai_model_picker_action() {
                             apply_openai_model_picker_action(app, action)?;
                         }
-                    } else if app.selected_provider_family()
-                        == ProviderFamily::DeepSeek
-                    {
+                    } else if app.selected_provider_family() == ProviderFamily::DeepSeek {
                         if app.selected_deepseek_api_key_action() {
                             app.open_overlay(Overlay::ApiKeyEditor);
                         } else if app.config.has_api_key() {
