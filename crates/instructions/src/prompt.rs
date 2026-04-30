@@ -324,6 +324,7 @@ fn default_system_prompt_sections() -> Vec<PromptSection> {
                 "Workspace Behavior",
                 &[
                     "You are already inside the user's workspace and can inspect local files yourself.",
+                    "The environment context's cwd is the current working directory for local tools; relative paths are resolved from that directory unless a tool says otherwise.",
                     "Do not ask the user to paste local file contents or name local files when tools can read them directly.",
                     "For repository review or architecture analysis, inspect the workspace proactively with tools before asking follow-up questions.",
                     "For repository review, avoid repeating the same discovery tool call with the same arguments unless the workspace changed.",
@@ -366,6 +367,7 @@ fn default_system_prompt_sections() -> Vec<PromptSection> {
                     "Do not use shell redirection, sed, perl, or ad-hoc scripts to edit files when direct edit tools or 'apply_patch' can do the job.",
                     "If a 'read_file' result is truncated, continue with offset=next_offset and a narrower limit instead of asking the user to paste the file.",
                     "When a CLI command or its flags are unfamiliar or uncertain, first inspect local usage with a safe read-only command such as '<cmd> --help', '<cmd> help', '<cmd> -h', or '<cmd> --version' before relying on guessed flags.",
+                    "For shell commands, pass the working directory through the tool's cwd field when needed and avoid using 'cd' unless it is necessary for the command itself.",
                     "If sandboxed bash is unavailable or blocked, continue with direct file tools such as read_file, apply_patch, and replace_lines before asking the user for help.",
                     "Use 'remember_experience' for global vector memory.",
                     "Use 'update_project_memory' to record facts into memory.md.",
@@ -501,18 +503,46 @@ fn dynamic_system_prompt_sections(
         PromptSection::optional("instructions", instruction_block),
         PromptSection::optional("memory", memory_block),
         PromptSection::optional("skills", skills_block),
-        PromptSection::new(
-            "runtime_context",
-            format!(
-                "## Runtime Context\n- workspace: {}\n- git branch: {}",
-                cwd, branch
-            ),
-        ),
+        PromptSection::new("runtime_context", render_environment_context(&cwd, &branch)),
         PromptSection::optional(
             "plan_mode",
             matches!(mode, PromptMode::Plan).then(plan_mode_prompt),
         ),
     ]
+}
+
+fn render_environment_context(cwd: &str, branch: &str) -> String {
+    let shell = std::env::var("SHELL")
+        .ok()
+        .and_then(|value| {
+            Path::new(&value)
+                .file_name()
+                .map(|name| name.to_string_lossy().to_string())
+        })
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "unknown".to_string());
+
+    format!(
+        "<environment_context>\n  <cwd>{}</cwd>\n  <shell>{}</shell>\n  <git_branch>{}</git_branch>\n</environment_context>",
+        escape_xml_text(cwd),
+        escape_xml_text(&shell),
+        escape_xml_text(branch),
+    )
+}
+
+fn escape_xml_text(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for ch in value.chars() {
+        match ch {
+            '&' => escaped.push_str("&amp;"),
+            '<' => escaped.push_str("&lt;"),
+            '>' => escaped.push_str("&gt;"),
+            '"' => escaped.push_str("&quot;"),
+            '\'' => escaped.push_str("&apos;"),
+            ch => escaped.push(ch),
+        }
+    }
+    escaped
 }
 
 fn render_available_skills_section(skills: &[PromptSkillSummary]) -> Option<String> {
@@ -685,7 +715,10 @@ mod tests {
             PromptMode::Plan,
         );
         assert!(prompt.contains("Current Execution Mode"));
-        assert!(prompt.contains("Runtime Context"));
+        assert!(prompt.contains("<environment_context>"));
+        assert!(prompt.contains("<cwd>"));
+        assert!(prompt.contains("<shell>"));
+        assert!(prompt.contains("<git_branch>"));
     }
 
     #[test]
@@ -774,6 +807,7 @@ mod tests {
         let prompt = super::default_system_prompt();
         assert!(prompt.contains("prompt injection"));
         assert!(prompt.contains("Conversation history may be compacted"));
+        assert!(prompt.contains("environment context's cwd"));
         assert!(prompt.contains("prefer 'rg' for text search"));
         assert!(prompt.contains("rg --files"));
         assert!(prompt.contains("Before modifying an existing file"));
@@ -793,6 +827,7 @@ mod tests {
         assert!(prompt.contains("Do not use shell redirection"));
         assert!(prompt.contains("first inspect local usage"));
         assert!(prompt.contains("<cmd> --help"));
+        assert!(prompt.contains("avoid using 'cd'"));
         assert!(prompt.contains("Let the existing codebase shape the solution"));
         assert!(prompt.contains("Keep changes small and reviewable"));
         assert!(prompt.contains("decompose the work into several smaller"));
@@ -821,6 +856,14 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(build_compact_instruction(&runtime), "custom compact");
+    }
+
+    #[test]
+    fn environment_context_escapes_xml_values() {
+        let rendered = super::render_environment_context("/tmp/a&b", "feat/<tag>");
+
+        assert!(rendered.contains("<cwd>/tmp/a&amp;b</cwd>"));
+        assert!(rendered.contains("<git_branch>feat/&lt;tag&gt;</git_branch>"));
     }
 
     #[test]

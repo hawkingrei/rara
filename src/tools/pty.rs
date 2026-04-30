@@ -317,7 +317,7 @@ impl Tool for PtyStartTool {
     }
 
     fn description(&self) -> &str {
-        "Start an interactive PTY session for commands that need terminal input"
+        "Start an interactive PTY session for commands that need terminal input. Use the cwd field for the working directory when needed, and avoid cd unless it is necessary for the command itself."
     }
 
     fn input_schema(&self) -> Value {
@@ -325,7 +325,7 @@ impl Tool for PtyStartTool {
             "type": "object",
             "properties": {
                 "command": { "type": "string", "description": "Shell command to run inside a PTY." },
-                "cwd": { "type": "string", "description": "Optional working directory." },
+                "cwd": { "type": "string", "description": "Optional working directory. Defaults to the current turn cwd." },
                 "env": {
                     "type": "object",
                     "additionalProperties": { "type": "string" },
