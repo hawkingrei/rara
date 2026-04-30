@@ -138,7 +138,7 @@ pub fn status_command_approval_text(app: &TuiApp) -> String {
         .unwrap_or_else(|| approval.command.clone());
 
     let network = if approval.allow_net {
-        "enabled for this command"
+        "enabled by sandbox config or command request"
     } else {
         "disabled unless already allowed by the sandbox"
     };

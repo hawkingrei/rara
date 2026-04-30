@@ -41,6 +41,11 @@ The transcript should move toward Codex/Claude-style tool visibility:
   DeepSeek thinking mode is explicitly enabled; the default DeepSeek request body
   must preserve assistant tool calls and adjacent tool results so the model can
   continue after approval.
+- The default TUI terminal mode should preserve native terminal text selection.
+  Mouse capture may be added later only behind an explicit opt-in, because
+  terminal mouse reporting steals drag and wheel events from the host terminal.
+- Edit tool results should expose a diff-like preview in the transcript instead
+  of rendering only `old=` and `new=` summary lines.
 - background bash tasks must be inspectable without imposing a fixed task-count limit:
   - `background_task_list` lists known background tasks;
   - `background_task_status` reads status and recent output for one task;

@@ -23,10 +23,18 @@ when a command paused for review.
   as adjacent protocol tool messages before the runtime continuation. Legacy
   reasoning-history folding now applies only when DeepSeek thinking mode is
   explicitly enabled.
+- The TUI no longer enables terminal mouse capture by default, preserving native
+  drag selection and terminal scrollback behavior.
+- `replace` and `replace_lines` results now include a diff-like preview that the
+  transcript renderer can display with the existing patch preview path.
 
 ## Validation
 
 - `cargo test interaction_text -- --nocapture`
 - `cargo test active_turn_cell_renders_shell_approval_as_interaction_card -- --nocapture`
 - `cargo test deepseek_v4_defaults_keep_tool_results_as_protocol_messages -- --nocapture`
+- `cargo test replace_results_include_renderable_diff_preview -- --nocapture`
+- `cargo test replace_lines_replaces_inclusive_range_without_old_string -- --nocapture`
+- `cargo test sync_snapshot_reports_effective_network_access_for_pending_approval -- --nocapture`
+- `cargo test summary_cell_renders_indented_diff_block_as_patch_preview -- --nocapture`
 - `cargo check`

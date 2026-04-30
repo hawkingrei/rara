@@ -59,7 +59,7 @@ impl HistoryCell for SummaryCell {
         let mut lines = vec![Line::from(section_span(self.title, self.color))];
         let mut summary_lines = self.summary.lines();
         while let Some(line) = summary_lines.next() {
-            if line == "diff:" {
+            if line.trim_start() == "diff:" {
                 lines.push(Line::from(vec![
                     Span::raw("  "),
                     Span::styled(
@@ -69,7 +69,10 @@ impl HistoryCell for SummaryCell {
                             .add_modifier(Modifier::BOLD),
                     ),
                 ]));
-                let diff = summary_lines.collect::<Vec<_>>().join("\n");
+                let diff = summary_lines
+                    .map(|line| line.trim_start())
+                    .collect::<Vec<_>>()
+                    .join("\n");
                 lines.extend(render_patch_preview(diff.as_str(), width));
                 break;
             }
@@ -771,4 +774,31 @@ impl HistoryCell for StartupCardCell {
 
 pub(super) fn planning_suggestion_text(app: &TuiApp) -> String {
     status_planning_suggestion_text(app)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{HistoryCell, SummaryCell};
+    use ratatui::style::Color;
+
+    #[test]
+    fn summary_cell_renders_indented_diff_block_as_patch_preview() {
+        let cell = SummaryCell::new(
+            "Ran",
+            Color::LightYellow,
+            "  replace src/main.rs\n  diff:\n  *** Begin Patch\n  *** Update File: src/main.rs\n  @@\n  -old\n  +new\n  *** End Patch",
+        );
+
+        let rendered = cell
+            .display_lines(100)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(rendered.contains("diff:"));
+        assert!(rendered.contains("Edited src/main.rs"));
+        assert!(rendered.contains("- old"));
+        assert!(rendered.contains("+ new"));
+    }
 }
