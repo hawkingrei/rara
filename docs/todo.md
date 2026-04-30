@@ -118,6 +118,7 @@ Priority order for this phase:
   - make deny rules take precedence over allow / bypass rules;
   - support explicit command-prefix or command-pattern rules for trusted commands;
   - allow unsandboxed execution only when policy permits it and the transcript/status surface makes the bypass visible;
+  - add a structured sandbox-denial error path for Codex-style `on-failure` approval and retry without stderr keyword matching;
   - document that convenience exclusions are not a security boundary.
 - [ ] Add a structured auto-permission classifier side query after deterministic deny rules, with compact transcript projection that includes user intent and tool actions but excludes assistant prose.
 - [ ] Add a background-task state classifier for long-running agents that reports `working` / `blocked` / `done` / `failed` as derived status while keeping persisted task transcript as source of truth.

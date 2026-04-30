@@ -96,6 +96,20 @@ pub struct BashCommandInput {
     pub allow_net: bool,
     #[serde(default)]
     pub run_in_background: bool,
+    #[serde(default)]
+    pub sandbox_permissions: BashSandboxPermissions,
+    #[serde(default)]
+    pub justification: Option<String>,
+    #[serde(default)]
+    pub prefix_rule: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum BashSandboxPermissions {
+    #[default]
+    UseDefault,
+    RequireEscalated,
 }
 
 impl BashCommandInput {
@@ -157,7 +171,13 @@ impl BashCommandInput {
     }
 
     pub fn is_read_only(&self) -> bool {
-        if self.allow_net || self.run_in_background || !self.env.is_empty() {
+        if self.allow_net
+            || self.run_in_background
+            || !self.env.is_empty()
+            || self.sandbox_permissions != BashSandboxPermissions::UseDefault
+            || self.justification.is_some()
+            || !self.prefix_rule.is_empty()
+        {
             return false;
         }
         if let Some(command) = self
@@ -175,6 +195,9 @@ impl BashCommandInput {
     }
 
     pub fn approval_prefix(&self) -> Option<String> {
+        if !self.prefix_rule.is_empty() {
+            return Some(self.prefix_rule.join(" "));
+        }
         if let Some(command) = self
             .command
             .as_ref()
@@ -750,6 +773,21 @@ impl Tool for BashTool {
                     "type": "boolean",
                     "default": false,
                     "description": "Run the command as a background task and return a task id immediately. Use background_task_status to inspect output later."
+                },
+                "sandbox_permissions": {
+                    "type": "string",
+                    "enum": ["use_default", "require_escalated"],
+                    "default": "use_default",
+                    "description": "Sandbox permissions for the command. Set to require_escalated to request approval to run this command outside the sandbox; defaults to use_default."
+                },
+                "justification": {
+                    "type": "string",
+                    "description": "Only set if sandbox_permissions is require_escalated. Ask the user a short question explaining why this command needs to run outside the sandbox."
+                },
+                "prefix_rule": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "Only set if sandbox_permissions is require_escalated. Suggested command prefix to approve for similar future commands, for example [\"git\", \"push\"] or [\"cargo\", \"test\"]."
                 }
             },
             "anyOf": [
@@ -771,22 +809,31 @@ impl Tool for BashTool {
         let cwd = request.working_dir()?;
         let allow_net = self.sandbox_network_access || request.allow_net;
         let wrapped = if let Some(command) = request.command.as_deref() {
-            self.sandbox
-                .wrap_shell_command(command, &cwd, allow_net)
-                .map_err(|e| {
-                    ToolError::ExecutionFailed(format!("{} {}", e, sandbox_failure_hint()))
-                })?
+            if request.sandbox_permissions == BashSandboxPermissions::RequireEscalated {
+                self.sandbox.wrap_unsandboxed_shell_command(command)
+            } else {
+                self.sandbox
+                    .wrap_shell_command(command, &cwd, allow_net)
+                    .map_err(|e| {
+                        ToolError::ExecutionFailed(format!("{} {}", e, sandbox_failure_hint()))
+                    })?
+            }
         } else {
             let program = request
                 .program
                 .as_deref()
                 .filter(|value| !value.trim().is_empty())
                 .ok_or_else(|| ToolError::InvalidInput("program".into()))?;
-            self.sandbox
-                .wrap_exec_command(program, &request.args, &cwd, allow_net)
-                .map_err(|e| {
-                    ToolError::ExecutionFailed(format!("{} {}", e, sandbox_failure_hint()))
-                })?
+            if request.sandbox_permissions == BashSandboxPermissions::RequireEscalated {
+                self.sandbox
+                    .wrap_unsandboxed_exec_command(program, &request.args)
+            } else {
+                self.sandbox
+                    .wrap_exec_command(program, &request.args, &cwd, allow_net)
+                    .map_err(|e| {
+                        ToolError::ExecutionFailed(format!("{} {}", e, sandbox_failure_hint()))
+                    })?
+            }
         };
         let command_env = command_env_for_wrapped(&wrapped, &self.base_env, &request.env)?;
 
@@ -1242,9 +1289,9 @@ async fn ensure_sandbox_home_dirs(sandbox_home: &Path) -> Result<(), ToolError> 
 mod tests {
     use super::{
         BackgroundTaskListTool, BackgroundTaskStatus, BackgroundTaskStatusTool,
-        BackgroundTaskStopTool, BackgroundTaskStore, BashCommandInput, BashTool,
-        command_env_for_wrapped, read_output_tail, sandbox_command_env, sandbox_output_hint,
-        unsandboxed_execution_warning,
+        BackgroundTaskStopTool, BackgroundTaskStore, BashCommandInput, BashSandboxPermissions,
+        BashTool, command_env_for_wrapped, read_output_tail, sandbox_command_env,
+        sandbox_output_hint, unsandboxed_execution_warning,
     };
     use crate::sandbox::{SandboxManager, WrappedCommand};
     use crate::tool::{Tool, ToolOutputStream, ToolProgressEvent};
@@ -1302,6 +1349,46 @@ mod tests {
 
         assert!(input.run_in_background);
         assert_eq!(input.summary(), "cargo test");
+    }
+
+    #[test]
+    fn parses_codex_style_escalated_sandbox_request() {
+        let input = BashCommandInput::from_value(json!({
+            "program": "cargo",
+            "args": ["check"],
+            "sandbox_permissions": "require_escalated",
+            "justification": "Do you want to run cargo check outside the sandbox?",
+            "prefix_rule": ["cargo", "check"]
+        }))
+        .expect("escalated payload");
+
+        assert_eq!(
+            input.sandbox_permissions,
+            BashSandboxPermissions::RequireEscalated
+        );
+        assert_eq!(
+            input.justification.as_deref(),
+            Some("Do you want to run cargo check outside the sandbox?")
+        );
+        assert_eq!(input.approval_prefix().as_deref(), Some("cargo check"));
+        assert!(!input.is_read_only());
+    }
+
+    #[test]
+    fn escalated_sandbox_request_allows_missing_justification() {
+        let input = BashCommandInput::from_value(json!({
+            "program": "cargo",
+            "args": ["check"],
+            "sandbox_permissions": "require_escalated"
+        }))
+        .expect("escalated payload");
+
+        assert_eq!(
+            input.sandbox_permissions,
+            BashSandboxPermissions::RequireEscalated
+        );
+        assert!(input.justification.is_none());
+        assert!(!input.is_read_only());
     }
 
     #[test]
@@ -1545,6 +1632,47 @@ mod tests {
 
         assert!(warning.contains("without sandbox isolation"));
         assert!(warning.contains("direct"));
+    }
+
+    #[tokio::test]
+    async fn escalated_sandbox_request_runs_directly_after_approval() {
+        let temp = tempdir().expect("tempdir");
+        let sandbox = SandboxManager::new_for_rara_dir(temp.path().join(".rara")).expect("sandbox");
+        let tool = BashTool {
+            sandbox: Arc::new(sandbox),
+            background_tasks: Arc::new(
+                BackgroundTaskStore::new(temp.path().join(".rara/background-tasks"))
+                    .expect("background task store"),
+            ),
+            base_env: Arc::new(HashMap::new()),
+            sandbox_network_access: false,
+        };
+
+        let result = tool
+            .call(json!({
+                "program": "sh",
+                "args": ["-c", "printf direct"],
+                "sandbox_permissions": "require_escalated",
+                "justification": "Do you want to run this shell outside the sandbox?"
+            }))
+            .await
+            .expect("bash result");
+
+        assert_eq!(
+            result.get("sandboxed").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            result.get("sandbox_backend").and_then(Value::as_str),
+            Some("direct")
+        );
+        assert_eq!(result.get("stdout").and_then(Value::as_str), Some("direct"));
+        assert!(
+            result
+                .get("stderr")
+                .and_then(Value::as_str)
+                .is_some_and(|stderr| stderr.contains("without sandbox isolation"))
+        );
     }
 
     #[tokio::test]

@@ -294,6 +294,61 @@ async fn suggestion_mode_keeps_write_bash_commands_pending_approval() {
 }
 
 #[tokio::test]
+async fn suggestion_mode_uses_escalated_sandbox_justification_for_approval() {
+    let backend = Arc::new(SequencedBackend::new(vec![LlmResponse {
+        content: vec![ContentBlock::ToolUse {
+            id: "tool-escalated-bash".to_string(),
+            name: "bash".to_string(),
+            input: json!({
+                "program": "cargo",
+                "args": ["check"],
+                "sandbox_permissions": "require_escalated",
+                "justification": "Do you want to run cargo check outside the sandbox?",
+                "prefix_rule": ["cargo", "check"]
+            }),
+        }],
+        stop_reason: Some("tool_use".to_string()),
+        usage: Some(TokenUsage::default()),
+    }]));
+    let mut tool_manager = ToolManager::new();
+    tool_manager.register(Box::new(StubBashTool));
+    let (_temp, session_manager, workspace, rara_dir) = test_runtime_storage();
+    let mut agent = Agent::new(
+        tool_manager,
+        backend.clone(),
+        Arc::new(VectorDB::new(&rara_dir.join("lancedb").to_string_lossy())),
+        session_manager,
+        workspace,
+    );
+    agent.bash_approval_mode = crate::agent::BashApprovalMode::Suggestion;
+
+    agent
+        .query_with_mode(
+            "run check outside sandbox".to_string(),
+            super::super::AgentOutputMode::Silent,
+        )
+        .await
+        .expect("query should pause on escalated bash approval");
+
+    assert!(agent.pending_approval.is_some());
+    let pending = agent
+        .pending_user_input
+        .as_ref()
+        .expect("pending user input");
+    assert_eq!(
+        pending.question,
+        "Do you want to run cargo check outside the sandbox?"
+    );
+    assert_eq!(
+        agent
+            .pending_approval
+            .as_ref()
+            .and_then(|approval| approval.request.approval_prefix()),
+        Some("cargo check".to_string())
+    );
+}
+
+#[tokio::test]
 async fn plan_mode_allows_read_only_bash_commands() {
     let backend = Arc::new(SequencedBackend::new(vec![
         LlmResponse {

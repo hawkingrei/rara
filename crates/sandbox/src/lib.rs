@@ -294,6 +294,10 @@ impl SandboxManager {
         }
     }
 
+    pub fn wrap_unsandboxed_shell_command(&self, original_cmd: &str) -> WrappedCommand {
+        wrap_direct_shell_command(original_cmd)
+    }
+
     pub fn wrap_pty_shell_command(
         &self,
         original_cmd: &str,
@@ -305,6 +309,10 @@ impl SandboxManager {
             SandboxBackend::MacosSeatbelt => Ok(wrap_direct_shell_command(original_cmd)),
             _ => self.wrap_shell_command(original_cmd, cwd, allow_net),
         }
+    }
+
+    pub fn wrap_unsandboxed_exec_command(&self, program: &str, args: &[String]) -> WrappedCommand {
+        wrap_direct_exec_command(program, args)
     }
 
     pub fn wrap_exec_command(

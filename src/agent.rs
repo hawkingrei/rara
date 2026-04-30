@@ -576,6 +576,7 @@ impl Agent {
                                 .get("run_in_background")
                                 .and_then(Value::as_bool)
                                 .unwrap_or(false),
+                            ..Default::default()
                         }
                     });
                 if !request.is_read_only() {
@@ -617,6 +618,7 @@ impl Agent {
                                 .get("run_in_background")
                                 .and_then(Value::as_bool)
                                 .unwrap_or(false),
+                            ..Default::default()
                         }
                     });
                 if request.is_read_only() || self.is_bash_prefix_approved(&request) {
@@ -630,8 +632,16 @@ impl Agent {
                         tool_use_id: tool_id.clone(),
                         request: request.clone(),
                     });
+                    let question = request
+                        .justification
+                        .as_ref()
+                        .filter(|value| !value.trim().is_empty())
+                        .cloned()
+                        .unwrap_or_else(|| {
+                            "Bash command needs approval. What should RARA do?".to_string()
+                        });
                     self.pending_user_input = Some(PendingUserInput {
-                        question: "Bash command needs approval. What should RARA do?".to_string(),
+                        question,
                         options: vec![
                             (
                                 "Run once".to_string(),
