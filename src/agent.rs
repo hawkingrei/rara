@@ -553,32 +553,26 @@ impl Agent {
                 tool_results.push(tool_result_message(&tool_id, result_text, false));
                 continue;
             }
-            if tool_call.name == "bash" && matches!(self.execution_mode, AgentExecutionMode::Plan) {
-                let request =
-                    BashCommandInput::from_value(tool_call.input.clone()).unwrap_or_else(|_| {
-                        BashCommandInput {
-                            command: tool_call
-                                .input
-                                .get("command")
-                                .and_then(Value::as_str)
-                                .map(str::to_string),
-                            program: None,
-                            args: Vec::new(),
-                            cwd: None,
-                            env: Default::default(),
-                            allow_net: tool_call
-                                .input
-                                .get("allow_net")
-                                .and_then(Value::as_bool)
-                                .unwrap_or(false),
-                            run_in_background: tool_call
-                                .input
-                                .get("run_in_background")
-                                .and_then(Value::as_bool)
-                                .unwrap_or(false),
-                            ..Default::default()
-                        }
-                    });
+            let bash_request = if tool_call.name == "bash" {
+                match BashCommandInput::from_value(tool_call.input.clone()) {
+                    Ok(request) => Some(request),
+                    Err(err) => {
+                        let error_text = format!("Error: invalid bash payload: {err}");
+                        report(AgentEvent::ToolResult {
+                            name: tool_name.clone(),
+                            content: error_text.clone(),
+                            is_error: true,
+                        });
+                        tool_results.push(tool_result_message(&tool_id, error_text, true));
+                        continue;
+                    }
+                }
+            } else {
+                None
+            };
+            if let Some(request) = bash_request.as_ref()
+                && matches!(self.execution_mode, AgentExecutionMode::Plan)
+            {
                 if !request.is_read_only() {
                     let error_text = format!(
                         "Error: bash is read-only in plan mode. Refuse command '{}' and inspect with read-only commands or return a plan.",
@@ -593,35 +587,13 @@ impl Agent {
                     continue;
                 }
             }
-            if tool_call.name == "bash"
-                && matches!(self.bash_approval_mode, BashApprovalMode::Suggestion)
+            if let Some(request) = bash_request.as_ref()
+                && (request.requires_escalated_permissions()
+                    || matches!(self.bash_approval_mode, BashApprovalMode::Suggestion))
             {
-                let request =
-                    BashCommandInput::from_value(tool_call.input.clone()).unwrap_or_else(|_| {
-                        BashCommandInput {
-                            command: tool_call
-                                .input
-                                .get("command")
-                                .and_then(Value::as_str)
-                                .map(str::to_string),
-                            program: None,
-                            args: Vec::new(),
-                            cwd: None,
-                            env: Default::default(),
-                            allow_net: tool_call
-                                .input
-                                .get("allow_net")
-                                .and_then(Value::as_bool)
-                                .unwrap_or(false),
-                            run_in_background: tool_call
-                                .input
-                                .get("run_in_background")
-                                .and_then(Value::as_bool)
-                                .unwrap_or(false),
-                            ..Default::default()
-                        }
-                    });
-                if request.is_read_only() || self.is_bash_prefix_approved(&request) {
+                if !request.requires_escalated_permissions()
+                    && (request.is_read_only() || self.is_bash_prefix_approved(request))
+                {
                     report(AgentEvent::Status(format!(
                         "Shell command allowed by policy: {}",
                         request.summary()
@@ -630,7 +602,7 @@ impl Agent {
                     let summary = request.summary();
                     self.pending_approval = Some(PendingApproval {
                         tool_use_id: tool_id.clone(),
-                        request: request.clone(),
+                        request: request.to_owned(),
                     });
                     let question = request
                         .justification

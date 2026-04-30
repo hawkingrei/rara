@@ -349,6 +349,86 @@ async fn suggestion_mode_uses_escalated_sandbox_justification_for_approval() {
 }
 
 #[tokio::test]
+async fn always_mode_still_requires_approval_for_escalated_sandbox_request() {
+    let backend = Arc::new(SequencedBackend::new(vec![LlmResponse {
+        content: vec![ContentBlock::ToolUse {
+            id: "tool-escalated-bash".to_string(),
+            name: "bash".to_string(),
+            input: json!({
+                "program": "cargo",
+                "args": ["check"],
+                "sandbox_permissions": "require_escalated"
+            }),
+        }],
+        stop_reason: Some("tool_use".to_string()),
+        usage: Some(TokenUsage::default()),
+    }]));
+    let mut tool_manager = ToolManager::new();
+    tool_manager.register(Box::new(StubBashTool));
+    let (_temp, session_manager, workspace, rara_dir) = test_runtime_storage();
+    let mut agent = Agent::new(
+        tool_manager,
+        backend.clone(),
+        Arc::new(VectorDB::new(&rara_dir.join("lancedb").to_string_lossy())),
+        session_manager,
+        workspace,
+    );
+    agent.bash_approval_mode = crate::agent::BashApprovalMode::Always;
+
+    agent
+        .query_with_mode(
+            "run check outside sandbox".to_string(),
+            super::super::AgentOutputMode::Silent,
+        )
+        .await
+        .expect("query should pause on escalated bash approval");
+
+    assert!(agent.pending_approval.is_some());
+    assert_eq!(backend.observed_messages().len(), 1);
+}
+
+#[tokio::test]
+async fn approved_sandboxed_prefix_does_not_auto_allow_escalated_request() {
+    let backend = Arc::new(SequencedBackend::new(vec![LlmResponse {
+        content: vec![ContentBlock::ToolUse {
+            id: "tool-escalated-bash".to_string(),
+            name: "bash".to_string(),
+            input: json!({
+                "program": "cargo",
+                "args": ["check"],
+                "sandbox_permissions": "require_escalated",
+                "prefix_rule": ["cargo", "check"]
+            }),
+        }],
+        stop_reason: Some("tool_use".to_string()),
+        usage: Some(TokenUsage::default()),
+    }]));
+    let mut tool_manager = ToolManager::new();
+    tool_manager.register(Box::new(StubBashTool));
+    let (_temp, session_manager, workspace, rara_dir) = test_runtime_storage();
+    let mut agent = Agent::new(
+        tool_manager,
+        backend.clone(),
+        Arc::new(VectorDB::new(&rara_dir.join("lancedb").to_string_lossy())),
+        session_manager,
+        workspace,
+    );
+    agent.bash_approval_mode = crate::agent::BashApprovalMode::Suggestion;
+    agent.approved_bash_prefixes.push("cargo check".to_string());
+
+    agent
+        .query_with_mode(
+            "run check outside sandbox".to_string(),
+            super::super::AgentOutputMode::Silent,
+        )
+        .await
+        .expect("query should pause on escalated bash approval");
+
+    assert!(agent.pending_approval.is_some());
+    assert_eq!(backend.observed_messages().len(), 1);
+}
+
+#[tokio::test]
 async fn plan_mode_allows_read_only_bash_commands() {
     let backend = Arc::new(SequencedBackend::new(vec![
         LlmResponse {

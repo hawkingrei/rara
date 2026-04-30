@@ -194,6 +194,10 @@ impl BashCommandInput {
             .is_some_and(|program| argv_is_read_only(program, &self.args))
     }
 
+    pub fn requires_escalated_permissions(&self) -> bool {
+        self.sandbox_permissions == BashSandboxPermissions::RequireEscalated
+    }
+
     pub fn approval_prefix(&self) -> Option<String> {
         if !self.prefix_rule.is_empty() {
             return Some(self.prefix_rule.join(" "));
