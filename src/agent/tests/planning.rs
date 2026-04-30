@@ -15,7 +15,7 @@ use crate::llm::{LlmBackend, LlmResponse, TokenUsage};
 use crate::session::SessionManager;
 use crate::tool::ToolManager;
 use crate::tool_result::ToolResultStore;
-use crate::tools::planning::EnterPlanModeTool;
+use crate::tools::planning::{EnterPlanModeTool, ExitPlanModeTool};
 use crate::vectordb::VectorDB;
 use crate::workspace::WorkspaceMemory;
 
@@ -830,6 +830,81 @@ async fn enter_plan_mode_prevents_earlier_mutating_tool_in_same_batch() {
     assert_eq!(agent.execution_mode, AgentExecutionMode::Plan);
     assert!(history.contains("bash is read-only in plan mode"));
     assert!(!history.contains("\"stdout\":\"ok"));
+}
+
+#[tokio::test]
+async fn exit_plan_mode_persists_plan_and_waits_for_approval() {
+    let backend = Arc::new(SequencedBackend::new(vec![
+        LlmResponse {
+            content: vec![
+                ContentBlock::Text {
+                    text: "<proposed_plan>\n- [pending] Update planning state\n- [pending] Add regression coverage\n</proposed_plan>".to_string(),
+                },
+                ContentBlock::ToolUse {
+                    id: "exit-plan".to_string(),
+                    name: "exit_plan_mode".to_string(),
+                    input: json!({}),
+                },
+            ],
+            stop_reason: Some("tool_use".to_string()),
+            usage: Some(TokenUsage::default()),
+        },
+        LlmResponse {
+            content: vec![ContentBlock::Text {
+                text: "Implemented the approved plan.".to_string(),
+            }],
+            stop_reason: Some("end_turn".to_string()),
+            usage: Some(TokenUsage::default()),
+        },
+    ]));
+
+    let mut tool_manager = ToolManager::new();
+    tool_manager.register(Box::new(ExitPlanModeTool));
+    let (_temp, session_manager, workspace, rara_dir) = test_runtime_storage();
+    let mut agent = Agent::new(
+        tool_manager,
+        backend.clone(),
+        Arc::new(VectorDB::new(&rara_dir.join("lancedb").to_string_lossy())),
+        session_manager.clone(),
+        workspace,
+    );
+    agent.set_execution_mode(AgentExecutionMode::Plan);
+
+    agent
+        .query_with_mode(
+            "plan the implementation".to_string(),
+            super::super::AgentOutputMode::Silent,
+        )
+        .await
+        .expect("query should stop at exit plan approval");
+
+    assert_eq!(agent.execution_mode, AgentExecutionMode::Plan);
+    assert!(agent.has_pending_plan_exit_approval());
+    let plan_file = session_manager.plan_file_path(&agent.session_id);
+    let plan = std::fs::read_to_string(plan_file).expect("plan file should be persisted");
+    assert!(plan.contains("- [pending] Update planning state"));
+    assert!(plan.contains("- [pending] Add regression coverage"));
+
+    agent
+        .resume_after_plan_approval_with_events(
+            false,
+            super::super::AgentOutputMode::Silent,
+            |_| {},
+        )
+        .await
+        .expect("approved plan should resume execution");
+
+    assert_eq!(agent.execution_mode, AgentExecutionMode::Execute);
+    assert!(!agent.has_pending_plan_exit_approval());
+    let history = agent
+        .history
+        .iter()
+        .map(|message| message.content.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(history.contains("User has approved your plan. You can now start coding."));
+    assert!(history.contains("Approved Plan"));
+    assert!(history.contains("Implemented the approved plan."));
 }
 
 #[tokio::test]

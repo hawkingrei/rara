@@ -125,6 +125,7 @@ pub struct Agent {
     pub compact_state: CompactState,
     inspection_progress: InspectionProgress,
     last_query_plan_updated: bool,
+    pending_plan_exit_tool_id: Option<String>,
     prompt_config: PromptRuntimeConfig,
     cancellation_token: Option<Arc<AtomicBool>>,
 }
@@ -163,6 +164,7 @@ impl Agent {
             compact_state: CompactState::default(),
             inspection_progress: InspectionProgress::default(),
             last_query_plan_updated: false,
+            pending_plan_exit_tool_id: None,
             prompt_config: PromptRuntimeConfig::default(),
             cancellation_token: None,
         }
@@ -196,6 +198,7 @@ impl Agent {
         let mut runtime_error_recoveries = 0usize;
         self.inspection_progress = InspectionProgress::default();
         self.last_query_plan_updated = false;
+        self.pending_plan_exit_tool_id = None;
         self.compact_if_needed_with_reporter(&mut report).await?;
         let repaired_history = repair_tool_result_history(&self.history);
         if repaired_history != self.history {
@@ -344,7 +347,7 @@ impl Agent {
                             report(AgentEvent::AssistantText(clean_text.clone()));
                         }
                         if matches!(self.execution_mode, AgentExecutionMode::Plan) {
-                            plan_updated |= self.capture_plan_from_text(&clean_text);
+                            plan_updated |= self.capture_plan_from_text(&clean_text)?;
                         }
                         if matches!(output_mode, AgentOutputMode::Terminal) {
                             println!("Agent: {}", clean_text);
@@ -474,7 +477,7 @@ impl Agent {
             let tool_results = self
                 .execute_tool_calls(turn_output.tool_calls, report)
                 .await?;
-            if self.pending_approval.is_some() {
+            if self.pending_approval.is_some() || self.pending_plan_exit_tool_id.is_some() {
                 self.checkpoint_session()?;
                 break;
             }
@@ -540,6 +543,7 @@ impl Agent {
                         "Inspect the repository with read-only tools.",
                         "Return a normal final answer for research, review, or planning-advice tasks.",
                         "Use a <proposed_plan> block only when you are requesting approval to implement a concrete plan.",
+                        "Call exit_plan_mode after the proposed plan is complete and ready for approval.",
                         "Use <request_user_input> only when a blocking decision needs user input.",
                         "Use <continue_inspection/> only when another read-only inspection pass is required."
                     ]
@@ -552,6 +556,23 @@ impl Agent {
                 });
                 tool_results.push(tool_result_message(&tool_id, result_text, false));
                 continue;
+            }
+            if tool_name == "exit_plan_mode" {
+                if self.current_plan.is_empty() {
+                    let error_text = "Error: exit_plan_mode requires a proposed plan. Emit a <proposed_plan> block before calling exit_plan_mode.".to_string();
+                    report(AgentEvent::ToolResult {
+                        name: tool_name.clone(),
+                        content: error_text.clone(),
+                        is_error: true,
+                    });
+                    tool_results.push(tool_result_message(&tool_id, error_text, true));
+                    continue;
+                }
+                self.pending_plan_exit_tool_id = Some(tool_id);
+                report(AgentEvent::Status(
+                    "Plan ready for approval. Waiting for a structured user decision.".to_string(),
+                ));
+                break;
             }
             let bash_request = if tool_call.name == "bash" {
                 match BashCommandInput::from_value(tool_call.input.clone()) {

@@ -13,20 +13,23 @@ RARA planning mode is a read-only collaboration mode for non-trivial tasks.
 - planning mode is read-only;
 - the agent enters planning mode by calling `enter_plan_mode`; the TUI must not infer planning mode from prompt keywords;
 - planning mode persists across turns until the runtime explicitly switches back to execute mode, such as after plan approval;
+- decision-complete implementation plans are persisted to `.rara/sessions/<session_id>/plan.md`;
+- `exit_plan_mode` submits the persisted proposed plan to the approval flow; it does not directly grant editing permission;
 - user imperative wording like "continue" or "implement" does not exit planning mode by itself;
 - planning turns may use read-only repository tools, read-only shell commands, and delegated read-only sub-agents;
 - planning turns may end with a normal final answer for research, review, or planning-advice tasks;
-- when the agent entered planning mode automatically from execute mode, a decision-complete implementation plan is auto-approved by the runtime and resumes execution without a human approval card;
+- when the agent entered planning mode automatically from execute mode without calling `exit_plan_mode`, a decision-complete implementation plan is auto-approved by the runtime and resumes execution without a human approval card;
 - manual `/plan` sessions still require explicit human approval before execution resumes from `<proposed_plan>`;
 - structured planning artifacts are reserved for explicit runtime actions:
-  - `<proposed_plan>` when the implementation plan is ready for approval;
+  - `<proposed_plan>` when the implementation plan is ready to persist as the plan artifact;
+  - `exit_plan_mode` when the persisted plan is ready for approval;
   - `<request_user_input>` when a key decision still needs user input;
   - `<continue_inspection/>` when more repository inspection is still required.
 - a model message with no tool call and no `<continue_inspection/>` is a final answer for the current turn, not an implicit request for runtime continuation;
 - planning-mode prose should stay in inspected findings and concise progress updates;
 - planning-mode progress updates should stay short and grounded in inspected code instead of narrating each next file-by-file action;
 - planning mode must not describe file edits, patches, or implementation steps as if they are already happening.
-- plan approval must not be requested in ordinary prose; the model must use `<proposed_plan>` when the plan is ready, or `<request_user_input>` when a key decision still blocks it.
+- plan approval must not be requested in ordinary prose; the model must use `<proposed_plan>` followed by `exit_plan_mode` when the plan is ready, or `<request_user_input>` when a key decision still blocks it.
 
 Plain narration or status updates are valid only when they are the final answer to a research, review, or planning-advice task. They must not be treated as approval requests.
 

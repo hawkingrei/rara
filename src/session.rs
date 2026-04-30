@@ -90,6 +90,24 @@ impl SessionManager {
         Ok(())
     }
 
+    pub fn plan_file_path(&self, session_id: &str) -> PathBuf {
+        self.legacy_storage_dir.join(session_id).join("plan.md")
+    }
+
+    pub fn save_plan_file(&self, session_id: &str, plan: &str) -> Result<()> {
+        let path = self.plan_file_path(session_id);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let tmp_path = path.with_extension(format!("md.tmp-{}", uuid::Uuid::new_v4()));
+        fs::write(&tmp_path, plan)?;
+        if let Err(err) = Self::replace_file(&tmp_path, &path) {
+            let _ = fs::remove_file(&tmp_path);
+            return Err(err);
+        }
+        Ok(())
+    }
+
     #[cfg(not(windows))]
     fn replace_file(src: &Path, dst: &Path) -> Result<()> {
         fs::rename(src, dst)?;

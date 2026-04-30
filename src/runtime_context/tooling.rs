@@ -17,7 +17,7 @@ use crate::tools::file::{
     FileReadState, ListFilesTool, ReadFileTool, ReplaceLinesTool, ReplaceTool, WriteFileTool,
 };
 use crate::tools::patch::ApplyPatchTool;
-use crate::tools::planning::EnterPlanModeTool;
+use crate::tools::planning::{EnterPlanModeTool, ExitPlanModeTool};
 use crate::tools::pty::{
     PtyKillTool, PtyListTool, PtyReadTool, PtySessionStore, PtyStartTool, PtyStatusTool,
     PtyStopTool, PtyWriteTool,
@@ -100,6 +100,7 @@ pub(super) fn create_full_tool_manager(
     tm.register(Box::new(GlobTool));
     tm.register(Box::new(GrepTool));
     tm.register(Box::new(EnterPlanModeTool));
+    tm.register(Box::new(ExitPlanModeTool));
     tm.register(Box::new(RememberExperienceTool {
         backend: backend.clone(),
         db_uri: vector_db_uri.clone(),
