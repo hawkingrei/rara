@@ -3,7 +3,7 @@ use std::sync::Arc;
 use crate::agent::Agent;
 
 use super::command::{palette_command_by_index, parse_local_command};
-use super::runtime::{execute_local_command, start_plan_approval_resume_task, start_query_task};
+use super::runtime::{execute_local_command, start_query_task};
 use super::state::{LocalCommandKind, OpenAiModelPickerAction, Overlay, TaskKind, TuiApp};
 
 pub(crate) async fn handle_submit(
@@ -68,9 +68,8 @@ pub(crate) async fn handle_submit(
     }
 
     if app.has_pending_plan_approval() && !trimmed.starts_with('/') {
-        if handle_pending_plan_approval_submit(app, agent_slot, &trimmed).await? {
-            return Ok(false);
-        }
+        handle_pending_plan_approval_submit(app);
+        return Ok(false);
     }
     if let Some(command) = parse_local_command(&trimmed) {
         if execute_local_command(command, app, agent_slot, oauth_manager).await? {
@@ -153,83 +152,10 @@ pub(crate) fn apply_openai_model_picker_action(
     Ok(())
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum PendingPlanApprovalAction {
-    StartImplementation,
-    ContinuePlanning,
-}
-
-pub(crate) fn classify_pending_plan_approval_input(
-    input: &str,
-) -> Option<PendingPlanApprovalAction> {
-    let trimmed = input.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-
-    let lowered = trimmed.to_ascii_lowercase();
-    let continue_planning_keywords = [
-        "继续规划",
-        "继续计划",
-        "继续 refine",
-        "refine plan",
-        "continue planning",
-        "keep planning",
-        "revise plan",
-    ];
-    if continue_planning_keywords
-        .iter()
-        .any(|keyword| lowered.contains(&keyword.to_ascii_lowercase()) || trimmed == *keyword)
-    {
-        return Some(PendingPlanApprovalAction::ContinuePlanning);
-    }
-
-    let approve_keywords = [
-        "执行计划",
-        "开始执行",
-        "implement plan",
-        "start implementation",
-    ];
-    if approve_keywords
-        .iter()
-        .any(|keyword| lowered == keyword.to_ascii_lowercase() || trimmed == *keyword)
-    {
-        return Some(PendingPlanApprovalAction::StartImplementation);
-    }
-
-    None
-}
-
-async fn handle_pending_plan_approval_submit(
-    app: &mut TuiApp,
-    agent_slot: &mut Option<Agent>,
-    input: &str,
-) -> anyhow::Result<bool> {
-    let Some(action) = classify_pending_plan_approval_input(input) else {
-        app.push_notice(
-            "A plan is waiting for approval. Press 1/2 or type '执行计划' to implement, '继续规划' to refine the plan.",
-        );
-        return Ok(true);
-    };
-
-    match action {
-        PendingPlanApprovalAction::StartImplementation => {
-            if let Some(agent) = agent_slot.take() {
-                start_plan_approval_resume_task(app, false, agent);
-            } else {
-                app.push_notice("No active agent is available to start implementation.");
-            }
-        }
-        PendingPlanApprovalAction::ContinuePlanning => {
-            if let Some(agent) = agent_slot.take() {
-                start_plan_approval_resume_task(app, true, agent);
-            } else {
-                app.push_notice("No active agent is available to continue planning.");
-            }
-        }
-    }
-
-    Ok(true)
+fn handle_pending_plan_approval_submit(app: &mut TuiApp) {
+    app.push_notice(
+        "A plan is waiting for approval. Press 1 to start implementation or 2 to continue planning.",
+    );
 }
 
 pub(crate) fn clamp_command_palette_selection(app: &mut TuiApp) {

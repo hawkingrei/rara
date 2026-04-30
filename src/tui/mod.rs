@@ -31,9 +31,9 @@ pub(crate) use self::keymap::map_key_to_event;
 pub(crate) use self::session_restore::provider_requires_api_key;
 pub(crate) use self::terminal_ui::is_ssh_session;
 
+#[cfg(test)]
 pub(crate) use self::event_dispatch::dispatch_event;
-pub(crate) use self::submit::{
-    PendingPlanApprovalAction, classify_pending_plan_approval_input, handle_submit,
-};
+#[cfg(test)]
+pub(crate) use self::submit::handle_submit;
 
 pub use self::event_loop::{StartupResumeTarget, run_tui};

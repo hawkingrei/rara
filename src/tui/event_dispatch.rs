@@ -5,6 +5,7 @@ use crate::config::DEFAULT_CODEX_BASE_URL;
 use crate::oauth::{OAuthManager, SavedCodexAuthMode};
 
 use super::app_event::AppEvent;
+use super::auth_mode_picker::AUTH_MODE_OPTION_COUNT;
 use super::command::{palette_command_by_index, palette_commands};
 use super::provider_flow::{
     open_provider_family_overlay, should_open_codex_auth_guide,
@@ -14,7 +15,7 @@ use super::runtime::{
     request_running_task_cancellation, start_deepseek_model_list_task, start_oauth_task,
     start_pending_approval_task, start_rebuild_task,
 };
-use super::session_restore::{provider_requires_api_key, restore_thread_by_id};
+use super::session_restore::restore_thread_by_id;
 use super::state::{
     ActivePendingInteractionKind, OpenAiModelPickerAction, Overlay, PROVIDER_FAMILIES,
     ProviderFamily, TuiApp,
@@ -125,7 +126,8 @@ pub(crate) async fn dispatch_event(
             }
         }
         AppEvent::MoveAuthModeSelection(delta) => {
-            let next = (app.auth_mode_idx as i32 + delta).clamp(0, 3);
+            let max_idx = AUTH_MODE_OPTION_COUNT.saturating_sub(1);
+            let next = (app.auth_mode_idx as i32 + delta).clamp(0, max_idx as i32);
             app.auth_mode_idx = next as usize;
         }
         AppEvent::SetProviderSelection(idx) => {
@@ -133,7 +135,7 @@ pub(crate) async fn dispatch_event(
             app.model_picker_idx = 0;
         }
         AppEvent::SetAuthModeSelection(idx) => {
-            app.auth_mode_idx = idx.min(3);
+            app.auth_mode_idx = idx.min(AUTH_MODE_OPTION_COUNT.saturating_sub(1));
         }
         AppEvent::SetReasoningEffortSelection(idx) => {
             let len = app.selected_codex_reasoning_options().len();
@@ -143,13 +145,15 @@ pub(crate) async fn dispatch_event(
             if let Some(interaction) = app.active_pending_interaction() {
                 match interaction.kind {
                     ActivePendingInteractionKind::PlanApproval => {
-                        if let Some(agent) = agent_slot.take() {
-                            let continue_planning = idx != 0;
-                            super::runtime::start_plan_approval_resume_task(
-                                app,
-                                continue_planning,
-                                agent,
-                            );
+                        if let 0 | 1 = idx {
+                            if let Some(agent) = agent_slot.take() {
+                                let continue_planning = idx == 1;
+                                super::runtime::start_plan_approval_resume_task(
+                                    app,
+                                    continue_planning,
+                                    agent,
+                                );
+                            }
                         }
                     }
                     ActivePendingInteractionKind::ShellApproval => {
@@ -178,7 +182,6 @@ pub(crate) async fn dispatch_event(
                             }
                         }
                     }
-                    _ => {}
                 }
             }
         }
