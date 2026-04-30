@@ -143,7 +143,7 @@ impl WorkspaceMemory {
         vec![PromptSource {
             kind: PromptSourceKind::UserInstruction,
             label: format!("User Instruction ({USER_INSTRUCTION_FILE})"),
-            display_path: format!("~/.rara/{USER_INSTRUCTION_FILE}"),
+            display_path: path.display().to_string(),
             content,
         }]
     }
@@ -351,6 +351,7 @@ mod tests {
         fs::write(rara_home.join("AGENTS.md"), "user rules").expect("write user agents");
         fs::write(root.join("AGENTS.md"), "root rules").expect("write root agents");
         fs::write(root.join("src").join("AGENTS.md"), "src rules").expect("write src agents");
+        let user_instruction_path = rara_home.join("AGENTS.md").display().to_string();
 
         let workspace = WorkspaceMemory::from_paths(root.clone(), rara_dir);
         let sources = workspace.discover_prompt_sources_from_dir(&nested);
@@ -370,7 +371,7 @@ mod tests {
             vec![
                 (
                     PromptSourceKind::UserInstruction,
-                    "~/.rara/AGENTS.md".to_string(),
+                    user_instruction_path,
                     "user rules".to_string()
                 ),
                 (

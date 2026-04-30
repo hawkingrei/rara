@@ -181,14 +181,14 @@ fn skill_name_from_path(path: &Path) -> String {
     }
 }
 
-fn skill_file_sort_key(path: &Path) -> (String, u8, String) {
+fn skill_file_sort_key(path: &Path) -> (String, u8, &Path) {
     let name = skill_name_from_path(path);
     let priority = if path.file_name().and_then(|value| value.to_str()) == Some("SKILL.md") {
         1
     } else {
         0
     };
-    (name, priority, path.display().to_string())
+    (name, priority, path)
 }
 
 #[cfg(test)]
