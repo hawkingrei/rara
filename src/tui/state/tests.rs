@@ -3,10 +3,17 @@ use super::{
     PendingInteractionSnapshot, ProviderFamily, RuntimeSnapshot, TranscriptEntry, TranscriptTurn,
     TuiApp, input_requests_command_palette, parse_repo_slug, state_db_status_error,
 };
+use crate::agent::{Agent, PendingApproval};
 use crate::codex_model_catalog::{CodexModelOption, CodexReasoningOption};
 use crate::config::{ConfigManager, OpenAiEndpointKind, RaraConfig};
 use crate::config::{DEFAULT_CODEX_BASE_URL, DEFAULT_CODEX_MODEL};
+use crate::llm::MockLlm;
+use crate::session::SessionManager;
 use crate::state_db::{PersistedCompactState, PersistedPromptRuntimeState, StateDb};
+use crate::tool::ToolManager;
+use crate::tools::bash::BashCommandInput;
+use crate::vectordb::VectorDB;
+use crate::workspace::WorkspaceMemory;
 use tempfile::tempdir;
 
 fn provider_family_idx(family: ProviderFamily) -> usize {
@@ -84,6 +91,45 @@ fn prioritizes_active_pending_interaction_in_ui_order() {
         .expect("pending interaction");
     assert_eq!(active.kind, ActivePendingInteractionKind::PlanApproval);
     assert_eq!(active._snapshot.title, "Plan Ready");
+}
+
+#[test]
+fn sync_snapshot_reports_effective_network_access_for_pending_approval() {
+    let dir = tempdir().expect("tempdir");
+    let root = dir.path().to_path_buf();
+    let rara_dir = root.join(".rara");
+    std::fs::create_dir_all(rara_dir.join("rollouts")).expect("rollouts");
+    std::fs::create_dir_all(rara_dir.join("sessions")).expect("sessions");
+    let mut app = TuiApp::new(ConfigManager {
+        path: root.join("config.json"),
+    })
+    .expect("app");
+    let mut agent = Agent::new(
+        ToolManager::new(),
+        std::sync::Arc::new(MockLlm),
+        std::sync::Arc::new(VectorDB::new(&rara_dir.join("lancedb").to_string_lossy())),
+        std::sync::Arc::new(SessionManager {
+            storage_dir: rara_dir.join("rollouts"),
+            legacy_storage_dir: rara_dir.join("sessions"),
+        }),
+        std::sync::Arc::new(WorkspaceMemory::from_paths(root, rara_dir)),
+    );
+    agent.pending_approval = Some(PendingApproval {
+        tool_use_id: "tool-1".to_string(),
+        request: BashCommandInput {
+            command: Some("cargo check".to_string()),
+            allow_net: false,
+            ..Default::default()
+        },
+    });
+
+    app.sync_snapshot(&agent);
+
+    let approval = app
+        .pending_command_approval()
+        .and_then(|interaction| interaction.approval.as_ref())
+        .expect("pending approval");
+    assert!(approval.allow_net);
 }
 
 #[test]

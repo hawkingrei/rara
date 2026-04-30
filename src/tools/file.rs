@@ -447,6 +447,7 @@ impl Tool for ReplaceLinesTool {
                 .collect::<Vec<_>>()
         };
         let removed_line_count = end_line - start_line + 1;
+        let removed_string = lines[start_line - 1..end_line].join("\n");
         lines.splice(start_line - 1..end_line, replacement_lines.iter().cloned());
 
         let mut updated = lines.join("\n");
@@ -461,6 +462,7 @@ impl Tool for ReplaceLinesTool {
             "start_line": start_line,
             "end_line": end_line,
             "removed_lines": removed_line_count,
+            "removed_string": removed_string,
             "inserted_lines": replacement_lines.len(),
             "line_delta": replacement_lines.len() as i64 - removed_line_count as i64,
         }))
@@ -809,6 +811,7 @@ mod tests {
             "one\nmiddle\nfour\n"
         );
         assert_eq!(result["removed_lines"], 2);
+        assert_eq!(result["removed_string"], "two\nthree");
         assert_eq!(result["inserted_lines"], 1);
         assert_eq!(result["line_delta"], -1);
     }

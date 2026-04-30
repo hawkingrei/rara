@@ -35,8 +35,8 @@ impl ToolResultStore {
         let inline = match tool_name {
             "apply_patch" => compact_apply_patch(result),
             "write_file" => compact_write_file(result),
-            "replace" => compact_replace(result),
-            "replace_lines" => compact_replace_lines(result),
+            "replace" => compact_replace(input, result),
+            "replace_lines" => compact_replace_lines(input, result),
             "spawn_agent" | "explore_agent" | "plan_agent" => {
                 compact_subagent_result(tool_name, result)
             }
@@ -368,10 +368,11 @@ fn compact_write_file(result: &Value) -> String {
     rendered
 }
 
-fn compact_replace(result: &Value) -> String {
+fn compact_replace(input: &Value, result: &Value) -> String {
     let path = result
         .get("path")
         .and_then(Value::as_str)
+        .or_else(|| input.get("path").and_then(Value::as_str))
         .unwrap_or("<unknown>");
     let replacements = result
         .get("replacements")
@@ -381,23 +382,25 @@ fn compact_replace(result: &Value) -> String {
         .get("line_delta")
         .and_then(Value::as_i64)
         .unwrap_or_default();
-    let old_preview = result
-        .get("old_preview")
+    let old_string = input
+        .get("old_string")
         .and_then(Value::as_str)
+        .or_else(|| result.get("old_preview").and_then(Value::as_str))
         .unwrap_or_default();
-    let new_preview = result
-        .get("new_preview")
+    let new_string = input
+        .get("new_string")
         .and_then(Value::as_str)
+        .or_else(|| result.get("new_preview").and_then(Value::as_str))
         .unwrap_or_default();
-    format!(
-        "replace {path}\nreplacements={replacements} line_delta={line_delta}\nold={old_preview}\nnew={new_preview}"
-    )
+    let diff = simple_patch_diff(path, old_string, new_string);
+    format!("replace {path}\nreplacements={replacements} line_delta={line_delta}\ndiff:\n{diff}")
 }
 
-fn compact_replace_lines(result: &Value) -> String {
+fn compact_replace_lines(input: &Value, result: &Value) -> String {
     let path = result
         .get("path")
         .and_then(Value::as_str)
+        .or_else(|| input.get("path").and_then(Value::as_str))
         .unwrap_or("<unknown>");
     let start_line = result
         .get("start_line")
@@ -419,9 +422,30 @@ fn compact_replace_lines(result: &Value) -> String {
         .get("line_delta")
         .and_then(Value::as_i64)
         .unwrap_or_default();
+    let old_string = result
+        .get("removed_string")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let new_string = input
+        .get("new_string")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let diff = simple_patch_diff(path, old_string, new_string);
     format!(
-        "replace_lines {path}:{start_line}-{end_line}\nremoved={removed_lines} inserted={inserted_lines} line_delta={line_delta}"
+        "replace_lines {path}:{start_line}-{end_line}\nremoved={removed_lines} inserted={inserted_lines} line_delta={line_delta}\ndiff:\n{diff}"
     )
+}
+
+fn simple_patch_diff(path: &str, old_string: &str, new_string: &str) -> String {
+    let mut lines = vec![
+        "*** Begin Patch".to_string(),
+        format!("*** Update File: {path}"),
+        "@@".to_string(),
+    ];
+    lines.extend(old_string.lines().map(|line| format!("-{line}")));
+    lines.extend(new_string.lines().map(|line| format!("+{line}")));
+    lines.push("*** End Patch".to_string());
+    lines.join("\n")
 }
 
 fn compact_subagent_result(tool_name: &str, result: &Value) -> String {
@@ -791,6 +815,34 @@ mod tests {
                 .expect("default tool result dir")
                 .ends_with(std::path::Path::new("tool-results"))
         );
+    }
+
+    #[test]
+    fn replace_results_include_renderable_diff_preview() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let store = ToolResultStore::new(tempdir.path()).expect("store");
+        let output = store
+            .compact_result(
+                "replace",
+                "tool-1",
+                &json!({
+                    "path": "src/main.rs",
+                    "old_string": "let old = true;",
+                    "new_string": "let new = true;"
+                }),
+                &json!({
+                    "status": "ok",
+                    "path": "src/main.rs",
+                    "replacements": 1,
+                    "line_delta": 0
+                }),
+            )
+            .expect("compact replace");
+
+        assert!(output.contains("diff:"));
+        assert!(output.contains("*** Update File: src/main.rs"));
+        assert!(output.contains("-let old = true;"));
+        assert!(output.contains("+let new = true;"));
     }
 
     #[test]

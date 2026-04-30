@@ -1274,7 +1274,8 @@ impl TuiApp {
                 approval: Some(PendingApprovalSnapshot {
                     tool_use_id: pending.tool_use_id.clone(),
                     command: pending.request.summary(),
-                    allow_net: pending.request.allow_net,
+                    allow_net: self.config.sandbox_workspace_write.network_access
+                        || pending.request.allow_net,
                     payload: pending.request.clone(),
                 }),
                 source: None,
