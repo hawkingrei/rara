@@ -12,7 +12,7 @@ pub(crate) async fn handle_submit(
     oauth_manager: &Arc<crate::oauth::OAuthManager>,
 ) -> anyhow::Result<bool> {
     if matches!(app.overlay, Some(Overlay::CommandPalette)) {
-        let query = app.input.trim_start().trim_start_matches('/');
+        let query = app.command_query();
         if let Some(spec) = palette_command_by_index(app, query, app.command_palette_idx) {
             app.set_input(spec.usage.to_string());
         }
@@ -234,7 +234,7 @@ async fn handle_pending_plan_approval_submit(
 
 pub(crate) fn clamp_command_palette_selection(app: &mut TuiApp) {
     let len =
-        super::command::palette_commands(app, app.input.trim_start().trim_start_matches('/')).len();
+        super::command::palette_commands(app, app.command_query()).len();
     if len == 0 {
         app.command_palette_idx = 0;
     } else if app.command_palette_idx >= len {

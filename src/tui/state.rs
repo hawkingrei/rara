@@ -156,6 +156,12 @@ impl TuiApp {
         }
     }
 
+    /// Returns the slash-command query string with the leading `/` stripped.
+    /// For example, if the input is `/help`, this returns `"help"`.
+    pub fn command_query(&self) -> &str {
+        self.input.trim_start().trim_start_matches('/')
+    }
+
     pub fn composer_cursor_offset(&self) -> usize {
         effective_cursor_offset(self.input.as_str(), self.input_cursor_offset)
     }

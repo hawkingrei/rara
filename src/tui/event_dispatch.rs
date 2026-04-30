@@ -73,7 +73,7 @@ pub(crate) async fn dispatch_event(
         }
         AppEvent::ScrollTranscript(delta) => app.scroll_transcript(delta),
         AppEvent::MoveCommandSelection(delta) => {
-            let len = palette_commands(app, app.input.trim_start().trim_start_matches('/')).len();
+            let len = palette_commands(app, app.command_query()).len();
             if len > 0 {
                 let next = (app.command_palette_idx as i32 + delta).clamp(0, len as i32 - 1);
                 app.command_palette_idx = next as usize;
@@ -351,7 +351,7 @@ pub(crate) async fn dispatch_event(
         }
         AppEvent::ApplyOverlaySelection => match app.overlay {
             Some(Overlay::CommandPalette) => {
-                let query = app.input.trim_start().trim_start_matches('/');
+                let query = app.command_query();
                 if let Some(spec) = palette_command_by_index(app, query, app.command_palette_idx) {
                     app.set_input(spec.usage.to_string());
                     app.close_overlay();
