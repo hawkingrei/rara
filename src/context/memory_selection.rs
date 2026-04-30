@@ -1,5 +1,7 @@
 use crate::agent::{Message, PlanStepStatus};
-use crate::context::{CompactionSourceContextEntry, MemorySelectionContextView, MemorySelectionItemContextEntry};
+use crate::context::{
+    CompactionSourceContextEntry, MemorySelectionContextView, MemorySelectionItemContextEntry,
+};
 use crate::prompt::PromptSource;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -216,7 +218,9 @@ fn workspace_memory_selected_item(source: &PromptSource) -> MemorySelectionItemC
     }
 }
 
-fn compacted_history_selected_items(entries: &[CompactionSourceContextEntry]) -> Vec<MemorySelectionItemContextEntry> {
+fn compacted_history_selected_items(
+    entries: &[CompactionSourceContextEntry],
+) -> Vec<MemorySelectionItemContextEntry> {
     entries
         .iter()
         .filter(|entry| entry.kind != "compact_boundary")
@@ -588,7 +592,10 @@ mod tests {
         )
         .expect("payload should parse from raw json");
 
-        assert_eq!(payload.get("status").and_then(serde_json::Value::as_str), Some("ok"));
+        assert_eq!(
+            payload.get("status").and_then(serde_json::Value::as_str),
+            Some("ok")
+        );
         assert_eq!(
             payload.get("summary").and_then(serde_json::Value::as_str),
             Some("plain json payload without wrapper")
