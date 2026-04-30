@@ -944,6 +944,56 @@ async fn exit_plan_mode_persists_plan_and_waits_for_approval() {
 }
 
 #[tokio::test]
+async fn exit_plan_mode_without_plan_stops_without_retrying_model() {
+    let backend = Arc::new(SequencedBackend::new(vec![LlmResponse {
+        content: vec![ContentBlock::ToolUse {
+            id: "exit-plan".to_string(),
+            name: "exit_plan_mode".to_string(),
+            input: json!({}),
+        }],
+        stop_reason: Some("tool_use".to_string()),
+        usage: Some(TokenUsage::default()),
+    }]));
+
+    let mut tool_manager = ToolManager::new();
+    tool_manager.register(Box::new(ExitPlanModeTool));
+    let (_temp, session_manager, workspace, rara_dir) = test_runtime_storage();
+    let mut agent = Agent::new(
+        tool_manager,
+        backend.clone(),
+        Arc::new(VectorDB::new(&rara_dir.join("lancedb").to_string_lossy())),
+        session_manager,
+        workspace,
+    );
+    agent.set_execution_mode(AgentExecutionMode::Plan);
+
+    agent
+        .query_with_mode(
+            "exit without a concrete plan".to_string(),
+            super::super::AgentOutputMode::Silent,
+        )
+        .await
+        .expect("invalid plan exit should stop the turn without retrying");
+
+    assert_eq!(backend.observed_messages().len(), 1);
+    assert_eq!(agent.execution_mode, AgentExecutionMode::Plan);
+    assert!(!agent.has_pending_plan_exit_approval());
+    assert!(
+        !agent
+            .history
+            .iter()
+            .any(|message| message.role == "assistant")
+    );
+    assert!(
+        !agent
+            .history
+            .iter()
+            .map(|message| message.content.to_string())
+            .any(|content| content.contains("exit_plan_mode requires a proposed plan"))
+    );
+}
+
+#[tokio::test]
 async fn continues_tool_loop_without_fixed_turn_cap() {
     let tool_turns = 205;
     let mut responses = (0..tool_turns)
