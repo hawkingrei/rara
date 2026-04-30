@@ -215,6 +215,42 @@ async fn recoverable_runtime_error_is_returned_to_model_once() {
 }
 
 #[tokio::test]
+async fn reasoning_only_turn_is_not_persisted_as_empty_assistant_message() {
+    let backend = Arc::new(SequencedBackend::new(vec![LlmResponse {
+        content: vec![ContentBlock::ProviderMetadata {
+            provider: "deepseek".to_string(),
+            key: "reasoning_content".to_string(),
+            value: json!("internal planning only"),
+        }],
+        stop_reason: Some("end_turn".to_string()),
+        usage: Some(TokenUsage::default()),
+    }]));
+    let (_temp, session_manager, workspace, rara_dir) = test_runtime_storage();
+    let mut agent = Agent::new(
+        ToolManager::new(),
+        backend,
+        Arc::new(VectorDB::new(&rara_dir.join("lancedb").to_string_lossy())),
+        session_manager,
+        workspace,
+    );
+
+    agent
+        .query_with_mode(
+            "list your todo".to_string(),
+            super::super::AgentOutputMode::Silent,
+        )
+        .await
+        .expect("reasoning-only response should complete without empty history");
+
+    assert!(
+        !agent
+            .history
+            .iter()
+            .any(|message| message.role == "assistant")
+    );
+}
+
+#[tokio::test]
 async fn suggestion_mode_auto_allows_read_only_bash_commands() {
     let backend = Arc::new(SequencedBackend::new(vec![
         LlmResponse {
