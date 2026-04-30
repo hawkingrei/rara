@@ -150,6 +150,7 @@ pub(super) fn restore_thread_by_id(
                             .and_then(|payload| payload.get("run_in_background"))
                             .and_then(|value| value.as_bool())
                             .unwrap_or(false),
+                        ..Default::default()
                     });
                 agent.pending_approval = Some(PendingApproval {
                     tool_use_id: payload
@@ -521,6 +522,7 @@ mod tests {
                 env: Default::default(),
                 allow_net: false,
                 run_in_background: false,
+                ..Default::default()
             },
         });
         original_agent.history.push(Message {

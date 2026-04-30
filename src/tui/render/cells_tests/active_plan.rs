@@ -180,6 +180,7 @@ fn active_turn_cell_renders_shell_approval_as_interaction_card() {
                     env: Default::default(),
                     allow_net: false,
                     run_in_background: false,
+                    ..Default::default()
                 },
             }),
             source: None,
