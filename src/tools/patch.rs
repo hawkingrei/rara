@@ -1,5 +1,5 @@
 use crate::tool::{Tool, ToolError};
-use crate::tools::file::SharedFileReadState;
+use crate::tools::file::{FileReadState, SharedFileReadState};
 use async_trait::async_trait;
 use serde_json::{Value, json};
 use std::fs;
@@ -116,9 +116,10 @@ impl Tool for ApplyPatchTool {
                     stats.added_lines += lines.len();
                     previews.push(format!("Add file {path}"));
                     if !dry_run {
-                        write_text_file(&path, &join_lines(&lines))?;
+                        let content = join_lines(&lines);
+                        write_text_file(&path, &content)?;
                         if let Some(read_state) = &self.read_state {
-                            read_state.record_write(&path, &fs::read_to_string(&path)?)?;
+                            record_patch_write_best_effort(read_state, &path, &content);
                         }
                     }
                 }
@@ -178,7 +179,7 @@ impl Tool for ApplyPatchTool {
                         }
                         write_text_file(write_path, &updated)?;
                         if let Some(read_state) = &self.read_state {
-                            read_state.record_write(write_path, &updated)?;
+                            record_patch_write_best_effort(read_state, write_path, &updated);
                         }
                     }
                 }
@@ -219,6 +220,12 @@ fn validate_patch_read_state(
         }
     }
     Ok(())
+}
+
+fn record_patch_write_best_effort(read_state: &FileReadState, path: &str, content: &str) {
+    if let Err(err) = read_state.record_write(path, content) {
+        eprintln!("Failed to record file read state after patch write: {err}");
+    }
 }
 
 fn patch_preview(patch: &str) -> (String, bool) {

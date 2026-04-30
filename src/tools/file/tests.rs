@@ -324,6 +324,32 @@ async fn replace_rejects_file_changed_since_read() {
     assert!(error.to_string().contains("since read"));
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn forget_removes_canonical_read_state_for_symlink_paths() {
+    let tempdir = tempfile::tempdir().expect("tempdir");
+    let path = tempdir.path().join("sample.txt");
+    let link = tempdir.path().join("linked.txt");
+    std::fs::write(&path, "one\ntwo\n").expect("write sample");
+    std::os::unix::fs::symlink(&path, &link).expect("create symlink");
+
+    let read_state = Arc::new(FileReadState::default());
+    let read_tool = ReadFileTool::new(read_state.clone());
+
+    read_tool
+        .call(json!({ "path": link.display().to_string() }))
+        .await
+        .expect("read file through symlink");
+    read_state
+        .forget(&link.display().to_string())
+        .expect("forget symlink path");
+
+    let error = read_state
+        .validate_existing_edit(&path.display().to_string())
+        .expect_err("forget should remove the canonical entry");
+    assert!(error.to_string().contains("File has not been read yet"));
+}
+
 #[tokio::test]
 async fn replace_lines_replaces_inclusive_range_without_old_string() {
     let tempdir = tempfile::tempdir().expect("tempdir");

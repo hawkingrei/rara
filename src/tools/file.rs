@@ -103,7 +103,7 @@ impl FileReadState {
     }
 
     pub(crate) fn forget(&self, path: &str) -> Result<(), ToolError> {
-        let key = absolute_path(path)?;
+        let key = canonical_existing_path(path)?;
         self.files
             .lock()
             .expect("file read state lock")
@@ -118,12 +118,9 @@ fn canonical_existing_path(path: &str) -> Result<PathBuf, ToolError> {
     Ok(fs::canonicalize(path)?)
 }
 
-fn absolute_path(path: &str) -> Result<PathBuf, ToolError> {
-    let path = Path::new(path);
-    if path.is_absolute() {
-        Ok(path.to_path_buf())
-    } else {
-        Ok(std::env::current_dir()?.join(path))
+fn record_write_best_effort(read_state: &FileReadState, path: &str, content: &str) {
+    if let Err(err) = read_state.record_write(path, content) {
+        eprintln!("Failed to record file read state after write: {err}");
     }
 }
 
@@ -474,7 +471,7 @@ impl Tool for WriteFileTool {
         };
         fs::write(p, c)?;
         if let Some(read_state) = &self.read_state {
-            read_state.record_write(p, c)?;
+            record_write_best_effort(read_state, p, c);
         }
         Ok(json!({
             "status": "ok",
@@ -545,7 +542,7 @@ impl Tool for ReplaceTool {
         let updated = c.replace(o, n);
         fs::write(p, &updated)?;
         if let Some(read_state) = &self.read_state {
-            read_state.record_write(p, &updated)?;
+            record_write_best_effort(read_state, p, &updated);
         }
         Ok(json!({
             "status": "ok",
@@ -662,9 +659,9 @@ impl Tool for ReplaceLinesTool {
         if had_trailing_newline && !updated.is_empty() {
             updated.push('\n');
         }
-        fs::write(path, updated)?;
+        fs::write(path, &updated)?;
         if let Some(read_state) = &self.read_state {
-            read_state.record_write(path, &std::fs::read_to_string(path)?)?;
+            record_write_best_effort(read_state, path, &updated);
         }
 
         Ok(json!({
