@@ -112,6 +112,13 @@ fn explicit_progress_entry_groups<'a>(
         if messages.is_empty() {
             continue;
         }
+        if role == "Exploring"
+            && let Some((last_role, last_messages)) = groups.last_mut()
+            && *last_role == "Exploring"
+        {
+            last_messages.extend(messages);
+            continue;
+        }
         groups.push((role, messages));
     }
     groups
@@ -197,6 +204,63 @@ fn push_live_event<'a>(
             // Active live events currently produce only known progress roles.
         }
     }
+}
+
+fn push_live_events<'a>(
+    cells: &mut Vec<Box<dyn HistoryCell + 'a>>,
+    events: &[crate::tui::state::ActiveLiveEvent],
+    active: bool,
+) {
+    let mut exploration_actions = Vec::new();
+    let mut exploration_notes = Vec::new();
+
+    for event in events {
+        if event.role() == "Exploring" {
+            if event.is_note() {
+                exploration_notes.push(event.message().to_string());
+            } else {
+                exploration_actions.push(event.message().to_string());
+            }
+            continue;
+        }
+
+        push_live_exploration_group(
+            cells,
+            &mut exploration_actions,
+            &mut exploration_notes,
+            active,
+        );
+        push_live_event(cells, event, active);
+    }
+
+    push_live_exploration_group(
+        cells,
+        &mut exploration_actions,
+        &mut exploration_notes,
+        active,
+    );
+}
+
+fn push_live_exploration_group<'a>(
+    cells: &mut Vec<Box<dyn HistoryCell + 'a>>,
+    actions: &mut Vec<String>,
+    notes: &mut Vec<String>,
+    active: bool,
+) {
+    if actions.is_empty() && notes.is_empty() {
+        return;
+    }
+    cells.push(Box::new(ExploringCell::new(
+        compact_progress_summary_lines(
+            actions.as_slice(),
+            notes.as_slice(),
+            4,
+            "more exploration step(s)",
+        ),
+        active,
+    )));
+    actions.clear();
+    notes.clear();
 }
 
 fn split_progress_sentences(message: &str) -> Vec<String> {
@@ -655,6 +719,17 @@ fn ordered_exploration_agent_segments<'a>(
                 }
                 segments.push(OrderedActiveSegment::Agent(entry.message.as_str()));
             }
+            role if progress_entry_role(role)
+                || matches!(
+                    role,
+                    "Tool Result" | "Tool Error" | "Tool Progress" | "System"
+                ) =>
+            {
+                if !exploration_items.is_empty() {
+                    saw_interleaving = true;
+                    flush_exploration(&mut segments, &mut exploration_items);
+                }
+            }
             _ => {}
         }
     }
@@ -981,8 +1056,8 @@ impl ActiveCell for ActiveTurnCell<'_> {
                     "Running" => has_event_running_summary = true,
                     _ => {}
                 }
-                push_live_event(&mut cells, event, true);
             }
+            push_live_events(&mut cells, live_events, true);
         }
 
         let explicit_progress_groups = (!has_live_events && !has_active_pending_interaction)
