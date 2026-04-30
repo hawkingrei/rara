@@ -263,12 +263,12 @@ fn push_live_thinking_group<'a>(
     messages: &mut Vec<String>,
     stream_lines: Option<&'a [Line<'static>]>,
 ) {
-    if messages.is_empty() && stream_lines.is_none_or(|lines| lines.is_empty()) {
+    if messages.is_empty() && stream_lines.map_or(true, |lines| lines.is_empty()) {
         return;
     }
     if stream_lines.is_some() {
         cells.push(Box::new(ThinkingGroupCell::new(
-            std::mem::take(messages),
+            std::mem::take(messages).join("\n"),
             stream_lines,
             4,
         )));

@@ -241,19 +241,19 @@ impl HistoryCell for ThinkingTextCell {
 }
 
 pub(super) struct ThinkingGroupCell<'a> {
-    messages: Vec<String>,
+    message: String,
     stream_lines: Option<&'a [Line<'static>]>,
     max_lines: usize,
 }
 
 impl<'a> ThinkingGroupCell<'a> {
     pub(super) fn new(
-        messages: Vec<String>,
+        message: String,
         stream_lines: Option<&'a [Line<'static>]>,
         max_lines: usize,
     ) -> Self {
         Self {
-            messages,
+            message,
             stream_lines,
             max_lines,
         }
@@ -264,9 +264,8 @@ impl HistoryCell for ThinkingGroupCell<'_> {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
         let render_width = usize::from(width.saturating_sub(2));
         let mut rendered_lines = Vec::new();
-        if !self.messages.is_empty() {
-            let rendered =
-                render_markdown_text_with_width(&self.messages.join("\n"), Some(render_width));
+        if !self.message.is_empty() {
+            let rendered = render_markdown_text_with_width(&self.message, Some(render_width));
             rendered_lines.extend(rendered.lines);
         }
         if let Some(stream_lines) = self.stream_lines {
