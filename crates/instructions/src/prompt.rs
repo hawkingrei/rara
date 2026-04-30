@@ -362,6 +362,7 @@ fn default_system_prompt_sections() -> Vec<PromptSection> {
                     "For update hunks, include enough exact context from the current file for the old lines to match uniquely; if a hunk does not match, re-read the file and make the smallest corrected patch rather than guessing.",
                     "Use 'replace' only for one exact, unique snippet that you have verified from the current file contents.",
                     "For 'replace', copy 'old_string' exactly from the current file, including whitespace and indentation.",
+                    "A 'partially read' or stale edit-tool error means you must re-read the file and retry a direct edit; it is not permission to bypass edit tools with sed, perl, shell redirection, or scripts.",
                     "Use 'replace_lines' only for large deletions or replacements when you have verified exact line numbers from the current file contents; do not pass hundreds of lines through 'replace.old_string'.",
                     "Use 'write_file' only for new files or intentional full-file rewrites after reading the current file when it already exists.",
                     "Do not use shell redirection, sed, perl, or ad-hoc scripts to edit files when direct edit tools or 'apply_patch' can do the job.",
@@ -823,6 +824,7 @@ mod tests {
         assert!(prompt.contains("include enough exact context"));
         assert!(prompt.contains("Use 'replace' only for one exact, unique snippet"));
         assert!(prompt.contains("copy 'old_string' exactly from the current file"));
+        assert!(prompt.contains("not permission to bypass edit tools"));
         assert!(prompt.contains("Use 'write_file' only for new files"));
         assert!(prompt.contains("Do not use shell redirection"));
         assert!(prompt.contains("first inspect local usage"));
