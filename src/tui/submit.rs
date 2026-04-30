@@ -233,8 +233,7 @@ async fn handle_pending_plan_approval_submit(
 }
 
 pub(crate) fn clamp_command_palette_selection(app: &mut TuiApp) {
-    let len =
-        super::command::palette_commands(app, app.command_query()).len();
+    let len = super::command::palette_commands(app, app.command_query()).len();
     if len == 0 {
         app.command_palette_idx = 0;
     } else if app.command_palette_idx >= len {
