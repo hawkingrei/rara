@@ -476,8 +476,13 @@ pub(super) async fn finish_running_task_if_ready(
                         app.set_agent_execution_mode(crate::agent::AgentExecutionMode::Plan);
                         let plan_ready =
                             agent.last_query_produced_plan() && !agent.current_plan.is_empty();
-                        app.set_pending_plan_approval(query_started_in_plan_mode && plan_ready);
-                        if plan_ready && !query_started_in_plan_mode {
+                        let pending_exit_plan_approval = agent.has_pending_plan_exit_approval();
+                        app.set_pending_plan_approval(
+                            plan_ready
+                                && (query_started_in_plan_mode || pending_exit_plan_approval),
+                        );
+                        if plan_ready && !query_started_in_plan_mode && !pending_exit_plan_approval
+                        {
                             app.release_pending_follow_ups();
                             app.finalize_agent_stream(None);
                             start_automatic_plan_implementation_task(app, agent);

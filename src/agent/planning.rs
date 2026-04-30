@@ -1,5 +1,6 @@
 use super::*;
 use crate::tools::bash::BashCommandInput;
+use crate::tools::planning::{ENTER_PLAN_MODE_TOOL_NAME, EXIT_PLAN_MODE_TOOL_NAME};
 use anyhow::anyhow;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -134,6 +135,10 @@ impl InspectionProgress {
 impl Agent {
     pub fn last_query_produced_plan(&self) -> bool {
         self.last_query_plan_updated
+    }
+
+    pub fn has_pending_plan_exit_approval(&self) -> bool {
+        self.pending_plan_exit_tool_id.is_some()
     }
 
     pub fn set_execution_mode(&mut self, mode: AgentExecutionMode) {
@@ -360,10 +365,10 @@ impl Agent {
 
     pub(super) fn is_tool_allowed_in_current_mode(&self, name: &str) -> bool {
         match self.execution_mode {
-            AgentExecutionMode::Execute => true,
+            AgentExecutionMode::Execute => name != EXIT_PLAN_MODE_TOOL_NAME,
             AgentExecutionMode::Plan => !matches!(
                 name,
-                "enter_plan_mode"
+                ENTER_PLAN_MODE_TOOL_NAME
                     | "write_file"
                     | "replace"
                     | "replace_lines"
@@ -387,12 +392,20 @@ impl Agent {
     {
         self.pending_user_input = None;
         self.pending_approval = None;
+        let pending_plan_exit_tool_id = self.pending_plan_exit_tool_id.take();
 
         if continue_planning {
             self.execution_mode = AgentExecutionMode::Plan;
             report(AgentEvent::Status(
                 "Continuing plan refinement from the current plan state.".to_string(),
             ));
+            if let Some(tool_id) = pending_plan_exit_tool_id {
+                self.push_history_message(tool_result_message(
+                    &tool_id,
+                    "User chose to continue planning. Revise the plan and call exit_plan_mode again when it is ready for approval.".to_string(),
+                    false,
+                ));
+            }
             self.push_history_message(self.runtime_continuation_message(
                 RuntimeContinuationPhase::PlanContinuationRequired,
                 0,
@@ -403,6 +416,15 @@ impl Agent {
             report(AgentEvent::Status(
                 "Plan approved. Continuing with implementation.".to_string(),
             ));
+            if let Some(tool_id) = pending_plan_exit_tool_id {
+                let plan_file_path = self.session_manager.plan_file_path(&self.session_id);
+                let plan_reference = format!(
+                    "User has approved your plan. You can now start coding.\n\nYour plan has been saved to: {}\nYou can refer back to it if needed during implementation.\n\n## Approved Plan:\n{}",
+                    plan_file_path.display(),
+                    self.current_plan_markdown()
+                );
+                self.push_history_message(tool_result_message(&tool_id, plan_reference, false));
+            }
             self.push_history_message(
                 self.runtime_continuation_message(RuntimeContinuationPhase::PlanApproved, 0),
             );
@@ -412,17 +434,42 @@ impl Agent {
         self.run_agent_loop(output_mode, &mut report).await
     }
 
-    pub(super) fn capture_plan_from_text(&mut self, text: &str) -> bool {
+    pub(super) fn capture_plan_from_text(&mut self, text: &str) -> Result<bool> {
         let Some((steps, explanation)) = parse_plan_block(text) else {
             self.pending_user_input = parse_request_user_input_block(text);
-            return false;
+            return Ok(false);
         };
         if !steps.is_empty() {
             self.current_plan = steps;
         }
         self.plan_explanation = explanation;
         self.pending_user_input = parse_request_user_input_block(text);
-        true
+        Ok(true)
+    }
+
+    pub(super) fn current_plan_markdown(&self) -> String {
+        let mut lines = Vec::new();
+        if let Some(explanation) = self.plan_explanation.as_ref() {
+            let trimmed = explanation.trim();
+            if !trimmed.is_empty() {
+                lines.push(trimmed.to_string());
+                lines.push(String::new());
+            }
+        }
+        for step in &self.current_plan {
+            let status = match step.status {
+                PlanStepStatus::Pending => "pending",
+                PlanStepStatus::InProgress => "in_progress",
+                PlanStepStatus::Completed => "completed",
+            };
+            lines.push(format!("- [{status}] {}", step.step));
+        }
+        lines.join("\n")
+    }
+
+    pub(super) fn save_current_plan_file(&self) -> Result<()> {
+        self.session_manager
+            .save_plan_file(&self.session_id, &self.current_plan_markdown())
     }
 
     pub(super) fn should_continue_plan_without_tools(
