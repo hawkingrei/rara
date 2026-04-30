@@ -5,6 +5,8 @@
 RARA now includes a user-level `~/.rara/AGENTS.md` prompt source when the
 workspace runtime data directory is under the normal `~/.rara/workspaces/...`
 layout.
+The source uses a dedicated `user_instruction` kind so status and context
+surfaces do not describe it as repository-walk discovery.
 
 The stable instruction source order is:
 

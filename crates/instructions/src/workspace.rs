@@ -83,7 +83,12 @@ impl WorkspaceMemory {
     pub fn discover_instructions(&self) -> Vec<String> {
         self.discover_prompt_sources()
             .into_iter()
-            .filter(|source| matches!(source.kind, PromptSourceKind::ProjectInstruction))
+            .filter(|source| {
+                matches!(
+                    source.kind,
+                    PromptSourceKind::UserInstruction | PromptSourceKind::ProjectInstruction
+                )
+            })
             .map(|source| format!("### {}:\n{}", source.label, source.content))
             .collect()
     }
@@ -136,7 +141,7 @@ impl WorkspaceMemory {
         };
 
         vec![PromptSource {
-            kind: PromptSourceKind::ProjectInstruction,
+            kind: PromptSourceKind::UserInstruction,
             label: format!("User Instruction ({USER_INSTRUCTION_FILE})"),
             display_path: format!("~/.rara/{USER_INSTRUCTION_FILE}"),
             content,
@@ -350,17 +355,34 @@ mod tests {
         let workspace = WorkspaceMemory::from_paths(root.clone(), rara_dir);
         let sources = workspace.discover_prompt_sources_from_dir(&nested);
 
-        let project_sources = sources
+        let instruction_sources = sources
             .into_iter()
-            .filter(|source| matches!(source.kind, PromptSourceKind::ProjectInstruction))
-            .map(|source| (source.display_path, source.content))
+            .filter(|source| {
+                matches!(
+                    source.kind,
+                    PromptSourceKind::UserInstruction | PromptSourceKind::ProjectInstruction
+                )
+            })
+            .map(|source| (source.kind, source.display_path, source.content))
             .collect::<Vec<_>>();
         assert_eq!(
-            project_sources,
+            instruction_sources,
             vec![
-                ("~/.rara/AGENTS.md".to_string(), "user rules".to_string()),
-                ("AGENTS.md".to_string(), "root rules".to_string()),
-                ("src/AGENTS.md".to_string(), "src rules".to_string()),
+                (
+                    PromptSourceKind::UserInstruction,
+                    "~/.rara/AGENTS.md".to_string(),
+                    "user rules".to_string()
+                ),
+                (
+                    PromptSourceKind::ProjectInstruction,
+                    "AGENTS.md".to_string(),
+                    "root rules".to_string()
+                ),
+                (
+                    PromptSourceKind::ProjectInstruction,
+                    "src/AGENTS.md".to_string(),
+                    "src rules".to_string()
+                ),
             ]
         );
     }

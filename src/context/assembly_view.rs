@@ -43,6 +43,7 @@ pub(crate) fn assemble_context_view(
     for source in &effective_prompt.sources {
         let kind = source.kind_label().to_string();
         let layer = match kind.as_str() {
+            "user_instruction" => "stable_instructions",
             "project_instruction" => "stable_instructions",
             "local_memory" => "workspace_prompt_sources",
             _ => "workspace_prompt_sources",
