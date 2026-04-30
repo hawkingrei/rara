@@ -224,22 +224,13 @@ pub(super) fn start_plan_approval_resume_task(
     continue_planning: bool,
     agent: Agent,
 ) {
-    let (decision_summary, notice) = if continue_planning {
-        ("Continued planning", "Continuing plan refinement.")
+    let notice = if continue_planning {
+        "Continuing plan refinement."
     } else {
-        (
-            "Approved and started implementation",
-            "Plan approved. Continuing with implementation.",
-        )
+        "Plan approved. Continuing with implementation."
     };
 
-    start_plan_resume_task(
-        app,
-        continue_planning,
-        agent,
-        decision_summary,
-        notice.to_string(),
-    );
+    start_plan_resume_task(app, continue_planning, agent, notice.to_string());
 }
 
 fn start_automatic_plan_implementation_task(app: &mut TuiApp, agent: Agent) {
@@ -247,7 +238,6 @@ fn start_automatic_plan_implementation_task(app: &mut TuiApp, agent: Agent) {
         app,
         false,
         agent,
-        "Auto-approved agent-generated plan",
         "Plan generated automatically. Continuing with implementation.".into(),
     );
 }
@@ -256,19 +246,12 @@ fn start_plan_resume_task(
     app: &mut TuiApp,
     continue_planning: bool,
     mut agent: Agent,
-    decision_summary: &'static str,
     notice: String,
 ) {
     let (sender, receiver) = mpsc::unbounded_channel();
     let cancellation_token = Arc::new(AtomicBool::new(false));
     app.clear_active_live_sections();
     app.set_pending_plan_approval(false);
-    app.record_completed_interaction(
-        crate::tui::state::InteractionKind::PlanApproval,
-        "Plan Decision",
-        decision_summary,
-        None,
-    );
     app.notice = Some(notice);
     app.set_runtime_phase(
         RuntimePhase::ProcessingResponse,
@@ -535,6 +518,7 @@ pub(super) async fn finish_running_task_if_ready(
                         app.finalize_active_turn();
                         app.notice = Some("Query cancelled.".into());
                         app.set_runtime_phase(RuntimePhase::Idle, Some("query cancelled".into()));
+                        try_start_queued_follow_up(app, agent_slot);
                         return Ok(());
                     }
                     app.set_runtime_phase(RuntimePhase::Failed, Some("query failed".into()));
@@ -552,6 +536,7 @@ pub(super) async fn finish_running_task_if_ready(
                     }
                     app.push_entry("System", message.clone());
                     app.push_notice(message);
+                    try_start_queued_follow_up(app, agent_slot);
                 }
             }
         }

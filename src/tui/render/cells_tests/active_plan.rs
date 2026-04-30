@@ -211,7 +211,7 @@ fn active_turn_cell_renders_shell_approval_as_interaction_card() {
 }
 
 #[test]
-fn active_turn_cell_renders_completed_plan_decision() {
+fn active_turn_cell_does_not_render_completed_plan_decision() {
     let temp = tempdir().unwrap();
     let mut app = TuiApp::new(ConfigManager {
         path: temp.path().join("config.json"),
@@ -238,8 +238,8 @@ fn active_turn_cell_renders_completed_plan_decision() {
         .collect::<Vec<_>>()
         .join("\n");
 
-    assert!(rendered.contains(" Plan Decision "));
-    assert!(rendered.contains("Approved and started implementation"));
+    assert!(!rendered.contains(" Plan Decision "));
+    assert!(!rendered.contains("Approved and started implementation"));
 }
 
 #[test]

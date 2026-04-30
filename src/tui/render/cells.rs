@@ -819,7 +819,6 @@ fn ordered_exploration_agent_segments<'a>(
 #[derive(Clone, Copy)]
 pub(super) enum InteractionCompletionKind {
     ShellApprovalCompleted,
-    PlanDecision,
     QuestionAnswered,
     PlanningQuestionAnswered,
     ExplorationQuestionAnswered,
@@ -830,7 +829,6 @@ impl InteractionCompletionKind {
     fn from_role(role: &str) -> Option<Self> {
         match role {
             "Shell Approval Completed" => Some(Self::ShellApprovalCompleted),
-            "Plan Decision" => Some(Self::PlanDecision),
             "Question Answered" => Some(Self::QuestionAnswered),
             "Planning Question Answered" => Some(Self::PlanningQuestionAnswered),
             "Exploration Question Answered" => Some(Self::ExplorationQuestionAnswered),
@@ -842,7 +840,6 @@ impl InteractionCompletionKind {
     fn title(self) -> &'static str {
         match self {
             Self::ShellApprovalCompleted => "Shell Approval Completed",
-            Self::PlanDecision => "Plan Decision",
             Self::QuestionAnswered => "Question Answered",
             Self::PlanningQuestionAnswered => "Planning Question Answered",
             Self::ExplorationQuestionAnswered => "Exploration Question Answered",
@@ -852,7 +849,6 @@ impl InteractionCompletionKind {
 
     fn color(self) -> Color {
         match self {
-            Self::PlanDecision => Color::Cyan,
             Self::ShellApprovalCompleted
             | Self::QuestionAnswered
             | Self::PlanningQuestionAnswered
@@ -930,9 +926,6 @@ impl HistoryCell for CommittedTurnCell<'_> {
             let kind = match entry.kind {
                 super::history_pipeline::CommittedCompletionKind::ShellApprovalCompleted => {
                     InteractionCompletionKind::ShellApprovalCompleted
-                }
-                super::history_pipeline::CommittedCompletionKind::PlanDecision => {
-                    InteractionCompletionKind::PlanDecision
                 }
                 super::history_pipeline::CommittedCompletionKind::PlanningQuestionAnswered => {
                     InteractionCompletionKind::PlanningQuestionAnswered
