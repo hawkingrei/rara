@@ -352,14 +352,14 @@ fn active_turn_cell_appends_long_live_exploration_events() {
 
     assert!(rendered.contains(" Exploring "));
     assert!(rendered.contains("Cross-check the auth entrypoint."));
-    assert!(!rendered.contains("more exploration step(s)"));
-    assert!(rendered.contains("module_1.rs"));
+    assert!(rendered.contains("1 more exploration step(s)"));
+    assert!(!rendered.contains("module_1.rs"));
     assert!(rendered.contains("module_2.rs"));
     assert!(rendered.contains("module_3.rs"));
+    assert!(rendered.contains("module_4.rs"));
     assert!(rendered.contains("module_5.rs"));
-    assert_eq!(rendered.matches(" Exploring ").count(), 6);
-    assert!(rendered.find("module_1.rs") < rendered.find("module_5.rs"));
-    assert!(rendered.find("module_5.rs") < rendered.find("Cross-check the auth entrypoint."));
+    assert_eq!(rendered.matches(" Exploring ").count(), 1);
+    assert!(rendered.find("module_2.rs") < rendered.find("module_5.rs"));
 }
 
 #[test]
@@ -1006,6 +1006,54 @@ fn active_turn_cell_preserves_repeated_progress_events_when_interleaved() {
 }
 
 #[test]
+fn active_turn_cell_groups_consecutive_exploration_events_only() {
+    let temp = tempdir().unwrap();
+    let mut app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("build tui app");
+    app.runtime_phase = RuntimePhase::RunningTool;
+    app.active_turn = TranscriptTurn {
+        entries: vec![TranscriptEntry {
+            role: "You".into(),
+            message: "Inspect and run checks".into(),
+            payload: None,
+        }],
+    };
+
+    app.record_exploration_action("Read src/tui/render/cells.rs");
+    app.record_exploration_action("Read src/tui/render/cells_tests/active_general.rs");
+    app.record_running_action("Run cargo check");
+    app.record_exploration_action("Read src/tui/render/cells_components.rs");
+
+    let rendered = ActiveTurnCell::new(&app, Some(Path::new(".")))
+        .display_lines(100)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert_eq!(rendered.matches(" Exploring ").count(), 2);
+
+    let first_exploring_idx = rendered.find(" Exploring ").unwrap();
+    let first_read_idx = rendered.find("Read src/tui/render/cells.rs").unwrap();
+    let second_read_idx = rendered
+        .find("Read src/tui/render/cells_tests/active_general.rs")
+        .unwrap();
+    let running_idx = rendered.find(" Running ").unwrap();
+    let second_exploring_idx = rendered.rfind(" Exploring ").unwrap();
+    let third_read_idx = rendered
+        .find("Read src/tui/render/cells_components.rs")
+        .unwrap();
+
+    assert!(first_exploring_idx < first_read_idx);
+    assert!(first_read_idx < second_read_idx);
+    assert!(second_read_idx < running_idx);
+    assert!(running_idx < second_exploring_idx);
+    assert!(second_exploring_idx < third_read_idx);
+}
+
+#[test]
 fn active_turn_cell_preserves_consecutive_duplicate_progress_events() {
     let temp = tempdir().unwrap();
     let mut app = TuiApp::new(ConfigManager {
@@ -1035,7 +1083,7 @@ fn active_turn_cell_preserves_consecutive_duplicate_progress_events() {
 
     assert_eq!(rendered.matches("Read src/tui/render/cells.rs").count(), 2);
     assert_eq!(rendered.matches("Run cargo check").count(), 2);
-    assert_eq!(rendered.matches(" Exploring ").count(), 2);
+    assert_eq!(rendered.matches(" Exploring ").count(), 1);
     assert_eq!(rendered.matches(" Running ").count(), 2);
 }
 
