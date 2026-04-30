@@ -569,6 +569,37 @@ async fn paste_inserts_at_current_cursor_offset() {
 }
 
 #[tokio::test]
+async fn paste_normalizes_crlf_and_cr_newlines() {
+    let temp = tempdir().expect("tempdir");
+    let mut app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("app");
+
+    super::terminal_ui::handle_paste("first\r\nsecond\rthird".to_string(), &mut app);
+
+    assert_eq!(app.input, "first\nsecond\nthird");
+    assert_eq!(
+        app.composer_cursor_offset(),
+        "first\nsecond\nthird".chars().count()
+    );
+}
+
+#[test]
+fn crossterm_paste_event_uses_paste_channel() {
+    let temp = tempdir().expect("tempdir");
+    let app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("app");
+
+    match translate_event(Event::Paste("first\nsecond".to_string()), &app) {
+        Some(UiEvent::Paste(text)) => assert_eq!(text, "first\nsecond"),
+        other => panic!("expected paste event, got {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn composer_supports_vertical_cursor_navigation_across_lines() {
     let temp = tempdir().expect("tempdir");
     let mut app = TuiApp::new(ConfigManager {

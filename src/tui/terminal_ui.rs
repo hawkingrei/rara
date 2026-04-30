@@ -3,7 +3,7 @@ use std::io;
 use anyhow::Result;
 use crossterm::{
     cursor::Show,
-    event::{DisableMouseCapture, EnableMouseCapture},
+    event::{DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture},
     execute,
     terminal::disable_raw_mode,
 };
@@ -15,14 +15,19 @@ use super::render::committed_turn_lines;
 use super::state::TuiApp;
 
 pub(super) fn handle_paste(text: String, app: &mut TuiApp) {
-    app.insert_active_input_text(text.as_str());
+    let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
+    app.insert_active_input_text(normalized.as_str());
 }
 
 pub(super) fn build_terminal(
     viewport_height: u16,
 ) -> Result<Terminal<CrosstermBackend<std::io::Stdout>>> {
     let mut terminal = Terminal::new(CrosstermBackend::new(io::stdout()))?;
-    execute!(terminal.backend_mut(), EnableMouseCapture)?;
+    execute!(
+        terminal.backend_mut(),
+        EnableMouseCapture,
+        EnableBracketedPaste
+    )?;
 
     let result = (|| -> Result<()> {
         let size = terminal.size()?;
@@ -32,7 +37,11 @@ pub(super) fn build_terminal(
     })();
 
     if let Err(err) = result {
-        let _ = execute!(terminal.backend_mut(), DisableMouseCapture);
+        let _ = execute!(
+            terminal.backend_mut(),
+            DisableBracketedPaste,
+            DisableMouseCapture
+        );
         return Err(err);
     }
 
@@ -55,7 +64,11 @@ pub(super) fn update_terminal_viewport(
 pub(super) fn teardown_terminal(
     mut terminal: Terminal<CrosstermBackend<std::io::Stdout>>,
 ) -> Result<()> {
-    execute!(terminal.backend_mut(), DisableMouseCapture)?;
+    execute!(
+        terminal.backend_mut(),
+        DisableBracketedPaste,
+        DisableMouseCapture
+    )?;
     disable_raw_mode()?;
     execute!(terminal.backend_mut(), Show)?;
     terminal.show_cursor()?;
