@@ -16,10 +16,11 @@ use super::runtime::{
 };
 use super::session_restore::{provider_requires_api_key, restore_thread_by_id};
 use super::state::{
-    ActivePendingInteractionKind, LocalCommandKind, OAuthLoginMode, OpenAiModelPickerAction,
-    Overlay, PROVIDER_FAMILIES, ProviderFamily, TaskKind, TuiApp,
+    ActivePendingInteractionKind, OpenAiModelPickerAction, Overlay, PROVIDER_FAMILIES,
+    ProviderFamily, TuiApp,
 };
 use super::submit::{apply_openai_model_picker_action, handle_submit};
+use super::terminal_ui::is_ssh_session;
 
 pub(crate) async fn dispatch_event(
     event: AppEvent,
@@ -341,8 +342,13 @@ pub(crate) async fn dispatch_event(
         AppEvent::EditOpenAiProfile => {
             if app.is_busy() {
                 app.push_notice("Wait for the current task before editing a profile.");
-            } else if app.selected_provider_family() == ProviderFamily::OpenAiCompatible {
-                app.begin_active_openai_profile_setup();
+            } else if app.selected_provider_family()
+                == ProviderFamily::OpenAiCompatible
+            {
+                if app.select_openai_model_picker_profile().is_some() {
+                    app.config_manager.save(&app.config)?;
+                    app.begin_edit_openai_profile_setup();
+                }
             }
         }
         AppEvent::ApplyOverlaySelection => match app.overlay {
@@ -432,62 +438,97 @@ pub(crate) async fn dispatch_event(
                     if app.selected_provider_family() == ProviderFamily::Codex {
                         let _ = sync_codex_credential_from_auth_store(app, oauth_manager.as_ref())?;
                     }
-                    if app.selected_provider_family() == ProviderFamily::Codex
-                        && !app.config.has_api_key()
-                        && should_open_codex_auth_guide(app, oauth_manager)
-                    {
+                    if should_open_codex_auth_guide(app, oauth_manager.as_ref()) {
+                        app.select_local_model(app.model_picker_idx);
                         app.open_overlay(Overlay::AuthModePicker);
-                    } else if app.selected_provider_family() == ProviderFamily::DeepSeek
-                        && !app.config.has_api_key()
+                    } else if app.selected_provider_family() == ProviderFamily::Codex {
+                        app.select_local_model(app.model_picker_idx);
+                        if app.selected_codex_reasoning_options().len() <= 1 {
+                            app.apply_selected_codex_reasoning_effort();
+                            start_rebuild_task(app);
+                        } else {
+                            app.open_overlay(Overlay::ReasoningEffortPicker);
+                        }
+                    } else if app.selected_provider_family()
+                        == ProviderFamily::OpenAiCompatible
                     {
-                        app.open_overlay(Overlay::ApiKeyEditor);
-                    } else if app.selected_provider_family() == ProviderFamily::OpenAiCompatible
-                        && app.selected_openai_model_picker_action()
-                            == Some(OpenAiModelPickerAction::SelectProfile)
+                        if let Some(action) = app.selected_openai_model_picker_action() {
+                            apply_openai_model_picker_action(app, action)?;
+                        }
+                    } else if app.selected_provider_family()
+                        == ProviderFamily::DeepSeek
                     {
-                        apply_openai_model_picker_action(
-                            app,
-                            OpenAiModelPickerAction::SelectProfile,
-                        )?;
-                    } else if provider_requires_api_key(&app.config.provider)
-                        && !app.config.has_api_key()
-                    {
-                        app.open_overlay(Overlay::ApiKeyEditor);
+                        if app.selected_deepseek_api_key_action() {
+                            app.open_overlay(Overlay::ApiKeyEditor);
+                        } else if app.config.has_api_key() {
+                            app.select_local_model(app.model_picker_idx);
+                            start_rebuild_task(app);
+                        } else {
+                            app.open_overlay(Overlay::ApiKeyEditor);
+                        }
                     } else {
                         app.select_local_model(app.model_picker_idx);
-                        app.config_manager.save(&app.config)?;
-                        app.close_overlay();
                         start_rebuild_task(app);
                     }
-                }
-            }
-            Some(Overlay::AuthModePicker) => {
-                if app.is_busy() {
-                    app.push_notice("A task is already running. Wait for it to finish.");
-                } else if app.auth_mode_idx == 0 {
-                    start_oauth_task(app, oauth_manager.clone(), OAuthLoginMode::Browser);
-                } else if app.auth_mode_idx == 1 {
-                    start_oauth_task(app, oauth_manager.clone(), OAuthLoginMode::DeviceCode);
-                } else if app.auth_mode_idx == 2 {
-                    app.open_overlay(Overlay::ApiKeyEditor);
-                } else if app.auth_mode_idx == 3 {
-                    app.config.clear_api_key();
-                    app.codex_auth_mode = None;
-                    app.config_manager.save(&app.config)?;
-                    app.notice = Some("Cleared Codex credential. Rebuilding backend.".into());
-                    app.overlay = None;
-                    super::runtime::start_rebuild_task(app);
                 }
             }
             Some(Overlay::ReasoningEffortPicker) => {
                 if app.is_busy() {
                     app.push_notice("A task is already running. Wait for it to finish.");
                 } else {
+                    app.select_local_model(app.model_picker_idx);
                     app.apply_selected_codex_reasoning_effort();
-                    app.config_manager.save(&app.config)?;
-                    app.close_overlay();
+                    start_rebuild_task(app);
                 }
             }
+            Some(Overlay::AuthModePicker) => match app.auth_mode_idx {
+                0 => {
+                    if app.is_busy() {
+                        app.push_notice("A task is already running. Wait for it to finish.");
+                    } else if is_ssh_session() {
+                        app.push_notice("Browser login is unavailable in SSH/headless sessions. Choose device code or API key instead.");
+                    } else {
+                        app.close_overlay();
+                        start_oauth_task(
+                            app,
+                            Arc::clone(oauth_manager),
+                            super::state::OAuthLoginMode::Browser,
+                        );
+                    }
+                }
+                1 => {
+                    if app.is_busy() {
+                        app.push_notice("A task is already running. Wait for it to finish.");
+                    } else {
+                        app.close_overlay();
+                        start_oauth_task(
+                            app,
+                            Arc::clone(oauth_manager),
+                            super::state::OAuthLoginMode::DeviceCode,
+                        );
+                    }
+                }
+                2 => app.open_overlay(Overlay::ApiKeyEditor),
+                3 => {
+                    if app.is_busy() {
+                        app.push_notice("A task is already running. Wait for it to finish.");
+                    } else {
+                        let removed = oauth_manager.clear_saved_auth()?;
+                        app.config.clear_provider_api_key("codex");
+                        app.codex_auth_mode = None;
+                        app.config_manager.save(&app.config)?;
+                        app.notice = Some(if removed {
+                            "Cleared the saved provider credential.".into()
+                        } else {
+                            "No saved provider credential was present.".into()
+                        });
+                        if app.config.provider == "codex" {
+                            start_rebuild_task(app);
+                        }
+                    }
+                }
+                _ => {}
+            },
             _ => {}
         },
     }

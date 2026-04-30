@@ -154,12 +154,12 @@ pub(crate) fn apply_openai_model_picker_action(
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum PendingPlanApprovalAction {
+pub(crate) enum PendingPlanApprovalAction {
     StartImplementation,
     ContinuePlanning,
 }
 
-fn classify_pending_plan_approval_input(input: &str) -> Option<PendingPlanApprovalAction> {
+pub(crate) fn classify_pending_plan_approval_input(input: &str) -> Option<PendingPlanApprovalAction> {
     let trimmed = input.trim();
     if trimmed.is_empty() {
         return None;
