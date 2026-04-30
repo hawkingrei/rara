@@ -354,7 +354,11 @@ fn default_system_prompt_sections() -> Vec<PromptSection> {
                 &[
                     "Before modifying an existing file, inspect the relevant current contents with 'read_file' or repository search unless you already read the exact target in this turn.",
                     "Prefer 'apply_patch' for editing existing files because it is diff-shaped and reviewable.",
+                    "When using 'apply_patch', send a single patch string that starts with '*** Begin Patch' and ends with '*** End Patch'. Use '*** Add File: path' with '+' lines for new files, '*** Delete File: path' for deletes, and '*** Update File: path' for edits.",
+                    "Inside an update patch, use '@@' hunks and prefix every content line with exactly one marker: space for unchanged context, '-' for removed text, or '+' for inserted text. Preserve indentation exactly after that marker.",
+                    "For update hunks, include enough exact context from the current file for the old lines to match uniquely; if a hunk does not match, re-read the file and make the smallest corrected patch rather than guessing.",
                     "Use 'replace' only for one exact, unique snippet that you have verified from the current file contents.",
+                    "For 'replace', copy 'old_string' exactly from the current file, including whitespace and indentation.",
                     "Use 'replace_lines' only for large deletions or replacements when you have verified exact line numbers from the current file contents; do not pass hundreds of lines through 'replace.old_string'.",
                     "Use 'write_file' only for new files or intentional full-file rewrites after reading the current file when it already exists.",
                     "Do not use shell redirection, sed, perl, or ad-hoc scripts to edit files when direct edit tools or 'apply_patch' can do the job.",
@@ -765,7 +769,14 @@ mod tests {
         assert!(prompt.contains("rg --files"));
         assert!(prompt.contains("Before modifying an existing file"));
         assert!(prompt.contains("Prefer 'apply_patch' for editing existing files"));
+        assert!(prompt.contains("starts with '*** Begin Patch'"));
+        assert!(prompt.contains("'*** Add File: path' with '+' lines"));
+        assert!(prompt.contains("'*** Update File: path' for edits"));
+        assert!(prompt.contains("prefix every content line with exactly one marker"));
+        assert!(prompt.contains("Preserve indentation exactly after that marker"));
+        assert!(prompt.contains("include enough exact context"));
         assert!(prompt.contains("Use 'replace' only for one exact, unique snippet"));
+        assert!(prompt.contains("copy 'old_string' exactly from the current file"));
         assert!(prompt.contains("Use 'write_file' only for new files"));
         assert!(prompt.contains("Do not use shell redirection"));
         assert!(prompt.contains("first inspect local usage"));
