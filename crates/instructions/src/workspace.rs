@@ -7,6 +7,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::SystemTime;
 
+const PROJECT_INSTRUCTION_FILES: [&str; 3] = ["CLAUDE.md", "GEMINI.md", "AGENTS.md"];
+const USER_INSTRUCTION_FILE: &str = "AGENTS.md";
+
 pub struct WorkspaceMemory {
     pub root: PathBuf,
     pub rara_dir: PathBuf,
@@ -80,7 +83,12 @@ impl WorkspaceMemory {
     pub fn discover_instructions(&self) -> Vec<String> {
         self.discover_prompt_sources()
             .into_iter()
-            .filter(|source| matches!(source.kind, PromptSourceKind::ProjectInstruction))
+            .filter(|source| {
+                matches!(
+                    source.kind,
+                    PromptSourceKind::UserInstruction | PromptSourceKind::ProjectInstruction
+                )
+            })
             .map(|source| format!("### {}:\n{}", source.label, source.content))
             .collect()
     }
@@ -92,8 +100,9 @@ impl WorkspaceMemory {
 
     fn discover_prompt_sources_from_dir(&self, focus: &Path) -> Vec<PromptSource> {
         let mut sources = Vec::new();
+        sources.extend(self.user_instruction_sources());
         for dir in self.instruction_search_dirs(focus) {
-            for file in ["CLAUDE.md", "GEMINI.md", "AGENTS.md"] {
+            for file in PROJECT_INSTRUCTION_FILES {
                 let path = dir.join(file);
                 if let Some(content) = self.cached_file_content(&path) {
                     let display_path = path
@@ -120,6 +129,23 @@ impl WorkspaceMemory {
             });
         }
         sources
+    }
+
+    fn user_instruction_sources(&self) -> Vec<PromptSource> {
+        let Some(rara_home) = self.rara_home_dir() else {
+            return Vec::new();
+        };
+        let path = rara_home.join(USER_INSTRUCTION_FILE);
+        let Some(content) = self.cached_file_content(&path) else {
+            return Vec::new();
+        };
+
+        vec![PromptSource {
+            kind: PromptSourceKind::UserInstruction,
+            label: format!("User Instruction ({USER_INSTRUCTION_FILE})"),
+            display_path: path.display().to_string(),
+            content,
+        }]
     }
 
     pub fn get_env_info(&self) -> (String, String) {
@@ -230,6 +256,14 @@ impl WorkspaceMemory {
         dirs
     }
 
+    fn rara_home_dir(&self) -> Option<PathBuf> {
+        let workspaces_dir = self.rara_dir.parent()?;
+        if workspaces_dir.file_name()? != "workspaces" {
+            return None;
+        }
+        workspaces_dir.parent().map(Path::to_path_buf)
+    }
+
     fn focus_dir(&self) -> PathBuf {
         let Ok(cwd) = std::env::current_dir() else {
             return self.root.clone();
@@ -303,6 +337,55 @@ mod tests {
         assert_eq!(project_sources[1].display_path, "src/AGENTS.md");
         assert_eq!(project_sources[0].content, "root rules");
         assert_eq!(project_sources[1].content, "src rules");
+    }
+
+    #[test]
+    fn discover_prompt_sources_keeps_user_instruction_as_stable_prefix() {
+        let dir = tempdir().expect("tempdir");
+        let root = dir.path().join("repo");
+        let rara_home = dir.path().join("home").join(".rara");
+        let rara_dir = rara_home.join("workspaces").join("repo-123");
+        let nested = root.join("src/tools");
+        fs::create_dir_all(&nested).expect("mkdir nested");
+        fs::create_dir_all(&rara_dir).expect("mkdir rara workspace");
+        fs::write(rara_home.join("AGENTS.md"), "user rules").expect("write user agents");
+        fs::write(root.join("AGENTS.md"), "root rules").expect("write root agents");
+        fs::write(root.join("src").join("AGENTS.md"), "src rules").expect("write src agents");
+        let user_instruction_path = rara_home.join("AGENTS.md").display().to_string();
+
+        let workspace = WorkspaceMemory::from_paths(root.clone(), rara_dir);
+        let sources = workspace.discover_prompt_sources_from_dir(&nested);
+
+        let instruction_sources = sources
+            .into_iter()
+            .filter(|source| {
+                matches!(
+                    source.kind,
+                    PromptSourceKind::UserInstruction | PromptSourceKind::ProjectInstruction
+                )
+            })
+            .map(|source| (source.kind, source.display_path, source.content))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            instruction_sources,
+            vec![
+                (
+                    PromptSourceKind::UserInstruction,
+                    user_instruction_path,
+                    "user rules".to_string()
+                ),
+                (
+                    PromptSourceKind::ProjectInstruction,
+                    "AGENTS.md".to_string(),
+                    "root rules".to_string()
+                ),
+                (
+                    PromptSourceKind::ProjectInstruction,
+                    "src/AGENTS.md".to_string(),
+                    "src rules".to_string()
+                ),
+            ]
+        );
     }
 
     #[test]

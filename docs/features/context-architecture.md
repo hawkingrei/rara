@@ -82,6 +82,7 @@ turn unless explicitly disabled.
 Examples:
 
 - base runtime/system instructions;
+- user instruction files such as `~/.rara/AGENTS.md`;
 - project instruction files such as `AGENTS.md`;
 - runtime policy fields such as plan mode or bash approval mode.
 
@@ -89,6 +90,9 @@ Properties:
 
 - low churn;
 - deterministic precedence;
+- deterministic ordering: user-level instruction sources come first, followed
+  by project instruction sources from workspace root toward the current focus
+  directory, so moving into a deeper directory preserves the existing prefix;
 - persisted separately from turn history;
 - never compacted into conversational summaries.
 

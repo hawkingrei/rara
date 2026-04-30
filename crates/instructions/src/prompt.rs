@@ -20,6 +20,7 @@ static PLAN_MODE_PROMPT: LazyLock<String> = LazyLock::new(|| {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PromptSourceKind {
+    UserInstruction,
     ProjectInstruction,
     LocalMemory,
     CustomSystemPrompt,
@@ -38,6 +39,7 @@ pub struct PromptSource {
 impl PromptSource {
     pub fn kind_label(&self) -> &'static str {
         match self.kind {
+            PromptSourceKind::UserInstruction => "user_instruction",
             PromptSourceKind::ProjectInstruction => "project_instruction",
             PromptSourceKind::LocalMemory => "local_memory",
             PromptSourceKind::CustomSystemPrompt => "custom_system_prompt",
@@ -48,6 +50,9 @@ impl PromptSource {
 
     pub fn status_line(&self) -> String {
         match self.kind {
+            PromptSourceKind::UserInstruction => {
+                format!("user instruction: {}", self.display_path)
+            }
             PromptSourceKind::ProjectInstruction => {
                 format!("project instruction: {}", self.display_path)
             }
@@ -64,6 +69,9 @@ impl PromptSource {
 
     pub fn inclusion_reason(&self) -> &'static str {
         match self.kind {
+            PromptSourceKind::UserInstruction => {
+                "included as a user-level instruction source loaded from the RARA home directory before workspace instructions"
+            }
             PromptSourceKind::ProjectInstruction => {
                 "included as a repository instruction discovered while walking from the workspace root toward the current focus directory"
             }
@@ -457,7 +465,12 @@ fn dynamic_system_prompt_sections(
     let (cwd, branch) = workspace.get_env_info();
     let instruction_sections = sources
         .iter()
-        .filter(|source| matches!(source.kind, PromptSourceKind::ProjectInstruction))
+        .filter(|source| {
+            matches!(
+                source.kind,
+                PromptSourceKind::UserInstruction | PromptSourceKind::ProjectInstruction
+            )
+        })
         .map(|source| format!("## {}\n{}", source.label, source.content))
         .collect::<Vec<_>>();
     let instruction_block = if instruction_sections.is_empty() {
