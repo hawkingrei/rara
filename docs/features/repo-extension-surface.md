@@ -209,9 +209,17 @@ Precedence should be explicit and source-aware.
 
 For skill name conflicts:
 
-1. workspace-local `.agents/skills`
-2. nested workspace skill roots, if applicable
-3. home/global skills
+RARA loads lower-precedence roots first and lets later roots override earlier
+skills with the same name. The current order is:
+
+1. home/global skills under `~/.rara/skills`, `~/.agents/skills`, and
+   `~/.codex/skills`
+2. repo-local `.agents/skills` from the repository root toward the current
+   working directory
+3. current-working-directory `.rara/skills`
+
+Within a single root, skill discovery is deterministic. If both `name.md` and
+`name/SKILL.md` exist, the directory skill is loaded last and wins.
 
 RARA should surface overridden skills in status/debug output instead of hiding
 them.

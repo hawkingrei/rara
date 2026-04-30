@@ -1697,6 +1697,11 @@ mod tests {
         if !binary_exists(&wrapped.program) {
             return;
         }
+        // Streaming through some sandbox backends (e.g. macOS seatbelt)
+        // is not supported; skip this test under sandboxed execution.
+        if wrapped.sandboxed {
+            return;
+        }
         let tool = BashTool {
             sandbox: Arc::new(sandbox),
             background_tasks: Arc::new(
@@ -1742,7 +1747,6 @@ mod tests {
             Some(wrapped.sandbox_backend.as_str())
         );
     }
-
     #[tokio::test]
     async fn background_call_returns_task_and_status_reads_output() {
         let temp = tempdir().expect("tempdir");

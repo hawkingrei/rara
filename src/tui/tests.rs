@@ -34,42 +34,13 @@ fn mouse_scroll(kind: MouseEventKind) -> Event {
     })
 }
 use super::state::{Overlay, ProviderFamily, RunningTask, TaskKind, TuiApp};
-use super::{
-    PendingPlanApprovalAction, classify_pending_plan_approval_input, dispatch_event,
-    map_key_to_event,
-};
+use super::{dispatch_event, map_key_to_event};
 
 fn provider_family_idx(family: ProviderFamily) -> usize {
     super::state::PROVIDER_FAMILIES
         .iter()
         .position(|(candidate, _, _)| *candidate == family)
         .expect("provider family present")
-}
-
-#[test]
-fn pending_plan_approval_supports_explicit_refine_signal() {
-    assert_eq!(
-        classify_pending_plan_approval_input("继续规划"),
-        Some(PendingPlanApprovalAction::ContinuePlanning)
-    );
-    assert_eq!(
-        classify_pending_plan_approval_input("continue planning"),
-        Some(PendingPlanApprovalAction::ContinuePlanning)
-    );
-}
-
-#[test]
-fn pending_plan_approval_requires_explicit_implementation_signal() {
-    assert_eq!(classify_pending_plan_approval_input("继续吧"), None);
-    assert_eq!(classify_pending_plan_approval_input("ok"), None);
-    assert_eq!(
-        classify_pending_plan_approval_input("执行计划"),
-        Some(PendingPlanApprovalAction::StartImplementation)
-    );
-    assert_eq!(
-        classify_pending_plan_approval_input("implement plan"),
-        Some(PendingPlanApprovalAction::StartImplementation)
-    );
 }
 
 #[tokio::test]
@@ -122,6 +93,35 @@ async fn busy_submit_queues_follow_up_message() {
     if let Some(task) = app.running_task.take() {
         task.handle.abort();
     }
+}
+
+#[tokio::test]
+async fn pending_plan_approval_blocks_plain_submit() {
+    let temp = tempdir().expect("tempdir");
+    let mut app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("app");
+    app.set_pending_plan_approval(true);
+    app.input = "start implementation".into();
+
+    let mut agent_slot = None;
+    let oauth_manager = Arc::new(
+        crate::oauth::OAuthManager::new_for_config_dir(temp.path().join(".rara"))
+            .expect("oauth manager"),
+    );
+    let should_quit = super::handle_submit(&mut app, &mut agent_slot, &oauth_manager)
+        .await
+        .expect("submit");
+
+    assert!(!should_quit);
+    assert!(app.has_pending_plan_approval());
+    assert!(app.running_task.is_none());
+    assert!(
+        app.notice
+            .as_deref()
+            .is_some_and(|value| value.contains("Press 1 to start implementation"))
+    );
 }
 
 #[tokio::test]

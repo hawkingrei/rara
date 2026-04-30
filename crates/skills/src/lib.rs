@@ -42,20 +42,27 @@ impl SkillManager {
     }
 
     pub fn load_from_dir(&mut self, dir: &Path) -> Result<()> {
+        let mut skill_files = Vec::new();
         for entry in fs::read_dir(dir)? {
             let entry = entry?;
             let path = entry.path();
             if path.is_dir() {
                 let skill_file = path.join("SKILL.md");
                 if skill_file.exists() {
-                    self.load_skill_file(&skill_file, dir)?;
+                    skill_files.push(skill_file);
                 }
                 continue;
             }
 
             if path.extension().and_then(|s| s.to_str()) == Some("md") {
-                self.load_skill_file(&path, dir)?;
+                skill_files.push(path);
             }
+        }
+
+        skill_files
+            .sort_by(|left, right| skill_file_sort_key(left).cmp(&skill_file_sort_key(right)));
+        for path in skill_files {
+            self.load_skill_file(&path, dir)?;
         }
         Ok(())
     }
@@ -174,6 +181,16 @@ fn skill_name_from_path(path: &Path) -> String {
     }
 }
 
+fn skill_file_sort_key(path: &Path) -> (String, u8, &Path) {
+    let name = skill_name_from_path(path);
+    let priority = if path.file_name().and_then(|value| value.to_str()) == Some("SKILL.md") {
+        1
+    } else {
+        0
+    };
+    (name, priority, path)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{SkillManager, repo_skill_search_dirs, skill_search_dirs};
@@ -209,7 +226,23 @@ mod tests {
     }
 
     #[test]
-    fn search_dirs_include_codex_compatible_home_and_repo_roots() {
+    fn load_from_dir_prefers_directory_skill_over_legacy_markdown_with_same_name() {
+        let dir = tempdir().expect("tempdir");
+        let skill_dir = dir.path().join("reviewer");
+        fs::create_dir_all(&skill_dir).expect("mkdir");
+        fs::write(dir.path().join("reviewer.md"), "# Legacy Reviewer\nlegacy").expect("write");
+        fs::write(skill_dir.join("SKILL.md"), "# Directory Reviewer\nworkflow").expect("write");
+
+        let mut manager = SkillManager::new();
+        manager.load_from_dir(dir.path()).expect("load");
+
+        let skill = manager.get_skill("reviewer").expect("reviewer skill");
+        assert_eq!(skill.description, "Directory Reviewer");
+        assert_eq!(skill.display_path, "reviewer/SKILL.md");
+    }
+
+    #[test]
+    fn search_dirs_keep_codex_compatible_prefix_order() {
         let temp = tempdir().expect("tempdir");
         let home = temp.path().join("home");
         let repo = temp.path().join("repo");
@@ -219,12 +252,18 @@ mod tests {
         fs::create_dir_all(repo.join(".git")).expect("mkdir git");
 
         let dirs = skill_search_dirs(&home, &nested);
-        assert!(dirs.contains(&home.join(".rara/skills")));
-        assert!(dirs.contains(&home.join(".agents/skills")));
-        assert!(dirs.contains(&home.join(".codex/skills")));
-        assert!(dirs.contains(&repo.join(".agents/skills")));
-        assert!(dirs.contains(&repo.join("crates/.agents/skills")));
-        assert!(dirs.contains(&nested.join(".rara/skills")));
+        assert_eq!(
+            dirs,
+            vec![
+                home.join(".rara/skills"),
+                home.join(".agents/skills"),
+                home.join(".codex/skills"),
+                repo.join(".agents/skills"),
+                repo.join("crates/.agents/skills"),
+                nested.join(".agents/skills"),
+                nested.join(".rara/skills"),
+            ]
+        );
     }
 
     #[test]
