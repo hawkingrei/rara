@@ -1,5 +1,6 @@
 use super::*;
 use crate::tools::bash::BashCommandInput;
+use crate::tools::planning::{ENTER_PLAN_MODE_TOOL_NAME, EXIT_PLAN_MODE_TOOL_NAME};
 use anyhow::anyhow;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -364,10 +365,10 @@ impl Agent {
 
     pub(super) fn is_tool_allowed_in_current_mode(&self, name: &str) -> bool {
         match self.execution_mode {
-            AgentExecutionMode::Execute => name != "exit_plan_mode",
+            AgentExecutionMode::Execute => name != EXIT_PLAN_MODE_TOOL_NAME,
             AgentExecutionMode::Plan => !matches!(
                 name,
-                "enter_plan_mode"
+                ENTER_PLAN_MODE_TOOL_NAME
                     | "write_file"
                     | "replace"
                     | "replace_lines"
@@ -443,7 +444,6 @@ impl Agent {
         }
         self.plan_explanation = explanation;
         self.pending_user_input = parse_request_user_input_block(text);
-        self.save_current_plan_file()?;
         Ok(true)
     }
 
@@ -467,7 +467,7 @@ impl Agent {
         lines.join("\n")
     }
 
-    fn save_current_plan_file(&self) -> Result<()> {
+    pub(super) fn save_current_plan_file(&self) -> Result<()> {
         self.session_manager
             .save_plan_file(&self.session_id, &self.current_plan_markdown())
     }

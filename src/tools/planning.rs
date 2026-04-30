@@ -2,13 +2,16 @@ use crate::tool::{Tool, ToolError};
 use async_trait::async_trait;
 use serde_json::{Value, json};
 
+pub const ENTER_PLAN_MODE_TOOL_NAME: &str = "enter_plan_mode";
+pub const EXIT_PLAN_MODE_TOOL_NAME: &str = "exit_plan_mode";
+
 pub struct EnterPlanModeTool;
 pub struct ExitPlanModeTool;
 
 #[async_trait]
 impl Tool for EnterPlanModeTool {
     fn name(&self) -> &str {
-        "enter_plan_mode"
+        ENTER_PLAN_MODE_TOOL_NAME
     }
 
     fn description(&self) -> &str {
@@ -40,7 +43,7 @@ impl Tool for EnterPlanModeTool {
 #[async_trait]
 impl Tool for ExitPlanModeTool {
     fn name(&self) -> &str {
-        "exit_plan_mode"
+        EXIT_PLAN_MODE_TOOL_NAME
     }
 
     fn description(&self) -> &str {
