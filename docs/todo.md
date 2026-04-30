@@ -96,6 +96,7 @@ Priority order for this phase:
 ## TUI / UX Parity
 
 - [ ] Continue improving transcript rendering stability across long and streaming sessions: reduce scroll jumps and flicker, strengthen bottom anchoring, and prevent stale transient sections from reappearing after their live phase ends.
+- [ ] Add Codex-style non-bracketed paste-burst detection for terminals that deliver pasted text as fast `Char` / `Enter` key streams instead of `Event::Paste`, so embedded newlines are inserted into the composer instead of submitting partial turns.
 - [ ] Improve long-running task progress reporting so the TUI heartbeat reflects the active phase (`sending prompt`, `streaming response`, `running tool`, `waiting for approval`, `checkpointing`) instead of resetting to a generic prompt-sending notice during long tool execution.
 - [ ] Rework long `Exploring` / `Explored` handling to follow Codex more closely: keep live exploration compact and summarize committed exploration into a source-aware digest instead of dumping long raw traces.
 - [ ] Decouple setup/help/model overlays from transcript layout so overlays behave as a pure top layer and do not perturb history viewport sizing.
