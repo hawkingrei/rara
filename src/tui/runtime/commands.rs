@@ -107,9 +107,7 @@ pub(super) async fn execute_local_command(
             if let Some(agent) = agent_slot.as_mut() {
                 agent.set_execution_mode(AgentExecutionMode::Plan);
             }
-            app.push_notice(
-                "Planning mode enabled. Use the next prompt to analyze, refine, or finalize a plan.",
-            );
+            app.push_notice("Planning mode enabled. Read-only planning; approve to execute.");
         }
         LocalCommandKind::Quit => {
             app.set_runtime_phase(RuntimePhase::LocalCommand, Some("quitting".into()));

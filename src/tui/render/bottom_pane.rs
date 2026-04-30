@@ -175,7 +175,7 @@ fn activity_status_line(app: &TuiApp) -> (&'static str, Color, String) {
         return (
             "Planning",
             Color::Cyan,
-            "analyze, refine, or finalize a plan".to_string(),
+            "read-only planning; approve to execute".to_string(),
         );
     }
 
@@ -381,7 +381,7 @@ fn composer_hint(app: &TuiApp) -> &'static str {
     } else if let Some(pending) = app.active_pending_interaction() {
         pending_interaction_hint_text(pending.kind)
     } else if app.agent_execution_mode_label() == "plan" {
-        "planning mode  analyze, refine, or finalize a plan"
+        "planning mode  read-only planning; approve to execute"
     } else {
         "Enter submit  Shift+Enter newline  / open commands"
     }
