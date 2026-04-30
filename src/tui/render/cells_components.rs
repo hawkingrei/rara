@@ -204,36 +204,6 @@ impl HistoryCell for RunningCell {
     }
 }
 
-pub(super) struct ThinkingCell<'a> {
-    lines: &'a [Line<'static>],
-    max_lines: usize,
-}
-
-impl<'a> ThinkingCell<'a> {
-    pub(super) fn new(lines: &'a [Line<'static>], max_lines: usize) -> Self {
-        Self { lines, max_lines }
-    }
-}
-
-impl HistoryCell for ThinkingCell<'_> {
-    fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
-        let start = self.lines.len().saturating_sub(self.max_lines);
-        let body = markdown_body_lines(&self.lines[start..], self.max_lines);
-        let mut lines = vec![Line::from(section_span("Thinking", Color::LightBlue))];
-        if start > 0 {
-            lines.push(Line::from(Span::styled(
-                format!("  ... {start} more line(s)"),
-                Style::default().fg(Color::DarkGray),
-            )));
-        }
-        lines.extend(body.into_iter().map(|mut line| {
-            line.spans.insert(0, Span::raw("  "));
-            line
-        }));
-        lines
-    }
-}
-
 pub(super) struct ThinkingTextCell {
     message: String,
     max_lines: usize,
@@ -253,6 +223,56 @@ impl HistoryCell for ThinkingTextCell {
         let render_width = usize::from(width.saturating_sub(2));
         let rendered = render_markdown_text_with_width(&self.message, Some(render_width));
         let rendered_lines = rendered.lines;
+        let start = rendered_lines.len().saturating_sub(self.max_lines);
+        let body = markdown_body_lines(&rendered_lines[start..], self.max_lines);
+        let mut lines = vec![Line::from(section_span("Thinking", Color::LightBlue))];
+        if start > 0 {
+            lines.push(Line::from(Span::styled(
+                format!("  ... {start} more line(s)"),
+                Style::default().fg(Color::DarkGray),
+            )));
+        }
+        lines.extend(body.into_iter().map(|mut line| {
+            line.spans.insert(0, Span::raw("  "));
+            line
+        }));
+        lines
+    }
+}
+
+pub(super) struct ThinkingGroupCell<'a> {
+    messages: Vec<String>,
+    stream_lines: Option<&'a [Line<'static>]>,
+    max_lines: usize,
+}
+
+impl<'a> ThinkingGroupCell<'a> {
+    pub(super) fn new(
+        messages: Vec<String>,
+        stream_lines: Option<&'a [Line<'static>]>,
+        max_lines: usize,
+    ) -> Self {
+        Self {
+            messages,
+            stream_lines,
+            max_lines,
+        }
+    }
+}
+
+impl HistoryCell for ThinkingGroupCell<'_> {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        let render_width = usize::from(width.saturating_sub(2));
+        let mut rendered_lines = Vec::new();
+        if !self.messages.is_empty() {
+            let rendered =
+                render_markdown_text_with_width(&self.messages.join("\n"), Some(render_width));
+            rendered_lines.extend(rendered.lines);
+        }
+        if let Some(stream_lines) = self.stream_lines {
+            rendered_lines.extend(stream_lines.iter().cloned());
+        }
+
         let start = rendered_lines.len().saturating_sub(self.max_lines);
         let body = markdown_body_lines(&rendered_lines[start..], self.max_lines);
         let mut lines = vec![Line::from(section_span("Thinking", Color::LightBlue))];

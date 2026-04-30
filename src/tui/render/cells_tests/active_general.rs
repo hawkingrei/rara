@@ -940,6 +940,78 @@ fn active_turn_cell_flattens_thinking_and_running_events_in_order() {
 }
 
 #[test]
+fn active_turn_cell_places_streaming_thinking_after_latest_progress_event() {
+    let temp = tempdir().unwrap();
+    let mut app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("build tui app");
+    app.runtime_phase = RuntimePhase::ProcessingResponse;
+    app.active_turn = TranscriptTurn {
+        entries: vec![TranscriptEntry {
+            role: "You".into(),
+            message: "Run a long task".into(),
+            payload: None,
+        }],
+    };
+
+    app.append_agent_thinking_delta("first reasoning block\n");
+    app.flush_agent_thinking_stream_to_live_event();
+    app.record_running_action("Run cargo check");
+    app.append_agent_thinking_delta("second reasoning block\n");
+
+    let rendered = ActiveTurnCell::new(&app, Some(Path::new(".")))
+        .display_lines(100)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let first_thinking = rendered.find("first reasoning block").unwrap();
+    let running = rendered.find("Run cargo check").unwrap();
+    let second_thinking = rendered.find("second reasoning block").unwrap();
+
+    assert!(first_thinking < running);
+    assert!(running < second_thinking);
+    assert_eq!(rendered.matches(" Thinking ").count(), 2);
+    assert_eq!(rendered.matches(" Running ").count(), 1);
+}
+
+#[test]
+fn active_turn_cell_groups_consecutive_thinking_events_with_stream() {
+    let temp = tempdir().unwrap();
+    let mut app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("build tui app");
+    app.runtime_phase = RuntimePhase::ProcessingResponse;
+    app.active_turn = TranscriptTurn {
+        entries: vec![TranscriptEntry {
+            role: "You".into(),
+            message: "Reason about a task".into(),
+            payload: None,
+        }],
+    };
+
+    app.append_agent_thinking_delta("first reasoning block\n");
+    app.flush_agent_thinking_stream_to_live_event();
+    app.append_agent_thinking_delta("second reasoning block\n");
+
+    let rendered = ActiveTurnCell::new(&app, Some(Path::new(".")))
+        .display_lines(100)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let first_thinking = rendered.find("first reasoning block").unwrap();
+    let second_thinking = rendered.find("second reasoning block").unwrap();
+
+    assert!(first_thinking < second_thinking);
+    assert_eq!(rendered.matches(" Thinking ").count(), 1);
+}
+
+#[test]
 fn active_turn_cell_preserves_flushed_thinking_leading_indentation() {
     let temp = tempdir().unwrap();
     let mut app = TuiApp::new(ConfigManager {

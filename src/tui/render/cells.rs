@@ -21,7 +21,8 @@ pub(crate) use self::components::StartupCardCell;
 use self::components::{
     CommittedInteractionCell, ExploredCell, ExploringCell, MessageCell, PendingInteractionCell,
     PlanModeCell, PlanSummaryCell, PlanningCell, PlanningSuggestionCell, RanCell, RespondingCell,
-    RunningCell, TerminalCell, ThinkingCell, ThinkingTextCell, UserCell, planning_suggestion_text,
+    RunningCell, TerminalCell, ThinkingGroupCell, ThinkingTextCell, UserCell,
+    planning_suggestion_text,
 };
 use super::{
     compact_progress_summary_lines, compact_recent_first_summary_lines, compact_summary_lines,
@@ -209,13 +210,27 @@ fn push_live_event<'a>(
 fn push_live_events<'a>(
     cells: &mut Vec<Box<dyn HistoryCell + 'a>>,
     events: &[crate::tui::state::ActiveLiveEvent],
+    streaming_thinking_lines: Option<&'a [Line<'static>]>,
     active: bool,
 ) {
+    let mut thinking_messages = Vec::new();
     let mut exploration_actions = Vec::new();
     let mut exploration_notes = Vec::new();
 
     for event in events {
+        if event.role() == "Thinking" {
+            push_live_exploration_group(
+                cells,
+                &mut exploration_actions,
+                &mut exploration_notes,
+                active,
+            );
+            thinking_messages.push(event.message().to_string());
+            continue;
+        }
+
         if event.role() == "Exploring" {
+            push_live_thinking_group(cells, &mut thinking_messages, None);
             if event.is_note() {
                 exploration_notes.push(event.message().to_string());
             } else {
@@ -224,6 +239,7 @@ fn push_live_events<'a>(
             continue;
         }
 
+        push_live_thinking_group(cells, &mut thinking_messages, None);
         push_live_exploration_group(
             cells,
             &mut exploration_actions,
@@ -233,12 +249,33 @@ fn push_live_events<'a>(
         push_live_event(cells, event, active);
     }
 
+    push_live_thinking_group(cells, &mut thinking_messages, streaming_thinking_lines);
     push_live_exploration_group(
         cells,
         &mut exploration_actions,
         &mut exploration_notes,
         active,
     );
+}
+
+fn push_live_thinking_group<'a>(
+    cells: &mut Vec<Box<dyn HistoryCell + 'a>>,
+    messages: &mut Vec<String>,
+    stream_lines: Option<&'a [Line<'static>]>,
+) {
+    if messages.is_empty() && stream_lines.is_none_or(|lines| lines.is_empty()) {
+        return;
+    }
+    if stream_lines.is_some() {
+        cells.push(Box::new(ThinkingGroupCell::new(
+            std::mem::take(messages),
+            stream_lines,
+            4,
+        )));
+        return;
+    }
+    cells.push(Box::new(ThinkingTextCell::new(&messages.join("\n"), 4)));
+    messages.clear();
 }
 
 fn push_live_exploration_group<'a>(
@@ -1010,12 +1047,6 @@ impl ActiveCell for ActiveTurnCell<'_> {
             cells.push(Box::new(PlanModeCell));
         }
 
-        if turn_live && has_thinking_stream {
-            if let Some(lines) = streaming_thinking_lines {
-                cells.push(Box::new(ThinkingCell::new(lines, 4)));
-            }
-        }
-
         let ordered_exploration_agent_segments =
             if !has_live_events && !has_live_exploration && !has_live_planning && !has_live_running
             {
@@ -1048,7 +1079,8 @@ impl ActiveCell for ActiveTurnCell<'_> {
         let mut has_event_exploration_summary = false;
         let mut has_event_planning_summary = false;
         let mut has_event_running_summary = false;
-        if has_live_events {
+        let has_live_thinking = turn_live && has_thinking_stream;
+        if has_live_events || has_live_thinking {
             for event in live_events {
                 match event.role() {
                     "Exploring" => has_event_exploration_summary = true,
@@ -1057,11 +1089,17 @@ impl ActiveCell for ActiveTurnCell<'_> {
                     _ => {}
                 }
             }
-            push_live_events(&mut cells, live_events, true);
+            push_live_events(
+                &mut cells,
+                live_events,
+                streaming_thinking_lines.filter(|_| has_live_thinking),
+                true,
+            );
         }
 
-        let explicit_progress_groups = (!has_live_events && !has_active_pending_interaction)
-            .then(|| explicit_progress_entry_groups(current_turn.iter().copied()));
+        let explicit_progress_groups =
+            (!has_live_events && !has_live_thinking && !has_active_pending_interaction)
+                .then(|| explicit_progress_entry_groups(current_turn.iter().copied()));
         if let Some(groups) = explicit_progress_groups.as_ref() {
             for (role, messages) in groups {
                 push_progress_group(&mut cells, role, messages.clone(), turn_live);
