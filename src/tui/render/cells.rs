@@ -214,25 +214,6 @@ fn push_live_events<'a>(
     let mut exploration_actions = Vec::new();
     let mut exploration_notes = Vec::new();
 
-    let flush_exploration = |cells: &mut Vec<Box<dyn HistoryCell + 'a>>,
-                             actions: &mut Vec<String>,
-                             notes: &mut Vec<String>| {
-        if actions.is_empty() && notes.is_empty() {
-            return;
-        }
-        cells.push(Box::new(ExploringCell::new(
-            compact_progress_summary_lines(
-                actions.as_slice(),
-                notes.as_slice(),
-                4,
-                "more exploration step(s)",
-            ),
-            active,
-        )));
-        actions.clear();
-        notes.clear();
-    };
-
     for event in events {
         if event.role() == "Exploring" {
             if event.is_note() {
@@ -243,11 +224,43 @@ fn push_live_events<'a>(
             continue;
         }
 
-        flush_exploration(cells, &mut exploration_actions, &mut exploration_notes);
+        push_live_exploration_group(
+            cells,
+            &mut exploration_actions,
+            &mut exploration_notes,
+            active,
+        );
         push_live_event(cells, event, active);
     }
 
-    flush_exploration(cells, &mut exploration_actions, &mut exploration_notes);
+    push_live_exploration_group(
+        cells,
+        &mut exploration_actions,
+        &mut exploration_notes,
+        active,
+    );
+}
+
+fn push_live_exploration_group<'a>(
+    cells: &mut Vec<Box<dyn HistoryCell + 'a>>,
+    actions: &mut Vec<String>,
+    notes: &mut Vec<String>,
+    active: bool,
+) {
+    if actions.is_empty() && notes.is_empty() {
+        return;
+    }
+    cells.push(Box::new(ExploringCell::new(
+        compact_progress_summary_lines(
+            actions.as_slice(),
+            notes.as_slice(),
+            4,
+            "more exploration step(s)",
+        ),
+        active,
+    )));
+    actions.clear();
+    notes.clear();
 }
 
 fn split_progress_sentences(message: &str) -> Vec<String> {
