@@ -66,3 +66,187 @@ Execute-mode repository inspection follows the same structured continuation boun
 - pending plan approval and planning questions should appear as interaction cards;
 - status panels, overlays, and transcript cells should reuse the same plan formatting instead of diverging into separate text-only summaries;
 - approval or answers should resume the same workflow rather than starting a brand-new free-form chat turn.
+
+## Claude-Style Complete Workflow
+
+The target long-term model is a Claude Code-style planning workflow adapted to RARA's runtime. The current implementation stores a parsed proposed plan as `.rara/sessions/<session_id>/plan.md` and uses `exit_plan_mode` to enter approval. The complete workflow should make that artifact first-class across runtime state, TUI rendering, recovery, and context assembly.
+
+### Plan Artifact
+
+- Each interactive session has a plan artifact at `.rara/sessions/<session_id>/plan.md`.
+- The plan artifact is the canonical approval surface for implementation tasks.
+- The artifact should contain only the implementation plan, not general chat history or todo progress.
+- The artifact should be generated from `<proposed_plan>` until RARA has a dedicated plan-file editing tool.
+- The artifact should remain available after approval so execution can refer back to the approved plan.
+- A later edit-capable approval UI may update the artifact before approval; the approved artifact version must be what execution receives.
+
+### Todo Relationship
+
+- The plan artifact is not a todo file.
+- Plan content answers what will change, why, where, and how it will be verified.
+- Todo/checklist state tracks execution progress after approval.
+- A future todo artifact may live beside the plan, such as `.rara/sessions/<session_id>/todo.json`, but it should not replace `plan.md`.
+
+### State Machine
+
+The planning lifecycle should use explicit structured states:
+
+- `execute`: normal coding mode.
+- `planning`: read-only exploration and plan drafting.
+- `plan_ready`: `exit_plan_mode` has submitted a plan for approval.
+- `plan_revising`: the user chose to continue planning after seeing a submitted plan.
+- `plan_approved`: the user approved the plan and execution may resume.
+- `plan_rejected`: the user rejected the plan without continuing the task.
+
+Allowed transitions:
+
+- `execute -> planning`: user runs `/plan` or the model calls `enter_plan_mode`.
+- `planning -> plan_ready`: model emits `<proposed_plan>` and calls `exit_plan_mode`.
+- `plan_ready -> plan_approved`: user approves the plan.
+- `plan_ready -> plan_revising`: user asks to continue planning or edits/rejects the plan with feedback.
+- `plan_revising -> plan_ready`: model updates the plan and calls `exit_plan_mode` again.
+- `plan_approved -> execute`: runtime injects the approved-plan tool result and resumes the agent loop.
+- `plan_ready -> plan_rejected`: user cancels the implementation request.
+
+User imperative text such as "continue", "implement", or "go ahead" must not skip `plan_ready -> plan_approved`; approval must come from the structured TUI interaction.
+
+### Runtime Persistence
+
+Runtime should persist enough state to recover after restart:
+
+- `session_id`
+- `plan_file_path`
+- `exit_plan_mode` tool-use id, when pending
+- pending approval status
+- approved/rejected/continued decision
+- approved plan version or content hash
+- timestamp of submission and decision
+
+This state should be recorded in the structured rollout log rather than only in memory. On resume:
+
+- if a plan is pending approval, the TUI should restore the approval card;
+- if a plan was approved but execution did not continue, the runtime should be able to inject the approved-plan result once;
+- if a plan was rejected or sent back for revision, the model should receive structured feedback and remain in planning mode.
+
+### Tool Permissions
+
+Plan mode should be read-only except for plan-artifact updates.
+
+The long-term tool model should replace name-based filtering with structured tool metadata:
+
+- `ReadOnly`: file reads, search, safe status commands.
+- `WorkspaceMutation`: edit tools such as `apply_patch`, `replace`, `write_file`.
+- `MemoryMutation`: project memory or experience writes.
+- `AgentSpawn`: general worker/team launch tools.
+- `PlanControl`: `enter_plan_mode`, `exit_plan_mode`.
+- `PlanArtifactMutation`: dedicated plan artifact write/update tools.
+
+Plan mode should allow `ReadOnly`, `PlanControl`, and `PlanArtifactMutation`, and block ordinary `WorkspaceMutation`, `MemoryMutation`, and `AgentSpawn`.
+
+### Approval UI
+
+The approval UI should show the persisted plan artifact, not an incidental chat excerpt.
+
+Minimum approval actions:
+
+- approve and start implementation;
+- continue planning with feedback;
+- reject/cancel implementation.
+
+Future approval actions:
+
+- edit the plan inline before approval;
+- open the plan in an external editor;
+- compare plan revisions;
+- approve with limited command permissions, such as "run tests" or "install dependencies".
+
+When the user edits the plan before approval, execution must receive the edited plan, not the original model output.
+
+### Context Assembly
+
+The current plan artifact should be part of runtime context:
+
+- in planning mode, include the existing plan when re-entering or revising;
+- after approval, include a one-time "approved plan" tool result before execution resumes;
+- after compaction, preserve the approved plan reference so the model can continue implementation without relying on old chat turns;
+- `/context` should display the plan artifact path, status, and whether the plan has been approved.
+
+### Status Surfaces
+
+`/status` should expose planning lifecycle fields:
+
+- current mode;
+- plan artifact path;
+- plan status;
+- pending approval age;
+- last approval decision;
+- approved plan hash or revision id;
+- execution progress against the approved plan, if available.
+
+`/context` should expose more detail:
+
+- plan source and path;
+- prompt/runtime sections that mention plan mode;
+- whether current context included the approved plan;
+- whether compacted context retained the plan artifact reference.
+
+### Recovery Scenarios
+
+The complete workflow should handle:
+
+- restart while in `planning`;
+- restart while `plan_ready` is waiting for approval;
+- restart after approval but before implementation resumes;
+- compaction during planning;
+- compaction during implementation of an approved plan;
+- model switch during planning or after approval;
+- user edits plan content before approval;
+- stale plan file when a new unrelated task enters plan mode.
+
+Re-entry rules:
+
+- if the new request continues the same task, read and revise the existing plan;
+- if the new request is unrelated, replace the existing plan artifact and record a new plan revision;
+- do not silently execute an old approved plan for a new request.
+
+### Implementation Plan
+
+Suggested PR sequence:
+
+1. Clarify artifact storage:
+   - add explicit `session_artifact_dir` and `session_plan_path` APIs;
+   - stop using legacy-history naming for new plan artifacts;
+   - add tests for path layout.
+
+2. Persist pending plan approval:
+   - add structured rollout events for plan submission and decision;
+   - restore pending approval cards from persisted state;
+   - ensure approved-plan tool results are injected exactly once.
+
+3. Add tool capability metadata:
+   - extend `Tool` with mode capability metadata;
+   - replace plan-mode name deny-lists with metadata filtering;
+   - keep protocol tool names centralized as constants.
+
+4. Add editable approval UI:
+   - render the persisted plan artifact in the approval card;
+   - allow continue/reject feedback to be stored with the plan revision;
+   - optionally support editing the plan before approval.
+
+5. Improve context and status:
+   - include plan status in `/status`;
+   - include plan artifact details in `/context`;
+   - preserve plan references across compaction and model switching.
+
+6. Retire compatibility auto-approval:
+   - require `exit_plan_mode` for implementation-plan approval;
+   - keep analysis-only planning answers as normal final answers;
+   - update tests and prompts so models do not rely on implicit auto-resume.
+
+### Open Questions
+
+- Should RARA allow the model to directly edit `plan.md`, or should all plan updates continue flowing through `<proposed_plan>` until a dedicated plan-edit tool exists?
+- Should plan revisions be separate files, appended structured events, or both?
+- Should approval support semantic command permissions like Claude's `allowedPrompts`?
+- Should the plan artifact be included in exports or only local session state?
+- How should stale plans be garbage-collected?
