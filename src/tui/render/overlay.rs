@@ -158,7 +158,7 @@ fn render_help_modal(f: &mut Frame, app: &TuiApp, area: Rect, tab: HelpTab) {
             );
         }
         HelpTab::Commands => {
-            let query = app.input.trim_start().trim_start_matches('/');
+            let query = app.command_query();
             let items = help_command_items(query)
                 .into_iter()
                 .map(command_palette_item)
@@ -240,7 +240,7 @@ fn render_help_modal(f: &mut Frame, app: &TuiApp, area: Rect, tab: HelpTab) {
 }
 
 fn render_command_palette(f: &mut Frame, app: &TuiApp, area: Rect) {
-    let query = app.input.trim_start().trim_start_matches('/');
+    let query = app.command_query();
     let items = if query.is_empty() {
         palette_items_for_empty_query(app)
     } else {
@@ -578,7 +578,7 @@ fn setup_flow_rect(area: Rect) -> Rect {
 }
 
 fn command_palette_rect(area: Rect, bottom_pane_area: Rect, app: &TuiApp) -> Rect {
-    let query = app.input.trim_start().trim_start_matches('/');
+    let query = app.command_query();
     let item_count = if query.is_empty() {
         palette_commands(app, "").len()
     } else {

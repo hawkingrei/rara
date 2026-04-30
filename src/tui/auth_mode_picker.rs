@@ -7,6 +7,8 @@ pub(crate) struct AuthModePickerView {
     pub(crate) footer: &'static str,
 }
 
+pub(crate) const AUTH_MODE_OPTION_COUNT: usize = 4;
+
 pub(crate) fn build_auth_mode_picker_view(app: &TuiApp, ssh_session: bool) -> AuthModePickerView {
     let ssh_hint = if ssh_session {
         "\n\nSSH session detected. Browser login on a remote shell usually cannot complete the localhost callback. Device-code login or API key is recommended in SSH/headless sessions."
@@ -35,6 +37,7 @@ pub(crate) fn build_auth_mode_picker_view(app: &TuiApp, ssh_session: bool) -> Au
             "Clear the saved provider credential and rebuild the current codex backend.",
         ),
     ];
+    debug_assert_eq!(options.len(), AUTH_MODE_OPTION_COUNT);
     let mut lines = vec![
         format!("Current model: {}", app.current_model_label()),
         "Provider: codex".to_string(),
