@@ -208,7 +208,7 @@ pub(crate) async fn dispatch_event(
             let value = app.api_key_input.trim();
             if app.is_busy() {
                 app.push_notice("Wait for the current task before saving the API key.");
-            } else if value.is_empty() && app.config.provider == "codex" {
+            } else if value.is_empty() && app.selected_provider_family() == ProviderFamily::Codex {
                 app.push_notice("Enter a Codex API key or press Esc to go back.");
             } else if value.is_empty() && app.selected_provider_family() == ProviderFamily::DeepSeek
             {
