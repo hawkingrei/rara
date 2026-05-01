@@ -1,5 +1,6 @@
 use crate::sandbox::{SandboxManager, WrappedCommand, sandbox_failure_hint};
 use crate::tool::{Tool, ToolError, ToolOutputStream, ToolProgressEvent};
+use crate::tool_result::model_preview_bash_output;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -741,7 +742,7 @@ impl Tool for BashTool {
         "bash"
     }
     fn description(&self) -> &str {
-        "Run a shell command in the sandbox for commands that need process execution. Prefer dedicated RARA tools for file search, file reads, and file edits; do not use shell redirection, sed, awk, perl, or ad-hoc scripts to edit files when apply_patch or direct file tools can do the job. Use the cwd field instead of prepending cd, avoid newline-separated command chaining, and keep commands sandboxed unless require_escalated is justified by user request or clear sandbox failure evidence. Use run_in_background for long-running non-interactive commands, then inspect or stop them with background_task_status, background_task_list, and background_task_stop."
+        "Run a shell command in the sandbox for commands that need process execution. Prefer dedicated RARA tools for file search, file reads, and file edits; do not use shell redirection, sed, awk, perl, or ad-hoc scripts to edit files when apply_patch or direct file tools can do the job. Use the cwd field instead of prepending cd. Do not use newlines to separate commands. If commands are independent and can run in parallel, make multiple bash tool calls in one assistant turn instead of joining them with &&, ;, or pipelines. Do not add 2>&1, head, tail, or grep only to reduce displayed output; RARA preserves stdout/stderr and provides bounded model-facing previews. Keep commands sandboxed unless require_escalated is justified by user request or clear sandbox failure evidence. Use run_in_background for long-running non-interactive commands, then inspect or stop them with background_task_status, background_task_list, and background_task_stop."
     }
     fn input_schema(&self) -> Value {
         json!({
@@ -749,7 +750,7 @@ impl Tool for BashTool {
             "properties": {
                 "command": {
                     "type": "string",
-                    "description": "Legacy shell command string. Prefer program+args for new calls. Avoid newline-separated command chaining, and do not use this field for file edits when apply_patch or direct file tools can do the job."
+                    "description": "Legacy shell command string. Prefer program+args for new calls. Do not use newlines to separate commands. Do not join independent validation commands with &&, ;, or pipelines just to run them together; make multiple bash tool calls instead. Do not add 2>&1, head, tail, or grep only to trim output for the model. Do not use this field for file edits when apply_patch or direct file tools can do the job."
                 },
                 "program": {
                     "type": "string",
@@ -984,7 +985,7 @@ impl Tool for BashTool {
         }
         let duration_ms = started_at.elapsed().as_millis() as u64;
         let model_preview_output =
-            model_preview_bash_output(&aggregated_output, status.code().unwrap_or(1));
+            model_preview_bash_output(&aggregated_output, status.code().map(i64::from));
 
         Ok(json!({
             "stdout": stdout_text,
@@ -1309,36 +1310,6 @@ fn append_aggregated_bash_output(
     *last_stream = Some(stream);
 }
 
-fn model_preview_bash_output(output: &str, exit_code: i32) -> String {
-    const SUCCESS_HEAD_CHARS: usize = 2_000;
-    const SUCCESS_TAIL_CHARS: usize = 2_000;
-    const ERROR_HEAD_CHARS: usize = 1_000;
-    const ERROR_TAIL_CHARS: usize = 3_000;
-
-    let (head_chars, tail_chars) = if exit_code == 0 {
-        (SUCCESS_HEAD_CHARS, SUCCESS_TAIL_CHARS)
-    } else {
-        (ERROR_HEAD_CHARS, ERROR_TAIL_CHARS)
-    };
-    head_tail_text(output, head_chars, tail_chars)
-}
-
-fn head_tail_text(text: &str, head_chars: usize, tail_chars: usize) -> String {
-    let total_chars = text.chars().count();
-    let budget = head_chars.saturating_add(tail_chars);
-    if total_chars <= budget {
-        return text.to_string();
-    }
-
-    let head = text.chars().take(head_chars).collect::<String>();
-    let tail_start = total_chars.saturating_sub(tail_chars);
-    let tail = text.chars().skip(tail_start).collect::<String>();
-    let omitted = total_chars
-        .saturating_sub(head_chars)
-        .saturating_sub(tail_chars);
-    format!("{head}\n... [{omitted} chars truncated from middle] ...\n{tail}")
-}
-
 fn sandbox_output_hint(stderr: &str) -> Option<&'static str> {
     let lower = stderr.to_ascii_lowercase();
     if lower.contains("sandbox: violation")
@@ -1382,11 +1353,11 @@ mod tests {
         BackgroundTaskListTool, BackgroundTaskStatus, BackgroundTaskStatusTool,
         BackgroundTaskStopTool, BackgroundTaskStore, BashCommandInput, BashSandboxPermissions,
         BashStreamKind, BashTool, append_aggregated_bash_output, command_env_for_wrapped,
-        model_preview_bash_output, read_output_tail, sandbox_command_env, sandbox_output_hint,
-        unsandboxed_execution_warning,
+        read_output_tail, sandbox_command_env, sandbox_output_hint, unsandboxed_execution_warning,
     };
     use crate::sandbox::{SandboxManager, WrappedCommand};
     use crate::tool::{Tool, ToolOutputStream, ToolProgressEvent};
+    use crate::tool_result::model_preview_bash_output;
     use serde_json::{Value, json};
     use std::collections::HashMap;
     use std::env;
@@ -1958,7 +1929,7 @@ mod tests {
     fn model_preview_bash_output_preserves_error_tail() {
         let output = format!("head\n{}tail-error\n", "middle\n".repeat(2_000));
 
-        let preview = model_preview_bash_output(&output, 1);
+        let preview = model_preview_bash_output(&output, Some(1));
 
         assert!(preview.contains("head"));
         assert!(preview.contains("tail-error"));

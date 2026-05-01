@@ -38,6 +38,11 @@ The transcript should move toward Codex/Claude-style tool visibility:
   - prefer dedicated RARA tools for file search, reads, and edits;
   - use `cwd` instead of prepending `cd`;
   - avoid newline-separated shell chaining;
+  - issue independent validation commands as separate tool calls instead of
+    combining them with `&&`, `;`, or pipelines only to run them together;
+  - avoid adding `2>&1`, `head`, `tail`, or `grep` only to reduce displayed
+    output, because the tool/result layer preserves stdout/stderr and provides a
+    bounded model-facing preview;
   - keep commands sandboxed unless escalation is justified by user request or
     clear sandbox failure evidence;
   - use background task controls for long-running non-interactive commands.
@@ -56,7 +61,8 @@ The transcript should move toward Codex/Claude-style tool visibility:
   preview. The full JSON payload remains inspectable from that path.
 - A single tool-result batch should enforce an aggregate model-facing budget so
   parallel tool calls cannot combine many individually acceptable results into
-  one oversized follow-up turn.
+  one oversized follow-up turn. The final compacted batch must fit the aggregate
+  budget, not only shorten the first oversized item encountered.
 - When shell execution pauses on a human approval request, the approval card should take visual priority over older live stdout/stderr progress from the same turn.
 - Approval choices should describe both the action and its scope, such as:
   - allow only the current command;
