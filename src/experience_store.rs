@@ -7,7 +7,7 @@ use std::time::SystemTime;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct StoredExperience {
     text: String,
-    created_at: u64, // unix timestamp seconds
+    created_at: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -41,7 +41,7 @@ impl ExperienceStore {
         })
     }
 
-    /// Persist an experience and return its index.
+    /// Persist an experience atomically.
     pub fn remember(&self, text: &str) {
         let trimmed = text.trim();
         if trimmed.is_empty() {
@@ -56,16 +56,18 @@ impl ExperienceStore {
             text: trimmed.to_string(),
             created_at: now,
         });
-        guard.dirty = true;
-        drop(guard);
-        let _ = self.flush();
+        let json = serde_json::to_string_pretty(&guard.data).expect("serialize experiences");
+        let tmp = self.path.with_extension("json.tmp");
+        std::fs::write(&tmp, json).expect("write experiences tmp file");
+        std::fs::rename(&tmp, &self.path).expect("commit experiences file");
     }
 
-    /// Retrieve experiences matching query keywords. Returns ordered by recency.
+    /// Retrieve experiences matching query keywords.
+    /// Results are ranked by match score descending, with recency breaking ties.
     pub fn retrieve(&self, query: &str, limit: usize) -> Vec<String> {
         let keywords = query_keywords(query);
         let guard = self.state.lock().expect("experience store poisoned");
-        let mut scored: Vec<(usize, &StoredExperience)> = guard
+        let mut scored: Vec<(usize, usize, &StoredExperience)> = guard
             .data
             .experiences
             .iter()
@@ -78,14 +80,13 @@ impl ExperienceStore {
                     None
                 }
             })
-            .map(|(idx, score, exp)| (idx, exp))
             .collect();
-        // Sort by recency (higher index = more recent)
-        scored.sort_by_key(|(idx, _)| std::cmp::Reverse(*idx));
+        // Sort by score descending, then recency (higher index = more recent) as tiebreaker
+        scored.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| b.0.cmp(&a.0)));
         scored
             .into_iter()
             .take(limit)
-            .map(|(_, exp)| exp.text.clone())
+            .map(|(_, _, exp)| exp.text.clone())
             .collect()
     }
 
@@ -94,32 +95,15 @@ impl ExperienceStore {
         let guard = self.state.lock().expect("experience store poisoned");
         guard.data.experiences.len()
     }
-
-    /// Check if the store is empty.
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-
-    fn flush(&self) -> Result<()> {
-        let guard = self.state.lock().expect("experience store poisoned");
-        if !guard.dirty {
-            return Ok(());
-        }
-        let json = serde_json::to_string_pretty(&guard.data)?;
-        drop(guard);
-        std::fs::write(&self.path, json)?;
-        // Safe to reacquire after drop
-        if let Ok(mut guard) = self.state.lock() {
-            guard.dirty = false;
-        }
-        Ok(())
-    }
 }
 
 fn query_keywords(query: &str) -> Vec<String> {
     query
         .split_whitespace()
-        .map(|w| w.trim_matches(|c: char| !c.is_alphanumeric()).to_lowercase())
+        .map(|w| {
+            w.trim_matches(|c: char| !c.is_alphanumeric())
+                .to_lowercase()
+        })
         .filter(|w| !w.is_empty() && w.len() >= 2)
         .collect()
 }
@@ -159,10 +143,11 @@ mod tests {
         store.remember("apple date elderberry");
         store.remember("fig grape honeydew");
 
-        // "apple banana" should match the first experience best
         let results = store.retrieve("apple banana", 5);
-        assert!(results.iter().any(|r| r.contains("cherry")),
-            "should find the apple+banana matching entry");
+        assert!(
+            results.iter().any(|r| r.contains("cherry")),
+            "should find the apple+banana matching entry"
+        );
     }
 
     #[test]
@@ -189,7 +174,6 @@ mod tests {
     fn empty_store() {
         let dir = tempfile::tempdir().unwrap();
         let store = ExperienceStore::new(dir.path().to_path_buf()).unwrap();
-        assert!(store.is_empty());
         assert_eq!(store.len(), 0);
         let results = store.retrieve("anything", 5);
         assert!(results.is_empty());
@@ -206,10 +190,59 @@ mod tests {
             store.remember("persisted experience two");
         }
 
-        // Re-open and verify data survived
         let store2 = ExperienceStore::new(path).unwrap();
         assert_eq!(store2.len(), 2);
         let results = store2.retrieve("persisted", 5);
         assert_eq!(results.len(), 2);
+    }
+
+    #[test]
+    fn score_ranking_preferred_over_recency() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = ExperienceStore::new(dir.path().to_path_buf()).unwrap();
+
+        store.remember("apple banana cherry");
+        store.remember("apple cherry");
+
+        let results = store.retrieve("apple banana cherry", 5);
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0], "apple banana cherry");
+        assert_eq!(results[1], "apple cherry");
+    }
+
+    #[test]
+    fn recency_breaks_score_ties() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = ExperienceStore::new(dir.path().to_path_buf()).unwrap();
+
+        store.remember("older rust project");
+        store.remember("newer rust project");
+
+        let results = store.retrieve("rust", 5);
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0], "newer rust project");
+    }
+
+    #[test]
+    fn is_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = ExperienceStore::new(dir.path().to_path_buf()).unwrap();
+        assert_eq!(store.len(), 0);
+        store.remember("test");
+        assert_eq!(store.len(), 1);
+    }
+
+    #[test]
+    fn keyword_splitting() {
+        let kw = query_keywords("Rust, Python! and Go");
+        assert_eq!(kw, vec!["rust", "python", "and", "go"]);
+    }
+
+    #[test]
+    fn match_score_counting() {
+        let kw = vec!["rust".to_string(), "python".to_string()];
+        assert_eq!(match_score(&kw, "I like Rust and Python"), 2);
+        assert_eq!(match_score(&kw, "I like Rust"), 1);
+        assert_eq!(match_score(&kw, "I like Go"), 0);
     }
 }

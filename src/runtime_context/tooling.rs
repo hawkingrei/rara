@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::llm::LlmBackend;
 use crate::experience_store::ExperienceStore;
+use crate::llm::LlmBackend;
 use crate::prompt::PromptRuntimeConfig;
 use crate::sandbox::SandboxManager;
 use crate::session::SessionManager;
@@ -43,9 +43,8 @@ pub(super) fn create_full_tool_manager(
     sandbox_network_access: bool,
 ) -> ToolManager {
     let mut tm = ToolManager::new();
-    let experience_store = Arc::new(
-        ExperienceStore::new(workspace.rara_dir.clone()).expect("experience store"),
-    );
+    let experience_store =
+        Arc::new(ExperienceStore::new(workspace.rara_dir.clone()).expect("experience store"));
     let background_tasks = Arc::new(
         BackgroundTaskStore::new(workspace.rara_dir.join("background-tasks"))
             .expect("background task store"),

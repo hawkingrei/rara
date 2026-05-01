@@ -461,15 +461,30 @@ fn render_context_summary(app: &TuiApp) -> String {
         context_window,
         total_budgeted,
         utilization,
-        app.snapshot.remaining_input_budget.map(|v| v.to_string()).unwrap_or_else(|| "-".to_string()),
+        app.snapshot
+            .remaining_input_budget
+            .map(|v| v.to_string())
+            .unwrap_or_else(|| "-".to_string()),
         layer_counts
     )
 }
 
 fn count_assembly_layers(app: &TuiApp) -> String {
     let mut layers: Vec<(&str, usize, usize)> = Vec::new();
-    for layer in &["stable_instructions", "workspace_prompt_sources", "active_memory_inputs", "compacted_history", "active_turn_state", "retrieval_ready"] {
-        let entries: Vec<_> = app.snapshot.assembly_entries.iter().filter(|e| e.layer == *layer).collect();
+    for layer in &[
+        "stable_instructions",
+        "workspace_prompt_sources",
+        "active_memory_inputs",
+        "compacted_history",
+        "active_turn_state",
+        "retrieval_ready",
+    ] {
+        let entries: Vec<_> = app
+            .snapshot
+            .assembly_entries
+            .iter()
+            .filter(|e| e.layer == *layer)
+            .collect();
         if !entries.is_empty() {
             let token_sum: usize = entries.iter().filter_map(|e| e.budget_impact_tokens).sum();
             layers.push((layer, entries.len(), token_sum));
@@ -489,11 +504,19 @@ fn retrieval_digest(app: &TuiApp) -> String {
     let sel = app.snapshot.memory_selection.selected_items.len();
     let av = app.snapshot.memory_selection.available_items.len();
     let dr = app.snapshot.memory_selection.dropped_items.len();
-    let has_workspace_mem = app.snapshot.memory_selection.selected_items.iter().any(|i| i.kind == "workspace_memory");
-    let has_compact = app.snapshot.memory_selection.selected_items.iter().any(|i| i.kind == "compacted_summary" || i.kind == "recent_files");
-    let mut parts = vec![
-        format!("memory selected={sel} available={av} dropped={dr}"),
-    ];
+    let has_workspace_mem = app
+        .snapshot
+        .memory_selection
+        .selected_items
+        .iter()
+        .any(|i| i.kind == "workspace_memory");
+    let has_compact = app
+        .snapshot
+        .memory_selection
+        .selected_items
+        .iter()
+        .any(|i| i.kind == "compacted_summary" || i.kind == "recent_files");
+    let mut parts = vec![format!("memory selected={sel} available={av} dropped={dr}")];
     if has_workspace_mem {
         parts.push("workspace_memory=active".to_string());
     } else {
