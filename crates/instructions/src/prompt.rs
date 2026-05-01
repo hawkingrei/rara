@@ -349,6 +349,22 @@ fn default_system_prompt_sections() -> Vec<PromptSection> {
             ),
         ),
         PromptSection::new(
+            "factual_verification",
+            section(
+                "Factual Verification",
+                &[
+                    "Do NOT guess or make up an answer. If a claim depends on current repository state, file contents, command output, branch status, PR/CI status, provider behavior, memory, or earlier conversation context, verify it with the appropriate current source before asserting it.",
+                    "Treat memory and prior conversation as context, not proof. A recalled memory records what may have been true when it was written; it may be stale, incomplete, renamed, removed, or never merged.",
+                    "\"The memory says X exists\" is not the same as \"X exists now.\" Verify file paths, functions, flags, branches, PRs, and CI status before recommending action based on them.",
+                    "Before proposing or making code changes, read the relevant current files. Do not propose changes to code you have not inspected when local inspection is available.",
+                    "Before reporting a task complete, verify it actually works when practical: run the narrowest relevant test, build, check, script, or command and inspect the output.",
+                    "If verification is not possible, not useful, too expensive, or not run, say so explicitly rather than implying it succeeded.",
+                    "Report outcomes faithfully. If tests fail, checks are pending, output is partial, or work is incomplete, state that directly with the relevant evidence. Never claim tests or checks passed unless the observed output shows that they passed.",
+                    "If an approach fails, diagnose why before switching tactics: read the error, check your assumptions, and try a focused fix. Do not retry the identical action blindly.",
+                ],
+            ),
+        ),
+        PromptSection::new(
             "tool_use_safety",
             section(
                 "Tool Use And Safety",
@@ -723,6 +739,39 @@ mod tests {
     }
 
     #[test]
+    fn default_prompt_includes_factual_verification_rules() {
+        let root = std::env::temp_dir().join(format!(
+            "rara-workspace-factual-verification-{}",
+            std::process::id()
+        ));
+        let rara_dir = root.join(".rara");
+        let _ = fs::create_dir_all(&rara_dir);
+        let workspace = WorkspaceMemory::from_paths(root, rara_dir);
+
+        let effective = build_effective_prompt(
+            &workspace,
+            &PromptRuntimeConfig::default(),
+            PromptMode::Execute,
+        );
+
+        assert!(effective.section_keys.contains(&"factual_verification"));
+        assert!(effective.text.contains("# Factual Verification"));
+        assert!(
+            effective
+                .text
+                .contains("Do NOT guess or make up an answer.")
+        );
+        assert!(
+            effective
+                .text
+                .contains("\"The memory says X exists\" is not the same as \"X exists now.\"")
+        );
+        assert!(effective.text.contains(
+            "Never claim tests or checks passed unless the observed output shows that they passed."
+        ));
+    }
+
+    #[test]
     fn build_system_prompt_includes_available_skill_summaries() {
         let root =
             std::env::temp_dir().join(format!("rara-workspace-skills-{}", std::process::id()));
@@ -794,7 +843,7 @@ mod tests {
         assert!(prompt.contains("Do not narrate every next action"));
         assert!(prompt.contains("until the runtime explicitly switches you back"));
         assert!(prompt.contains("treat it as a request to refine the implementation plan"));
-        assert!(prompt.contains("In automated planning"));
+        assert!(prompt.contains("Use this mode to inspect the codebase"));
         assert!(prompt.contains("run read-only shell commands"));
         assert!(prompt.contains(
             "For research, review, diagnosis, planning-advice, or code-inspection tasks"
