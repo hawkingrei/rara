@@ -1753,10 +1753,12 @@ mod tests {
             Some("direct")
         );
         assert_eq!(result.get("stdout").and_then(Value::as_str), Some("direct"));
-        assert_eq!(
-            result.get("aggregated_output").and_then(Value::as_str),
-            Some("direct")
-        );
+        let aggregated_output = result
+            .get("aggregated_output")
+            .and_then(Value::as_str)
+            .expect("aggregated output");
+        assert!(aggregated_output.contains("direct"));
+        assert!(aggregated_output.contains("without sandbox isolation"));
         assert!(result.get("duration_ms").and_then(Value::as_u64).is_some());
         assert!(
             result
