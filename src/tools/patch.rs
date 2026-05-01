@@ -378,18 +378,26 @@ fn apply_update_chunks(
     let mut cursor = 0usize;
 
     for chunk in chunks {
-        let old_lines: Vec<String> = chunk
-            .lines
-            .iter()
-            .filter(|line| line.kind != DiffLineKind::Addition)
-            .map(|line| line.text.clone())
-            .collect();
-        let new_lines: Vec<String> = chunk
-            .lines
-            .iter()
-            .filter(|line| line.kind != DiffLineKind::Removal)
-            .map(|line| line.text.clone())
-            .collect();
+        let mut old_lines = Vec::new();
+        let mut new_lines = Vec::new();
+        let mut added_in_chunk = 0usize;
+        let mut removed_in_chunk = 0usize;
+        for line in &chunk.lines {
+            match line.kind {
+                DiffLineKind::Context => {
+                    old_lines.push(line.text.clone());
+                    new_lines.push(line.text.clone());
+                }
+                DiffLineKind::Addition => {
+                    new_lines.push(line.text.clone());
+                    added_in_chunk += 1;
+                }
+                DiffLineKind::Removal => {
+                    old_lines.push(line.text.clone());
+                    removed_in_chunk += 1;
+                }
+            }
+        }
 
         let Some(relative_start) = find_subsequence(&original_lines[cursor..], &old_lines) else {
             return Err(ToolError::ExecutionFailed(format!(
@@ -401,16 +409,8 @@ fn apply_update_chunks(
         output.extend(new_lines.clone());
         cursor = start + old_lines.len();
         stats.hunks_applied += 1;
-        stats.added_lines += chunk
-            .lines
-            .iter()
-            .filter(|line| line.kind == DiffLineKind::Addition)
-            .count();
-        stats.removed_lines += chunk
-            .lines
-            .iter()
-            .filter(|line| line.kind == DiffLineKind::Removal)
-            .count();
+        stats.added_lines += added_in_chunk;
+        stats.removed_lines += removed_in_chunk;
     }
 
     output.extend_from_slice(&original_lines[cursor..]);
