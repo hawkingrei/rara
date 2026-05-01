@@ -647,48 +647,9 @@ impl Agent {
                         request.summary()
                     )));
                 } else {
-                    let summary = request.summary();
                     self.pending_approval = Some(PendingApproval {
                         tool_use_id: tool_id.clone(),
                         request: request.to_owned(),
-                    });
-                    let question = request
-                        .justification
-                        .as_ref()
-                        .filter(|value| !value.trim().is_empty())
-                        .cloned()
-                        .unwrap_or_else(|| {
-                            "Bash command needs approval. What should RARA do?".to_string()
-                        });
-                    self.pending_user_input = Some(PendingUserInput {
-                        question,
-                        options: vec![
-                            (
-                                "Run once".to_string(),
-                                "Execute this command now and then return to suggestion mode."
-                                    .to_string(),
-                            ),
-                            (
-                                "Allow matching prefix".to_string(),
-                                format!(
-                                    "Execute now and auto-allow later commands that start with '{}'.",
-                                    request
-                                        .approval_prefix()
-                                        .unwrap_or_else(|| request.summary())
-                                ),
-                            ),
-                            (
-                                "Always allow bash".to_string(),
-                                "Execute now and keep bash approval open for later commands."
-                                    .to_string(),
-                            ),
-                            (
-                                "Suggestion only".to_string(),
-                                "Do not run the command automatically. Continue with a safer path."
-                                    .to_string(),
-                            ),
-                        ],
-                        note: Some(format!("command: {}", summary)),
                     });
                     report(AgentEvent::Status(
                         "Bash approval required. Waiting for a structured user decision."

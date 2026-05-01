@@ -33,7 +33,10 @@ fn mouse_scroll(kind: MouseEventKind) -> Event {
         modifiers: KeyModifiers::NONE,
     })
 }
-use super::state::{Overlay, ProviderFamily, RunningTask, TaskKind, TuiApp};
+use super::state::{
+    InteractionKind, Overlay, PendingApprovalSnapshot, PendingInteractionSnapshot, ProviderFamily,
+    RunningTask, TaskKind, TuiApp,
+};
 use super::{dispatch_event, map_key_to_event};
 
 fn provider_family_idx(family: ProviderFamily) -> usize {
@@ -121,6 +124,35 @@ async fn pending_plan_approval_blocks_plain_submit() {
         app.notice
             .as_deref()
             .is_some_and(|value| value.contains("Press 1 to start implementation"))
+    );
+}
+
+#[tokio::test]
+async fn submit_numeric_input_handles_pending_shell_approval() {
+    let temp = tempdir().expect("tempdir");
+    let mut app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("app");
+    add_pending_shell_approval(&mut app);
+    app.input = "4".into();
+
+    let mut agent_slot = None;
+    let oauth_manager = Arc::new(
+        crate::oauth::OAuthManager::new_for_config_dir(temp.path().join(".rara"))
+            .expect("oauth manager"),
+    );
+    let should_quit = super::handle_submit(&mut app, &mut agent_slot, &oauth_manager)
+        .await
+        .expect("submit");
+
+    assert!(!should_quit);
+    assert!(app.running_task.is_none());
+    assert_eq!(app.input, "");
+    assert!(
+        app.notice
+            .as_deref()
+            .is_some_and(|value| value.contains("Approval is still preparing"))
     );
 }
 
@@ -269,6 +301,99 @@ fn auth_mode_picker_prefers_selection_navigation() {
     assert!(matches!(
         map_key_to_event(key(KeyCode::Char('3')), &app),
         AppEvent::SetAuthModeSelection(2)
+    ));
+}
+
+fn add_pending_shell_approval(app: &mut TuiApp) {
+    app.snapshot
+        .pending_interactions
+        .push(PendingInteractionSnapshot {
+            kind: InteractionKind::Approval,
+            title: "Pending Approval".into(),
+            summary: "git rebase --continue".into(),
+            options: Vec::new(),
+            note: None,
+            approval: Some(PendingApprovalSnapshot {
+                tool_use_id: "tool-1".into(),
+                command: "git rebase --continue".into(),
+                allow_net: false,
+                payload: Default::default(),
+            }),
+            source: None,
+        });
+}
+
+fn add_pending_request_input(app: &mut TuiApp, option_count: usize) {
+    app.snapshot
+        .pending_interactions
+        .push(PendingInteractionSnapshot {
+            kind: InteractionKind::RequestInput,
+            title: "Choose one".into(),
+            summary: String::new(),
+            options: (1..=option_count)
+                .map(|index| (format!("option {index}"), String::new()))
+                .collect(),
+            note: None,
+            approval: None,
+            source: None,
+        });
+}
+
+#[test]
+fn pending_shell_approval_number_shortcuts_work_in_local_and_ssh() {
+    for ssh in [false, true] {
+        let _ssh_env = super::terminal_ui::test_env::set_ssh_session(ssh);
+        let temp = tempdir().expect("tempdir");
+        let mut app = TuiApp::new(ConfigManager {
+            path: temp.path().join("config.json"),
+        })
+        .expect("app");
+        add_pending_shell_approval(&mut app);
+
+        assert!(matches!(
+            map_key_to_event(key(KeyCode::Char('1')), &app),
+            AppEvent::SelectPendingOption(0)
+        ));
+        assert!(matches!(
+            map_key_to_event(key(KeyCode::Char('4')), &app),
+            AppEvent::SelectPendingOption(3)
+        ));
+    }
+}
+
+#[test]
+fn pending_shell_approval_does_not_render_as_request_input() {
+    let temp = tempdir().expect("tempdir");
+    let mut app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("app");
+    add_pending_shell_approval(&mut app);
+
+    assert_eq!(
+        app.active_pending_interaction().map(|item| item.kind),
+        Some(super::state::ActivePendingInteractionKind::ShellApproval)
+    );
+    assert_eq!(app.active_pending_option_count(), 4);
+}
+
+#[test]
+fn request_input_shortcuts_match_advertised_three_options() {
+    let temp = tempdir().expect("tempdir");
+    let mut app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("app");
+    add_pending_request_input(&mut app, 4);
+
+    assert_eq!(app.active_pending_option_count(), 3);
+    assert!(matches!(
+        map_key_to_event(key(KeyCode::Char('3')), &app),
+        AppEvent::SelectPendingOption(2)
+    ));
+    assert!(matches!(
+        map_key_to_event(key(KeyCode::Char('4')), &app),
+        AppEvent::InputChar('4')
     ));
 }
 
