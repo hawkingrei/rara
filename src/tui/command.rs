@@ -342,7 +342,7 @@ fn render_context_assembly_entries(app: &TuiApp, layer: &str, title: &str) -> St
             let cache = cache_marker(entry.cache_status);
             let budget = entry
                 .budget_impact_tokens
-                .map(|v| format!(" {v}t"))
+                .map(|v| format!(" {}", format_token_count(v)))
                 .unwrap_or_default();
             let drop_note = match entry.dropped_reason.as_ref() {
                 Some(r) if !r.is_empty() && r != "-" => format!(" ── reason: {r}"),
@@ -365,7 +365,7 @@ fn render_memory_selection(app: &TuiApp) -> String {
         .snapshot
         .memory_selection
         .selection_budget_tokens
-        .map(|v| format!("{v}t"))
+        .map(format_token_count)
         .unwrap_or_else(|| "unlimited".to_string());
 
     let render_items = |items: &[crate::context::MemorySelectionItemContextEntry]| -> String {
@@ -383,7 +383,7 @@ fn render_memory_selection(app: &TuiApp) -> String {
                 };
                 let budget = item
                     .budget_impact_tokens
-                    .map(|v| format!(" {v}t"))
+                    .map(|v| format!(" {}", format_token_count(v)))
                     .unwrap_or_default();
                 let detail_preview = truncate_preview(&item.detail, 60);
                 let selection_reason = truncate_preview(&item.selection_reason, 70);
@@ -443,6 +443,84 @@ fn cache_marker(cache_status: Option<CacheStatus>) -> &'static str {
     }
 }
 
+fn format_token_count(tokens: usize) -> String {
+    format!("{tokens} tokens")
+}
+
+fn format_token_percent(tokens: usize, window: Option<usize>) -> String {
+    let Some(window) = window.filter(|value| *value > 0) else {
+        return String::new();
+    };
+    let percent = tokens as f64 * 100.0 / window as f64;
+    format!(" ({percent:.1}%)")
+}
+
+fn context_usage_line(label: &str, tokens: usize, window: Option<usize>) -> String {
+    format!(
+        "  {label}: {}{}",
+        format_token_count(tokens),
+        format_token_percent(tokens, window)
+    )
+}
+
+fn render_context_usage_summary(app: &TuiApp) -> String {
+    let window = app.snapshot.context_window_tokens;
+    let prompt_tokens = app
+        .snapshot
+        .stable_instructions_budget
+        .saturating_add(app.snapshot.workspace_prompt_budget);
+    let used_tokens = prompt_tokens
+        .saturating_add(app.snapshot.active_turn_budget)
+        .saturating_add(app.snapshot.compacted_history_budget)
+        .saturating_add(app.snapshot.retrieved_memory_budget)
+        .saturating_add(app.snapshot.reserved_output_tokens);
+    let free_tokens = app
+        .snapshot
+        .remaining_input_budget
+        .or_else(|| window.map(|window| window.saturating_sub(used_tokens)));
+    let autocompact_buffer = window
+        .map(|window| window.saturating_sub(app.snapshot.compact_threshold_tokens))
+        .filter(|tokens| *tokens > 0);
+
+    let mut lines = vec![
+        "Context Usage".to_string(),
+        format!("  model: {}", app.current_model_label()),
+        format!(
+            "  used: {}{} / {}",
+            format_token_count(used_tokens),
+            format_token_percent(used_tokens, window),
+            window
+                .map(format_token_count)
+                .unwrap_or_else(|| "unknown window".to_string())
+        ),
+        "  Estimated usage by category".to_string(),
+        context_usage_line("System prompt", prompt_tokens, window),
+        context_usage_line("Active turn", app.snapshot.active_turn_budget, window),
+        context_usage_line(
+            "Compacted history",
+            app.snapshot.compacted_history_budget,
+            window,
+        ),
+        context_usage_line(
+            "Retrieved memory",
+            app.snapshot.retrieved_memory_budget,
+            window,
+        ),
+        context_usage_line(
+            "Reserved output",
+            app.snapshot.reserved_output_tokens,
+            window,
+        ),
+    ];
+    if let Some(tokens) = free_tokens {
+        lines.push(context_usage_line("Free space", tokens, window));
+    }
+    if let Some(tokens) = autocompact_buffer {
+        lines.push(context_usage_line("Autocompact buffer", tokens, window));
+    }
+    lines.join("\n")
+}
+
 pub fn status_context_text(app: &TuiApp) -> String {
     let prompt_warnings = if app.snapshot.prompt_warnings.is_empty() {
         None
@@ -483,18 +561,19 @@ pub fn status_context_text(app: &TuiApp) -> String {
         let before = app
             .snapshot
             .last_compaction_boundary_before_tokens
-            .map(|tokens| tokens.to_string())
+            .map(format_token_count)
             .unwrap_or_else(|| "-".to_string());
         let files = app
             .snapshot
             .last_compaction_boundary_recent_file_count
             .map(|count| count.to_string())
             .unwrap_or_else(|| "-".to_string());
-        format!("v{version} before_tokens={before} recent_file_count={files}")
+        format!("v{version} before={before} recent_file_count={files}")
     } else {
         "-".to_string()
     };
     let mut sections = vec![
+        render_context_usage_summary(app),
         format!(
             "Session\n  cwd: {}\n  branch: {}\n  session: {}\n  history: {} msgs  {} entries",
             app.snapshot.cwd,
@@ -507,31 +586,31 @@ pub fn status_context_text(app: &TuiApp) -> String {
             "Budget\n  window: {}  reserved: {}  remaining: {}\n  stable: {}  workspace: {}  active: {}  compacted: {}  retrieved: {}",
             app.snapshot
                 .context_window_tokens
-                .map(|value| value.to_string())
+                .map(format_token_count)
                 .unwrap_or_else(|| "-".to_string()),
-            app.snapshot.reserved_output_tokens,
+            format_token_count(app.snapshot.reserved_output_tokens),
             app.snapshot
                 .remaining_input_budget
-                .map(|value| value.to_string())
+                .map(format_token_count)
                 .unwrap_or_else(|| "-".to_string()),
-            app.snapshot.stable_instructions_budget,
-            app.snapshot.workspace_prompt_budget,
-            app.snapshot.active_turn_budget,
-            app.snapshot.compacted_history_budget,
-            app.snapshot.retrieved_memory_budget,
+            format_token_count(app.snapshot.stable_instructions_budget),
+            format_token_count(app.snapshot.workspace_prompt_budget),
+            format_token_count(app.snapshot.active_turn_budget),
+            format_token_count(app.snapshot.compacted_history_budget),
+            format_token_count(app.snapshot.retrieved_memory_budget),
         ),
         format!(
-            "Compaction\n  estimated: {}t  threshold: {}t  count: {}\n  last: {}t → {}t  boundary: {}",
-            app.snapshot.estimated_history_tokens,
-            app.snapshot.compact_threshold_tokens,
+            "Compaction\n  estimated: {}  threshold: {}  count: {}\n  last: {} → {}  boundary: {}",
+            format_token_count(app.snapshot.estimated_history_tokens),
+            format_token_count(app.snapshot.compact_threshold_tokens),
             app.snapshot.compaction_count,
             app.snapshot
                 .last_compaction_before_tokens
-                .map(|value| value.to_string())
+                .map(format_token_count)
                 .unwrap_or_else(|| "-".to_string()),
             app.snapshot
                 .last_compaction_after_tokens
-                .map(|value| value.to_string())
+                .map(format_token_count)
                 .unwrap_or_else(|| "-".to_string()),
             last_boundary
         ),
@@ -1570,14 +1649,20 @@ mod tests {
         };
 
         let rendered = status_context_text(&app);
+        assert!(rendered.contains("Context Usage"));
+        assert!(rendered.contains("model:"));
+        assert!(rendered.contains("used: 10228 tokens (5.1%) / 200000 tokens"));
+        assert!(rendered.contains("System prompt: 1520 tokens (0.8%)"));
+        assert!(rendered.contains("Free space: 189772 tokens (94.9%)"));
+        assert!(rendered.contains("Autocompact buffer: 20000 tokens (10.0%)"));
         assert!(rendered.contains("Session"));
         assert!(rendered.contains("Budget"));
-        assert!(rendered.contains("stable: 1200"));
+        assert!(rendered.contains("stable: 1200 tokens"));
         assert!(rendered.contains("Stable Instructions"));
         assert!(rendered.contains("Workspace Prompt Sources"));
         assert!(rendered.contains("Active Memory Inputs"));
         assert!(rendered.contains("Memory Selection"));
-        assert!(rendered.contains("budget: 1024"));
+        assert!(rendered.contains("budget: 1024 tokens"));
         assert!(rendered.contains("Compacted History"));
         assert!(rendered.contains("Active Turn State"));
         assert!(rendered.contains("Retrieval-ready"));
@@ -1589,7 +1674,9 @@ mod tests {
         assert!(rendered.contains("○ [local_memory] Workspace Memory"));
         assert!(rendered.contains("- [retrieved_workspace_memory] Retrieved Experience"));
         assert!(rendered.contains("path: AGENTS.md"));
-        assert!(rendered.contains("120t"));
+        assert!(rendered.contains("120 tokens"));
+        assert!(rendered.contains("last: 12000 tokens → 4500 tokens"));
+        assert!(rendered.contains("boundary: v1 before=12000 tokens"));
         assert!(rendered.contains("[thread_history] Thread History (not injected)"));
         assert!(rendered.contains("exceed the remaining memory-selection budget"));
         assert!(rendered.contains("[pending] Implement /context"));
