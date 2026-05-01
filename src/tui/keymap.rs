@@ -226,61 +226,69 @@ pub(crate) fn map_key_to_event(key: KeyEvent, app: &TuiApp) -> AppEvent {
             KeyCode::Enter => AppEvent::ApplyOverlaySelection,
             _ => AppEvent::Noop,
         },
-        None => match (code, modifiers) {
-            (KeyCode::Esc, _) if app.is_busy() => AppEvent::CancelRunningTask,
-            (KeyCode::Esc, _) => AppEvent::Noop,
-            (KeyCode::Enter, KeyModifiers::SHIFT) | (KeyCode::Char('j'), KeyModifiers::CONTROL) => {
-                AppEvent::InsertNewline
-            }
-            (KeyCode::Enter, _) => AppEvent::SubmitComposer,
-            (KeyCode::Left, _) => AppEvent::MoveCursorLeft,
-            (KeyCode::Right, _) => AppEvent::MoveCursorRight,
-            (KeyCode::Home, _) | (KeyCode::Char('a'), KeyModifiers::CONTROL) => {
-                AppEvent::MoveCursorHome
-            }
-            (KeyCode::End, _) | (KeyCode::Char('e'), KeyModifiers::CONTROL) => {
-                AppEvent::MoveCursorEnd
-            }
-            (KeyCode::Up, _) if app.should_handle_input_history_navigation(-1) => {
-                AppEvent::NavigateInputHistory(-1)
-            }
-            (KeyCode::Up, _) => AppEvent::MoveCursorUp,
-            (KeyCode::Down, _) if app.should_handle_input_history_navigation(1) => {
-                AppEvent::NavigateInputHistory(1)
-            }
-            (KeyCode::Down, _) => AppEvent::MoveCursorDown,
-            (KeyCode::Char('k'), _) if app.input.is_empty() => AppEvent::ScrollTranscript(-1),
-            (KeyCode::Char('j'), _) if app.input.is_empty() => AppEvent::ScrollTranscript(1),
-            (KeyCode::PageUp, _) if app.input.is_empty() => AppEvent::ScrollTranscript(-8),
-            (KeyCode::PageDown, _) if app.input.is_empty() => AppEvent::ScrollTranscript(8),
-            (KeyCode::Char('1'), _)
-                if app.input.is_empty()
-                    && (app.active_pending_interaction().is_some()
-                        || app.has_pending_planning_suggestion()) =>
+        None => {
+            if app.input.is_empty()
+                && let Some(index) = pending_shortcut_index(code, app)
             {
-                AppEvent::SelectPendingOption(0)
+                return AppEvent::SelectPendingOption(index);
             }
-            (KeyCode::Char('2'), _)
-                if app.input.is_empty()
-                    && (app.active_pending_interaction().is_some()
-                        || app.has_pending_planning_suggestion()) =>
-            {
-                AppEvent::SelectPendingOption(1)
+
+            match (code, modifiers) {
+                (KeyCode::Esc, _) if app.is_busy() => AppEvent::CancelRunningTask,
+                (KeyCode::Esc, _) => AppEvent::Noop,
+                (KeyCode::Enter, KeyModifiers::SHIFT)
+                | (KeyCode::Char('j'), KeyModifiers::CONTROL) => AppEvent::InsertNewline,
+                (KeyCode::Enter, _) => AppEvent::SubmitComposer,
+                (KeyCode::Left, _) => AppEvent::MoveCursorLeft,
+                (KeyCode::Right, _) => AppEvent::MoveCursorRight,
+                (KeyCode::Home, _) | (KeyCode::Char('a'), KeyModifiers::CONTROL) => {
+                    AppEvent::MoveCursorHome
+                }
+                (KeyCode::End, _) | (KeyCode::Char('e'), KeyModifiers::CONTROL) => {
+                    AppEvent::MoveCursorEnd
+                }
+                (KeyCode::Up, _) if app.should_handle_input_history_navigation(-1) => {
+                    AppEvent::NavigateInputHistory(-1)
+                }
+                (KeyCode::Up, _) => AppEvent::MoveCursorUp,
+                (KeyCode::Down, _) if app.should_handle_input_history_navigation(1) => {
+                    AppEvent::NavigateInputHistory(1)
+                }
+                (KeyCode::Down, _) => AppEvent::MoveCursorDown,
+                (KeyCode::Char('k'), _) if app.input.is_empty() => AppEvent::ScrollTranscript(-1),
+                (KeyCode::Char('j'), _) if app.input.is_empty() => AppEvent::ScrollTranscript(1),
+                (KeyCode::PageUp, _) if app.input.is_empty() => AppEvent::ScrollTranscript(-8),
+                (KeyCode::PageDown, _) if app.input.is_empty() => AppEvent::ScrollTranscript(8),
+                (KeyCode::Char('1'), _)
+                    if app.input.is_empty() && app.has_pending_planning_suggestion() =>
+                {
+                    AppEvent::SelectPendingOption(0)
+                }
+                (KeyCode::Char('2'), _)
+                    if app.input.is_empty() && app.has_pending_planning_suggestion() =>
+                {
+                    AppEvent::SelectPendingOption(1)
+                }
+                (KeyCode::Backspace, _) => AppEvent::Backspace,
+                (KeyCode::Delete, _) | (KeyCode::Char('d'), KeyModifiers::CONTROL) => {
+                    AppEvent::DeleteForward
+                }
+                (KeyCode::Char(c), _) => AppEvent::InputChar(c),
+                _ => AppEvent::Noop,
             }
-            (KeyCode::Char('3'), _)
-                if app.input.is_empty()
-                    && app.active_pending_interaction().is_some_and(|pending| {
-                        pending.kind != super::state::ActivePendingInteractionKind::PlanApproval
-                    }) =>
-            {
-                AppEvent::SelectPendingOption(2)
-            }
-            (KeyCode::Backspace, _) => AppEvent::Backspace,
-            (KeyCode::Delete, _) | (KeyCode::Char('d'), KeyModifiers::CONTROL) => {
-                AppEvent::DeleteForward
-            }
-            (KeyCode::Char(c), _) => AppEvent::InputChar(c),
-            _ => AppEvent::Noop,
-        },
+        }
     }
+}
+
+fn pending_shortcut_index(code: KeyCode, app: &TuiApp) -> Option<usize> {
+    let KeyCode::Char(ch) = code else {
+        return None;
+    };
+
+    let index = match ch.to_digit(10) {
+        Some(digit @ 1..=9) => digit as usize - 1,
+        _ => return None,
+    };
+
+    (index < app.active_pending_option_count()).then_some(index)
 }

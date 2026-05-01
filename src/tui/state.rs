@@ -1532,6 +1532,23 @@ impl TuiApp {
         None
     }
 
+    pub fn active_pending_option_count(&self) -> usize {
+        let Some(pending) = self.active_pending_interaction() else {
+            return 0;
+        };
+        match pending.kind {
+            ActivePendingInteractionKind::PlanApproval => 2,
+            ActivePendingInteractionKind::ShellApproval => 4,
+            ActivePendingInteractionKind::PlanningQuestion
+            | ActivePendingInteractionKind::ExplorationQuestion
+            | ActivePendingInteractionKind::SubAgentQuestion
+            | ActivePendingInteractionKind::RequestInput => self
+                .pending_request_input()
+                .map(|interaction| interaction.options.len().min(3))
+                .unwrap_or(0),
+        }
+    }
+
     pub fn set_pending_plan_approval(&mut self, pending: bool) {
         self.set_plan_approval_interaction(pending);
         self.persist_runtime_state();

@@ -6,6 +6,8 @@ use super::command::{palette_command_by_index, parse_local_command};
 use super::runtime::{execute_local_command, start_query_task};
 use super::state::{LocalCommandKind, OpenAiModelPickerAction, Overlay, TaskKind, TuiApp};
 
+mod pending;
+
 pub(crate) async fn handle_submit(
     app: &mut TuiApp,
     agent_slot: &mut Option<Agent>,
@@ -68,6 +70,9 @@ pub(crate) async fn handle_submit(
     }
 
     if app.has_pending_plan_approval() && !trimmed.starts_with('/') {
+        if pending::handle_pending_option_submit(app, agent_slot, &trimmed) {
+            return Ok(false);
+        }
         handle_pending_plan_approval_submit(app);
         return Ok(false);
     }
@@ -77,39 +82,12 @@ pub(crate) async fn handle_submit(
         }
     } else if trimmed.starts_with('/') {
         app.push_notice(format!("Unknown command '{}'. Use /help.", trimmed));
+    } else if pending::handle_pending_option_submit(app, agent_slot, &trimmed) {
+        return Ok(false);
     } else if let Some(agent) = agent_slot.take() {
-        let mut agent = agent;
         if app.pending_request_input().is_some() {
-            if app.has_local_pending_request_input() {
-                let interaction = app.pending_request_input().cloned();
-                if let Some(interaction) = interaction {
-                    let source = interaction
-                        .source
-                        .clone()
-                        .unwrap_or_else(|| "sub-agent".to_string());
-                    let answer = trimmed.clone();
-                    app.record_completed_interaction(
-                        crate::tui::state::InteractionKind::RequestInput,
-                        interaction.title.clone(),
-                        format!("Answered with: {}", answer),
-                        interaction.source.clone(),
-                    );
-                    app.clear_local_request_input();
-                    let mut prompt = format!(
-                        "Continue the same task. A delegated {source} requested additional user input.\nQuestion: {}\nAnswer: {}",
-                        interaction.title, answer
-                    );
-                    if let Some(note) = interaction.note.as_deref() {
-                        if !note.trim().is_empty() {
-                            prompt.push_str(&format!("\nContext: {}", note.trim()));
-                        }
-                    }
-                    start_query_task(app, prompt, agent);
-                    return Ok(false);
-                }
-            } else {
-                agent.consume_pending_user_input(&trimmed);
-            }
+            pending::handle_request_input_answer(app, agent_slot, agent, trimmed);
+            return Ok(false);
         }
         let prompt = trimmed;
         app.clear_pending_planning_suggestion();

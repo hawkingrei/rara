@@ -368,13 +368,9 @@ async fn suggestion_mode_uses_escalated_sandbox_justification_for_approval() {
         .expect("query should pause on escalated bash approval");
 
     assert!(agent.pending_approval.is_some());
-    let pending = agent
-        .pending_user_input
-        .as_ref()
-        .expect("pending user input");
-    assert_eq!(
-        pending.question,
-        "Do you want to run cargo check outside the sandbox?"
+    assert!(
+        agent.pending_user_input.is_none(),
+        "bash approval should stay on the structured approval path"
     );
     assert_eq!(
         agent
