@@ -271,7 +271,7 @@ async fn replace_requires_prior_full_read_when_state_is_enabled() {
 }
 
 #[tokio::test]
-async fn replace_rejects_partial_read_state() {
+async fn replace_allows_partial_read_when_old_string_is_unique() {
     let tempdir = tempfile::tempdir().expect("tempdir");
     let path = tempdir.path().join("sample.txt");
     std::fs::write(&path, "one\ntwo\nthree\n").expect("write sample");
@@ -287,14 +287,47 @@ async fn replace_rejects_partial_read_state() {
         }))
         .await
         .expect("partial read");
-    let error = replace_tool
+    replace_tool
         .call(json!({
             "path": path.display().to_string(),
             "old_string": "two",
             "new_string": "second"
         }))
         .await
-        .expect_err("partial read should be rejected");
+        .expect("replace after partial read");
+
+    assert_eq!(
+        std::fs::read_to_string(&path).expect("read updated"),
+        "one\nsecond\nthree\n"
+    );
+}
+
+#[tokio::test]
+async fn replace_lines_rejects_partial_read_state() {
+    let tempdir = tempfile::tempdir().expect("tempdir");
+    let path = tempdir.path().join("sample.txt");
+    std::fs::write(&path, "one\ntwo\nthree\n").expect("write sample");
+    let read_state = Arc::new(FileReadState::default());
+    let read_tool = ReadFileTool::new(read_state.clone());
+    let replace_lines_tool = ReplaceLinesTool::new(read_state);
+
+    read_tool
+        .call(json!({
+            "path": path.display().to_string(),
+            "offset": 1,
+            "limit": 1
+        }))
+        .await
+        .expect("partial read");
+    let error = replace_lines_tool
+        .call(json!({
+            "path": path.display().to_string(),
+            "start_line": 2,
+            "end_line": 2,
+            "new_string": "second"
+        }))
+        .await
+        .expect_err("line-only edit should still require full read");
     assert!(error.to_string().contains("only partially read"));
 }
 
@@ -429,7 +462,7 @@ fn file_tool_descriptions_encode_safe_edit_contract() {
     assert!(
         replace_tool
             .description()
-            .contains("Read the full file first")
+            .contains("Read the relevant file content first")
     );
     assert!(
         replace_lines_tool

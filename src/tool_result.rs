@@ -10,6 +10,14 @@ const INLINE_CHAR_BUDGET: usize = 8_000;
 const FILE_LIST_PREVIEW_LIMIT: usize = 200;
 const MATCH_PREVIEW_LIMIT: usize = 40;
 const LARGE_PREVIEW_HEAD: usize = 4_000;
+const LARGE_PREVIEW_TAIL: usize = 4_000;
+const TOOL_RESULT_BATCH_BUDGET: usize = 24_000;
+const BATCH_PREVIEW_HEAD: usize = 1_000;
+const BATCH_PREVIEW_TAIL: usize = 1_000;
+const BASH_SUCCESS_HEAD_CHARS: usize = 2_000;
+const BASH_SUCCESS_TAIL_CHARS: usize = 2_000;
+const BASH_ERROR_HEAD_CHARS: usize = 1_000;
+const BASH_ERROR_TAIL_CHARS: usize = 3_000;
 
 pub struct ToolResultStore {
     base_dir: PathBuf,
@@ -59,10 +67,10 @@ impl ToolResultStore {
         }
 
         let stored_path = self.persist_full_result(tool_use_id, tool_name, input, result)?;
-        Ok(format!(
-            "{}\n\n[tool_result truncated]\nfull_result_path={}",
-            truncate_text(&inline, LARGE_PREVIEW_HEAD),
-            stored_path.display()
+        Ok(persisted_output_message(
+            &stored_path,
+            full_rendered.chars().count(),
+            &head_tail_text(&inline, LARGE_PREVIEW_HEAD, LARGE_PREVIEW_TAIL),
         ))
     }
 
@@ -141,6 +149,106 @@ pub fn repair_tool_result_history(history: &[Message]) -> Vec<Message> {
     }
 
     repaired
+}
+
+pub fn enforce_tool_result_batch_budget(mut messages: Vec<Message>) -> Vec<Message> {
+    let mut candidates = tool_result_content_candidates(&messages);
+    let mut total_chars: usize = candidates.iter().map(|candidate| candidate.chars).sum();
+    if total_chars <= TOOL_RESULT_BATCH_BUDGET {
+        return messages;
+    }
+
+    candidates.sort_by(|left, right| right.chars.cmp(&left.chars));
+    for candidate in candidates {
+        if total_chars <= TOOL_RESULT_BATCH_BUDGET {
+            break;
+        }
+        let Some(content) = tool_result_content_mut(
+            &mut messages,
+            candidate.message_index,
+            candidate.block_index,
+        ) else {
+            continue;
+        };
+        let available_chars =
+            TOOL_RESULT_BATCH_BUDGET.saturating_sub(total_chars.saturating_sub(candidate.chars));
+        let replacement = shortened_batch_tool_result(content, available_chars);
+        total_chars = total_chars
+            .saturating_sub(candidate.chars)
+            .saturating_add(replacement.chars().count());
+        *content = replacement;
+    }
+
+    messages
+}
+
+#[derive(Debug)]
+struct ToolResultContentCandidate {
+    message_index: usize,
+    block_index: usize,
+    chars: usize,
+}
+
+fn tool_result_content_candidates(messages: &[Message]) -> Vec<ToolResultContentCandidate> {
+    let mut candidates = Vec::new();
+    for (message_index, message) in messages.iter().enumerate() {
+        let Some(blocks) = message.content.as_array() else {
+            continue;
+        };
+        for (block_index, block) in blocks.iter().enumerate() {
+            if block.get("type").and_then(Value::as_str) != Some("tool_result") {
+                continue;
+            }
+            let Some(content) = block.get("content").and_then(Value::as_str) else {
+                continue;
+            };
+            candidates.push(ToolResultContentCandidate {
+                message_index,
+                block_index,
+                chars: content.chars().count(),
+            });
+        }
+    }
+    candidates
+}
+
+fn tool_result_content_mut(
+    messages: &mut [Message],
+    message_index: usize,
+    block_index: usize,
+) -> Option<&mut String> {
+    messages
+        .get_mut(message_index)?
+        .content
+        .as_array_mut()?
+        .get_mut(block_index)?
+        .get_mut("content")
+        .and_then(|value| match value {
+            Value::String(content) => Some(content),
+            _ => None,
+        })
+}
+
+fn shortened_batch_tool_result(content: &str, max_chars: usize) -> String {
+    if max_chars == 0 {
+        return String::new();
+    }
+
+    let original_chars = content.chars().count();
+    let marker = format!(
+        "\n\n[tool_result shortened]\nreason=tool result batch exceeded {TOOL_RESULT_BATCH_BUDGET} chars\noriginal_chars={original_chars}"
+    );
+    let marker_chars = marker.chars().count();
+    if marker_chars >= max_chars {
+        return truncate_text(&marker, max_chars);
+    }
+
+    let preview_budget = max_chars - marker_chars;
+    let preview_head = BATCH_PREVIEW_HEAD.min(preview_budget / 2);
+    let preview_tail = BATCH_PREVIEW_TAIL.min(preview_budget.saturating_sub(preview_head));
+    let preview = head_tail_text(content, preview_head, preview_tail);
+    let preview = truncate_text(&preview, preview_budget);
+    format!("{preview}{marker}")
 }
 
 fn synthetic_tool_result_message(ids: &[String]) -> Message {
@@ -365,10 +473,20 @@ fn compact_bash(result: &Value) -> String {
         .unwrap_or_else(|| "unknown".to_string());
     let duration_ms = result.get("duration_ms").and_then(Value::as_u64);
     let output = result
-        .get("aggregated_output")
+        .get("model_preview_output")
         .and_then(Value::as_str)
         .filter(|output| !output.is_empty())
         .map(str::to_string)
+        .or_else(|| {
+            result
+                .get("aggregated_output")
+                .and_then(Value::as_str)
+                .filter(|output| !output.is_empty())
+                .map(|output| {
+                    let exit_code = result.get("exit_code").and_then(Value::as_i64);
+                    model_preview_bash_output(output, exit_code)
+                })
+        })
         .unwrap_or_else(|| {
             let stdout = result
                 .get("stdout")
@@ -799,6 +917,57 @@ fn truncate_text(text: &str, max_chars: usize) -> String {
     collected
 }
 
+pub(crate) fn model_preview_bash_output(output: &str, exit_code: Option<i64>) -> String {
+    let (head_chars, tail_chars) = if exit_code == Some(0) {
+        (BASH_SUCCESS_HEAD_CHARS, BASH_SUCCESS_TAIL_CHARS)
+    } else {
+        (BASH_ERROR_HEAD_CHARS, BASH_ERROR_TAIL_CHARS)
+    };
+    head_tail_text(output, head_chars, tail_chars)
+}
+
+pub(crate) fn head_tail_text(text: &str, head_chars: usize, tail_chars: usize) -> String {
+    let budget = head_chars.saturating_add(tail_chars);
+    if text.chars().nth(budget).is_none() {
+        return text.to_string();
+    }
+
+    let head_end = char_boundary_after_n_chars(text, head_chars);
+    let tail_start = char_boundary_before_last_n_chars(text, tail_chars);
+    let head = &text[..head_end];
+    let tail = &text[tail_start..];
+    let omitted = text[head_end..tail_start].chars().count();
+    format!("{head}\n... [{omitted} chars truncated from middle] ...\n{tail}")
+}
+
+fn char_boundary_after_n_chars(text: &str, n: usize) -> usize {
+    if n == 0 {
+        return 0;
+    }
+    text.char_indices()
+        .nth(n)
+        .map(|(idx, _)| idx)
+        .unwrap_or(text.len())
+}
+
+fn char_boundary_before_last_n_chars(text: &str, n: usize) -> usize {
+    if n == 0 {
+        return text.len();
+    }
+    text.char_indices()
+        .rev()
+        .nth(n.saturating_sub(1))
+        .map(|(idx, _)| idx)
+        .unwrap_or(0)
+}
+
+fn persisted_output_message(path: &PathBuf, original_chars: usize, preview: &str) -> String {
+    format!(
+        "<persisted-output>\nOutput too large ({original_chars} chars). Full output saved to: {}\n\nPreview:\n{preview}\n</persisted-output>",
+        path.display()
+    )
+}
+
 pub fn default_tool_result_store_dir() -> Result<PathBuf> {
     let root = std::env::current_dir()?;
     Ok(rara_config::workspace_data_dir_for(&root)?.join("tool-results"))
@@ -807,8 +976,9 @@ pub fn default_tool_result_store_dir() -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::{
-        ToolResultStore, compact_read_file, compact_subagent_result, compact_web_search,
-        default_tool_result_store_dir, repair_tool_result_history,
+        TOOL_RESULT_BATCH_BUDGET, ToolResultStore, compact_read_file, compact_subagent_result,
+        compact_web_search, default_tool_result_store_dir, enforce_tool_result_batch_budget,
+        repair_tool_result_history, tool_result_content_candidates,
     };
     use crate::agent::Message;
     use serde_json::json;
@@ -874,7 +1044,8 @@ mod tests {
                 &json!({ "content": "x".repeat(20_000) }),
             )
             .expect("compact result");
-        assert!(output.contains("full_result_path="));
+        assert!(output.contains("<persisted-output>"));
+        assert!(output.contains("Full output saved to:"));
         assert!(output.contains("Fetched https://example.com"));
         assert!(tempdir.path().join("tool-1.json").exists());
         assert!(
@@ -912,6 +1083,141 @@ mod tests {
         assert!(output.contains("Output:\nchecking\n[stderr] warning"));
         assert!(!output.contains("stdout-only"));
         assert!(!output.contains("stderr-only"));
+    }
+
+    #[test]
+    fn compacts_bash_prefers_independent_model_preview_output() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let store = ToolResultStore::new(tempdir.path()).expect("store");
+        let output = store
+            .compact_result(
+                "bash",
+                "tool-bash",
+                &json!({ "program": "cargo", "args": ["test"] }),
+                &json!({
+                    "stdout": "stdout-only\n",
+                    "stderr": "stderr-only\n",
+                    "aggregated_output": "full aggregated output\n",
+                    "model_preview_output": "model preview output\n",
+                    "exit_code": 1,
+                    "duration_ms": 10
+                }),
+            )
+            .expect("compact bash result");
+
+        assert!(output.contains("model preview output"));
+        assert!(!output.contains("full aggregated output"));
+        assert!(!output.contains("stdout-only"));
+        assert!(!output.contains("stderr-only"));
+    }
+
+    #[test]
+    fn compacts_bash_long_aggregated_output_with_head_and_tail() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let store = ToolResultStore::new(tempdir.path()).expect("store");
+        let output = store
+            .compact_result(
+                "bash",
+                "tool-bash",
+                &json!({ "program": "cargo", "args": ["test"] }),
+                &json!({
+                    "aggregated_output": format!("head\n{}tail-error\n", "middle\n".repeat(2_000)),
+                    "exit_code": 1,
+                    "duration_ms": 10
+                }),
+            )
+            .expect("compact bash result");
+
+        assert!(output.contains("head"));
+        assert!(output.contains("tail-error"));
+        assert!(output.contains("chars truncated from middle"));
+    }
+
+    #[test]
+    fn compacts_bash_unknown_exit_status_as_error_preview() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let store = ToolResultStore::new(tempdir.path()).expect("store");
+        let output = store
+            .compact_result(
+                "bash",
+                "tool-bash",
+                &json!({ "program": "cargo", "args": ["test"] }),
+                &json!({
+                    "aggregated_output": format!("head\n{}tail-error\n", "middle\n".repeat(2_000)),
+                    "duration_ms": 10
+                }),
+            )
+            .expect("compact bash result");
+
+        assert!(output.contains("head"));
+        assert!(output.contains("tail-error"));
+        assert!(output.contains("chars truncated from middle"));
+    }
+
+    #[test]
+    fn batch_budget_shortens_largest_tool_results() {
+        let large = "large-start\n".to_string() + &"middle\n".repeat(4_000) + "large-tail\n";
+        let small = "small-result\n".to_string();
+        let messages = vec![
+            Message {
+                role: "user".to_string(),
+                content: json!([{
+                    "type": "tool_result",
+                    "tool_use_id": "large",
+                    "content": large,
+                }]),
+            },
+            Message {
+                role: "user".to_string(),
+                content: json!([{
+                    "type": "tool_result",
+                    "tool_use_id": "small",
+                    "content": small,
+                }]),
+            },
+        ];
+
+        let budgeted = enforce_tool_result_batch_budget(messages);
+        let large_content = budgeted[0].content[0]["content"]
+            .as_str()
+            .expect("large content");
+        let small_content = budgeted[1].content[0]["content"]
+            .as_str()
+            .expect("small content");
+
+        assert!(large_content.contains("large-start"));
+        assert!(large_content.contains("large-tail"));
+        assert!(large_content.contains("tool_result shortened"));
+        assert_eq!(small_content, "small-result\n");
+    }
+
+    #[test]
+    fn batch_budget_enforces_final_total_for_many_large_results() {
+        let large = "large-start\n".to_string() + &"middle\n".repeat(4_000) + "large-tail\n";
+        let messages = (0..20)
+            .map(|idx| Message {
+                role: "user".to_string(),
+                content: json!([{
+                    "type": "tool_result",
+                    "tool_use_id": format!("large-{idx}"),
+                    "content": large,
+                }]),
+            })
+            .collect::<Vec<_>>();
+
+        let budgeted = enforce_tool_result_batch_budget(messages);
+        let total_chars = tool_result_content_candidates(&budgeted)
+            .iter()
+            .map(|candidate| candidate.chars)
+            .sum::<usize>();
+
+        assert!(total_chars <= TOOL_RESULT_BATCH_BUDGET);
+        assert!(
+            budgeted
+                .iter()
+                .filter_map(|message| message.content[0]["content"].as_str())
+                .any(|content| content.contains("tool_result shortened"))
+        );
     }
 
     #[test]

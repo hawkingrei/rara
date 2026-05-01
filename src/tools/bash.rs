@@ -1,5 +1,6 @@
 use crate::sandbox::{SandboxManager, WrappedCommand, sandbox_failure_hint};
 use crate::tool::{Tool, ToolError, ToolOutputStream, ToolProgressEvent};
+use crate::tool_result::model_preview_bash_output;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -741,7 +742,7 @@ impl Tool for BashTool {
         "bash"
     }
     fn description(&self) -> &str {
-        "Run a shell command in the sandbox for commands that need process execution. Prefer dedicated RARA tools for file search, file reads, and file edits; do not use shell redirection, sed, awk, perl, or ad-hoc scripts to edit files when apply_patch or direct file tools can do the job. Use the cwd field instead of prepending cd, avoid newline-separated command chaining, and keep commands sandboxed unless require_escalated is justified by user request or clear sandbox failure evidence. Use run_in_background for long-running non-interactive commands, then inspect or stop them with background_task_status, background_task_list, and background_task_stop."
+        "Run a shell command in the sandbox for commands that need process execution. Prefer dedicated RARA tools for file search, file reads, and file edits; do not use shell redirection, sed, awk, perl, or ad-hoc scripts to edit files when apply_patch or direct file tools can do the job. Use the cwd field instead of prepending cd. Avoid newline-separated command chaining. If commands are independent and can run in parallel, make multiple bash tool calls in one assistant turn instead of joining them with &&, ;, or pipelines. Do not add 2>&1, head, tail, or grep only to reduce displayed output; RARA preserves stdout/stderr and provides bounded model-facing previews. Keep commands sandboxed unless require_escalated is justified by user request or clear sandbox failure evidence. Use run_in_background for long-running non-interactive commands, then inspect or stop them with background_task_status, background_task_list, and background_task_stop."
     }
     fn input_schema(&self) -> Value {
         json!({
@@ -749,7 +750,7 @@ impl Tool for BashTool {
             "properties": {
                 "command": {
                     "type": "string",
-                    "description": "Legacy shell command string. Prefer program+args for new calls. Avoid newline-separated command chaining, and do not use this field for file edits when apply_patch or direct file tools can do the job."
+                    "description": "Legacy shell command string. Prefer program+args for new calls. Avoid newline-separated command chaining. Do not join independent validation commands with &&, ;, or pipelines just to run them together; make multiple bash tool calls instead. Do not add 2>&1, head, tail, or grep only to trim output for the model. Do not use this field for file edits when apply_patch or direct file tools can do the job."
                 },
                 "program": {
                     "type": "string",
@@ -983,11 +984,14 @@ impl Tool for BashTool {
             }
         }
         let duration_ms = started_at.elapsed().as_millis() as u64;
+        let model_preview_output =
+            model_preview_bash_output(&aggregated_output, status.code().map(i64::from));
 
         Ok(json!({
             "stdout": stdout_text,
             "stderr": stderr_text,
             "aggregated_output": aggregated_output,
+            "model_preview_output": model_preview_output,
             "exit_code": status.code(),
             "duration_ms": duration_ms,
             "live_streamed": live_streamed,
@@ -1353,6 +1357,7 @@ mod tests {
     };
     use crate::sandbox::{SandboxManager, WrappedCommand};
     use crate::tool::{Tool, ToolOutputStream, ToolProgressEvent};
+    use crate::tool_result::model_preview_bash_output;
     use serde_json::{Value, json};
     use std::collections::HashMap;
     use std::env;
@@ -1865,6 +1870,12 @@ mod tests {
             .expect("aggregated output");
         assert!(aggregated_output.contains("out"));
         assert!(aggregated_output.contains("[stderr] err"));
+        let model_preview_output = result
+            .get("model_preview_output")
+            .and_then(Value::as_str)
+            .expect("model preview output");
+        assert!(model_preview_output.contains("out"));
+        assert!(model_preview_output.contains("[stderr] err"));
         assert!(result.get("duration_ms").and_then(Value::as_u64).is_some());
     }
 
@@ -1912,6 +1923,17 @@ mod tests {
         );
 
         assert_eq!(output, "stdout-without-newline\n[stderr] stderr-line\n");
+    }
+
+    #[test]
+    fn model_preview_bash_output_preserves_error_tail() {
+        let output = format!("head\n{}tail-error\n", "middle\n".repeat(2_000));
+
+        let preview = model_preview_bash_output(&output, Some(1));
+
+        assert!(preview.contains("head"));
+        assert!(preview.contains("tail-error"));
+        assert!(preview.contains("chars truncated from middle"));
     }
 
     #[tokio::test]

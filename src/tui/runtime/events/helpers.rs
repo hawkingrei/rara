@@ -685,7 +685,7 @@ pub(super) fn format_tool_result(name: &str, content: &str) -> String {
     {
         let summary = normalize_tool_result_summary(name, summary);
         let mut rendered = format!("{name}: {summary}");
-        if content.contains("full_result_path=") {
+        if content.contains("<persisted-output>") {
             rendered.push_str("\\nfull result stored on disk");
         } else if let Some(preview) = tool_result_preview(content) {
             rendered.push_str(&format!("\n{preview}"));

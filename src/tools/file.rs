@@ -94,6 +94,21 @@ impl FileReadState {
         Ok(())
     }
 
+    pub(crate) fn validate_exact_replace_edit(&self, path: &str) -> Result<(), ToolError> {
+        let key = canonical_existing_path(path)?;
+        let files = self.files.lock().expect("file read state lock");
+        let Some(entry) = files.get(&key) else {
+            return Err(ToolError::ExecutionFailed(
+                "File has not been read yet. Read it first before writing to it.".into(),
+            ));
+        };
+        if entry.is_partial {
+            return Ok(());
+        }
+        drop(files);
+        self.validate_existing_edit(path)
+    }
+
     pub(crate) fn record_write(&self, path: &str, content: &str) -> Result<(), ToolError> {
         let key = canonical_existing_path(path)?;
         let metadata = fs::metadata(&key)?;
@@ -522,7 +537,7 @@ impl Tool for ReplaceTool {
         "replace"
     }
     fn description(&self) -> &str {
-        "Replace one exact, unique string in a file. Read the full file first and prefer apply_patch for structured multi-line edits."
+        "Replace one exact, unique string in a file. Read the relevant file content first and prefer apply_patch for structured multi-line edits."
     }
     fn input_schema(&self) -> Value {
         json!({
@@ -546,7 +561,7 @@ impl Tool for ReplaceTool {
             .as_str()
             .ok_or(ToolError::InvalidInput("new".into()))?;
         if let Some(read_state) = &self.read_state {
-            read_state.validate_existing_edit(p)?;
+            read_state.validate_exact_replace_edit(p)?;
         }
         let c = fs::read_to_string(p)?;
         if c.matches(o).count() != 1 {
