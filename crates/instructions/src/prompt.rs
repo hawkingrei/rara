@@ -439,6 +439,20 @@ fn default_system_prompt_sections() -> Vec<PromptSection> {
             ),
         ),
         PromptSection::new(
+            "git_conflict_resolution",
+            section(
+                "Git Conflict Resolution",
+                &[
+                    "When you encounter Git conflict markers such as '<<<<<<<', '=======', or '>>>>>>>', treat the file as unresolved until every marker has been removed.",
+                    "Before resolving a conflict, inspect the current git state and read the conflicted file with enough surrounding context to understand both sides and the intended local change.",
+                    "Do not blindly choose one side. Preserve both sides when they are complementary, remove obsolete code only when the inspected context proves it is obsolete, and keep imports, names, formatting, and control flow consistent after the merge.",
+                    "Prefer structured edit tools or 'apply_patch' for the resolved hunks. Avoid full-file rewrites unless the file is small or the conflict truly requires rewriting the whole file.",
+                    "After resolving conflicts, run a targeted marker scan such as 'rg \"<<<<<<<|=======|>>>>>>>\"' and the narrowest relevant formatter, test, build, or check command before claiming the conflict is resolved.",
+                    "If the conflict semantics are ambiguous, state which side is verified, which side is inferred, and what validation remains instead of inventing intent.",
+                ],
+            ),
+        ),
+        PromptSection::new(
             "tool_workflow_discipline",
             section(
                 "Tool Workflow Discipline",
@@ -1085,6 +1099,36 @@ mod tests {
             effective
                 .text
                 .contains("verify current repository facts before acting on them")
+        );
+    }
+
+    #[test]
+    fn default_system_prompt_includes_git_conflict_resolution_guidance() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let root = temp.path().join("workspace");
+        let rara_dir = root.join(".rara");
+        fs::create_dir_all(&rara_dir).expect("mkdir .rara");
+        let workspace = WorkspaceMemory::from_paths(root, rara_dir);
+
+        let effective = build_effective_prompt(
+            &workspace,
+            &PromptRuntimeConfig::default(),
+            PromptMode::Execute,
+        );
+
+        assert!(effective.section_keys.contains(&"git_conflict_resolution"));
+        assert!(effective.text.contains("# Git Conflict Resolution"));
+        assert!(
+            effective
+                .text
+                .contains("treat the file as unresolved until every marker has been removed")
+        );
+        assert!(effective.text.contains("Do not blindly choose one side"));
+        assert!(effective.text.contains("rg \"<<<<<<<|=======|>>>>>>>\""));
+        assert!(
+            effective
+                .text
+                .contains("If the conflict semantics are ambiguous")
         );
     }
 

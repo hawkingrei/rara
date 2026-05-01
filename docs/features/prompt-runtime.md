@@ -52,6 +52,20 @@ The effective prompt is assembled in this order:
 5. mode-specific addenda such as plan mode;
 6. append prompt.
 
+### 3.1) Built-In Engineering Workflow Guidance
+
+The default base prompt includes source-grounded engineering workflow guidance for:
+
+- factual verification before claims about repository, PR, CI, provider, or local-tool behavior;
+- structured tool use, including edit-tool discipline and unfiltered command-output inspection;
+- reviewable implementation workflow, focused validation, and PR hygiene;
+- Git conflict resolution when conflict markers are present.
+
+Git conflict guidance is intentionally conservative. It tells the model to inspect the current git
+state and conflicted file, preserve complementary changes instead of blindly choosing one side, use
+structured edits where practical, scan for remaining conflict markers, and run the narrowest relevant
+validation before claiming the conflict is resolved.
+
 ### 4) Compact Prompt
 
 - Context compaction must not use the normal system prompt.
@@ -137,3 +151,4 @@ The effective prompt is assembled in this order:
 - [2026-04-17-prompt-runtime](../journal/2026-04-17-prompt-runtime.md)
 - [2026-04-24-context-observability-and-restore](../journal/2026-04-24-context-observability-and-restore.md)
 - [2026-04-25-context-assembly-stage1](../journal/2026-04-25-context-assembly-stage1.md)
+- [2026-05-02-git-conflict-prompt-guidance](../journal/2026-05-02-git-conflict-prompt-guidance.md)
