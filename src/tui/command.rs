@@ -1,5 +1,5 @@
 use crate::config::RaraConfig;
-use crate::context::CacheStatus;
+use crate::context::{CacheStatus, DropReason};
 
 use super::state::{
     CommandSpec, LocalCommand, LocalCommandKind, PROVIDER_FAMILIES, PendingInteractionSnapshot,
@@ -344,7 +344,7 @@ fn render_context_assembly_entries(app: &TuiApp, layer: &str, title: &str) -> St
                 .budget_impact_tokens
                 .map(|v| format!(" {v}t"))
                 .unwrap_or_default();
-            let drop_note = match entry.dropped_reason.as_deref() {
+            let drop_note = match entry.dropped_reason.as_ref() {
                 Some(r) if !r.is_empty() && r != "-" => format!(" ── reason: {r}"),
                 _ => String::new(),
             };
@@ -387,9 +387,12 @@ fn render_memory_selection(app: &TuiApp) -> String {
                     .unwrap_or_default();
                 let detail_preview = truncate_preview(&item.detail, 60);
                 let selection_reason = truncate_preview(&item.selection_reason, 70);
-                let drop_note = match item.dropped_reason.as_deref() {
-                    Some(r) if !r.is_empty() && r != "-" => {
-                        format!(" ── reason: {r}")
+                let drop_note = match &item.dropped_reason {
+                    Some(DropReason::NotSelected { reason }) if !reason.is_empty() => {
+                        format!(" ── reason: {reason}")
+                    }
+                    Some(DropReason::BudgetExceeded { reason }) => {
+                        format!(" ── reason: {reason}")
                     }
                     _ => String::new(),
                 };
@@ -1045,7 +1048,7 @@ mod tests {
         status_prompt_sources_text, status_resources_text, status_runtime_text, truncate_preview,
     };
     use crate::config::{ConfigManager, OpenAiEndpointKind};
-    use crate::context::PromptSourceContextEntry;
+    use crate::context::{DropReason, PromptSourceContextEntry};
     use crate::tui::state::{RuntimeSnapshot, TuiApp};
     use tempfile::tempdir;
 
@@ -1441,9 +1444,7 @@ mod tests {
                     selection_reason:
                         "thread history remains available as a recall source even when only active-turn state is currently injected".into(),
                     budget_impact_tokens: None,
-                    dropped_reason: Some(
-                        "raw thread history was not selected directly because the current turn already has sufficient active-turn and compacted-history context".into(),
-                    ),
+                    dropped_reason: Some(DropReason::NotSelected { reason: "raw thread history was not selected directly because the current turn already has sufficient active-turn and compacted-history context".to_string() }),
                 }],
                 dropped_items: vec![crate::context::MemorySelectionItemContextEntry {
                     order: 1,
@@ -1453,9 +1454,7 @@ mod tests {
                     selection_reason:
                         "selected because the retrieval tool returned relevant durable memory candidates for the current task".into(),
                     budget_impact_tokens: Some(2_048),
-                    dropped_reason: Some(
-                        "not selected because it would exceed the remaining memory-selection budget (2048 > 1024)".into(),
-                    ),
+                    dropped_reason: Some(DropReason::NotSelected { reason: "not selected because it would exceed the remaining memory-selection budget (2048 > 1024)".to_string() }),
                 }],
             },
             prompt_base_kind: "codex".into(),

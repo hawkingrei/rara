@@ -258,6 +258,25 @@ pub struct MemorySelectionContextView {
     pub dropped_items: Vec<MemorySelectionItemContextEntry>,
 }
 
+/// Reason an item was not selected into the current turn.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DropReason {
+    /// Did not win the selection contest (ranking, dedup, not selectable,
+    /// compacted history already covers it). Appears in available_items.
+    NotSelected { reason: String },
+    /// Would have exceeded the remaining memory-selection budget.
+    /// Appears in dropped_items.
+    BudgetExceeded { reason: String },
+}
+
+impl DropReason {
+    pub fn reason(&self) -> &str {
+        match self {
+            DropReason::NotSelected { reason } | DropReason::BudgetExceeded { reason } => reason,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MemorySelectionItemContextEntry {
     pub order: usize,
@@ -266,5 +285,5 @@ pub struct MemorySelectionItemContextEntry {
     pub detail: String,
     pub selection_reason: String,
     pub budget_impact_tokens: Option<usize>,
-    pub dropped_reason: Option<String>,
+    pub dropped_reason: Option<DropReason>,
 }

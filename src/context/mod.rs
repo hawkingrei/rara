@@ -16,7 +16,7 @@ pub use self::assembler::{
 };
 pub use self::runtime::{
     CacheStatus, CompactionContextView, CompactionSourceContextEntry, ContextAssemblyEntry,
-    ContextAssemblyView, ContextBudgetView, MemorySelectionContextView,
+    ContextAssemblyView, ContextBudgetView, DropReason, MemorySelectionContextView,
     MemorySelectionItemContextEntry, PlanContextView, PromptContextView, PromptSourceContextEntry,
     RetrievalContextView, RetrievalSourceContextEntry, SharedRuntimeContext,
 };

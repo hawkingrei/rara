@@ -1,6 +1,7 @@
 use crate::agent::{Message, PlanStepStatus};
 use crate::context::{
-    CompactionSourceContextEntry, MemorySelectionContextView, MemorySelectionItemContextEntry,
+    CompactionSourceContextEntry, DropReason, MemorySelectionContextView,
+    MemorySelectionItemContextEntry,
 };
 use crate::prompt::PromptSource;
 use serde_json::Value;
@@ -76,7 +77,7 @@ struct MemorySelectionCandidate {
     budget_impact_tokens: Option<usize>,
     priority: usize,
     selectable: bool,
-    dropped_reason: String,
+    dropped_reason: DropReason,
 }
 
 #[derive(Debug, Default)]
@@ -333,8 +334,6 @@ fn select_memory_candidates(
     selection_budget_tokens: Option<usize>,
     fixed_selected_kinds: &[String],
 ) -> MemorySelectionDecision {
-    const BUDGET_DROP_REASON_PREFIX: &str =
-        "not selected because it would exceed the remaining memory-selection budget";
     candidates.sort_by_key(|candidate| candidate.priority);
     let mut remaining_budget = selection_budget_tokens;
     let has_compacted_history = fixed_selected_kinds.iter().any(|kind| {
@@ -347,29 +346,34 @@ fn select_memory_candidates(
     let mut selected_kinds = fixed_selected_kinds.to_vec();
 
     for candidate in candidates {
-        let should_drop = if !candidate.selectable {
+        let should_drop: Option<DropReason> = if !candidate.selectable {
             Some(candidate.dropped_reason.clone())
         } else if candidate.kind == "thread_history" && has_compacted_history {
-            Some(
-                "not selected because compacted thread history already provides a more focused carried-over thread view".to_string(),
-            )
+            Some(DropReason::NotSelected {
+                reason: "not selected because compacted thread history already provides a more focused carried-over thread view".to_string(),
+            })
         } else if selected_kinds
             .iter()
             .any(|kind| kind == "retrieved_thread_context" && candidate.kind == "thread_history")
         {
-            Some(
-                "not selected because a more focused retrieved thread-context candidate already won the current memory selection".to_string(),
-            )
+            Some(DropReason::NotSelected {
+                reason:
+                    "not selected because a more focused retrieved thread-context candidate already won the current memory selection".to_string(),
+            })
         } else if let (Some(remaining), Some(cost)) =
             (remaining_budget, candidate.budget_impact_tokens)
         {
-            (cost > remaining)
-                .then(|| format!("{BUDGET_DROP_REASON_PREFIX} ({cost} > {remaining})"))
+            (cost > remaining).then(|| DropReason::BudgetExceeded {
+                reason: format!(
+                    "not selected because it would exceed the remaining memory-selection budget ({cost} > {remaining})"
+                ),
+            })
         } else {
             None
         };
 
         if let Some(dropped_reason) = should_drop {
+            let is_budget = matches!(dropped_reason, DropReason::BudgetExceeded { .. });
             let item = MemorySelectionItemContextEntry {
                 order: 0,
                 kind: candidate.kind,
@@ -379,11 +383,7 @@ fn select_memory_candidates(
                 budget_impact_tokens: candidate.budget_impact_tokens,
                 dropped_reason: Some(dropped_reason),
             };
-            if item
-                .dropped_reason
-                .as_deref()
-                .is_some_and(|reason| reason.starts_with(BUDGET_DROP_REASON_PREFIX))
-            {
+            if is_budget {
                 decision.dropped_items.push(item);
             } else {
                 decision.available_items.push(item);
@@ -430,11 +430,11 @@ fn workspace_memory_available_item(
         },
         selection_reason: "workspace memory participates in the selection contract even when it is not part of the current assembled working set".to_string(),
         budget_impact_tokens: None,
-        dropped_reason: Some(if workspace_memory_available {
+        dropped_reason: Some(DropReason::NotSelected { reason: if workspace_memory_available {
             "available for recall, but not selected into the current turn because workspace memory was not activated as a prompt input".to_string()
         } else {
             "no workspace memory candidate is currently available".to_string()
-        }),
+        }}),
     }
 }
 
@@ -449,11 +449,11 @@ fn thread_history_candidate(history: &[Message], session_id: &str) -> MemorySele
         )),
         priority: 30,
         selectable: !history.is_empty(),
-        dropped_reason: if history.is_empty() {
+        dropped_reason: DropReason::NotSelected { reason: if history.is_empty() {
             "no thread history is available for selection".to_string()
         } else {
             "raw thread history was not selected directly because the current turn already has sufficient active-turn and compacted-history context".to_string()
-        },
+        }},
     }
 }
 
@@ -470,11 +470,11 @@ fn vector_memory_candidate(vdb_uri: &str) -> MemorySelectionCandidate {
         budget_impact_tokens: None,
         priority: 40,
         selectable: false,
-        dropped_reason: if vdb_uri.is_empty() {
+        dropped_reason: DropReason::NotSelected { reason: if vdb_uri.is_empty() {
             "no vector-backed memory store is configured".to_string()
         } else {
             "not selected because vector-backed candidate ranking is not implemented yet".to_string()
-        },
+        }},
     }
 }
 
@@ -505,7 +505,7 @@ fn retrieval_tool_candidate(
                 selection_reason: "selected because the retrieval tool returned relevant durable memory candidates for the current task".to_string(),
                 priority: 10,
                 selectable: true,
-                dropped_reason: "not selected after ranking the retrieved workspace-memory candidates against the current memory-selection budget".to_string(),
+                dropped_reason: DropReason::NotSelected { reason: "not selected after ranking the retrieved workspace-memory candidates against the current memory-selection budget".to_string() },
             }
         }
         "retrieve_session_context" => {
@@ -521,7 +521,7 @@ fn retrieval_tool_candidate(
                 selection_reason: "selected because the retrieval tool returned focused thread-context material for the current task".to_string(),
                 priority: 20,
                 selectable: true,
-                dropped_reason: "not selected after ranking the retrieved thread-context candidate against the current memory-selection budget".to_string(),
+                dropped_reason: DropReason::NotSelected { reason: "not selected after ranking the retrieved thread-context candidate against the current memory-selection budget".to_string() },
             }
         }
         other => MemorySelectionCandidate {
@@ -534,7 +534,7 @@ fn retrieval_tool_candidate(
             budget_impact_tokens: Some(estimate_text_tokens(content)),
             priority: 50,
             selectable: true,
-            dropped_reason: "not selected after ranking the retrieval candidate against the current memory-selection budget".to_string(),
+            dropped_reason: DropReason::NotSelected { reason: "not selected after ranking the retrieval candidate against the current memory-selection budget".to_string() },
         },
     }
 }
@@ -721,8 +721,8 @@ mod tests {
         assert!(
             vector_entry
                 .dropped_reason
-                .as_deref()
-                .is_some_and(|reason| reason.contains("not implemented")),
+                .as_ref()
+                .is_some_and(|r| r.reason().contains("not implemented")),
             "vector_memory should explain it is not implemented yet"
         );
     }

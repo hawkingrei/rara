@@ -199,7 +199,7 @@ pub(crate) fn assemble_context_view(
             injected: false,
             inclusion_reason: item.selection_reason.clone(),
             budget_impact_tokens: item.budget_impact_tokens,
-            dropped_reason: item.dropped_reason.clone(),
+            dropped_reason: item.dropped_reason.as_ref().map(|r| r.reason().to_string()),
         });
     }
 
@@ -214,7 +214,7 @@ pub(crate) fn assemble_context_view(
             injected: false,
             inclusion_reason: item.selection_reason.clone(),
             budget_impact_tokens: item.budget_impact_tokens,
-            dropped_reason: item.dropped_reason.clone(),
+            dropped_reason: item.dropped_reason.as_ref().map(|r| r.reason().to_string()),
         });
     }
 

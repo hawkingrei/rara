@@ -589,8 +589,8 @@ mod tests {
                         "retrieved_workspace_memory" | "retrieved_thread_context"
                     ) && item
                         .dropped_reason
-                        .as_deref()
-                        .is_some_and(|reason| reason.contains("memory-selection budget"))
+                        .as_ref()
+                        .is_some_and(|r| r.reason().contains("memory-selection budget"))
                 })
         );
     }
