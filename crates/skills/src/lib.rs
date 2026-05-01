@@ -209,17 +209,33 @@ fn parse_skill_metadata(content: &str) -> ParsedSkillMetadata {
 }
 
 fn split_frontmatter(content: &str) -> (Option<&str>, &str) {
-    let Some(rest) = content.strip_prefix("---\n") else {
+    let mut lines = content.split_inclusive('\n');
+    let Some(first_line) = lines.next() else {
         return (None, content);
     };
-    let Some(end) = rest.find("\n---") else {
+
+    if frontmatter_delimiter(first_line) != "---" {
         return (None, content);
-    };
-    let frontmatter = &rest[..end];
-    let markdown = rest[end + "\n---".len()..]
-        .strip_prefix('\n')
-        .unwrap_or(&rest[end + "\n---".len()..]);
-    (Some(frontmatter), markdown)
+    }
+
+    let frontmatter_start = first_line.len();
+    let mut cursor = frontmatter_start;
+
+    for line in lines {
+        let line_start = cursor;
+        cursor += line.len();
+
+        if frontmatter_delimiter(line) == "---" {
+            let frontmatter = content[frontmatter_start..line_start].trim_end_matches(['\r', '\n']);
+            return (Some(frontmatter), &content[cursor..]);
+        }
+    }
+
+    (None, content)
+}
+
+fn frontmatter_delimiter(line: &str) -> &str {
+    line.trim_end_matches('\n').trim_end_matches('\r')
 }
 
 fn frontmatter_value(frontmatter: &str, key: &str) -> Option<String> {
@@ -336,6 +352,28 @@ mod tests {
         let skill = manager.get_skill("code-review").expect("frontmatter skill");
         assert_eq!(skill.title.as_deref(), Some("Code Review"));
         assert_eq!(skill.description, "Review local code changes.");
+        assert_eq!(skill.display_path, "reviewer/SKILL.md");
+    }
+
+    #[test]
+    fn loads_frontmatter_metadata_with_crlf_line_endings() {
+        let dir = tempdir().expect("tempdir");
+        let skill_dir = dir.path().join("reviewer");
+        fs::create_dir_all(&skill_dir).expect("mkdir");
+        fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\r\nname: windows-review\r\ntitle: Windows Review\r\ndescription: Review CRLF metadata.\r\n---\r\n\r\n# Ignored Heading\r\nworkflow",
+        )
+        .expect("write");
+
+        let mut manager = SkillManager::new();
+        manager.load_from_dir(dir.path()).expect("load");
+
+        let skill = manager
+            .get_skill("windows-review")
+            .expect("frontmatter skill");
+        assert_eq!(skill.title.as_deref(), Some("Windows Review"));
+        assert_eq!(skill.description, "Review CRLF metadata.");
         assert_eq!(skill.display_path, "reviewer/SKILL.md");
     }
 

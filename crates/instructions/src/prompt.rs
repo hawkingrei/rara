@@ -998,7 +998,7 @@ mod tests {
         assert!(prompt.contains("never rewrite history"));
         assert!(prompt.contains("evidence-backed conclusion"));
         assert!(prompt.contains("Do not assume durable vector recall exists"));
-        assert!(prompt.contains("Use 'agent' or 'team_create'"));
+        assert!(prompt.contains("Use 'spawn_agent' or 'team_create'"));
     }
 
     #[test]
