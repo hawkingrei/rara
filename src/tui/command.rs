@@ -328,7 +328,11 @@ fn render_context_assembly_entries(app: &TuiApp, layer: &str, title: &str) -> St
         .into_iter()
         .enumerate()
         .map(|(idx, entry)| {
-            let connector = if idx + 1 == count { "└──" } else { "├──" };
+            let (connector, vertical) = if idx + 1 == count {
+                ("└──", " ")
+            } else {
+                ("├──", "│")
+            };
             let path = entry
                 .source_path
                 .as_deref()
@@ -349,7 +353,7 @@ fn render_context_assembly_entries(app: &TuiApp, layer: &str, title: &str) -> St
                 _ => String::new(),
             };
             format!(
-                "  {connector} {cache}[{kind}] {label}{injected}{budget}\n  │   path: {path}{drop_note}",
+                "  {connector} {cache}[{kind}] {label}{injected}{budget}\n  {vertical}   path: {path}{drop_note}",
                 kind = entry.kind,
                 label = entry.label,
             )
@@ -377,7 +381,11 @@ fn render_memory_selection(app: &TuiApp) -> String {
             .iter()
             .enumerate()
             .map(|(idx, item)| {
-                let connector = if idx + 1 == items.len() { "└──" } else { "├──" };
+                let (connector, vertical) = if idx + 1 == items.len() {
+                    ("└──", " ")
+                } else {
+                    ("├──", "│")
+                };
                 let budget = item
                     .budget_impact_tokens
                     .map(|v| format!(" {v}t"))
@@ -390,7 +398,7 @@ fn render_memory_selection(app: &TuiApp) -> String {
                     _ => String::new(),
                 };
                 format!(
-                    "    {connector} [{kind}] {label}{budget}\n    │   {detail_preview}{drop_note}",
+                    "    {connector} [{kind}] {label}{budget}\n    {vertical}   {detail_preview}{drop_note}",
                     kind = item.kind,
                     label = item.label,
                 )
@@ -409,10 +417,10 @@ fn render_memory_selection(app: &TuiApp) -> String {
 
 fn truncate_preview(text: &str, max_len: usize) -> String {
     let condensed: String = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    if condensed.len() <= max_len {
+    if condensed.chars().count() <= max_len {
         condensed
     } else {
-        format!("{}…", &condensed[..max_len - 1])
+        format!("{}…", &condensed[..condensed.char_indices().nth(max_len - 1).map_or(max_len - 1, |(i, _)| i)])
     }
 }
 
