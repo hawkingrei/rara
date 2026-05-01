@@ -66,7 +66,7 @@ pub enum BackgroundTaskStatus {
     Killed,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum BashStreamKind {
     Stdout,
     Stderr,
@@ -923,11 +923,17 @@ impl Tool for BashTool {
         let mut stdout_text = String::new();
         let mut stderr_text = String::new();
         let mut aggregated_output = String::new();
+        let mut aggregated_output_stream = None;
         let mut live_streamed = false;
         if !wrapped.sandboxed {
             let chunk = unsandboxed_execution_warning(&wrapped);
             stderr_text.push_str(&chunk);
-            append_aggregated_bash_output(&mut aggregated_output, BashStreamKind::Stderr, &chunk);
+            append_aggregated_bash_output(
+                &mut aggregated_output,
+                &mut aggregated_output_stream,
+                BashStreamKind::Stderr,
+                &chunk,
+            );
             live_streamed = true;
             report(ToolProgressEvent::Output {
                 stream: ToolOutputStream::Stderr,
@@ -943,7 +949,12 @@ impl Tool for BashTool {
                 BashStreamKind::Stdout => stdout_text.push_str(&chunk),
                 BashStreamKind::Stderr => stderr_text.push_str(&chunk),
             }
-            append_aggregated_bash_output(&mut aggregated_output, stream, &chunk);
+            append_aggregated_bash_output(
+                &mut aggregated_output,
+                &mut aggregated_output_stream,
+                stream,
+                &chunk,
+            );
             report(ToolProgressEvent::Output {
                 stream: stream.output_stream(),
                 chunk,
@@ -963,7 +974,12 @@ impl Tool for BashTool {
         if wrapped.sandboxed {
             if let Some(hint) = sandbox_output_hint(&stderr_text) {
                 stderr_text.push_str(hint);
-                append_aggregated_bash_output(&mut aggregated_output, BashStreamKind::Stderr, hint);
+                append_aggregated_bash_output(
+                    &mut aggregated_output,
+                    &mut aggregated_output_stream,
+                    BashStreamKind::Stderr,
+                    hint,
+                );
             }
         }
         let duration_ms = started_at.elapsed().as_millis() as u64;
@@ -1263,6 +1279,7 @@ where
 
 fn append_aggregated_bash_output(
     aggregated_output: &mut String,
+    last_stream: &mut Option<BashStreamKind>,
     stream: BashStreamKind,
     chunk: &str,
 ) {
@@ -1272,6 +1289,12 @@ fn append_aggregated_bash_output(
     match stream {
         BashStreamKind::Stdout => aggregated_output.push_str(chunk),
         BashStreamKind::Stderr => {
+            if !aggregated_output.is_empty()
+                && !aggregated_output.ends_with('\n')
+                && !matches!(last_stream, Some(BashStreamKind::Stderr))
+            {
+                aggregated_output.push('\n');
+            }
             for line in chunk.split_inclusive('\n') {
                 if aggregated_output.is_empty() || aggregated_output.ends_with('\n') {
                     aggregated_output.push_str("[stderr] ");
@@ -1280,6 +1303,7 @@ fn append_aggregated_bash_output(
             }
         }
     }
+    *last_stream = Some(stream);
 }
 
 fn sandbox_output_hint(stderr: &str) -> Option<&'static str> {
@@ -1847,11 +1871,47 @@ mod tests {
     #[test]
     fn aggregated_stderr_prefixes_only_line_boundaries() {
         let mut output = String::new();
-        append_aggregated_bash_output(&mut output, BashStreamKind::Stderr, "partial");
-        append_aggregated_bash_output(&mut output, BashStreamKind::Stderr, "-line\nnext");
-        append_aggregated_bash_output(&mut output, BashStreamKind::Stderr, "-line\n");
+        let mut last_stream = None;
+        append_aggregated_bash_output(
+            &mut output,
+            &mut last_stream,
+            BashStreamKind::Stderr,
+            "partial",
+        );
+        append_aggregated_bash_output(
+            &mut output,
+            &mut last_stream,
+            BashStreamKind::Stderr,
+            "-line\nnext",
+        );
+        append_aggregated_bash_output(
+            &mut output,
+            &mut last_stream,
+            BashStreamKind::Stderr,
+            "-line\n",
+        );
 
         assert_eq!(output, "[stderr] partial-line\n[stderr] next-line\n");
+    }
+
+    #[test]
+    fn aggregated_stderr_starts_on_new_line_after_stdout() {
+        let mut output = String::new();
+        let mut last_stream = None;
+        append_aggregated_bash_output(
+            &mut output,
+            &mut last_stream,
+            BashStreamKind::Stdout,
+            "stdout-without-newline",
+        );
+        append_aggregated_bash_output(
+            &mut output,
+            &mut last_stream,
+            BashStreamKind::Stderr,
+            "stderr-line\n",
+        );
+
+        assert_eq!(output, "stdout-without-newline\n[stderr] stderr-line\n");
     }
 
     #[tokio::test]

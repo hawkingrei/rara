@@ -339,6 +339,25 @@ fn compact_generic(summary: &str, result: &Value) -> String {
 }
 
 fn compact_bash(result: &Value) -> String {
+    if let Some(task_id) = result.get("background_task_id").and_then(Value::as_str) {
+        let status = result
+            .get("status")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown");
+        let output_path = result
+            .get("output_path")
+            .and_then(Value::as_str)
+            .unwrap_or("<unknown>");
+        let exit_code = result
+            .get("exit_code")
+            .and_then(Value::as_i64)
+            .map(|code| code.to_string())
+            .unwrap_or_else(|| "pending".to_string());
+        return format!(
+            "bash started in background.\nTask id: {task_id}\nStatus: {status}\nExit code: {exit_code}\nOutput path: {output_path}\nUse background_task_status with this task id to inspect output."
+        );
+    }
+
     let exit_code = result
         .get("exit_code")
         .and_then(Value::as_i64)
@@ -907,6 +926,32 @@ mod tests {
             .expect("compact bash result");
 
         assert!(output.contains("stdout-without-newline\n[stderr] stderr-line"));
+    }
+
+    #[test]
+    fn compacts_background_bash_with_task_id() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let store = ToolResultStore::new(tempdir.path()).expect("store");
+        let output = store
+            .compact_result(
+                "bash",
+                "tool-bash",
+                &json!({ "program": "sh", "run_in_background": true }),
+                &json!({
+                    "background_task_id": "bash-123",
+                    "status": "running",
+                    "output_path": "/tmp/rara/bash-123.log",
+                    "exit_code": null,
+                    "stdout": "",
+                    "stderr": "",
+                }),
+            )
+            .expect("compact background bash result");
+
+        assert!(output.contains("bash started in background."));
+        assert!(output.contains("Task id: bash-123"));
+        assert!(output.contains("Status: running"));
+        assert!(output.contains("background_task_status"));
     }
 
     #[test]
