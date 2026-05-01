@@ -657,6 +657,19 @@ mod tests {
         assert!(selected_kinds.contains(&"approval"));
         assert!(selected_kinds.contains(&"latest_user_request"));
         assert!(selected_kinds.contains(&"tool_result"));
+
+        let active_memory_assembly_kinds = runtime_context
+            .assembly
+            .entries
+            .iter()
+            .filter(|entry| entry.layer == "active_memory_inputs")
+            .map(|entry| entry.kind.as_str())
+            .collect::<Vec<_>>();
+        assert!(!active_memory_assembly_kinds.contains(&"plan_explanation"));
+        assert!(!active_memory_assembly_kinds.contains(&"plan_steps"));
+        assert!(!active_memory_assembly_kinds.contains(&"approval"));
+        assert!(!active_memory_assembly_kinds.contains(&"latest_user_request"));
+        assert!(!active_memory_assembly_kinds.contains(&"tool_result"));
     }
 
     #[test]

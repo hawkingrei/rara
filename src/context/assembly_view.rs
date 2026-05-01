@@ -170,7 +170,10 @@ pub(crate) fn assemble_context_view(
         });
     }
 
-    for item in selected_memory_items {
+    for item in selected_memory_items
+        .iter()
+        .filter(|item| is_memory_assembly_input(item.kind.as_str()))
+    {
         push(ContextAssemblyEntry {
             order: 0,
             cache_status: None,
@@ -216,4 +219,11 @@ pub(crate) fn assemble_context_view(
     }
 
     ContextAssemblyView { entries }
+}
+
+fn is_memory_assembly_input(kind: &str) -> bool {
+    matches!(
+        kind,
+        "retrieved_workspace_memory" | "retrieved_thread_context"
+    )
 }
