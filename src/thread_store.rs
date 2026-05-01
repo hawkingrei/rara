@@ -108,6 +108,30 @@ pub struct ThreadMaterializationProvenance {
     pub non_turn_rollout_source: ThreadNonTurnRolloutSource,
 }
 
+impl ThreadMaterializationProvenance {
+    /// Human-readable description of where each piece of the thread snapshot
+    /// was sourced from, making the legacy-fallback hierarchy explicit.
+    pub fn describe(&self) -> String {
+        let metadata = match self.metadata_source {
+            ThreadMetadataSource::StateDb => "StateDb (canonical)",
+        };
+        let history = match self.history_source {
+            ThreadHistorySource::CanonicalHistory => "canonical history.json",
+            ThreadHistorySource::LegacyHistoryBackfilled => "legacy session JSON (backfilled)",
+            ThreadHistorySource::Missing => "missing",
+        };
+        let rollout = match self.non_turn_rollout_source {
+            ThreadNonTurnRolloutSource::StructuredEventsLog => "structured events log (canonical)",
+            ThreadNonTurnRolloutSource::LegacyBackfilled => "legacy rollout (backfilled)",
+            ThreadNonTurnRolloutSource::StateDbFallback => "StateDb fallback",
+            ThreadNonTurnRolloutSource::Empty => "empty",
+        };
+        format!(
+            "metadata={metadata} history={history} non-turn-rollout={rollout}"
+        )
+    }
+}
+
 impl From<PersistedThreadRecord> for ThreadMetadata {
     fn from(value: PersistedThreadRecord) -> Self {
         Self {
@@ -126,6 +150,19 @@ impl From<PersistedThreadRecord> for ThreadMetadata {
             transcript_len: value.transcript_len,
             updated_at: value.updated_at,
         }
+    }
+}
+
+impl ThreadMetadata {
+    /// Returns true when this thread was forked from another thread.
+    pub fn is_fork(&self) -> bool {
+        self.origin_kind == "fork" && self.forked_from_thread_id.is_some()
+    }
+
+    /// Returns the origin kind and optional source thread id, making the
+    /// lineage explicit for callers that need to trace thread ancestry.
+    pub fn lineage(&self) -> (&str, Option<&str>) {
+        (self.origin_kind.as_str(), self.forked_from_thread_id.as_deref())
     }
 }
 
@@ -189,6 +226,22 @@ pub struct ThreadSnapshot {
     pub plan_steps: Vec<PersistedPlanStep>,
     pub interactions: Vec<PersistedInteraction>,
     pub rollout_items: Vec<RolloutItem>,
+}
+
+impl ThreadSnapshot {
+    /// Human-readable provenance description showing the source hierarchy.
+    pub fn provenance_description(&self) -> String {
+        self.provenance.describe()
+    }
+
+    /// Returns true when this snapshot was forked from another thread.
+    pub fn is_fork(&self) -> bool {
+        self.metadata.is_fork()
+    }
+
+    pub fn lineage(&self) -> (&str, Option<&str>) {
+        self.metadata.lineage()
+    }
 }
 
 #[derive(Debug, Clone)]

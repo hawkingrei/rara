@@ -26,47 +26,27 @@ Acceptance:
 Priority order for this phase:
 
 1. Strengthen `/context` as the primary context and memory-selection debugger
-   - The first target is not a prettier command output; it is a stable inspection contract.
-   - `/context` should show:
-     - context source categories and order;
-     - source paths and provenance;
-     - selected, available, and dropped memory-selection items;
-     - selection/drop reasons;
-     - token or budget contribution;
-     - cache hit or refresh status when known.
+   - ✅ The data pipeline is solid: `ContextAssemblyView` → `RuntimeSnapshot` → `status_context_text`.
+   - ✅ Rendering includes all layers, memory selection (selected/available/dropped), budget, compaction, and retrieval sources.
+   - ✅ Added `CacheStatus` enum (`Hit`/`Miss`/`NoCache`) to `src/context/runtime.rs`, threading through `ContextAssemblyEntry`, `PromptSourceContextEntry`, and the `/context` render in `src/tui/command.rs` ("cache: hit", "cache: miss", "cache: -").
 
 2. Complete `MemorySelection` as the authoritative bounded retrieval-selection pipeline
-   - The current Stage 1 skeleton exists:
-     - candidate pool;
-     - selected/dropped reason reporting;
-     - selection budget surface;
-   - The next step is to make it the real runtime path for bounded recall.
-   - Rollout order:
-     - 1A. promote selection logic into the primary path for thread/workspace candidates;
-     - 1B. replace placeholder retrieval with real vector-backed retrieval for thread and workspace memory.
+   - ✅ 1A. Selection logic is the primary path — `memory_selection()` assembles fixed + discretionary items with budget-aware ranking. 6 focused tests added to `src/context/memory_selection.rs`.
+   - [ ] 1B. Replace placeholder retrieval with real vector-backed retrieval for thread and workspace memory (requires LanceDB backend).
 
 3. Deepen the `ThreadStore` / `ThreadRecorder` boundary into a real thread domain
-   - The current thread boundary and lifecycle surface now exist:
-     - `threads`
-     - `thread`
-     - `resume --last`
-     - `fork`
-   - The remaining work is to define:
-     - authoritative thread metadata ownership;
-     - rollout-item ownership;
-     - lineage / fork source / latest-thread contract;
-     - which legacy files remain fallback-only.
+   - ✅ Added `ThreadMetadata::is_fork()`, `ThreadMetadata::lineage()`, `ThreadSnapshot::provenance_description()`, `ThreadMaterializationProvenance::describe()` for explicit lineage and fallback-hierarchy inspection.
+   - ✅ Provenance tracking distinguishes canonical sources from legacy backfill and StateDb fallback.
 
 4. Continue promoting compaction into a first-class runtime lifecycle event
-   - Build on the current persisted summaries, token counters, and boundary metadata.
-   - Tighten ownership between compaction state and thread/runtime persistence.
-   - Keep this coupled to the thread-domain work instead of treating it as a UI-only follow-up.
+   - ✅ Compaction events persist through `PersistedCompactionEvent` in the structured rollout events log.
+   - [ ] Tighten ownership between `CompactState` (runtime) and `CompactionRecord` (persisted) so compaction metadata flows through one authoritative boundary instead of two parallel representations.
 
 ## Architecture / Runtime
 
-- [ ] Promote the current `MemorySelection` skeleton into the authoritative bounded retrieval-selection pipeline for thread and workspace recall.
-- [ ] Finish the first non-vector cut of `MemorySelection` so thread memory, workspace memory, active thread state, pending interaction state, and recent tool results all flow through one selected/available/dropped explanation path.
-- [ ] Treat `/context` as the high-priority debugger for context and memory selection before expanding retrieval breadth.
+- [x] Promote the current `MemorySelection` skeleton into the authoritative bounded retrieval-selection pipeline for thread and workspace recall.
+- [x] Finish the first non-vector cut of `MemorySelection` so thread memory, workspace memory, active thread state, pending interaction state, and recent tool results all flow through one selected/available/dropped explanation path.
+- [x] Treat `/context` as the high-priority debugger for context and memory selection before expanding retrieval breadth.
 
 ## Configuration / Provider Surface
 

@@ -15,8 +15,9 @@ pub use self::assembler::{
     RuntimeInteractionInput,
 };
 pub use self::runtime::{
-    CompactionContextView, CompactionSourceContextEntry, ContextAssemblyEntry, ContextAssemblyView,
-    ContextBudgetView, MemorySelectionContextView, MemorySelectionItemContextEntry,
-    PlanContextView, PromptContextView, PromptSourceContextEntry, RetrievalContextView,
-    RetrievalSourceContextEntry, SharedRuntimeContext,
+    CacheStatus, CompactionContextView, CompactionSourceContextEntry, ContextAssemblyEntry,
+    ContextAssemblyView, ContextBudgetView, MemorySelectionContextView,
+    MemorySelectionItemContextEntry, PlanContextView, PromptContextView,
+    PromptSourceContextEntry, RetrievalContextView, RetrievalSourceContextEntry,
+    SharedRuntimeContext,
 };

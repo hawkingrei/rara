@@ -1,9 +1,20 @@
 use crate::agent::{CompactState, PlanStepStatus};
 use crate::prompt::{EffectivePrompt, PromptSource};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CacheStatus {
+    /// Content was served from the in-memory cache (mtime unchanged).
+    Hit,
+    /// Content was re-read from disk (mtime changed or first read).
+    Miss,
+    /// Cache does not apply (non-file source, e.g. append-system-prompt).
+    NoCache,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContextAssemblyEntry {
     pub order: usize,
+    pub cache_status: Option<CacheStatus>,
     pub layer: String,
     pub kind: String,
     pub label: String,

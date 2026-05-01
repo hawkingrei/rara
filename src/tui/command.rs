@@ -1,4 +1,5 @@
 use crate::config::RaraConfig;
+use crate::context::CacheStatus;
 
 use super::state::{
     CommandSpec, LocalCommand, LocalCommandKind, PROVIDER_FAMILIES, PendingInteractionSnapshot,
@@ -312,40 +313,45 @@ fn format_pending_interaction(snapshot: &PendingInteractionSnapshot) -> String {
 }
 
 fn render_context_assembly_entries(app: &TuiApp, layer: &str, title: &str) -> String {
-    let entries = app
+    let entries: Vec<&crate::context::ContextAssemblyEntry> = app
         .snapshot
         .assembly_entries
         .iter()
         .filter(|entry| entry.layer == layer)
         .collect::<Vec<_>>();
+    let count = entries.len();
     if entries.is_empty() {
-        return format!("{title}\n  - None.");
+        return format!("{title}\n  (none)");
     }
 
     let body = entries
         .into_iter()
-        .map(|entry| {
+        .enumerate()
+        .map(|(idx, entry)| {
+            let connector = if idx + 1 == count { "└──" } else { "├──" };
             let path = entry
                 .source_path
                 .as_deref()
-                .filter(|value| !value.is_empty())
+                .filter(|v| !v.is_empty())
                 .unwrap_or("-");
-            let injected = if entry.injected { "yes" } else { "no" };
+            let injected = if entry.injected { "" } else { " (not injected)" };
+            let cache = match entry.cache_status {
+                Some(CacheStatus::Hit) => "●",
+                Some(CacheStatus::Miss) => "○",
+                _ => "",
+            };
             let budget = entry
                 .budget_impact_tokens
-                .map(|value| value.to_string())
-                .unwrap_or_else(|| "-".to_string());
-            let dropped = entry.dropped_reason.as_deref().unwrap_or("-");
+                .map(|v| format!(" {v}t"))
+                .unwrap_or_default();
+            let drop_note = match entry.dropped_reason.as_deref() {
+                Some(r) if !r.is_empty() && r != "-" => format!(" ── dropped: {r}"),
+                _ => String::new(),
+            };
             format!(
-                "  {}. {} ({})\n     path: {}\n     injected: {}\n     budget impact: {}\n     why: {}\n     dropped: {}",
-                entry.order,
-                entry.label,
-                entry.kind,
-                path,
-                injected,
-                budget,
-                entry.inclusion_reason,
-                dropped,
+                "  {connector} {cache}[{kind}] {label}{injected}{budget}\n  │   path: {path}{drop_note}",
+                kind = entry.kind,
+                label = entry.label,
             )
         })
         .collect::<Vec<_>>()
@@ -359,65 +365,33 @@ fn render_memory_selection(app: &TuiApp) -> String {
         .snapshot
         .memory_selection
         .selection_budget_tokens
-        .map(|value| value.to_string())
-        .unwrap_or_else(|| "-".to_string());
-    let selected = if app.snapshot.memory_selection.selected_items.is_empty() {
-        "  - None.".to_string()
-    } else {
-        app.snapshot
-            .memory_selection
-            .selected_items
+        .map(|v| format!("{v}t"))
+        .unwrap_or_else(|| "unlimited".to_string());
+
+    let render_items = |items: &[crate::context::MemorySelectionItemContextEntry]| -> String {
+        if items.is_empty() {
+            return "    (none)".to_string();
+        }
+        items
             .iter()
-            .map(|item| {
+            .enumerate()
+            .map(|(idx, item)| {
+                let connector = if idx + 1 == items.len() { "└──" } else { "├──" };
                 let budget = item
                     .budget_impact_tokens
-                    .map(|value| value.to_string())
-                    .unwrap_or_else(|| "-".to_string());
+                    .map(|v| format!(" {v}t"))
+                    .unwrap_or_default();
+                let detail_preview = truncate_preview(&item.detail, 60);
+                let drop_note = match item.dropped_reason.as_deref() {
+                    Some(r) if !r.is_empty() && r != "-" => {
+                        format!(" ── {r}")
+                    }
+                    _ => String::new(),
+                };
                 format!(
-                    "  {}. {} ({})\n     detail: {}\n     budget impact: {}\n     why selected: {}",
-                    item.order, item.label, item.kind, item.detail, budget, item.selection_reason
-                )
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
-    };
-    let available = if app.snapshot.memory_selection.available_items.is_empty() {
-        "  - None.".to_string()
-    } else {
-        app.snapshot
-            .memory_selection
-            .available_items
-            .iter()
-            .map(|item| {
-                format!(
-                    "  {}. {} ({})\n     detail: {}\n     why available: {}\n     not injected: {}",
-                    item.order,
-                    item.label,
-                    item.kind,
-                    item.detail,
-                    item.selection_reason,
-                    item.dropped_reason.as_deref().unwrap_or("-")
-                )
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
-    };
-    let dropped = if app.snapshot.memory_selection.dropped_items.is_empty() {
-        "  - None.".to_string()
-    } else {
-        app.snapshot
-            .memory_selection
-            .dropped_items
-            .iter()
-            .map(|item| {
-                format!(
-                    "  {}. {} ({})\n     detail: {}\n     why considered: {}\n     dropped: {}",
-                    item.order,
-                    item.label,
-                    item.kind,
-                    item.detail,
-                    item.selection_reason,
-                    item.dropped_reason.as_deref().unwrap_or("-")
+                    "    {connector} [{kind}] {label}{budget}\n    │   {detail_preview}{drop_note}",
+                    kind = item.kind,
+                    label = item.label,
                 )
             })
             .collect::<Vec<_>>()
@@ -425,9 +399,20 @@ fn render_memory_selection(app: &TuiApp) -> String {
     };
 
     format!(
-        "Memory Selection\n  selection budget: {}\n  selected now:\n{}\n  available but not injected:\n{}\n  dropped by ranking or budget:\n{}",
-        budget, selected, available, dropped
+        "Memory Selection  (budget: {budget})\n  ├── selected:\n{}\n  ├── available:\n{}\n  └── dropped:\n{}",
+        render_items(&app.snapshot.memory_selection.selected_items),
+        render_items(&app.snapshot.memory_selection.available_items),
+        render_items(&app.snapshot.memory_selection.dropped_items),
     )
+}
+
+fn truncate_preview(text: &str, max_len: usize) -> String {
+    let condensed: String = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if condensed.len() <= max_len {
+        condensed
+    } else {
+        format!("{}…", &condensed[..max_len - 1])
+    }
 }
 
 pub fn status_context_text(app: &TuiApp) -> String {
@@ -483,7 +468,7 @@ pub fn status_context_text(app: &TuiApp) -> String {
     };
     let mut sections = vec![
         format!(
-            "Current Session\n  cwd: {}\n  branch: {}\n  session: {}\n  history messages: {}\n  transcript entries: {}",
+            "Session\n  cwd: {}\n  branch: {}\n  session: {}\n  history: {} msgs  {} entries",
             app.snapshot.cwd,
             app.snapshot.branch,
             app.snapshot.session_id,
@@ -491,51 +476,26 @@ pub fn status_context_text(app: &TuiApp) -> String {
             app.transcript_entry_count(),
         ),
         format!(
-            "Context Budget\n  context window: {}\n  reserved output: {}\n  stable instructions: {}\n  workspace prompt sources: {}\n  active turn: {}\n  compacted history: {}\n  retrieved memory: {}\n  remaining input budget: {}",
+            "Budget\n  window: {}  reserved: {}  remaining: {}\n  stable: {}  workspace: {}  active: {}  compacted: {}  retrieved: {}",
             app.snapshot
                 .context_window_tokens
                 .map(|value| value.to_string())
                 .unwrap_or_else(|| "-".to_string()),
             app.snapshot.reserved_output_tokens,
+            app.snapshot
+                .remaining_input_budget
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "-".to_string()),
             app.snapshot.stable_instructions_budget,
             app.snapshot.workspace_prompt_budget,
             app.snapshot.active_turn_budget,
             app.snapshot.compacted_history_budget,
             app.snapshot.retrieved_memory_budget,
-            app.snapshot
-                .remaining_input_budget
-                .map(|value| value.to_string())
-                .unwrap_or_else(|| "-".to_string()),
-        ),
-        render_context_assembly_entries(app, "stable_instructions", "Stable Instructions"),
-        render_context_assembly_entries(
-            app,
-            "workspace_prompt_sources",
-            "Workspace Prompt Sources",
-        ),
-        render_context_assembly_entries(app, "active_memory_inputs", "Active Memory Inputs"),
-        render_memory_selection(app),
-        render_context_assembly_entries(app, "compacted_history", "Compacted History"),
-        render_context_assembly_entries(app, "active_turn_state", "Active Turn State"),
-        render_context_assembly_entries(
-            app,
-            "retrieval_ready",
-            "Retrieval-ready but not injected items",
         ),
         format!(
-            "Plan State\n  explanation: {}\n{}",
-            app.snapshot.plan_explanation.as_deref().unwrap_or("-"),
-            plan_lines
-        ),
-        format!(
-            "Compaction State\n  estimated history tokens: {}\n  context window: {}\n  threshold: {}\n  reserved output: {}\n  compactions: {}\n  last compaction: {} -> {}\n  last boundary: {}",
+            "Compaction\n  estimated: {}t  threshold: {}t  count: {}\n  last: {}t → {}t  boundary: {}",
             app.snapshot.estimated_history_tokens,
-            app.snapshot
-                .context_window_tokens
-                .map(|value| value.to_string())
-                .unwrap_or_else(|| "-".to_string()),
             app.snapshot.compact_threshold_tokens,
-            app.snapshot.reserved_output_tokens,
             app.snapshot.compaction_count,
             app.snapshot
                 .last_compaction_before_tokens
@@ -547,7 +507,20 @@ pub fn status_context_text(app: &TuiApp) -> String {
                 .unwrap_or_else(|| "-".to_string()),
             last_boundary
         ),
-        format!("Pending Interaction\n{}", pending_interactions),
+        format!(
+            "Plan\n  mode: {}  explanation: {}\n{}",
+            app.agent_execution_mode_label(),
+            app.snapshot.plan_explanation.as_deref().unwrap_or("-"),
+            plan_lines
+        ),
+        format!("Pending\n{}", pending_interactions),
+        render_context_assembly_entries(app, "stable_instructions", "Stable Instructions"),
+        render_context_assembly_entries(app, "workspace_prompt_sources", "Workspace Prompt Sources"),
+        render_context_assembly_entries(app, "active_memory_inputs", "Active Memory Inputs"),
+        render_memory_selection(app),
+        render_context_assembly_entries(app, "compacted_history", "Compacted History"),
+        render_context_assembly_entries(app, "active_turn_state", "Active Turn State"),
+        render_context_assembly_entries(app, "retrieval_ready", "Retrieval-ready"),
     ];
     if let Some(warnings) = prompt_warnings {
         sections.insert(2, warnings);
@@ -1485,6 +1458,7 @@ mod tests {
             ],
             assembly_entries: vec![
                 crate::context::ContextAssemblyEntry {
+                    cache_status: None,
                     order: 1,
                     layer: "stable_instructions".into(),
                     kind: "project_instruction".into(),
@@ -1497,6 +1471,7 @@ mod tests {
                     dropped_reason: None,
                 },
                 crate::context::ContextAssemblyEntry {
+                    cache_status: None,
                     order: 2,
                     layer: "workspace_prompt_sources".into(),
                     kind: "local_memory".into(),
@@ -1509,6 +1484,7 @@ mod tests {
                     dropped_reason: None,
                 },
                 crate::context::ContextAssemblyEntry {
+                    cache_status: None,
                     order: 3,
                     layer: "active_memory_inputs".into(),
                     kind: "retrieved_workspace_memory".into(),
@@ -1521,6 +1497,7 @@ mod tests {
                     dropped_reason: None,
                 },
                 crate::context::ContextAssemblyEntry {
+                    cache_status: None,
                     order: 4,
                     layer: "compacted_history".into(),
                     kind: "compacted_summary".into(),
@@ -1533,6 +1510,7 @@ mod tests {
                     dropped_reason: None,
                 },
                 crate::context::ContextAssemblyEntry {
+                    cache_status: None,
                     order: 5,
                     layer: "active_turn_state".into(),
                     kind: "plan_steps".into(),
@@ -1545,6 +1523,7 @@ mod tests {
                     dropped_reason: None,
                 },
                 crate::context::ContextAssemblyEntry {
+                    cache_status: None,
                     order: 6,
                     layer: "retrieval_ready".into(),
                     kind: "thread_history".into(),
@@ -1563,31 +1542,27 @@ mod tests {
         };
 
         let rendered = status_context_text(&app);
-        assert!(rendered.contains("Current Session"));
-        assert!(rendered.contains("Context Budget"));
-        assert!(rendered.contains("stable instructions: 1200"));
+        assert!(rendered.contains("Session"));
+        assert!(rendered.contains("Budget"));
+        assert!(rendered.contains("stable: 1200"));
         assert!(rendered.contains("Stable Instructions"));
         assert!(rendered.contains("Workspace Prompt Sources"));
         assert!(rendered.contains("Active Memory Inputs"));
         assert!(rendered.contains("Memory Selection"));
-        assert!(rendered.contains("selection budget: 1024"));
+        assert!(rendered.contains("budget: 1024"));
         assert!(rendered.contains("Compacted History"));
         assert!(rendered.contains("Active Turn State"));
-        assert!(rendered.contains("Retrieval-ready but not injected items"));
-        assert!(rendered.contains("available but not injected"));
-        assert!(rendered.contains("dropped by ranking or budget"));
-        assert!(rendered.contains("1. Project Instruction (AGENTS.md) (project_instruction)"));
+        assert!(rendered.contains("Retrieval-ready"));
+        assert!(rendered.contains("selected:"));
+        assert!(rendered.contains("available:"));
+        assert!(rendered.contains("dropped:"));
+        assert!(rendered.contains("[project_instruction] Project Instruction (AGENTS.md)"));
         assert!(rendered.contains("path: AGENTS.md"));
-        assert!(rendered.contains("injected: yes"));
-        assert!(rendered.contains("budget impact: 120"));
-        assert!(rendered.contains("dropped: -"));
-        assert!(rendered.contains("6. Thread History (thread_history)"));
-        assert!(rendered.contains("injected: no"));
-        assert!(rendered.contains("not injected: raw thread history was not selected directly"));
+        assert!(rendered.contains("120t"));
+        assert!(rendered.contains("[thread_history] Thread History (not injected)"));
         assert!(rendered.contains(
-            "dropped: not selected because it would exceed the remaining memory-selection budget"
+            "exceed the remaining memory-selection budget"
         ));
-        assert!(rendered.contains("why selected: selected because the current effective prompt includes the workspace memory file as an active input"));
         assert!(rendered.contains("[pending] Implement /context"));
     }
 
