@@ -111,8 +111,8 @@ pub(crate) fn assemble_context_view(
             label: interaction.title.clone(),
             source_path: interaction.source.clone(),
             injected: true,
-            inclusion_reason: "included because pending interactions are active runtime obligations"
-                .to_string(),
+            inclusion_reason:
+                "included because pending interactions are active runtime obligations".to_string(),
             budget_impact_tokens: Some(
                 estimate_text_tokens(interaction.title.as_str())
                     + estimate_text_tokens(interaction.summary.as_str()),

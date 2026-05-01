@@ -126,9 +126,7 @@ impl ThreadMaterializationProvenance {
             ThreadNonTurnRolloutSource::StateDbFallback => "StateDb fallback",
             ThreadNonTurnRolloutSource::Empty => "empty",
         };
-        format!(
-            "metadata={metadata} history={history} non-turn-rollout={rollout}"
-        )
+        format!("metadata={metadata} history={history} non-turn-rollout={rollout}")
     }
 }
 
@@ -162,7 +160,10 @@ impl ThreadMetadata {
     /// Returns the origin kind and optional source thread id, making the
     /// lineage explicit for callers that need to trace thread ancestry.
     pub fn lineage(&self) -> (&str, Option<&str>) {
-        (self.origin_kind.as_str(), self.forked_from_thread_id.as_deref())
+        (
+            self.origin_kind.as_str(),
+            self.forked_from_thread_id.as_deref(),
+        )
     }
 }
 

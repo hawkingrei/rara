@@ -754,17 +754,7 @@ mod tests {
         ];
         // Budget of 1 token forces the retrieval candidate to be dropped,
         // proving it was captured as a candidate.
-        let result = memory_selection(
-            &[],
-            None,
-            &[],
-            &[],
-            &[],
-            &history,
-            "session-1",
-            "",
-            Some(1),
-        );
+        let result = memory_selection(&[], None, &[], &[], &[], &history, "session-1", "", Some(1));
 
         let dropped_kinds: Vec<&str> = result
             .dropped_items
@@ -863,7 +853,10 @@ mod tests {
         );
 
         // Selected: at least latest_user_request + thread_history (if budget allows)
-        assert!(!result.selected_items.is_empty(), "should have selected items");
+        assert!(
+            !result.selected_items.is_empty(),
+            "should have selected items"
+        );
         // Available: vector_memory should be there
         let available_kinds: Vec<&str> = result
             .available_items
@@ -876,6 +869,9 @@ mod tests {
         );
         // workspace_memory_available_item is also pushed when not already selected
         let has_workspace_available = available_kinds.contains(&"workspace_memory");
-        assert!(has_workspace_available, "workspace_memory should be in available when no workspace prompt source is active");
+        assert!(
+            has_workspace_available,
+            "workspace_memory should be in available when no workspace prompt source is active"
+        );
     }
 }

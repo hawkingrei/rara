@@ -1,5 +1,5 @@
-use anyhow::Result;
 use crate::prompt::{PromptSource, PromptSourceKind};
+use anyhow::Result;
 use rara_config::workspace_data_dir_for;
 use std::collections::HashMap;
 use std::fs;

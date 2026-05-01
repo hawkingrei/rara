@@ -368,11 +368,12 @@ fn render_memory_selection(app: &TuiApp) -> String {
         .map(|v| format!("{v}t"))
         .unwrap_or_else(|| "unlimited".to_string());
 
-    let render_items = |items: &[crate::context::MemorySelectionItemContextEntry]| -> String {
-        if items.is_empty() {
-            return "    (none)".to_string();
-        }
-        items
+    let render_items =
+        |items: &[crate::context::MemorySelectionItemContextEntry]| -> String {
+            if items.is_empty() {
+                return "    (none)".to_string();
+            }
+            items
             .iter()
             .enumerate()
             .map(|(idx, item)| {
@@ -396,7 +397,7 @@ fn render_memory_selection(app: &TuiApp) -> String {
             })
             .collect::<Vec<_>>()
             .join("\n")
-    };
+        };
 
     format!(
         "Memory Selection  (budget: {budget})\n  ├── selected:\n{}\n  ├── available:\n{}\n  └── dropped:\n{}",
@@ -515,7 +516,11 @@ pub fn status_context_text(app: &TuiApp) -> String {
         ),
         format!("Pending\n{}", pending_interactions),
         render_context_assembly_entries(app, "stable_instructions", "Stable Instructions"),
-        render_context_assembly_entries(app, "workspace_prompt_sources", "Workspace Prompt Sources"),
+        render_context_assembly_entries(
+            app,
+            "workspace_prompt_sources",
+            "Workspace Prompt Sources",
+        ),
         render_context_assembly_entries(app, "active_memory_inputs", "Active Memory Inputs"),
         render_memory_selection(app),
         render_context_assembly_entries(app, "compacted_history", "Compacted History"),
@@ -1560,9 +1565,7 @@ mod tests {
         assert!(rendered.contains("path: AGENTS.md"));
         assert!(rendered.contains("120t"));
         assert!(rendered.contains("[thread_history] Thread History (not injected)"));
-        assert!(rendered.contains(
-            "exceed the remaining memory-selection budget"
-        ));
+        assert!(rendered.contains("exceed the remaining memory-selection budget"));
         assert!(rendered.contains("[pending] Implement /context"));
     }
 
