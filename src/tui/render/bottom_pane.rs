@@ -8,9 +8,9 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use super::super::custom_terminal::Frame;
 use super::super::interaction_text::pending_interaction_hint_text;
-use super::super::queued_input::{
-    pending_follow_up_hint, queued_follow_up_hint, queued_follow_up_sections,
-};
+#[cfg(test)]
+use super::super::queued_input::queued_follow_up_sections;
+use super::super::queued_input::{pending_follow_up_hint, queued_follow_up_hint};
 use super::super::state::char_offset_to_byte_index;
 use super::super::state::{ActivePendingInteractionKind, TaskKind, TuiApp};
 use super::badge;
@@ -284,6 +284,7 @@ fn render_composer(f: &mut Frame, app: &TuiApp, area: Rect) -> Option<(u16, u16)
     ))
 }
 
+#[cfg(test)]
 fn queued_follow_up_preview_lines(app: &TuiApp) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
 

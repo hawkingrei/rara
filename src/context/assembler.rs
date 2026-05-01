@@ -163,12 +163,7 @@ impl<'a> ContextAssembler<'a> {
             .memory_selection
             .selected_items
             .iter()
-            .filter(|item| {
-                matches!(
-                    item.kind.as_str(),
-                    "retrieved_workspace_memory" | "retrieved_thread_context"
-                )
-            })
+            .filter(|item| crate::context::is_retrieved_memory_kind(item.kind.as_str()))
             .map(|item| item.budget_impact_tokens.unwrap_or_default())
             .sum();
         let assembly = assemble_context_view(

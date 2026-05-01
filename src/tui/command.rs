@@ -1454,7 +1454,7 @@ mod tests {
                     selection_reason:
                         "selected because the retrieval tool returned relevant durable memory candidates for the current task".into(),
                     budget_impact_tokens: Some(2_048),
-                    dropped_reason: Some(DropReason::NotSelected { reason: "not selected because it would exceed the remaining memory-selection budget (2048 > 1024)".to_string() }),
+                    dropped_reason: Some(DropReason::BudgetExceeded { reason: "not selected because it would exceed the remaining memory-selection budget (2048 > 1024)".to_string() }),
                 }],
             },
             prompt_base_kind: "codex".into(),

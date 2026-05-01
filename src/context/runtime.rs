@@ -11,6 +11,16 @@ pub enum CacheStatus {
     NoCache,
 }
 
+pub const RETRIEVED_WORKSPACE_MEMORY_KIND: &str = "retrieved_workspace_memory";
+pub const RETRIEVED_THREAD_CONTEXT_KIND: &str = "retrieved_thread_context";
+
+pub fn is_retrieved_memory_kind(kind: &str) -> bool {
+    matches!(
+        kind,
+        RETRIEVED_WORKSPACE_MEMORY_KIND | RETRIEVED_THREAD_CONTEXT_KIND
+    )
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContextAssemblyEntry {
     pub order: usize,

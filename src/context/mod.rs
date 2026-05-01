@@ -19,4 +19,5 @@ pub use self::runtime::{
     ContextAssemblyView, ContextBudgetView, DropReason, MemorySelectionContextView,
     MemorySelectionItemContextEntry, PlanContextView, PromptContextView, PromptSourceContextEntry,
     RetrievalContextView, RetrievalSourceContextEntry, SharedRuntimeContext,
+    is_retrieved_memory_kind,
 };

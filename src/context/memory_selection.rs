@@ -373,7 +373,7 @@ fn select_memory_candidates(
         };
 
         if let Some(dropped_reason) = should_drop {
-            let is_budget = matches!(dropped_reason, DropReason::BudgetExceeded { .. });
+            let is_budget = matches!(&dropped_reason, DropReason::BudgetExceeded { .. });
             let item = MemorySelectionItemContextEntry {
                 order: 0,
                 kind: candidate.kind,

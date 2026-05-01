@@ -1,7 +1,7 @@
 use crate::agent::{Message, PlanStepStatus};
 use crate::context::{
     CompactionSourceContextEntry, ContextAssemblyEntry, ContextAssemblyView,
-    MemorySelectionItemContextEntry,
+    MemorySelectionItemContextEntry, is_retrieved_memory_kind,
 };
 use crate::prompt::EffectivePrompt;
 
@@ -172,7 +172,7 @@ pub(crate) fn assemble_context_view(
 
     for item in selected_memory_items
         .iter()
-        .filter(|item| is_memory_assembly_input(item.kind.as_str()))
+        .filter(|item| is_retrieved_memory_kind(item.kind.as_str()))
     {
         push(ContextAssemblyEntry {
             order: 0,
@@ -219,11 +219,4 @@ pub(crate) fn assemble_context_view(
     }
 
     ContextAssemblyView { entries }
-}
-
-fn is_memory_assembly_input(kind: &str) -> bool {
-    matches!(
-        kind,
-        "retrieved_workspace_memory" | "retrieved_thread_context"
-    )
 }
