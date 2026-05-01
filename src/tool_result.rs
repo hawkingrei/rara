@@ -445,7 +445,7 @@ fn compact_generic(summary: &str, result: &Value) -> String {
 fn render_persisted_compact_result(inline: &str, stored_path: &std::path::Path) -> String {
     format!(
         "{}\n\n[tool_result truncated]\nfull result: {}",
-        truncate_text(inline, LARGE_PREVIEW_HEAD),
+        head_tail_text(inline, LARGE_PREVIEW_HEAD, LARGE_PREVIEW_TAIL),
         stored_path.display()
     )
 }
