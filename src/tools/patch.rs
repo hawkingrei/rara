@@ -43,8 +43,26 @@ struct Chunk {
 
 #[derive(Debug)]
 struct DiffLine {
-    kind: char,
+    kind: DiffLineKind,
     text: String,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DiffLineKind {
+    Context,
+    Addition,
+    Removal,
+}
+
+impl DiffLineKind {
+    fn from_marker(marker: char) -> Option<Self> {
+        match marker {
+            ' ' => Some(Self::Context),
+            '+' => Some(Self::Addition),
+            '-' => Some(Self::Removal),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Default)]
@@ -214,7 +232,11 @@ fn validate_patch_update_context(ops: &[PatchOp]) -> Result<(), ToolError> {
                 )));
             }
             for chunk in chunks {
-                if !chunk.lines.iter().any(|line| line.kind != '+') {
+                if chunk
+                    .lines
+                    .iter()
+                    .all(|line| line.kind == DiffLineKind::Addition)
+                {
                     return Err(ToolError::ExecutionFailed(format!(
                         "Patch hunk for {path} must include at least one context or removed line"
                     )));
@@ -313,11 +335,11 @@ fn parse_patch(patch: &str) -> Result<Vec<PatchOp>, ToolError> {
                     let kind = current.chars().next().ok_or_else(|| {
                         ToolError::InvalidInput("Unexpected empty patch line".into())
                     })?;
-                    if !matches!(kind, ' ' | '+' | '-') {
+                    let Some(kind) = DiffLineKind::from_marker(kind) else {
                         return Err(ToolError::InvalidInput(format!(
                             "Unexpected patch line: {current}"
                         )));
-                    }
+                    };
                     let chunk = current_chunk.get_or_insert_with(|| Chunk { lines: Vec::new() });
                     chunk.lines.push(DiffLine {
                         kind,
@@ -359,13 +381,13 @@ fn apply_update_chunks(
         let old_lines: Vec<String> = chunk
             .lines
             .iter()
-            .filter(|line| line.kind != '+')
+            .filter(|line| line.kind != DiffLineKind::Addition)
             .map(|line| line.text.clone())
             .collect();
         let new_lines: Vec<String> = chunk
             .lines
             .iter()
-            .filter(|line| line.kind != '-')
+            .filter(|line| line.kind != DiffLineKind::Removal)
             .map(|line| line.text.clone())
             .collect();
 
@@ -379,8 +401,16 @@ fn apply_update_chunks(
         output.extend(new_lines.clone());
         cursor = start + old_lines.len();
         stats.hunks_applied += 1;
-        stats.added_lines += chunk.lines.iter().filter(|line| line.kind == '+').count();
-        stats.removed_lines += chunk.lines.iter().filter(|line| line.kind == '-').count();
+        stats.added_lines += chunk
+            .lines
+            .iter()
+            .filter(|line| line.kind == DiffLineKind::Addition)
+            .count();
+        stats.removed_lines += chunk
+            .lines
+            .iter()
+            .filter(|line| line.kind == DiffLineKind::Removal)
+            .count();
     }
 
     output.extend_from_slice(&original_lines[cursor..]);
