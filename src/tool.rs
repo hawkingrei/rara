@@ -2,6 +2,10 @@ use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::Value;
 use std::collections::BTreeMap;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ToolError {
@@ -27,6 +31,24 @@ pub enum ToolProgressEvent {
     },
 }
 
+#[derive(Clone, Debug, Default)]
+pub struct ToolCallContext {
+    cancellation: Option<Arc<AtomicBool>>,
+}
+
+impl ToolCallContext {
+    pub fn with_cancellation(mut self, cancellation: Arc<AtomicBool>) -> Self {
+        self.cancellation = Some(cancellation);
+        self
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.cancellation
+            .as_ref()
+            .is_some_and(|cancellation| cancellation.load(Ordering::SeqCst))
+    }
+}
+
 #[async_trait]
 pub trait Tool: Send + Sync {
     fn name(&self) -> &str;
@@ -39,6 +61,15 @@ pub trait Tool: Send + Sync {
         _report: &mut (dyn FnMut(ToolProgressEvent) + Send),
     ) -> Result<Value, ToolError> {
         self.call(input).await
+    }
+
+    async fn call_with_context_events(
+        &self,
+        input: Value,
+        _context: ToolCallContext,
+        report: &mut (dyn FnMut(ToolProgressEvent) + Send),
+    ) -> Result<Value, ToolError> {
+        self.call_with_events(input, report).await
     }
 }
 

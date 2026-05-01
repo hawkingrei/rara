@@ -8613,6 +8613,7 @@ dependencies = [
  "indicatif",
  "insta",
  "lancedb",
+ "libc",
  "open",
  "owo-colors",
  "portable-pty",

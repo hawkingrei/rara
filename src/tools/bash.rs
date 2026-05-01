@@ -1,5 +1,5 @@
 use crate::sandbox::{SandboxManager, WrappedCommand, sandbox_failure_hint};
-use crate::tool::{Tool, ToolError, ToolOutputStream, ToolProgressEvent};
+use crate::tool::{Tool, ToolCallContext, ToolError, ToolOutputStream, ToolProgressEvent};
 use crate::tool_result::model_preview_bash_output;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -12,12 +12,14 @@ use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::time::Duration;
 use std::time::Instant;
 use tokio::fs;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 use tokio::process::{Child, Command};
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
+use tokio::time::{Instant as TokioInstant, MissedTickBehavior};
 use uuid::Uuid;
 
 pub struct BashTool {
@@ -742,7 +744,7 @@ impl Tool for BashTool {
         "bash"
     }
     fn description(&self) -> &str {
-        "Run a shell command in the sandbox for commands that need process execution. Prefer dedicated RARA tools for file search, file reads, and file edits; do not use shell redirection, sed, awk, perl, or ad-hoc scripts to edit files when apply_patch or direct file tools can do the job. Use the cwd field instead of prepending cd. Avoid newline-separated command chaining. If commands are independent and can run in parallel, make multiple bash tool calls in one assistant turn instead of joining them with &&, ;, or pipelines. Do not add 2>&1, head, tail, or grep only to reduce displayed output; RARA preserves stdout/stderr and provides bounded model-facing previews. Keep commands sandboxed unless require_escalated is justified by user request or clear sandbox failure evidence. Use run_in_background for long-running non-interactive commands, then inspect or stop them with background_task_status, background_task_list, and background_task_stop."
+        "Run a shell command in the sandbox for commands that need process execution. Prefer dedicated RARA tools for file search, file reads, and file edits; do not use shell redirection, sed, awk, perl, or ad-hoc scripts to edit files when apply_patch or direct file tools can do the job. Use the cwd field instead of prepending cd. Avoid newline-separated command chaining. If commands are independent and can run in parallel, make multiple bash tool calls in one assistant turn instead of joining them with &&, ;, or pipelines. Do not add 2>&1, head, tail, or grep only to reduce displayed output; RARA preserves stdout/stderr and provides bounded model-facing previews. Commands must be non-interactive: do not start editors, pagers, REPLs, prompts, or TUI programs from bash. For git commits, always supply the message with git commit -m or git commit -F; never run bare git commit and wait for an editor. Keep commands sandboxed unless require_escalated is justified by user request or clear sandbox failure evidence. Use run_in_background for long-running non-interactive commands, then inspect or stop them with background_task_status, background_task_list, and background_task_stop."
     }
     fn input_schema(&self) -> Value {
         json!({
@@ -750,7 +752,7 @@ impl Tool for BashTool {
             "properties": {
                 "command": {
                     "type": "string",
-                    "description": "Legacy shell command string. Prefer program+args for new calls. Avoid newline-separated command chaining. Do not join independent validation commands with &&, ;, or pipelines just to run them together; make multiple bash tool calls instead. Do not add 2>&1, head, tail, or grep only to trim output for the model. Do not use this field for file edits when apply_patch or direct file tools can do the job."
+                    "description": "Legacy shell command string. Prefer program+args for new calls. Avoid newline-separated command chaining. Do not join independent validation commands with &&, ;, or pipelines just to run them together; make multiple bash tool calls instead. Do not add 2>&1, head, tail, or grep only to trim output for the model. Do not run interactive editors, pagers, REPLs, prompts, or TUI programs from bash. For git commits, use git commit -m or git commit -F, never bare git commit. Do not use this field for file edits when apply_patch or direct file tools can do the job."
                 },
                 "program": {
                     "type": "string",
@@ -811,6 +813,16 @@ impl Tool for BashTool {
         i: Value,
         report: &mut (dyn FnMut(ToolProgressEvent) + Send),
     ) -> Result<Value, ToolError> {
+        self.call_with_context_events(i, ToolCallContext::default(), report)
+            .await
+    }
+
+    async fn call_with_context_events(
+        &self,
+        i: Value,
+        context: ToolCallContext,
+        report: &mut (dyn FnMut(ToolProgressEvent) + Send),
+    ) -> Result<Value, ToolError> {
         let request = BashCommandInput::from_value(i)?;
         let cwd = request.working_dir()?;
         let allow_net = self.sandbox_network_access || request.allow_net;
@@ -860,6 +872,7 @@ impl Tool for BashTool {
             .envs(&command_env)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        configure_process_group(&mut command);
         let started_at = Instant::now();
         let mut child = command.spawn().map_err(|err| {
             if wrapped.sandboxed {
@@ -875,6 +888,7 @@ impl Tool for BashTool {
                 ))
             }
         })?;
+        let process_group_id = child.id();
 
         if request.run_in_background {
             let (record, stop_rx) = self.background_tasks.start_record(
@@ -889,6 +903,7 @@ impl Tool for BashTool {
                 record.clone(),
                 self.background_tasks.clone(),
                 stop_rx,
+                process_group_id,
             );
             return Ok(json!({
                 "stdout": "",
@@ -926,6 +941,8 @@ impl Tool for BashTool {
         let mut aggregated_output = String::new();
         let mut aggregated_output_stream = None;
         let mut live_streamed = false;
+        let mut cancelled = false;
+        let mut cancellation_watchdog = Box::pin(tokio::time::sleep(Duration::from_secs(u64::MAX)));
         if !wrapped.sandboxed {
             let chunk = unsandboxed_execution_warning(&wrapped);
             stderr_text.push_str(&chunk);
@@ -941,63 +958,113 @@ impl Tool for BashTool {
                 chunk,
             });
         }
-        while let Some((stream, chunk)) = rx.recv().await {
-            if chunk.is_empty() {
-                continue;
+        let mut cancellation_interval = tokio::time::interval(Duration::from_millis(100));
+        cancellation_interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+        loop {
+            tokio::select! {
+                chunk = rx.recv() => {
+                    let Some((stream, chunk)) = chunk else {
+                        break;
+                    };
+                    if chunk.is_empty() {
+                        continue;
+                    }
+                    live_streamed = true;
+                    match stream {
+                        BashStreamKind::Stdout => stdout_text.push_str(&chunk),
+                        BashStreamKind::Stderr => stderr_text.push_str(&chunk),
+                    }
+                    append_aggregated_bash_output(
+                        &mut aggregated_output,
+                        &mut aggregated_output_stream,
+                        stream,
+                        &chunk,
+                    );
+                    report(ToolProgressEvent::Output {
+                        stream: stream.output_stream(),
+                        chunk,
+                    });
+                }
+                _ = cancellation_interval.tick(), if !cancelled => {
+                    if context.is_cancelled() {
+                        cancelled = true;
+                        let chunk = "bash command cancelled by user\n".to_string();
+                        stderr_text.push_str(&chunk);
+                        append_aggregated_bash_output(
+                            &mut aggregated_output,
+                            &mut aggregated_output_stream,
+                            BashStreamKind::Stderr,
+                            &chunk,
+                        );
+                        live_streamed = true;
+                        report(ToolProgressEvent::Output {
+                            stream: ToolOutputStream::Stderr,
+                            chunk,
+                        });
+                        kill_child_process_group(process_group_id);
+                        let _ = child.start_kill();
+                        cancellation_watchdog
+                            .as_mut()
+                            .reset(TokioInstant::now() + Duration::from_secs(2));
+                    }
+                }
+                _ = &mut cancellation_watchdog, if cancelled => {
+                    break;
+                }
             }
-            live_streamed = true;
-            match stream {
-                BashStreamKind::Stdout => stdout_text.push_str(&chunk),
-                BashStreamKind::Stderr => stderr_text.push_str(&chunk),
-            }
-            append_aggregated_bash_output(
-                &mut aggregated_output,
-                &mut aggregated_output_stream,
-                stream,
-                &chunk,
-            );
-            report(ToolProgressEvent::Output {
-                stream: stream.output_stream(),
-                chunk,
-            });
         }
 
-        let status = child.wait().await?;
-        stdout_task
-            .await
-            .map_err(|err| ToolError::ExecutionFailed(err.to_string()))??;
-        stderr_task
-            .await
-            .map_err(|err| ToolError::ExecutionFailed(err.to_string()))??;
+        let status = if cancelled {
+            let _ = tokio::time::timeout(Duration::from_secs(1), child.wait()).await;
+            None
+        } else {
+            Some(child.wait().await?)
+        };
+
+        if let Some(status) = status {
+            stdout_task
+                .await
+                .map_err(|err| ToolError::ExecutionFailed(err.to_string()))??;
+            stderr_task
+                .await
+                .map_err(|err| ToolError::ExecutionFailed(err.to_string()))??;
+            if let Some(path) = wrapped.cleanup_path.as_ref() {
+                let _ = fs::remove_file(path).await;
+            }
+            if wrapped.sandboxed {
+                if let Some(hint) = sandbox_output_hint(&stderr_text) {
+                    stderr_text.push_str(hint);
+                    append_aggregated_bash_output(
+                        &mut aggregated_output,
+                        &mut aggregated_output_stream,
+                        BashStreamKind::Stderr,
+                        hint,
+                    );
+                }
+            }
+            let duration_ms = started_at.elapsed().as_millis() as u64;
+            let model_preview_output =
+                model_preview_bash_output(&aggregated_output, status.code().map(i64::from));
+
+            return Ok(json!({
+                "stdout": stdout_text,
+                "stderr": stderr_text,
+                "aggregated_output": aggregated_output,
+                "model_preview_output": model_preview_output,
+                "exit_code": status.code(),
+                "duration_ms": duration_ms,
+                "live_streamed": live_streamed,
+                "sandboxed": wrapped.sandboxed,
+                "sandbox_backend": wrapped.sandbox_backend,
+            }));
+        }
+
+        stdout_task.abort();
+        stderr_task.abort();
         if let Some(path) = wrapped.cleanup_path.as_ref() {
             let _ = fs::remove_file(path).await;
         }
-        if wrapped.sandboxed {
-            if let Some(hint) = sandbox_output_hint(&stderr_text) {
-                stderr_text.push_str(hint);
-                append_aggregated_bash_output(
-                    &mut aggregated_output,
-                    &mut aggregated_output_stream,
-                    BashStreamKind::Stderr,
-                    hint,
-                );
-            }
-        }
-        let duration_ms = started_at.elapsed().as_millis() as u64;
-        let model_preview_output =
-            model_preview_bash_output(&aggregated_output, status.code().map(i64::from));
-
-        Ok(json!({
-            "stdout": stdout_text,
-            "stderr": stderr_text,
-            "aggregated_output": aggregated_output,
-            "model_preview_output": model_preview_output,
-            "exit_code": status.code(),
-            "duration_ms": duration_ms,
-            "live_streamed": live_streamed,
-            "sandboxed": wrapped.sandboxed,
-            "sandbox_backend": wrapped.sandbox_backend,
-        }))
+        Err(ToolError::ExecutionFailed("cancelled by user".into()))
     }
 }
 
@@ -1120,9 +1187,11 @@ fn spawn_background_bash_task(
     record: BackgroundTaskRecord,
     store: Arc<BackgroundTaskStore>,
     stop_rx: oneshot::Receiver<()>,
+    process_group_id: Option<u32>,
 ) {
     tokio::spawn(async move {
-        let result = run_background_bash_task(&mut child, wrapped, &record, stop_rx).await;
+        let result =
+            run_background_bash_task(&mut child, wrapped, &record, stop_rx, process_group_id).await;
         let (status, exit_code) = match result {
             Ok(code) => {
                 if code == Some(0) {
@@ -1150,6 +1219,7 @@ async fn run_background_bash_task(
     wrapped: WrappedCommand,
     record: &BackgroundTaskRecord,
     mut stop_rx: oneshot::Receiver<()>,
+    process_group_id: Option<u32>,
 ) -> Result<Option<i32>, ToolError> {
     if let Some(parent) = record.output_path.parent() {
         fs::create_dir_all(parent).await?;
@@ -1204,8 +1274,8 @@ async fn run_background_bash_task(
             }
             _ = &mut stop_rx, if !stop_requested => {
                 stop_requested = true;
-                child.start_kill()
-                    .map_err(|err| ToolError::ExecutionFailed(format!("stop background task: {err}")))?;
+                kill_child_process_group(process_group_id);
+                let _ = child.start_kill();
                 output_file.write_all(b"[stderr] background task stop requested\n").await?;
             }
         }
@@ -1333,6 +1403,36 @@ fn unsandboxed_execution_warning(wrapped: &WrappedCommand) -> String {
     )
 }
 
+fn configure_process_group(command: &mut Command) {
+    #[cfg(unix)]
+    {
+        command.process_group(0);
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = command;
+    }
+}
+
+fn kill_child_process_group(child_id: Option<u32>) {
+    #[cfg(unix)]
+    {
+        let Some(child_id) = child_id else {
+            return;
+        };
+        let process_group = -(child_id as libc::pid_t);
+        // Best-effort cancellation: the direct child may have already exited,
+        // but killing the group stops shell descendants that still hold pipes.
+        unsafe {
+            libc::kill(process_group, libc::SIGKILL);
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = child_id;
+    }
+}
+
 async fn ensure_sandbox_home_dirs(sandbox_home: &Path) -> Result<(), ToolError> {
     for dir in [
         sandbox_home.to_path_buf(),
@@ -1356,13 +1456,17 @@ mod tests {
         read_output_tail, sandbox_command_env, sandbox_output_hint, unsandboxed_execution_warning,
     };
     use crate::sandbox::{SandboxManager, WrappedCommand};
-    use crate::tool::{Tool, ToolOutputStream, ToolProgressEvent};
+    use crate::tool::{Tool, ToolCallContext, ToolOutputStream, ToolProgressEvent};
     use crate::tool_result::model_preview_bash_output;
     use serde_json::{Value, json};
     use std::collections::HashMap;
     use std::env;
     use std::path::Path;
-    use std::sync::Arc;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+    use std::time::Duration;
     use tempfile::tempdir;
 
     #[test]
@@ -1457,12 +1561,15 @@ mod tests {
         assert!(description.contains("apply_patch"));
         assert!(description.contains("cwd field"));
         assert!(description.contains("newline-separated command chaining"));
+        assert!(description.contains("Commands must be non-interactive"));
+        assert!(description.contains("git commit -m"));
         assert!(description.contains("require_escalated"));
         assert!(description.contains("background_task_status"));
 
         let schema = tool.input_schema().to_string();
         assert!(schema.contains("Prefer program+args"));
         assert!(schema.contains("direct file tools"));
+        assert!(schema.contains("never bare git commit"));
         assert!(schema.contains("prefer this over prepending cd"));
         assert!(schema.contains("sandbox failure evidence"));
         assert!(schema.contains("Do not suggest broad prefixes"));
@@ -1877,6 +1984,50 @@ mod tests {
         assert!(model_preview_output.contains("out"));
         assert!(model_preview_output.contains("[stderr] err"));
         assert!(result.get("duration_ms").and_then(Value::as_u64).is_some());
+    }
+
+    #[tokio::test]
+    async fn foreground_bash_can_be_cancelled() {
+        let temp = tempdir().expect("tempdir");
+        let sandbox = SandboxManager::new_for_rara_dir(temp.path().join(".rara")).expect("sandbox");
+        let tool = BashTool {
+            sandbox: Arc::new(sandbox),
+            background_tasks: Arc::new(
+                BackgroundTaskStore::new(temp.path().join(".rara/background-tasks"))
+                    .expect("background task store"),
+            ),
+            base_env: Arc::new(HashMap::new()),
+            sandbox_network_access: false,
+        };
+        let cancellation = Arc::new(AtomicBool::new(false));
+        let cancellation_for_task = cancellation.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            cancellation_for_task.store(true, Ordering::SeqCst);
+        });
+        let mut events = Vec::new();
+
+        let err = tool
+            .call_with_context_events(
+                json!({
+                    "program": "sh",
+                    "args": ["-c", "sleep 30 & wait"],
+                    "sandbox_permissions": "require_escalated"
+                }),
+                ToolCallContext::default().with_cancellation(cancellation),
+                &mut |event| events.push(event),
+            )
+            .await
+            .expect_err("bash should be cancelled");
+
+        assert!(err.to_string().contains("cancelled by user"));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            ToolProgressEvent::Output {
+                stream: ToolOutputStream::Stderr,
+                chunk,
+            } if chunk.contains("cancelled by user")
+        )));
     }
 
     #[test]

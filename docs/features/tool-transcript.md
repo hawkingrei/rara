@@ -43,6 +43,10 @@ The transcript should move toward Codex/Claude-style tool visibility:
   - avoid adding `2>&1`, `head`, `tail`, or `grep` only to reduce displayed
     output, because the tool/result layer preserves stdout/stderr and provides a
     bounded model-facing preview;
+  - run only non-interactive commands through `bash`; avoid editors, pagers,
+    REPLs, prompts, and TUI programs;
+  - use `git commit -m` or `git commit -F` for commits, never bare `git commit`
+    that waits for an editor;
   - keep commands sandboxed unless escalation is justified by user request or
     clear sandbox failure evidence;
   - use background task controls for long-running non-interactive commands.
@@ -120,6 +124,10 @@ The transcript should move toward Codex/Claude-style tool visibility:
 - Cancellation is cooperative: provider streaming loops should check the query
   cancellation token and return a local cancellation error instead of leaving the
   TUI stuck in `streaming model output`.
+- Foreground tool calls must receive the same cancellation context. For `bash`,
+  cancellation should stop the child process group, emit a cancellation
+  diagnostic, and return a local `cancelled by user` error instead of waiting
+  forever on stdout, stderr, or the process exit.
 - Cancellation must preserve the current agent state so the user can continue
   from the same thread after the task exits.
 
