@@ -387,7 +387,7 @@ fn deepseek_reasoner_defaults_preserve_standard_body() {
 }
 
 #[test]
-fn deepseek_v4_defaults_keep_tool_results_as_protocol_messages() {
+fn deepseek_v4_defaults_fold_legacy_tool_results_without_reasoning_content() {
     let body = build_chat_completion_request_body(
         "deepseek-v4-pro",
         &[
@@ -424,13 +424,16 @@ fn deepseek_v4_defaults_keep_tool_results_as_protocol_messages() {
     );
 
     let messages = body["messages"].as_array().expect("messages");
-    assert_eq!(messages[0]["role"], "assistant");
-    assert_eq!(messages[0]["tool_calls"][0]["id"], "tool-1");
-    assert_eq!(messages[1]["role"], "tool");
-    assert_eq!(messages[1]["tool_call_id"], "tool-1");
-    assert_eq!(messages[2]["role"], "user");
+    assert_eq!(messages.len(), 2);
+    assert_eq!(messages[0]["role"], "user");
+    let folded_note = messages[0]["content"].as_str().expect("folded note");
+    assert!(folded_note.contains("tool_call: bash"));
+    assert!(folded_note.contains("id=tool-1"));
+    assert!(folded_note.contains("cargo check"));
+    assert!(folded_note.contains("tool: ok"));
+    assert_eq!(messages[1]["role"], "user");
     assert!(
-        messages[2]["content"]
+        messages[1]["content"]
             .as_str()
             .is_some_and(|content| content.contains("tool_results_available"))
     );
@@ -661,7 +664,7 @@ fn deepseek_folds_legacy_tool_calls_with_id_and_arguments() {
 }
 
 #[test]
-fn deepseek_default_thinking_preserves_legacy_assistant_history_without_reasoning() {
+fn deepseek_default_thinking_folds_legacy_assistant_history_without_reasoning() {
     let body = build_chat_completion_request_body(
         "deepseek-v4-pro",
         &[
@@ -685,6 +688,44 @@ fn deepseek_default_thinking_preserves_legacy_assistant_history_without_reasonin
     );
 
     assert!(body.get("thinking").is_none());
+    let messages = body["messages"].as_array().expect("messages");
+    assert_eq!(messages.len(), 2);
+    assert_eq!(messages[0]["role"], "user");
+    assert!(
+        messages[0]["content"]
+            .as_str()
+            .expect("folded note")
+            .contains("Legacy answer without provider metadata.")
+    );
+    assert_eq!(messages[1]["role"], "user");
+    assert_eq!(messages[1]["content"], "Continue.");
+}
+
+#[test]
+fn deepseek_disabled_thinking_preserves_legacy_assistant_history_without_reasoning() {
+    let body = build_chat_completion_request_body(
+        "deepseek-v4-pro",
+        &[
+            Message {
+                role: "assistant".to_string(),
+                content: serde_json::to_value(vec![ContentBlock::Text {
+                    text: "Legacy answer without provider metadata.".to_string(),
+                }])
+                .expect("content"),
+            },
+            Message {
+                role: "user".to_string(),
+                content: json!("Continue."),
+            },
+        ],
+        &[],
+        OpenAiEndpointKind::Deepseek,
+        None,
+        Some(false),
+        LlmTurnMetadata::default(),
+    );
+
+    assert_eq!(body["thinking"]["type"], "disabled");
     let messages = body["messages"].as_array().expect("messages");
     assert_eq!(messages.len(), 2);
     assert_eq!(messages[0]["role"], "assistant");
