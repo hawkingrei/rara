@@ -37,6 +37,10 @@ The transcript should move toward Codex/Claude-style tool visibility:
     clear sandbox failure evidence;
   - use background task controls for long-running non-interactive commands.
 - The final `bash` tool result should keep the exit code and avoid duplicating large output that was already streamed live.
+- The final foreground `bash` tool result must expose `stdout`, `stderr`,
+  `aggregated_output`, `exit_code`, and `duration_ms`. The model-facing compact
+  result should prefer `aggregated_output` so command failure diagnosis uses the
+  real captured output instead of requiring shell-side `2>&1` redirection.
 - When shell execution pauses on a human approval request, the approval card should take visual priority over older live stdout/stderr progress from the same turn.
 - Approval choices should describe both the action and its scope, such as:
   - allow only the current command;
