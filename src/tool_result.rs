@@ -381,10 +381,10 @@ fn compact_bash(result: &Value) -> String {
             match (stdout.is_empty(), stderr.is_empty()) {
                 (true, true) => String::new(),
                 (false, true) => stdout.to_string(),
-                (true, false) => format!("[stderr] {stderr}"),
+                (true, false) => prefix_stderr_lines(stderr),
                 (false, false) => {
                     let separator = if stdout.ends_with('\n') { "" } else { "\n" };
-                    format!("{stdout}{separator}[stderr] {stderr}")
+                    format!("{stdout}{separator}{}", prefix_stderr_lines(stderr))
                 }
             }
         });
@@ -395,6 +395,13 @@ fn compact_bash(result: &Value) -> String {
     rendered.push_str("\nOutput:\n");
     rendered.push_str(&output);
     rendered
+}
+
+fn prefix_stderr_lines(stderr: &str) -> String {
+    stderr
+        .split_inclusive('\n')
+        .map(|line| format!("[stderr] {line}"))
+        .collect()
 }
 
 fn compact_write_file(result: &Value) -> String {
@@ -926,6 +933,27 @@ mod tests {
             .expect("compact bash result");
 
         assert!(output.contains("stdout-without-newline\n[stderr] stderr-line"));
+    }
+
+    #[test]
+    fn compacts_bash_fallback_prefixes_each_stderr_line() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let store = ToolResultStore::new(tempdir.path()).expect("store");
+        let output = store
+            .compact_result(
+                "bash",
+                "tool-bash",
+                &json!({ "program": "sh" }),
+                &json!({
+                    "stdout": "",
+                    "stderr": "first\nsecond\n",
+                    "exit_code": 1,
+                    "duration_ms": 10,
+                }),
+            )
+            .expect("compact bash result");
+
+        assert!(output.contains("[stderr] first\n[stderr] second\n"));
     }
 
     #[test]
