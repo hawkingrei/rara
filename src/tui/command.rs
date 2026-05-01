@@ -339,11 +339,7 @@ fn render_context_assembly_entries(app: &TuiApp, layer: &str, title: &str) -> St
                 .filter(|v| !v.is_empty())
                 .unwrap_or("-");
             let injected = if entry.injected { "" } else { " (not injected)" };
-            let cache = match entry.cache_status {
-                Some(CacheStatus::Hit) => "●",
-                Some(CacheStatus::Miss) => "○",
-                _ => "",
-            };
+            let cache = cache_marker(entry.cache_status);
             let budget = entry
                 .budget_impact_tokens
                 .map(|v| format!(" {v}t"))
@@ -417,15 +413,29 @@ fn render_memory_selection(app: &TuiApp) -> String {
 fn truncate_preview(text: &str, max_len: usize) -> String {
     let condensed: String = text.split_whitespace().collect::<Vec<_>>().join(" ");
     if condensed.chars().count() <= max_len {
-        condensed
-    } else {
-        format!(
-            "{}…",
-            &condensed[..condensed
-                .char_indices()
-                .nth(max_len - 1)
-                .map_or(max_len - 1, |(i, _)| i)]
-        )
+        return condensed;
+    }
+    if max_len == 0 {
+        return String::new();
+    }
+    if max_len == 1 {
+        return "…".to_string();
+    }
+
+    let keep_chars = max_len - 1;
+    let truncate_at = condensed
+        .char_indices()
+        .nth(keep_chars)
+        .map_or(condensed.len(), |(idx, _)| idx);
+    format!("{}…", &condensed[..truncate_at])
+}
+
+fn cache_marker(cache_status: Option<CacheStatus>) -> &'static str {
+    match cache_status {
+        Some(CacheStatus::Hit) => "● ",
+        Some(CacheStatus::Miss) => "○ ",
+        Some(CacheStatus::NoCache) => "- ",
+        None => "",
     }
 }
 
@@ -1031,7 +1041,7 @@ mod tests {
     use super::{
         COMMAND_SPECS, LocalCommandKind, help_text, matching_commands, model_help_text,
         normalize_command_token, palette_commands, parse_local_command, status_context_text,
-        status_prompt_sources_text, status_resources_text, status_runtime_text,
+        status_prompt_sources_text, status_resources_text, status_runtime_text, truncate_preview,
     };
     use crate::config::{ConfigManager, OpenAiEndpointKind};
     use crate::context::PromptSourceContextEntry;
@@ -1476,7 +1486,7 @@ mod tests {
             ],
             assembly_entries: vec![
                 crate::context::ContextAssemblyEntry {
-                    cache_status: None,
+                    cache_status: Some(crate::context::CacheStatus::Hit),
                     order: 1,
                     layer: "stable_instructions".into(),
                     kind: "project_instruction".into(),
@@ -1489,7 +1499,7 @@ mod tests {
                     dropped_reason: None,
                 },
                 crate::context::ContextAssemblyEntry {
-                    cache_status: None,
+                    cache_status: Some(crate::context::CacheStatus::Miss),
                     order: 2,
                     layer: "workspace_prompt_sources".into(),
                     kind: "local_memory".into(),
@@ -1502,7 +1512,7 @@ mod tests {
                     dropped_reason: None,
                 },
                 crate::context::ContextAssemblyEntry {
-                    cache_status: None,
+                    cache_status: Some(crate::context::CacheStatus::NoCache),
                     order: 3,
                     layer: "active_memory_inputs".into(),
                     kind: "retrieved_workspace_memory".into(),
@@ -1575,11 +1585,22 @@ mod tests {
         assert!(rendered.contains("available:"));
         assert!(rendered.contains("dropped:"));
         assert!(rendered.contains("[project_instruction] Project Instruction (AGENTS.md)"));
+        assert!(rendered.contains("● [project_instruction] Project Instruction (AGENTS.md)"));
+        assert!(rendered.contains("○ [local_memory] Workspace Memory"));
+        assert!(rendered.contains("- [retrieved_workspace_memory] Retrieved Experience"));
         assert!(rendered.contains("path: AGENTS.md"));
         assert!(rendered.contains("120t"));
         assert!(rendered.contains("[thread_history] Thread History (not injected)"));
         assert!(rendered.contains("exceed the remaining memory-selection budget"));
         assert!(rendered.contains("[pending] Implement /context"));
+    }
+
+    #[test]
+    fn truncate_preview_handles_unicode_and_small_limits() {
+        assert_eq!(truncate_preview("alpha beta", 0), "");
+        assert_eq!(truncate_preview("alpha beta", 1), "…");
+        assert_eq!(truncate_preview("你好 世界", 3), "你好…");
+        assert_eq!(truncate_preview("alpha   beta", 20), "alpha beta");
     }
 
     #[test]

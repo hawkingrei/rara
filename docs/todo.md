@@ -28,7 +28,7 @@ Priority order for this phase:
 1. Strengthen `/context` as the primary context and memory-selection debugger
    - ✅ The data pipeline is solid: `ContextAssemblyView` → `RuntimeSnapshot` → `status_context_text`.
    - ✅ Rendering includes all layers, memory selection (selected/available/dropped), budget, compaction, and retrieval sources.
-   - ✅ Added `CacheStatus` enum (`Hit`/`Miss`/`NoCache`) to `src/context/runtime.rs`, threading through `ContextAssemblyEntry`, `PromptSourceContextEntry`, and the `/context` render in `src/tui/command.rs` ("cache: hit", "cache: miss", "cache: -").
+   - ✅ Added `CacheStatus` enum (`Hit`/`Miss`/`NoCache`) to `src/context/runtime.rs`, threading it through `ContextAssemblyEntry`, and rendering known cache state in `/context` with compact markers (`●` hit, `○` miss, `-` no-cache).
 
 2. Complete `MemorySelection` as the authoritative bounded retrieval-selection pipeline
    - ✅ 1A. Selection logic is the primary path — `memory_selection()` assembles fixed + discretionary items with budget-aware ranking. 6 focused tests added to `src/context/memory_selection.rs`.
