@@ -64,3 +64,22 @@ The current product direction is to make local inference a first-class path inst
 - Better onboarding and runtime status transparency.
 - Stronger local-model prompt formatting and stop-sequence handling.
 - A real embedding backend for local memory retrieval quality.
+
+## 7. Commit Rules
+
+- Use short project-specific conventional commit titles. This is an intentional
+  subset of Conventional Commits, not the full upstream type set.
+- Allowed commit title types:
+  - `feat`: user-visible feature or capability.
+  - `fix`: bug fix or behavior correction.
+  - `chore`: maintenance, dependency, tooling, or non-user-facing cleanup.
+  - `test`: test-only changes.
+- Format commit titles as `type: subject` or `type(scope): subject`.
+- Do not use `!` breaking-change markers in commit titles; describe unusual
+  compatibility impact in the PR body instead.
+- Keep the subject concise, imperative, and lowercase unless a proper noun or
+  code identifier requires otherwise.
+- Do not use unlisted types such as `docs`, `refactor`, or `style`; fold those
+  changes into the closest allowed type. Documentation-only and spec-only
+  changes should use `chore` unless they are part of a user-visible `feat` or
+  behavior `fix`.
