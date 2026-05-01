@@ -12,7 +12,8 @@ use crate::session::SessionManager;
 use crate::tool::ToolManager;
 use crate::tool::ToolOutputStream;
 use crate::tool_result::{
-    ToolResultStore, default_tool_result_store_dir, repair_tool_result_history,
+    ToolResultStore, default_tool_result_store_dir, enforce_tool_result_batch_budget,
+    repair_tool_result_history,
 };
 use crate::tools::bash::BashCommandInput;
 use crate::tools::planning::{ENTER_PLAN_MODE_TOOL_NAME, EXIT_PLAN_MODE_TOOL_NAME};
@@ -719,7 +720,7 @@ impl Agent {
                 }
             }
         }
-        Ok(tool_results)
+        Ok(enforce_tool_result_batch_budget(tool_results))
     }
 }
 

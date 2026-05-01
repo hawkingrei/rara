@@ -983,11 +983,14 @@ impl Tool for BashTool {
             }
         }
         let duration_ms = started_at.elapsed().as_millis() as u64;
+        let model_preview_output =
+            model_preview_bash_output(&aggregated_output, status.code().unwrap_or(1));
 
         Ok(json!({
             "stdout": stdout_text,
             "stderr": stderr_text,
             "aggregated_output": aggregated_output,
+            "model_preview_output": model_preview_output,
             "exit_code": status.code(),
             "duration_ms": duration_ms,
             "live_streamed": live_streamed,
@@ -1306,6 +1309,36 @@ fn append_aggregated_bash_output(
     *last_stream = Some(stream);
 }
 
+fn model_preview_bash_output(output: &str, exit_code: i32) -> String {
+    const SUCCESS_HEAD_CHARS: usize = 2_000;
+    const SUCCESS_TAIL_CHARS: usize = 2_000;
+    const ERROR_HEAD_CHARS: usize = 1_000;
+    const ERROR_TAIL_CHARS: usize = 3_000;
+
+    let (head_chars, tail_chars) = if exit_code == 0 {
+        (SUCCESS_HEAD_CHARS, SUCCESS_TAIL_CHARS)
+    } else {
+        (ERROR_HEAD_CHARS, ERROR_TAIL_CHARS)
+    };
+    head_tail_text(output, head_chars, tail_chars)
+}
+
+fn head_tail_text(text: &str, head_chars: usize, tail_chars: usize) -> String {
+    let total_chars = text.chars().count();
+    let budget = head_chars.saturating_add(tail_chars);
+    if total_chars <= budget {
+        return text.to_string();
+    }
+
+    let head = text.chars().take(head_chars).collect::<String>();
+    let tail_start = total_chars.saturating_sub(tail_chars);
+    let tail = text.chars().skip(tail_start).collect::<String>();
+    let omitted = total_chars
+        .saturating_sub(head_chars)
+        .saturating_sub(tail_chars);
+    format!("{head}\n... [{omitted} chars truncated from middle] ...\n{tail}")
+}
+
 fn sandbox_output_hint(stderr: &str) -> Option<&'static str> {
     let lower = stderr.to_ascii_lowercase();
     if lower.contains("sandbox: violation")
@@ -1349,7 +1382,8 @@ mod tests {
         BackgroundTaskListTool, BackgroundTaskStatus, BackgroundTaskStatusTool,
         BackgroundTaskStopTool, BackgroundTaskStore, BashCommandInput, BashSandboxPermissions,
         BashStreamKind, BashTool, append_aggregated_bash_output, command_env_for_wrapped,
-        read_output_tail, sandbox_command_env, sandbox_output_hint, unsandboxed_execution_warning,
+        model_preview_bash_output, read_output_tail, sandbox_command_env, sandbox_output_hint,
+        unsandboxed_execution_warning,
     };
     use crate::sandbox::{SandboxManager, WrappedCommand};
     use crate::tool::{Tool, ToolOutputStream, ToolProgressEvent};
@@ -1865,6 +1899,12 @@ mod tests {
             .expect("aggregated output");
         assert!(aggregated_output.contains("out"));
         assert!(aggregated_output.contains("[stderr] err"));
+        let model_preview_output = result
+            .get("model_preview_output")
+            .and_then(Value::as_str)
+            .expect("model preview output");
+        assert!(model_preview_output.contains("out"));
+        assert!(model_preview_output.contains("[stderr] err"));
         assert!(result.get("duration_ms").and_then(Value::as_u64).is_some());
     }
 
@@ -1912,6 +1952,17 @@ mod tests {
         );
 
         assert_eq!(output, "stdout-without-newline\n[stderr] stderr-line\n");
+    }
+
+    #[test]
+    fn model_preview_bash_output_preserves_error_tail() {
+        let output = format!("head\n{}tail-error\n", "middle\n".repeat(2_000));
+
+        let preview = model_preview_bash_output(&output, 1);
+
+        assert!(preview.contains("head"));
+        assert!(preview.contains("tail-error"));
+        assert!(preview.contains("chars truncated from middle"));
     }
 
     #[tokio::test]

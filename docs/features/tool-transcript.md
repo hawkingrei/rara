@@ -24,6 +24,11 @@ The transcript should move toward Codex/Claude-style tool visibility:
   - created / updated / deleted / moved files;
   - a short change preview.
 - `write_file` and `replace` must render file-aware summaries instead of generic action labels.
+- `replace` is an exact-match edit tool. When file read-state tracking is
+  enabled, it still requires the file to have been read at least once, but it may
+  proceed after a partial read because the edit re-reads the current file and
+  requires `old_string` to match exactly once. Line-number-only edits such as
+  `replace_lines` must continue to require a full read first.
 
 ### Shell execution
 
@@ -41,10 +46,17 @@ The transcript should move toward Codex/Claude-style tool visibility:
   was shown, the rendered row should use a compact summary or truncated preview
   rather than reprinting the full output block.
 - The final foreground `bash` tool-result payload must still expose `stdout`,
-  `stderr`, `aggregated_output`, `exit_code`, and `duration_ms`. When a compact
-  model-facing rendering is needed, it should prefer `aggregated_output` as the
-  source for any preview/summary so command failure diagnosis uses the real
-  captured output without requiring shell-side `2>&1` redirection.
+  `stderr`, `aggregated_output`, `model_preview_output`, `exit_code`, and
+  `duration_ms`. `aggregated_output` remains the raw combined capture.
+  `model_preview_output` is the model-facing head/tail preview, with failed
+  commands biased toward the tail so error diagnostics remain visible without
+  requiring shell-side `2>&1` redirection.
+- Oversized tool results should be persisted to disk and replaced in model
+  context with a `<persisted-output>` message containing the path and a bounded
+  preview. The full JSON payload remains inspectable from that path.
+- A single tool-result batch should enforce an aggregate model-facing budget so
+  parallel tool calls cannot combine many individually acceptable results into
+  one oversized follow-up turn.
 - When shell execution pauses on a human approval request, the approval card should take visual priority over older live stdout/stderr progress from the same turn.
 - Approval choices should describe both the action and its scope, such as:
   - allow only the current command;
