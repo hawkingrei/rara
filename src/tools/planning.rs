@@ -32,7 +32,7 @@ impl Tool for EnterPlanModeTool {
                 "Inspect the repository with read-only tools.",
                 "Return a normal final answer for research, review, or planning-advice tasks.",
                 "Use a <proposed_plan> block only when you are requesting approval to implement a concrete plan.",
-                "Call exit_plan_mode after the proposed plan is complete and ready for approval.",
+                "Call exit_plan_mode only after the same assistant message contains a complete <proposed_plan>...</proposed_plan> block.",
                 "Use <request_user_input> only when a blocking decision needs user input.",
                 "Use <continue_inspection/> only when another read-only inspection pass is required."
             ]
@@ -47,7 +47,7 @@ impl Tool for ExitPlanModeTool {
     }
 
     fn description(&self) -> &str {
-        "Submit user approval only after this same assistant response has emitted a complete <proposed_plan>...</proposed_plan> block. Never call this tool without a proposed plan."
+        "Submit user approval only after this same assistant response has emitted a complete <proposed_plan>...</proposed_plan> block with the exact closing </proposed_plan> tag. Never call this tool without a complete proposed plan."
     }
 
     fn input_schema(&self) -> Value {
@@ -63,7 +63,7 @@ impl Tool for ExitPlanModeTool {
             "instructions": [
                 "Wait for the user's structured plan decision.",
                 "If approved, continue in execute mode.",
-                "If rejected or continued, refine the plan and call exit_plan_mode again only after emitting an updated <proposed_plan> block."
+                "If rejected or continued, refine the plan and call exit_plan_mode again only after emitting an updated complete <proposed_plan>...</proposed_plan> block."
             ]
         }))
     }

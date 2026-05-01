@@ -5,11 +5,12 @@ use async_trait::async_trait;
 use serde_json::json;
 
 use crate::agent::planning::{
-    parse_plan_block, parse_request_user_input_block, strip_continue_inspection_control,
+    has_unclosed_proposed_plan_block, parse_plan_block, parse_request_user_input_block,
+    strip_continue_inspection_control,
 };
 use crate::agent::{
-    Agent, AgentExecutionMode, BashApprovalDecision, ContentBlock, PendingUserInput, PlanStep,
-    PlanStepStatus, RuntimeContinuationPhase,
+    Agent, AgentEvent, AgentExecutionMode, BashApprovalDecision, ContentBlock, PendingUserInput,
+    PlanStep, PlanStepStatus, RuntimeContinuationPhase,
 };
 use crate::llm::{LlmBackend, LlmResponse, TokenUsage};
 use crate::session::SessionManager;
@@ -994,6 +995,61 @@ async fn exit_plan_mode_without_plan_stops_without_retrying_model() {
 }
 
 #[tokio::test]
+async fn exit_plan_mode_with_unclosed_proposed_plan_reports_specific_error() {
+    let backend = Arc::new(SequencedBackend::new(vec![LlmResponse {
+        content: vec![
+            ContentBlock::Text {
+                text: "<proposed_plan>\n- [pending] Update planning state".to_string(),
+            },
+            ContentBlock::ToolUse {
+                id: "exit-plan".to_string(),
+                name: "exit_plan_mode".to_string(),
+                input: json!({}),
+            },
+        ],
+        stop_reason: Some("tool_use".to_string()),
+        usage: Some(TokenUsage::default()),
+    }]));
+
+    let mut tool_manager = ToolManager::new();
+    tool_manager.register(Box::new(ExitPlanModeTool));
+    let (_temp, session_manager, workspace, rara_dir) = test_runtime_storage();
+    let mut agent = Agent::new(
+        tool_manager,
+        backend.clone(),
+        Arc::new(VectorDB::new(&rara_dir.join("lancedb").to_string_lossy())),
+        session_manager,
+        workspace,
+    );
+    agent.set_execution_mode(AgentExecutionMode::Plan);
+
+    let mut events = Vec::new();
+    agent
+        .query_with_mode_and_events(
+            "exit with an incomplete plan".to_string(),
+            super::super::AgentOutputMode::Silent,
+            |event| events.push(event),
+        )
+        .await
+        .expect("invalid plan exit should stop the turn without retrying");
+
+    assert_eq!(backend.observed_messages().len(), 1);
+    assert_eq!(agent.execution_mode, AgentExecutionMode::Plan);
+    assert!(!agent.has_pending_plan_exit_approval());
+    assert!(agent.current_plan.is_empty());
+    assert!(events.iter().any(|event| matches!(
+        event,
+        AgentEvent::ToolResult {
+            name,
+            content,
+            is_error: true,
+        } if name == "exit_plan_mode"
+            && content.contains("complete <proposed_plan>...</proposed_plan> block")
+            && content.contains("</proposed_plan>")
+    )));
+}
+
+#[tokio::test]
 async fn continues_tool_loop_without_fixed_turn_cap() {
     let tool_turns = 205;
     let mut responses = (0..tool_turns)
@@ -1090,6 +1146,19 @@ fn parses_structured_plan_block() {
         parsed.1.as_deref(),
         Some("Focus on agent.rs and tui/runtime.rs first.")
     );
+}
+
+#[test]
+fn detects_unclosed_proposed_plan_block() {
+    assert!(has_unclosed_proposed_plan_block(
+        "<proposed_plan>\n- [pending] Update planning state"
+    ));
+    assert!(!has_unclosed_proposed_plan_block(
+        "<proposed_plan>\n- [pending] Update planning state\n</proposed_plan>"
+    ));
+    assert!(!has_unclosed_proposed_plan_block(
+        "Ordinary planning answer without a structured plan."
+    ));
 }
 
 #[test]

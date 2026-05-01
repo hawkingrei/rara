@@ -673,6 +673,15 @@ fn find_legacy_plan_block_bounds(text: &str) -> Option<(&'static str, &'static s
     Some((start_tag, end_tag, start, end))
 }
 
+pub(super) fn has_unclosed_proposed_plan_block(text: &str) -> bool {
+    let start_tag = "<proposed_plan>";
+    let end_tag = "</proposed_plan>";
+    let Some(start) = text.find(start_tag) else {
+        return false;
+    };
+    !text[start + start_tag.len()..].contains(end_tag)
+}
+
 fn parse_plan_step_line(line: &str) -> Option<PlanStep> {
     if let Some(rest) = line
         .strip_prefix("- [")

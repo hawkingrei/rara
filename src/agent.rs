@@ -99,6 +99,7 @@ struct TurnOutput {
     assistant_message: Option<Message>,
     tool_calls: Vec<ToolCall>,
     plan_updated: bool,
+    malformed_proposed_plan: bool,
     continue_inspection: bool,
     had_text_response: bool,
 }
@@ -330,6 +331,7 @@ impl Agent {
 
         let mut tool_calls = Vec::new();
         let mut plan_updated = false;
+        let mut malformed_proposed_plan = false;
         let mut continue_inspection = false;
         let mut had_text_response = false;
         let mut sanitized_content = Vec::new();
@@ -348,6 +350,8 @@ impl Agent {
                             report(AgentEvent::AssistantText(clean_text.clone()));
                         }
                         if matches!(self.execution_mode, AgentExecutionMode::Plan) {
+                            malformed_proposed_plan |=
+                                planning::has_unclosed_proposed_plan_block(&clean_text);
                             plan_updated |= self.capture_plan_from_text(&clean_text)?;
                         }
                         if matches!(output_mode, AgentOutputMode::Terminal) {
@@ -392,6 +396,7 @@ impl Agent {
             assistant_message: assistant_turn_history_message(sanitized_content)?,
             tool_calls,
             plan_updated,
+            malformed_proposed_plan,
             continue_inspection,
             had_text_response,
         })
@@ -441,9 +446,14 @@ impl Agent {
                     .iter()
                     .any(|tool_call| tool_call.name == EXIT_PLAN_MODE_TOOL_NAME)
             {
+                let content = if turn_output.malformed_proposed_plan {
+                    incomplete_proposed_plan_error()
+                } else {
+                    missing_proposed_plan_error()
+                };
                 report(AgentEvent::ToolResult {
                     name: EXIT_PLAN_MODE_TOOL_NAME.to_string(),
-                    content: missing_proposed_plan_error(),
+                    content,
                     is_error: true,
                 });
                 self.checkpoint_session()?;
@@ -560,7 +570,7 @@ impl Agent {
                         "Inspect the repository with read-only tools.",
                         "Return a normal final answer for research, review, or planning-advice tasks.",
                         "Use a <proposed_plan> block only when you are requesting approval to implement a concrete plan.",
-                        "Call exit_plan_mode after the proposed plan is complete and ready for approval.",
+                        "Call exit_plan_mode only after the same assistant message contains a complete <proposed_plan>...</proposed_plan> block.",
                         "Use <request_user_input> only when a blocking decision needs user input.",
                         "Use <continue_inspection/> only when another read-only inspection pass is required."
                     ]
@@ -771,6 +781,10 @@ fn assistant_turn_history_message(content: Vec<ContentBlock>) -> Result<Option<M
 
 fn missing_proposed_plan_error() -> String {
     "Error: exit_plan_mode requires a proposed plan. Emit a <proposed_plan> block before calling exit_plan_mode.".to_string()
+}
+
+fn incomplete_proposed_plan_error() -> String {
+    "Error: exit_plan_mode requires a complete <proposed_plan>...</proposed_plan> block. Close the block with </proposed_plan> before calling exit_plan_mode.".to_string()
 }
 
 fn is_compact_boundary_message(message: &Message) -> bool {
