@@ -126,7 +126,10 @@ This keeps Todo visible as execution state without turning it into persistent tr
 
 ### Persistence
 
-- Todo writes must be atomic: write a temporary file, then rename into place.
+- Todo writes must match the existing `SessionManager` atomic-write contract:
+  write a unique temporary file next to `todo.json`, then replace the target
+  with platform-aware replace semantics instead of relying on a plain
+  rename-over-existing-file operation.
 - Invalid todo state must be rejected with a structured tool error.
 - Session restore must load the latest todo artifact if it exists.
 - Missing todo files are valid and mean "no active todo state".

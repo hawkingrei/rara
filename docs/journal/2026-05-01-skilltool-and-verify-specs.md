@@ -43,5 +43,7 @@ budget-aware prompt rendering.
 - Keep skill metadata structured in the runtime, following Codex's model-visible
   `name`, `description`, and path list. Markdown headings are a legacy fallback
   parsed by the loader, not something the model should infer from raw Markdown.
+- Removed `~/.codex/skills` from RARA's default runtime skill roots so the
+  implementation matches the RARA-specific compatibility boundary in the spec.
 - Extend `skill` tool responses with source metadata and optional args.
 - Surface skill roots, overrides, parse errors, and invoked skills in `/context` or `/status`.

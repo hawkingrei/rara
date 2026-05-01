@@ -122,11 +122,7 @@ impl SkillManager {
 }
 
 fn skill_search_dirs(home: &Path, cwd: &Path) -> Vec<PathBuf> {
-    let mut dirs = vec![
-        home.join(".rara/skills"),
-        home.join(".agents/skills"),
-        home.join(".codex/skills"),
-    ];
+    let mut dirs = vec![home.join(".rara/skills"), home.join(".agents/skills")];
 
     for dir in repo_skill_search_dirs(cwd) {
         dirs.push(dir.join(".agents/skills"));
@@ -360,7 +356,7 @@ mod tests {
     }
 
     #[test]
-    fn search_dirs_keep_codex_compatible_prefix_order() {
+    fn search_dirs_keep_stable_prefix_order_without_codex_home_root() {
         let temp = tempdir().expect("tempdir");
         let home = temp.path().join("home");
         let repo = temp.path().join("repo");
@@ -375,7 +371,6 @@ mod tests {
             vec![
                 home.join(".rara/skills"),
                 home.join(".agents/skills"),
-                home.join(".codex/skills"),
                 repo.join(".agents/skills"),
                 repo.join("crates/.agents/skills"),
                 nested.join(".agents/skills"),
