@@ -9,8 +9,8 @@ use crate::llm::{ContentBlock, LlmBackend, LlmStreamEvent, LlmTurnMetadata};
 use crate::prompt::{self, PromptMode, PromptRuntimeConfig};
 use crate::redaction::redact_secrets;
 use crate::session::SessionManager;
-use crate::tool::ToolManager;
 use crate::tool::ToolOutputStream;
+use crate::tool::{ToolCallContext, ToolManager, ToolProgressEvent};
 use crate::tool_result::{
     ToolResultStore, default_tool_result_store_dir, enforce_tool_result_batch_budget,
     repair_tool_result_history,
@@ -683,15 +683,19 @@ impl Agent {
                 };
                 report(AgentEvent::Status(status_detail));
                 match tool
-                    .call_with_events(tool_input.clone(), &mut |progress| match progress {
-                        crate::tool::ToolProgressEvent::Output { stream, chunk } => {
-                            report(AgentEvent::ToolProgress {
-                                name: tool_name.clone(),
-                                stream,
-                                chunk,
-                            });
-                        }
-                    })
+                    .call_with_context_events(
+                        tool_input.clone(),
+                        self.tool_call_context(),
+                        &mut |progress| match progress {
+                            ToolProgressEvent::Output { stream, chunk } => {
+                                report(AgentEvent::ToolProgress {
+                                    name: tool_name.clone(),
+                                    stream,
+                                    chunk,
+                                });
+                            }
+                        },
+                    )
                     .await
                 {
                     Ok(result) => {
@@ -721,6 +725,13 @@ impl Agent {
             }
         }
         Ok(enforce_tool_result_batch_budget(tool_results))
+    }
+
+    fn tool_call_context(&self) -> ToolCallContext {
+        match self.cancellation_token.as_ref() {
+            Some(token) => ToolCallContext::default().with_cancellation(token.clone()),
+            None => ToolCallContext::default(),
+        }
     }
 }
 

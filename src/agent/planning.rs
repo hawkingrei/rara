@@ -1,4 +1,5 @@
 use super::*;
+use crate::tool::ToolProgressEvent;
 use crate::tools::bash::BashCommandInput;
 use crate::tools::planning::{ENTER_PLAN_MODE_TOOL_NAME, EXIT_PLAN_MODE_TOOL_NAME};
 use anyhow::anyhow;
@@ -280,13 +281,15 @@ impl Agent {
             .unwrap_or_else(|_| "Running approved bash command.".to_string());
         report(AgentEvent::Status(status_detail));
         match tool
-            .call_with_events(input.clone(), &mut |progress| match progress {
-                crate::tool::ToolProgressEvent::Output { stream, chunk } => {
-                    report(AgentEvent::ToolProgress {
-                        name: "bash".to_string(),
-                        stream,
-                        chunk,
-                    });
+            .call_with_context_events(input.clone(), self.tool_call_context(), &mut |progress| {
+                match progress {
+                    ToolProgressEvent::Output { stream, chunk } => {
+                        report(AgentEvent::ToolProgress {
+                            name: "bash".to_string(),
+                            stream,
+                            chunk,
+                        });
+                    }
                 }
             })
             .await
