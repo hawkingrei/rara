@@ -61,12 +61,28 @@ The transcript should move toward Codex/Claude-style tool visibility:
   commands biased toward the tail so error diagnostics remain visible without
   requiring shell-side `2>&1` redirection.
 - Oversized tool results should be persisted to disk and replaced in model
-  context with a `<persisted-output>` message containing the path and a bounded
-  preview. The full JSON payload remains inspectable from that path.
+  context with a bounded preview plus the display-oriented continuation lines
+  described below. The full JSON payload remains inspectable from that path.
 - A single tool-result batch should enforce an aggregate model-facing budget so
   parallel tool calls cannot combine many individually acceptable results into
   one oversized follow-up turn. The final compacted batch must fit the aggregate
   budget, not only shorten the first oversized item encountered.
+- Compact shell results must be composable at the source. The compact `bash`
+  status line should describe only the process outcome, such as `finished with
+  exit code 0` or `failed with exit code 101`; renderer layers may prepend the
+  tool name when needed. Source compactors should not emit `bash finished`
+  because that forces downstream renderers either to duplicate the tool name or
+  to carry bash-specific string cleanup.
+- Persisted oversized tool results should expose a display-oriented continuation
+  line:
+  - `[tool_result truncated]`
+  - `full result: <path>`
+
+  Legacy wrappers or key/value markers such as `<persisted-output>` or
+  `full_result_path=<path>` may remain readable for backward compatibility, but
+  new model-facing compact results should use the display contract above. This
+  keeps final transcript rows human-readable while preserving a stable path for
+  full output inspection.
 - When shell execution pauses on a human approval request, the approval card should take visual priority over older live stdout/stderr progress from the same turn.
 - Approval choices should describe both the action and its scope, such as:
   - allow only the current command;
@@ -113,9 +129,49 @@ The transcript should move toward Codex/Claude-style tool visibility:
 - If a follow-up is entered during a query turn, it first waits for the next tool/result boundary.
 - Once that boundary is crossed, the message is promoted into the ordinary end-of-turn queue.
 - If the turn finishes before another boundary appears, the pending follow-up is promoted at turn completion.
-- The bottom pane should render the two queues separately:
+- If a shell approval, plan approval, or other pending interaction is active,
+  plain text submitted from the composer is queued as a follow-up instead of
+  starting a new model turn. Request-input prompts remain answer paths, and
+  numeric shortcuts remain option-selection paths.
+- Queued follow-up visibility belongs in the active transcript, not in the
+  composer body. The composer remains the input surface and may show only a
+  short hint.
+- The active transcript should render queued follow-up state as a dedicated
+  status cell after any pending interaction card. This preserves option
+  visibility for approval cards and keeps queued user input in chronological
+  turn context.
+- The queued status cell should render the two queues separately:
   - `Messages to be submitted after next tool call`
   - `Queued follow-up messages`
+
+### TUI modular rendering boundary
+
+The TUI should keep input state, display data, and visual cells separate:
+
+- State modules own queue and interaction state. They should not encode Ratatui
+  lines, spans, colors, or layout decisions.
+- Small display-data builders, such as the queued follow-up section builder,
+  may translate state into renderer-neutral structs. These builders should be
+  deterministic and cheap to test without a terminal frame.
+- History cells own transcript rendering. A cell should render one semantic
+  thing: pending interaction, queued follow-up, running command, completed
+  command, thinking group, or message text.
+- The bottom pane owns composer text, cursor placement, and one-line hints. It
+  should not render durable transcript status, approval options, or queued
+  follow-up bodies.
+- Active-turn composition owns ordering. Pending interactions must be placed
+  before queued follow-up status so approval options remain visible. Queued
+  status should be appended near the newest active cell instead of being
+  rewritten into an older transcript location.
+- Tool-result compactors should emit renderer-neutral text. Renderer helpers
+  may add the tool name, styling, and truncation frame, but should not need
+  bash-specific source cleanup for normal output.
+
+This mirrors the Codex-style split where queued follow-up input is active
+transcript status and the composer remains a prompt/input surface. It also keeps
+future cells composable: adding a new pending interaction or queue type should
+usually require a new display-data section or cell, not another special case in
+the bottom pane.
 
 ### Running query cancellation
 

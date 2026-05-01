@@ -524,6 +524,20 @@ fn formats_generic_tool_result_without_preview_available_marker() {
 }
 
 #[test]
+fn formats_persisted_bash_result_without_generic_prefix() {
+    let rendered = format_tool_result(
+        "bash",
+        "finished with exit code 0\nDuration: 10 ms\nOutput:\nline 1\nline 2\n\n[tool_result truncated]\nfull result: /tmp/rara/tool-results/tool-1.json",
+    );
+
+    assert!(rendered.starts_with("bash: finished with exit code 0"));
+    assert!(rendered.contains("Output:\nline 1\nline 2"));
+    assert!(rendered.contains("full result: /tmp/rara/tool-results/tool-1.json"));
+    assert!(!rendered.contains("bash: bash finished"));
+    assert!(!rendered.contains("full result stored on disk"));
+}
+
+#[test]
 fn formats_tool_progress_with_stream_label() {
     let rendered = format_tool_progress("bash", ToolOutputStream::Stderr, "warn 1\nwarn 2\n");
     assert_eq!(rendered, "bash stderr:\nwarn 1\nwarn 2\n");

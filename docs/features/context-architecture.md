@@ -218,6 +218,11 @@ still letting `/context` explain:
   the same need;
 - which candidates were dropped because the selection budget was exhausted.
 
+The assembler should preserve that ownership split. Fixed items may appear in
+the `MemorySelection` explanation, but they should not be re-emitted under the
+`active_memory_inputs` assembly layer. That layer is reserved for discretionary
+retrieval candidates that actually won selection for this turn.
+
 This lets `/context` explain:
 
 - what won the current memory budget;

@@ -163,12 +163,7 @@ impl<'a> ContextAssembler<'a> {
             .memory_selection
             .selected_items
             .iter()
-            .filter(|item| {
-                matches!(
-                    item.kind.as_str(),
-                    "retrieved_workspace_memory" | "retrieved_thread_context"
-                )
-            })
+            .filter(|item| crate::context::is_retrieved_memory_kind(item.kind.as_str()))
             .map(|item| item.budget_impact_tokens.unwrap_or_default())
             .sum();
         let assembly = assemble_context_view(
@@ -589,8 +584,8 @@ mod tests {
                         "retrieved_workspace_memory" | "retrieved_thread_context"
                     ) && item
                         .dropped_reason
-                        .as_deref()
-                        .is_some_and(|reason| reason.contains("memory-selection budget"))
+                        .as_ref()
+                        .is_some_and(|r| r.reason().contains("memory-selection budget"))
                 })
         );
     }
@@ -657,6 +652,19 @@ mod tests {
         assert!(selected_kinds.contains(&"approval"));
         assert!(selected_kinds.contains(&"latest_user_request"));
         assert!(selected_kinds.contains(&"tool_result"));
+
+        let active_memory_assembly_kinds = runtime_context
+            .assembly
+            .entries
+            .iter()
+            .filter(|entry| entry.layer == "active_memory_inputs")
+            .map(|entry| entry.kind.as_str())
+            .collect::<Vec<_>>();
+        assert!(!active_memory_assembly_kinds.contains(&"plan_explanation"));
+        assert!(!active_memory_assembly_kinds.contains(&"plan_steps"));
+        assert!(!active_memory_assembly_kinds.contains(&"approval"));
+        assert!(!active_memory_assembly_kinds.contains(&"latest_user_request"));
+        assert!(!active_memory_assembly_kinds.contains(&"tool_result"));
     }
 
     #[test]

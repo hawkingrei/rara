@@ -1,7 +1,7 @@
 use crate::agent::{Message, PlanStepStatus};
 use crate::context::{
     CompactionSourceContextEntry, ContextAssemblyEntry, ContextAssemblyView,
-    MemorySelectionItemContextEntry,
+    MemorySelectionItemContextEntry, is_retrieved_memory_kind,
 };
 use crate::prompt::EffectivePrompt;
 
@@ -29,6 +29,7 @@ pub(crate) fn assemble_context_view(
 
     push(ContextAssemblyEntry {
         order: 0,
+        cache_status: None,
         layer: "stable_instructions".to_string(),
         kind: format!("base_prompt:{}", effective_prompt.base_prompt_kind.label()),
         label: "Base System Prompt".to_string(),
@@ -50,6 +51,7 @@ pub(crate) fn assemble_context_view(
         };
         push(ContextAssemblyEntry {
             order: 0,
+            cache_status: None,
             layer: layer.to_string(),
             kind,
             label: source.label.clone(),
@@ -64,6 +66,7 @@ pub(crate) fn assemble_context_view(
     if let Some(plan_explanation) = plan_explanation.filter(|value| !value.trim().is_empty()) {
         push(ContextAssemblyEntry {
             order: 0,
+            cache_status: None,
             layer: "active_turn_state".to_string(),
             kind: "plan_explanation".to_string(),
             label: "Plan Explanation".to_string(),
@@ -85,6 +88,7 @@ pub(crate) fn assemble_context_view(
             .join("\n");
         push(ContextAssemblyEntry {
             order: 0,
+            cache_status: None,
             layer: "active_turn_state".to_string(),
             kind: "plan_steps".to_string(),
             label: "Plan Steps".to_string(),
@@ -101,13 +105,18 @@ pub(crate) fn assemble_context_view(
     for interaction in pending_interactions {
         push(ContextAssemblyEntry {
             order: 0,
+            cache_status: None,
             layer: "active_turn_state".to_string(),
             kind: interaction.kind.clone(),
             label: interaction.title.clone(),
             source_path: interaction.source.clone(),
             injected: true,
-            inclusion_reason: "included because a pending interaction must survive restore and remain visible to the active runtime".to_string(),
-            budget_impact_tokens: Some(estimate_text_tokens(interaction.summary.as_str())),
+            inclusion_reason:
+                "included because pending interactions are active runtime obligations".to_string(),
+            budget_impact_tokens: Some(
+                estimate_text_tokens(interaction.title.as_str())
+                    + estimate_text_tokens(interaction.summary.as_str()),
+            ),
             dropped_reason: None,
         });
     }
@@ -115,6 +124,7 @@ pub(crate) fn assemble_context_view(
     if let Some(user_request) = latest_user_request(history) {
         push(ContextAssemblyEntry {
             order: 0,
+            cache_status: None,
             layer: "active_turn_state".to_string(),
             kind: "latest_user_request".to_string(),
             label: "Latest User Request".to_string(),
@@ -131,6 +141,7 @@ pub(crate) fn assemble_context_view(
     for (label, detail) in latest_tool_results(history) {
         push(ContextAssemblyEntry {
             order: 0,
+            cache_status: None,
             layer: "active_turn_state".to_string(),
             kind: "tool_result".to_string(),
             label,
@@ -147,6 +158,7 @@ pub(crate) fn assemble_context_view(
     for entry in compaction_entries {
         push(ContextAssemblyEntry {
             order: 0,
+            cache_status: None,
             layer: "compacted_history".to_string(),
             kind: entry.kind.clone(),
             label: entry.label.clone(),
@@ -158,9 +170,13 @@ pub(crate) fn assemble_context_view(
         });
     }
 
-    for item in selected_memory_items {
+    for item in selected_memory_items
+        .iter()
+        .filter(|item| is_retrieved_memory_kind(item.kind.as_str()))
+    {
         push(ContextAssemblyEntry {
             order: 0,
+            cache_status: None,
             layer: "active_memory_inputs".to_string(),
             kind: item.kind.clone(),
             label: item.label.clone(),
@@ -175,6 +191,7 @@ pub(crate) fn assemble_context_view(
     for item in available_memory_items {
         push(ContextAssemblyEntry {
             order: 0,
+            cache_status: None,
             layer: "retrieval_ready".to_string(),
             kind: item.kind.clone(),
             label: item.label.clone(),
@@ -182,13 +199,14 @@ pub(crate) fn assemble_context_view(
             injected: false,
             inclusion_reason: item.selection_reason.clone(),
             budget_impact_tokens: item.budget_impact_tokens,
-            dropped_reason: item.dropped_reason.clone(),
+            dropped_reason: item.dropped_reason.as_ref().map(|r| r.reason().to_string()),
         });
     }
 
     for item in dropped_memory_items {
         push(ContextAssemblyEntry {
             order: 0,
+            cache_status: None,
             layer: "retrieval_ready".to_string(),
             kind: item.kind.clone(),
             label: item.label.clone(),
@@ -196,7 +214,7 @@ pub(crate) fn assemble_context_view(
             injected: false,
             inclusion_reason: item.selection_reason.clone(),
             budget_impact_tokens: item.budget_impact_tokens,
-            dropped_reason: item.dropped_reason.clone(),
+            dropped_reason: item.dropped_reason.as_ref().map(|r| r.reason().to_string()),
         });
     }
 

@@ -84,6 +84,17 @@ pub(crate) async fn handle_submit(
         app.push_notice(format!("Unknown command '{}'. Use /help.", trimmed));
     } else if pending::handle_pending_option_submit(app, agent_slot, &trimmed) {
         return Ok(false);
+    } else if app.active_pending_interaction().is_some() && app.pending_request_input().is_none() {
+        let queued = app.queue_follow_up_message(trimmed.clone());
+        let suffix = if queued > 1 {
+            format!(" {queued} follow-up messages are queued.")
+        } else {
+            " 1 follow-up message is queued.".to_string()
+        };
+        app.notice = Some(format!(
+            "Queued until the pending interaction is answered.{suffix}"
+        ));
+        return Ok(false);
     } else if let Some(agent) = agent_slot.take() {
         if app.pending_request_input().is_some() {
             pending::handle_request_input_answer(app, agent_slot, agent, trimmed);

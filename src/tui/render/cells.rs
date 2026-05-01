@@ -6,6 +6,7 @@ use crate::tui::interaction_text::{
     pending_interaction_detail_text, pending_interaction_shortcut_text,
 };
 use crate::tui::plan_display::should_show_updated_plan;
+use crate::tui::queued_input::queued_follow_up_sections;
 use crate::tui::state::{
     ActiveLiveEvent, RuntimePhase, TranscriptEntry, TranscriptEntryPayload, TuiApp,
     contains_structured_planning_output,
@@ -20,9 +21,9 @@ mod components;
 pub(crate) use self::components::StartupCardCell;
 use self::components::{
     CommittedInteractionCell, ExploredCell, ExploringCell, MessageCell, PendingInteractionCell,
-    PlanModeCell, PlanSummaryCell, PlanningCell, PlanningSuggestionCell, RanCell, RespondingCell,
-    RunningCell, TerminalCell, ThinkingGroupCell, ThinkingTextCell, UserCell,
-    planning_suggestion_text,
+    PlanModeCell, PlanSummaryCell, PlanningCell, PlanningSuggestionCell, QueuedFollowUpCell,
+    RanCell, RespondingCell, RunningCell, TerminalCell, ThinkingGroupCell, ThinkingTextCell,
+    UserCell, planning_suggestion_text,
 };
 use super::{
     compact_progress_summary_lines, compact_recent_first_summary_lines, compact_summary_lines,
@@ -1255,6 +1256,16 @@ impl ActiveCell for ActiveTurnCell<'_> {
                 pending.kind,
                 request_lines,
             )));
+        }
+
+        let queued_sections = queued_follow_up_sections(
+            self.app.pending_follow_up_preview(),
+            self.app.pending_follow_up_count(),
+            self.app.queued_end_of_turn_preview(),
+            self.app.queued_follow_up_messages.len(),
+        );
+        if !queued_sections.is_empty() {
+            cells.push(Box::new(QueuedFollowUpCell::new(queued_sections)));
         }
 
         if self.app.pending_planning_suggestion.is_some() {

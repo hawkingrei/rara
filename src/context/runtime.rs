@@ -1,9 +1,30 @@
 use crate::agent::{CompactState, PlanStepStatus};
 use crate::prompt::{EffectivePrompt, PromptSource};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CacheStatus {
+    /// Content was served from the in-memory cache (mtime unchanged).
+    Hit,
+    /// Content was re-read from disk (mtime changed or first read).
+    Miss,
+    /// Cache does not apply (non-file source, e.g. append-system-prompt).
+    NoCache,
+}
+
+pub const RETRIEVED_WORKSPACE_MEMORY_KIND: &str = "retrieved_workspace_memory";
+pub const RETRIEVED_THREAD_CONTEXT_KIND: &str = "retrieved_thread_context";
+
+pub fn is_retrieved_memory_kind(kind: &str) -> bool {
+    matches!(
+        kind,
+        RETRIEVED_WORKSPACE_MEMORY_KIND | RETRIEVED_THREAD_CONTEXT_KIND
+    )
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContextAssemblyEntry {
     pub order: usize,
+    pub cache_status: Option<CacheStatus>,
     pub layer: String,
     pub kind: String,
     pub label: String,
@@ -247,6 +268,25 @@ pub struct MemorySelectionContextView {
     pub dropped_items: Vec<MemorySelectionItemContextEntry>,
 }
 
+/// Reason an item was not selected into the current turn.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DropReason {
+    /// Did not win the selection contest (ranking, dedup, not selectable,
+    /// compacted history already covers it). Appears in available_items.
+    NotSelected { reason: String },
+    /// Would have exceeded the remaining memory-selection budget.
+    /// Appears in dropped_items.
+    BudgetExceeded { reason: String },
+}
+
+impl DropReason {
+    pub fn reason(&self) -> &str {
+        match self {
+            DropReason::NotSelected { reason } | DropReason::BudgetExceeded { reason } => reason,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MemorySelectionItemContextEntry {
     pub order: usize,
@@ -255,5 +295,5 @@ pub struct MemorySelectionItemContextEntry {
     pub detail: String,
     pub selection_reason: String,
     pub budget_impact_tokens: Option<usize>,
-    pub dropped_reason: Option<String>,
+    pub dropped_reason: Option<DropReason>,
 }

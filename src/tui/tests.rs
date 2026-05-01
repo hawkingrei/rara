@@ -157,6 +157,35 @@ async fn submit_numeric_input_handles_pending_shell_approval() {
 }
 
 #[tokio::test]
+async fn plain_submit_queues_while_shell_approval_is_pending() {
+    let temp = tempdir().expect("tempdir");
+    let mut app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("app");
+    add_pending_shell_approval(&mut app);
+    app.input = "then review the diff".into();
+
+    let mut agent_slot = None;
+    let oauth_manager = Arc::new(
+        crate::oauth::OAuthManager::new_for_config_dir(temp.path().join(".rara"))
+            .expect("oauth manager"),
+    );
+    let should_quit = super::handle_submit(&mut app, &mut agent_slot, &oauth_manager)
+        .await
+        .expect("submit");
+
+    assert!(!should_quit);
+    assert!(app.running_task.is_none());
+    assert_eq!(app.queued_follow_up_preview(), Some("then review the diff"));
+    assert!(
+        app.notice
+            .as_deref()
+            .is_some_and(|value| value.contains("pending interaction is answered"))
+    );
+}
+
+#[tokio::test]
 async fn esc_cancels_busy_query_without_overlay() {
     let temp = tempdir().expect("tempdir");
     let mut app = TuiApp::new(ConfigManager {

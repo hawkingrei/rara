@@ -1,6 +1,7 @@
 use crate::agent::{Message, PlanStepStatus};
 use crate::context::{
-    CompactionSourceContextEntry, MemorySelectionContextView, MemorySelectionItemContextEntry,
+    CompactionSourceContextEntry, DropReason, MemorySelectionContextView,
+    MemorySelectionItemContextEntry,
 };
 use crate::prompt::PromptSource;
 use serde_json::Value;
@@ -76,7 +77,7 @@ struct MemorySelectionCandidate {
     budget_impact_tokens: Option<usize>,
     priority: usize,
     selectable: bool,
-    dropped_reason: String,
+    dropped_reason: DropReason,
 }
 
 #[derive(Debug, Default)]
@@ -333,8 +334,6 @@ fn select_memory_candidates(
     selection_budget_tokens: Option<usize>,
     fixed_selected_kinds: &[String],
 ) -> MemorySelectionDecision {
-    const BUDGET_DROP_REASON_PREFIX: &str =
-        "not selected because it would exceed the remaining memory-selection budget";
     candidates.sort_by_key(|candidate| candidate.priority);
     let mut remaining_budget = selection_budget_tokens;
     let has_compacted_history = fixed_selected_kinds.iter().any(|kind| {
@@ -347,29 +346,34 @@ fn select_memory_candidates(
     let mut selected_kinds = fixed_selected_kinds.to_vec();
 
     for candidate in candidates {
-        let should_drop = if !candidate.selectable {
+        let should_drop: Option<DropReason> = if !candidate.selectable {
             Some(candidate.dropped_reason.clone())
         } else if candidate.kind == "thread_history" && has_compacted_history {
-            Some(
-                "not selected because compacted thread history already provides a more focused carried-over thread view".to_string(),
-            )
+            Some(DropReason::NotSelected {
+                reason: "not selected because compacted thread history already provides a more focused carried-over thread view".to_string(),
+            })
         } else if selected_kinds
             .iter()
             .any(|kind| kind == "retrieved_thread_context" && candidate.kind == "thread_history")
         {
-            Some(
-                "not selected because a more focused retrieved thread-context candidate already won the current memory selection".to_string(),
-            )
+            Some(DropReason::NotSelected {
+                reason:
+                    "not selected because a more focused retrieved thread-context candidate already won the current memory selection".to_string(),
+            })
         } else if let (Some(remaining), Some(cost)) =
             (remaining_budget, candidate.budget_impact_tokens)
         {
-            (cost > remaining)
-                .then(|| format!("{BUDGET_DROP_REASON_PREFIX} ({cost} > {remaining})"))
+            (cost > remaining).then(|| DropReason::BudgetExceeded {
+                reason: format!(
+                    "not selected because it would exceed the remaining memory-selection budget ({cost} > {remaining})"
+                ),
+            })
         } else {
             None
         };
 
         if let Some(dropped_reason) = should_drop {
+            let is_budget = matches!(&dropped_reason, DropReason::BudgetExceeded { .. });
             let item = MemorySelectionItemContextEntry {
                 order: 0,
                 kind: candidate.kind,
@@ -379,11 +383,7 @@ fn select_memory_candidates(
                 budget_impact_tokens: candidate.budget_impact_tokens,
                 dropped_reason: Some(dropped_reason),
             };
-            if item
-                .dropped_reason
-                .as_deref()
-                .is_some_and(|reason| reason.starts_with(BUDGET_DROP_REASON_PREFIX))
-            {
+            if is_budget {
                 decision.dropped_items.push(item);
             } else {
                 decision.available_items.push(item);
@@ -430,11 +430,11 @@ fn workspace_memory_available_item(
         },
         selection_reason: "workspace memory participates in the selection contract even when it is not part of the current assembled working set".to_string(),
         budget_impact_tokens: None,
-        dropped_reason: Some(if workspace_memory_available {
+        dropped_reason: Some(DropReason::NotSelected { reason: if workspace_memory_available {
             "available for recall, but not selected into the current turn because workspace memory was not activated as a prompt input".to_string()
         } else {
             "no workspace memory candidate is currently available".to_string()
-        }),
+        }}),
     }
 }
 
@@ -449,11 +449,11 @@ fn thread_history_candidate(history: &[Message], session_id: &str) -> MemorySele
         )),
         priority: 30,
         selectable: !history.is_empty(),
-        dropped_reason: if history.is_empty() {
+        dropped_reason: DropReason::NotSelected { reason: if history.is_empty() {
             "no thread history is available for selection".to_string()
         } else {
             "raw thread history was not selected directly because the current turn already has sufficient active-turn and compacted-history context".to_string()
-        },
+        }},
     }
 }
 
@@ -470,11 +470,11 @@ fn vector_memory_candidate(vdb_uri: &str) -> MemorySelectionCandidate {
         budget_impact_tokens: None,
         priority: 40,
         selectable: false,
-        dropped_reason: if vdb_uri.is_empty() {
+        dropped_reason: DropReason::NotSelected { reason: if vdb_uri.is_empty() {
             "no vector-backed memory store is configured".to_string()
         } else {
             "not selected because vector-backed candidate ranking is not implemented yet".to_string()
-        },
+        }},
     }
 }
 
@@ -505,7 +505,7 @@ fn retrieval_tool_candidate(
                 selection_reason: "selected because the retrieval tool returned relevant durable memory candidates for the current task".to_string(),
                 priority: 10,
                 selectable: true,
-                dropped_reason: "not selected after ranking the retrieved workspace-memory candidates against the current memory-selection budget".to_string(),
+                dropped_reason: DropReason::NotSelected { reason: "not selected after ranking the retrieved workspace-memory candidates against the current memory-selection budget".to_string() },
             }
         }
         "retrieve_session_context" => {
@@ -521,7 +521,7 @@ fn retrieval_tool_candidate(
                 selection_reason: "selected because the retrieval tool returned focused thread-context material for the current task".to_string(),
                 priority: 20,
                 selectable: true,
-                dropped_reason: "not selected after ranking the retrieved thread-context candidate against the current memory-selection budget".to_string(),
+                dropped_reason: DropReason::NotSelected { reason: "not selected after ranking the retrieved thread-context candidate against the current memory-selection budget".to_string() },
             }
         }
         other => MemorySelectionCandidate {
@@ -534,7 +534,7 @@ fn retrieval_tool_candidate(
             budget_impact_tokens: Some(estimate_text_tokens(content)),
             priority: 50,
             selectable: true,
-            dropped_reason: "not selected after ranking the retrieval candidate against the current memory-selection budget".to_string(),
+            dropped_reason: DropReason::NotSelected { reason: "not selected after ranking the retrieval candidate against the current memory-selection budget".to_string() },
         },
     }
 }
@@ -599,6 +599,279 @@ mod tests {
         assert_eq!(
             payload.get("summary").and_then(serde_json::Value::as_str),
             Some("plain json payload without wrapper")
+        );
+    }
+
+    // ── Non-vector selection path ──────────────────────────────────────────
+
+    #[test]
+    fn thread_history_selected_when_no_compacted_history_and_budget_allows() {
+        let history = vec![
+            Message {
+                role: "user".to_string(),
+                content: json!("hello"),
+            },
+            Message {
+                role: "assistant".to_string(),
+                content: json!("hi there"),
+            },
+        ];
+        let result = memory_selection(
+            &[],
+            None,
+            &[],
+            &[],
+            &[], // no compacted history
+            &history,
+            "session-1",
+            "",
+            Some(10_000),
+        );
+
+        let selected_kinds: Vec<&str> = result
+            .selected_items
+            .iter()
+            .map(|item| item.kind.as_str())
+            .collect();
+        assert!(
+            selected_kinds.contains(&"latest_user_request"),
+            "latest user request should be a fixed selected item"
+        );
+        assert!(
+            selected_kinds.contains(&"thread_history"),
+            "thread_history should be selected when no compacted history exists and budget allows"
+        );
+        assert!(result.dropped_items.is_empty());
+    }
+
+    #[test]
+    fn thread_history_available_not_selected_when_compacted_history_exists() {
+        let history = vec![Message {
+            role: "user".to_string(),
+            content: json!("hello"),
+        }];
+        let compacted = vec![CompactionSourceContextEntry {
+            order: 1,
+            kind: "compacted_summary".to_string(),
+            label: "Compacted Summary".to_string(),
+            detail: "previous work".to_string(),
+            inclusion_reason: "carried forward".to_string(),
+        }];
+        let result = memory_selection(
+            &[],
+            None,
+            &[],
+            &[],
+            &compacted,
+            &history,
+            "session-1",
+            "",
+            Some(10_000),
+        );
+
+        let available_kinds: Vec<&str> = result
+            .available_items
+            .iter()
+            .map(|item| item.kind.as_str())
+            .collect();
+        assert!(
+            available_kinds.contains(&"thread_history"),
+            "thread_history should be available but not selected when compacted history already covers it"
+        );
+        let selected_kinds: Vec<&str> = result
+            .selected_items
+            .iter()
+            .map(|item| item.kind.as_str())
+            .collect();
+        assert!(
+            !selected_kinds.contains(&"thread_history"),
+            "thread_history should not be selected when compacted history exists"
+        );
+    }
+
+    #[test]
+    fn vector_memory_is_available_but_not_selectable() {
+        let history: Vec<Message> = vec![];
+        let result = memory_selection(
+            &[],
+            None,
+            &[],
+            &[],
+            &[],
+            &history,
+            "session-1",
+            "memory://vdb",
+            Some(10_000),
+        );
+
+        let available_kinds: Vec<&str> = result
+            .available_items
+            .iter()
+            .map(|item| item.kind.as_str())
+            .collect();
+        assert!(
+            available_kinds.contains(&"vector_memory"),
+            "vector_memory should appear in available when a vdb URI is configured"
+        );
+        let vector_entry = result
+            .available_items
+            .iter()
+            .find(|item| item.kind == "vector_memory")
+            .expect("vector_memory should be present");
+        assert!(
+            vector_entry
+                .dropped_reason
+                .as_ref()
+                .is_some_and(|r| r.reason().contains("not implemented")),
+            "vector_memory should explain it is not implemented yet"
+        );
+    }
+
+    #[test]
+    fn retrieval_tool_results_from_history_are_captured_as_candidates() {
+        let history = vec![
+            Message {
+                role: "assistant".to_string(),
+                content: json!([
+                    {
+                        "type": "tool_use",
+                        "id": "tool-retrieve-1",
+                        "name": "retrieve_experience",
+                        "input": { "query": "bootstrap contract" }
+                    }
+                ]),
+            },
+            Message {
+                role: "user".to_string(),
+                content: json!([
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "tool-retrieve-1",
+                        "content": "Tool retrieve_experience completed.\nPayload:\n{\n  \"relevant_experiences\": [\"Use shared bootstrap.\"]\n}"
+                    }
+                ]),
+            },
+        ];
+        // Budget of 1 token forces the retrieval candidate to be dropped,
+        // proving it was captured as a candidate.
+        let result = memory_selection(&[], None, &[], &[], &[], &history, "session-1", "", Some(1));
+
+        let dropped_kinds: Vec<&str> = result
+            .dropped_items
+            .iter()
+            .map(|item| item.kind.as_str())
+            .collect();
+        let selected_kinds: Vec<&str> = result
+            .selected_items
+            .iter()
+            .map(|item| item.kind.as_str())
+            .collect();
+        let available_kinds: Vec<&str> = result
+            .available_items
+            .iter()
+            .map(|item| item.kind.as_str())
+            .collect();
+        // The retrieval candidate should appear in one of the three lists,
+        // proving it was captured from history.
+        let all_kinds: Vec<&&str> = dropped_kinds
+            .iter()
+            .chain(selected_kinds.iter())
+            .chain(available_kinds.iter())
+            .collect();
+        assert!(
+            all_kinds.contains(&&"retrieved_workspace_memory"),
+            "retrieval tool candidate from history must appear in selected, available, or dropped"
+        );
+    }
+
+    #[test]
+    fn retrieval_tool_results_selected_when_budget_allows() {
+        let history = vec![
+            Message {
+                role: "assistant".to_string(),
+                content: json!([
+                    {
+                        "type": "tool_use",
+                        "id": "tool-retrieve-1",
+                        "name": "retrieve_session_context",
+                        "input": { "query": "auth flow" }
+                    }
+                ]),
+            },
+            Message {
+                role: "user".to_string(),
+                content: json!([
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "tool-retrieve-1",
+                        "content": "Tool retrieve_session_context completed.\nPayload:\n{\n  \"status\": \"ok\",\n  \"summary\": \"Auth picker moved.\"\n}"
+                    }
+                ]),
+            },
+        ];
+        let result = memory_selection(
+            &[],
+            None,
+            &[],
+            &[],
+            &[],
+            &history,
+            "session-1",
+            "",
+            Some(10_000),
+        );
+
+        let selected_kinds: Vec<&str> = result
+            .selected_items
+            .iter()
+            .map(|item| item.kind.as_str())
+            .collect();
+        assert!(
+            selected_kinds.contains(&"retrieved_thread_context"),
+            "retrieve_session_context results should be selected when budget allows"
+        );
+    }
+
+    // ── Category completeness ──────────────────────────────────────────────
+
+    #[test]
+    fn memory_selection_reports_all_three_categories() {
+        let history = vec![Message {
+            role: "user".to_string(),
+            content: json!("hello"),
+        }];
+        let result = memory_selection(
+            &[],
+            None,
+            &[],
+            &[],
+            &[],
+            &history,
+            "session-1",
+            "memory://vdb",
+            Some(10_000),
+        );
+
+        // Selected: at least latest_user_request + thread_history (if budget allows)
+        assert!(
+            !result.selected_items.is_empty(),
+            "should have selected items"
+        );
+        // Available: vector_memory should be there
+        let available_kinds: Vec<&str> = result
+            .available_items
+            .iter()
+            .map(|item| item.kind.as_str())
+            .collect();
+        assert!(
+            available_kinds.contains(&"vector_memory"),
+            "vector_memory should be in available"
+        );
+        // workspace_memory_available_item is also pushed when not already selected
+        let has_workspace_available = available_kinds.contains(&"workspace_memory");
+        assert!(
+            has_workspace_available,
+            "workspace_memory should be in available when no workspace prompt source is active"
         );
     }
 }

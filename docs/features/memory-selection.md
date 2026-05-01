@@ -128,6 +128,12 @@ Fixed selected items do not compete for the discretionary retrieval budget. They
 are listed in `MemorySelection` so `/context` can explain them, not so retrieval
 can re-rank them after ownership has already selected them.
 
+Fixed selected items also remain owned by their original assembly layers.
+Workspace memory stays under prompt sources, compacted carry-over stays under
+compacted history, and active thread state stays under active turn state.
+`ContextAssemblyView` should only place newly selected discretionary retrieval
+items in `active_memory_inputs`.
+
 ### Available Items
 
 Available items are candidates that can be considered or recalled, but are not
