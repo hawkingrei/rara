@@ -374,6 +374,7 @@ fn default_system_prompt_sections() -> Vec<PromptSection> {
                     "Never write from memory, a search snippet, or a stale summary when the direct file contents can be read locally.",
                     "Prefer 'apply_patch' for editing existing files because it is diff-shaped and reviewable.",
                     "When using 'apply_patch', send a single patch string that starts with '*** Begin Patch' and ends with '*** End Patch'. Use '*** Add File: path' with '+' lines for new files, '*** Delete File: path' for deletes, and '*** Update File: path' for edits.",
+                    "For whole-file deletes, use '*** Delete File: path' by itself; do not include removed file contents under that header.",
                     "Inside an update patch, use '@@' hunks and prefix every content line with exactly one marker: space for unchanged context, '-' for removed text, or '+' for inserted text. Preserve indentation exactly after that marker.",
                     "For update hunks, include enough exact context from the current file for the old lines to match uniquely. If a full read is unavailable because the file or line is too large, use 'apply_patch' with exact context from the current partial read rather than shell text-editing commands.",
                     "If an 'apply_patch' hunk does not match, re-read the file and make the smallest corrected patch rather than guessing.",
@@ -868,6 +869,8 @@ mod tests {
         assert!(prompt.contains("Prefer 'apply_patch' for editing existing files"));
         assert!(prompt.contains("starts with '*** Begin Patch'"));
         assert!(prompt.contains("'*** Add File: path' with '+' lines"));
+        assert!(prompt.contains("'*** Delete File: path' for deletes"));
+        assert!(prompt.contains("do not include removed file contents"));
         assert!(prompt.contains("'*** Update File: path' for edits"));
         assert!(prompt.contains("prefix every content line with exactly one marker"));
         assert!(prompt.contains("Preserve indentation exactly after that marker"));

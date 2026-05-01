@@ -66,7 +66,7 @@ impl Tool for ApplyPatchTool {
     }
 
     fn description(&self) -> &str {
-        "Apply structured file edits using Begin Patch syntax. Prefer this for editing existing files. Update operations verify hunks against current file contents; delete operations require reading the full target file first."
+        "Apply structured file edits using Begin Patch syntax. Prefer this for editing existing files. Update operations verify hunks against current file contents."
     }
 
     fn input_schema(&self) -> Value {
@@ -97,9 +97,6 @@ impl Tool for ApplyPatchTool {
             .unwrap_or(false);
         let ops = parse_patch(patch)?;
         validate_patch_update_context(&ops)?;
-        if let Some(read_state) = &self.read_state {
-            validate_patch_delete_read_state(read_state, &ops)?;
-        }
         let mut stats = PatchStats::default();
         let mut previews = Vec::new();
 
@@ -206,18 +203,6 @@ impl Tool for ApplyPatchTool {
             "diff_truncated": diff_truncated,
         }))
     }
-}
-
-fn validate_patch_delete_read_state(
-    read_state: &SharedFileReadState,
-    ops: &[PatchOp],
-) -> Result<(), ToolError> {
-    for op in ops {
-        if let PatchOp::Delete { path } = op {
-            read_state.validate_existing_edit(path)?;
-        }
-    }
-    Ok(())
 }
 
 fn validate_patch_update_context(ops: &[PatchOp]) -> Result<(), ToolError> {
@@ -569,7 +554,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn delete_patch_still_requires_prior_full_read_when_state_is_enabled() {
+    async fn delete_patch_allows_partial_read_when_state_is_enabled() {
         let dir = tempfile::tempdir().expect("tempdir");
         let file = dir.path().join("sample.txt");
         std::fs::write(&file, "hello\nworld\n").expect("write");
@@ -586,14 +571,16 @@ mod tests {
             .await
             .expect("partial read");
 
-        let error = patch_tool
+        let result = patch_tool
             .call(json!({
                 "patch": format!("*** Begin Patch\n*** Delete File: {}\n*** End Patch", file.display())
             }))
             .await
-            .expect_err("delete should require full read");
+            .expect("delete after partial read");
 
-        assert!(error.to_string().contains("only partially read"));
-        assert!(file.exists());
+        assert_eq!(result["status"], "applied");
+        assert_eq!(result["files_changed"], 1);
+        assert_eq!(result["deleted_files"][0], file.display().to_string());
+        assert!(!file.exists());
     }
 }
