@@ -363,7 +363,10 @@ fn compact_bash(result: &Value) -> String {
                 (true, true) => String::new(),
                 (false, true) => stdout.to_string(),
                 (true, false) => format!("[stderr] {stderr}"),
-                (false, false) => format!("{stdout}[stderr] {stderr}"),
+                (false, false) => {
+                    let separator = if stdout.ends_with('\n') { "" } else { "\n" };
+                    format!("{stdout}{separator}[stderr] {stderr}")
+                }
             }
         });
     let mut rendered = format!("bash finished.\nExit code: {exit_code}");
@@ -883,6 +886,27 @@ mod tests {
         assert!(output.contains("Output:\nchecking\n[stderr] warning"));
         assert!(!output.contains("stdout-only"));
         assert!(!output.contains("stderr-only"));
+    }
+
+    #[test]
+    fn compacts_bash_fallback_separates_stdout_and_stderr() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let store = ToolResultStore::new(tempdir.path()).expect("store");
+        let output = store
+            .compact_result(
+                "bash",
+                "tool-bash",
+                &json!({ "program": "sh" }),
+                &json!({
+                    "stdout": "stdout-without-newline",
+                    "stderr": "stderr-line\n",
+                    "exit_code": 1,
+                    "duration_ms": 10,
+                }),
+            )
+            .expect("compact bash result");
+
+        assert!(output.contains("stdout-without-newline\n[stderr] stderr-line"));
     }
 
     #[test]

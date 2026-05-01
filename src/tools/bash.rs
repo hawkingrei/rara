@@ -1272,10 +1272,11 @@ fn append_aggregated_bash_output(
     match stream {
         BashStreamKind::Stdout => aggregated_output.push_str(chunk),
         BashStreamKind::Stderr => {
-            aggregated_output.push_str("[stderr] ");
-            aggregated_output.push_str(chunk);
-            if !chunk.ends_with('\n') {
-                aggregated_output.push('\n');
+            for line in chunk.split_inclusive('\n') {
+                if aggregated_output.is_empty() || aggregated_output.ends_with('\n') {
+                    aggregated_output.push_str("[stderr] ");
+                }
+                aggregated_output.push_str(line);
             }
         }
     }
@@ -1323,8 +1324,8 @@ mod tests {
     use super::{
         BackgroundTaskListTool, BackgroundTaskStatus, BackgroundTaskStatusTool,
         BackgroundTaskStopTool, BackgroundTaskStore, BashCommandInput, BashSandboxPermissions,
-        BashTool, command_env_for_wrapped, read_output_tail, sandbox_command_env,
-        sandbox_output_hint, unsandboxed_execution_warning,
+        BashStreamKind, BashTool, append_aggregated_bash_output, command_env_for_wrapped,
+        read_output_tail, sandbox_command_env, sandbox_output_hint, unsandboxed_execution_warning,
     };
     use crate::sandbox::{SandboxManager, WrappedCommand};
     use crate::tool::{Tool, ToolOutputStream, ToolProgressEvent};
@@ -1840,6 +1841,17 @@ mod tests {
         assert!(aggregated_output.contains("[stderr] err"));
         assert!(result.get("duration_ms").and_then(Value::as_u64).is_some());
     }
+
+    #[test]
+    fn aggregated_stderr_prefixes_only_line_boundaries() {
+        let mut output = String::new();
+        append_aggregated_bash_output(&mut output, BashStreamKind::Stderr, "partial");
+        append_aggregated_bash_output(&mut output, BashStreamKind::Stderr, "-line\nnext");
+        append_aggregated_bash_output(&mut output, BashStreamKind::Stderr, "-line\n");
+
+        assert_eq!(output, "[stderr] partial-line\n[stderr] next-line\n");
+    }
+
     #[tokio::test]
     async fn background_call_returns_task_and_status_reads_output() {
         let temp = tempdir().expect("tempdir");
