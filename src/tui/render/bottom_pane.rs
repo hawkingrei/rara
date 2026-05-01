@@ -375,7 +375,15 @@ fn composer_hint(app: &TuiApp) -> &'static str {
     } else if app.has_queued_follow_up_messages() {
         queued_follow_up_hint()
     } else if app.is_busy() {
-        "busy  wait for the current task to finish"
+        if app
+            .running_task
+            .as_ref()
+            .is_some_and(|task| matches!(task.kind, TaskKind::Query))
+        {
+            "Enter queue  Esc cancel"
+        } else {
+            "Enter queue"
+        }
     } else if app.has_pending_planning_suggestion() {
         "planning suggested  1 enter planning mode  2 continue in execute mode"
     } else if let Some(pending) = app.active_pending_interaction() {
@@ -635,12 +643,16 @@ fn display_char_width(ch: char) -> usize {
 #[cfg(test)]
 mod tests {
     use insta::assert_snapshot;
+    use std::time::Instant;
+
     use ratatui::{layout::Rect, style::Color};
     use tempfile::tempdir;
+    use tokio::sync::mpsc;
 
     use crate::config::ConfigManager;
     use crate::tui::state::{
-        InteractionKind, PendingInteractionSnapshot, RuntimePhase, RuntimeSnapshot, TuiApp,
+        InteractionKind, PendingInteractionSnapshot, RunningTask, RuntimePhase, RuntimeSnapshot,
+        TaskCompletion, TaskKind, TuiApp,
     };
 
     use super::{
@@ -791,6 +803,58 @@ mod tests {
             composer_hint(&app),
             "pending follow-up  will submit after next tool call"
         );
+    }
+
+    #[tokio::test]
+    async fn busy_composer_hint_keeps_only_action_keys() {
+        let temp = tempdir().unwrap();
+        let mut app = TuiApp::new(ConfigManager {
+            path: temp.path().join("config.json"),
+        })
+        .expect("build tui app");
+        app.runtime_phase = RuntimePhase::ProcessingResponse;
+        let (_sender, receiver) = mpsc::unbounded_channel();
+        app.running_task = Some(RunningTask {
+            kind: TaskKind::Query,
+            receiver,
+            handle: tokio::spawn(std::future::pending::<TaskCompletion>()),
+            started_at: Instant::now(),
+            next_heartbeat_after_secs: 2,
+            cancellation_token: None,
+            cancellation_requested: false,
+        });
+
+        assert_eq!(composer_hint(&app), "Enter queue  Esc cancel");
+
+        if let Some(task) = app.running_task.take() {
+            task.handle.abort();
+        }
+    }
+
+    #[tokio::test]
+    async fn busy_composer_hint_hides_cancel_for_non_query_tasks() {
+        let temp = tempdir().unwrap();
+        let mut app = TuiApp::new(ConfigManager {
+            path: temp.path().join("config.json"),
+        })
+        .expect("build tui app");
+        app.runtime_phase = RuntimePhase::ProcessingResponse;
+        let (_sender, receiver) = mpsc::unbounded_channel();
+        app.running_task = Some(RunningTask {
+            kind: TaskKind::Compact,
+            receiver,
+            handle: tokio::spawn(std::future::pending::<TaskCompletion>()),
+            started_at: Instant::now(),
+            next_heartbeat_after_secs: 2,
+            cancellation_token: None,
+            cancellation_requested: false,
+        });
+
+        assert_eq!(composer_hint(&app), "Enter queue");
+
+        if let Some(task) = app.running_task.take() {
+            task.handle.abort();
+        }
     }
 
     #[test]

@@ -300,11 +300,6 @@ fn committed_turn_cell_orders_completion_records_by_interaction_kind() {
             payload: None,
         },
         TranscriptEntry {
-            role: "Plan Decision".into(),
-            message: "Approved the proposed implementation plan.".into(),
-            payload: None,
-        },
-        TranscriptEntry {
             role: "Shell Approval Completed".into(),
             message: "Approved the one-off shell command.".into(),
             payload: None,
@@ -329,17 +324,16 @@ fn committed_turn_cell_orders_completion_records_by_interaction_kind() {
         .join("\n");
 
     let shell_idx = rendered.find(" Shell Approval Completed ").unwrap();
-    let plan_idx = rendered.find(" Plan Decision ").unwrap();
     let planning_question_idx = rendered.find(" Planning Question Answered ").unwrap();
     let generic_question_idx = rendered.find(" Question Answered ").unwrap();
     let agent_idx = rendered
         .find("• Here is the final narrative summary.")
         .unwrap();
 
-    assert!(shell_idx < plan_idx);
-    assert!(plan_idx < planning_question_idx);
+    assert!(shell_idx < planning_question_idx);
     assert!(planning_question_idx < generic_question_idx);
     assert!(generic_question_idx < agent_idx);
+    assert!(!rendered.contains(" Plan Decision "));
 }
 
 #[test]

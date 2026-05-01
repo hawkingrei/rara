@@ -3,7 +3,6 @@ use crate::tui::state::TranscriptEntry;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) enum CommittedCompletionKind {
     ShellApprovalCompleted,
-    PlanDecision,
     PlanningQuestionAnswered,
     ExplorationQuestionAnswered,
     SubAgentQuestionAnswered,
@@ -48,7 +47,6 @@ pub(super) fn narrative_entries<'a>(
 pub(super) fn completion_role_kind(role: &str) -> Option<CommittedCompletionKind> {
     match role {
         "Shell Approval Completed" => Some(CommittedCompletionKind::ShellApprovalCompleted),
-        "Plan Decision" => Some(CommittedCompletionKind::PlanDecision),
         "Planning Question Answered" => Some(CommittedCompletionKind::PlanningQuestionAnswered),
         "Exploration Question Answered" => {
             Some(CommittedCompletionKind::ExplorationQuestionAnswered)

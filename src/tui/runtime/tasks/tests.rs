@@ -152,6 +152,63 @@ impl LlmBackend for ExitPlanModeBackend {
     }
 }
 
+fn create_test_agent(temp: &tempfile::TempDir) -> Agent {
+    let workspace_root = temp.path().join("workspace");
+    let rara_dir = workspace_root.join(".rara");
+    std::fs::create_dir_all(rara_dir.join("rollouts")).expect("rollouts");
+    std::fs::create_dir_all(rara_dir.join("sessions")).expect("sessions");
+    std::fs::create_dir_all(rara_dir.join("tool-results")).expect("tool results");
+
+    let workspace = Arc::new(WorkspaceMemory::from_paths(
+        workspace_root.clone(),
+        rara_dir.clone(),
+    ));
+    let session_manager = Arc::new(SessionManager {
+        storage_dir: rara_dir.join("rollouts"),
+        legacy_storage_dir: rara_dir.join("sessions"),
+    });
+    Agent::new(
+        ToolManager::new(),
+        Arc::new(crate::llm::MockLlm),
+        Arc::new(VectorDB::new(
+            &rara_dir.join("lancedb").display().to_string(),
+        )),
+        session_manager,
+        workspace,
+    )
+}
+
+fn install_completed_query_task(app: &mut TuiApp, agent: Agent, result: anyhow::Result<()>) {
+    let (_sender, receiver) = mpsc::unbounded_channel();
+    let handle = tokio::spawn(async move { TaskCompletion::Query { agent, result } });
+    app.running_task = Some(RunningTask {
+        kind: TaskKind::Query,
+        receiver,
+        handle,
+        started_at: Instant::now(),
+        next_heartbeat_after_secs: 2,
+        cancellation_token: None,
+        cancellation_requested: false,
+    });
+}
+
+async fn finish_ready_query_task(app: &mut TuiApp, agent_slot: &mut Option<Agent>) {
+    for _ in 0..20 {
+        finish_running_task_if_ready(app, agent_slot)
+            .await
+            .expect("finish task");
+        if app
+            .running_task
+            .as_ref()
+            .is_some_and(|task| matches!(task.kind, TaskKind::Query))
+            && !app.has_queued_follow_up_messages()
+        {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
 #[test]
 fn browser_oauth_is_rejected_before_task_start_in_ssh() {
     let temp = tempdir().unwrap();
@@ -332,6 +389,56 @@ async fn queued_follow_ups_start_as_one_multiline_turn() {
         app.active_turn.entries[0].message,
         "first line\n\nsecond line"
     );
+
+    if let Some(task) = app.running_task.take() {
+        task.handle.abort();
+    }
+}
+
+#[tokio::test]
+async fn queued_follow_up_starts_after_query_failure() {
+    let temp = tempdir().unwrap();
+    let mut app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("build tui app");
+    let agent = create_test_agent(&temp);
+    app.queue_follow_up_message("inspect the failure");
+    install_completed_query_task(&mut app, agent, Err(anyhow::anyhow!("backend failed")));
+
+    let mut agent_slot = None;
+    finish_ready_query_task(&mut app, &mut agent_slot).await;
+
+    assert_eq!(app.queued_follow_up_count(), 0);
+    assert!(app.running_task.is_some());
+    assert_eq!(app.active_turn.entries.len(), 1);
+    assert_eq!(app.active_turn.entries[0].role, "You");
+    assert_eq!(app.active_turn.entries[0].message, "inspect the failure");
+
+    if let Some(task) = app.running_task.take() {
+        task.handle.abort();
+    }
+}
+
+#[tokio::test]
+async fn queued_follow_up_starts_after_query_cancellation() {
+    let temp = tempdir().unwrap();
+    let mut app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("build tui app");
+    let agent = create_test_agent(&temp);
+    app.queue_follow_up_message("continue after cancel");
+    install_completed_query_task(&mut app, agent, Err(anyhow::anyhow!("cancelled by user")));
+
+    let mut agent_slot = None;
+    finish_ready_query_task(&mut app, &mut agent_slot).await;
+
+    assert_eq!(app.queued_follow_up_count(), 0);
+    assert!(app.running_task.is_some());
+    assert_eq!(app.active_turn.entries.len(), 1);
+    assert_eq!(app.active_turn.entries[0].role, "You");
+    assert_eq!(app.active_turn.entries[0].message, "continue after cancel");
 
     if let Some(task) = app.running_task.take() {
         task.handle.abort();

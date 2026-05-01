@@ -299,6 +299,42 @@ async fn replace_rejects_partial_read_state() {
 }
 
 #[tokio::test]
+async fn partial_read_does_not_downgrade_existing_full_read_state() {
+    let tempdir = tempfile::tempdir().expect("tempdir");
+    let path = tempdir.path().join("sample.txt");
+    std::fs::write(&path, "one\ntwo\nthree\n").expect("write sample");
+    let read_state = Arc::new(FileReadState::default());
+    let read_tool = ReadFileTool::new(read_state.clone());
+    let replace_tool = ReplaceTool::new(read_state);
+
+    read_tool
+        .call(json!({ "path": path.display().to_string() }))
+        .await
+        .expect("full read");
+    read_tool
+        .call(json!({
+            "path": path.display().to_string(),
+            "offset": 2,
+            "limit": 1
+        }))
+        .await
+        .expect("partial read");
+
+    replace_tool
+        .call(json!({
+            "path": path.display().to_string(),
+            "old_string": "two",
+            "new_string": "second"
+        }))
+        .await
+        .expect("replace after full read and later partial read");
+    assert_eq!(
+        std::fs::read_to_string(&path).expect("read updated"),
+        "one\nsecond\nthree\n"
+    );
+}
+
+#[tokio::test]
 async fn replace_rejects_file_changed_since_read() {
     let tempdir = tempfile::tempdir().expect("tempdir");
     let path = tempdir.path().join("sample.txt");

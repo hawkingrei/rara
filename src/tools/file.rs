@@ -35,15 +35,22 @@ impl FileReadState {
     ) -> Result<(), ToolError> {
         let key = canonical_existing_path(path)?;
         let metadata = fs::metadata(&key)?;
+        let modified = metadata.modified()?;
+        let is_partial = output.is_partial();
+        let mut files = self.files.lock().expect("file read state lock");
+        if is_partial {
+            if let Some(existing) = files.get(&key) {
+                if !existing.is_partial && existing.modified == modified {
+                    return Ok(());
+                }
+            }
+        }
         let entry = FileReadEntry {
-            modified: metadata.modified()?,
+            modified,
             content,
-            is_partial: output.truncated || output.start_line != 1 || !output.total_lines_exact,
+            is_partial,
         };
-        self.files
-            .lock()
-            .expect("file read state lock")
-            .insert(key, entry);
+        files.insert(key, entry);
         Ok(())
     }
 
@@ -215,6 +222,12 @@ pub(crate) struct ReadFileOutput {
     next_offset: Option<usize>,
     line_truncated: bool,
     bytes_read: usize,
+}
+
+impl ReadFileOutput {
+    fn is_partial(&self) -> bool {
+        self.truncated || self.start_line != 1 || !self.total_lines_exact
+    }
 }
 
 struct BoundedLineRead {
