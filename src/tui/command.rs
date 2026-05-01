@@ -372,12 +372,11 @@ fn render_memory_selection(app: &TuiApp) -> String {
         .map(|v| format!("{v}t"))
         .unwrap_or_else(|| "unlimited".to_string());
 
-    let render_items =
-        |items: &[crate::context::MemorySelectionItemContextEntry]| -> String {
-            if items.is_empty() {
-                return "    (none)".to_string();
-            }
-            items
+    let render_items = |items: &[crate::context::MemorySelectionItemContextEntry]| -> String {
+        if items.is_empty() {
+            return "    (none)".to_string();
+        }
+        items
             .iter()
             .enumerate()
             .map(|(idx, item)| {
@@ -405,7 +404,7 @@ fn render_memory_selection(app: &TuiApp) -> String {
             })
             .collect::<Vec<_>>()
             .join("\n")
-        };
+    };
 
     format!(
         "Memory Selection  (budget: {budget})\n  ├── selected:\n{}\n  ├── available:\n{}\n  └── dropped:\n{}",
@@ -420,7 +419,13 @@ fn truncate_preview(text: &str, max_len: usize) -> String {
     if condensed.chars().count() <= max_len {
         condensed
     } else {
-        format!("{}…", &condensed[..condensed.char_indices().nth(max_len - 1).map_or(max_len - 1, |(i, _)| i)])
+        format!(
+            "{}…",
+            &condensed[..condensed
+                .char_indices()
+                .nth(max_len - 1)
+                .map_or(max_len - 1, |(i, _)| i)]
+        )
     }
 }
 
