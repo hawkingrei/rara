@@ -243,6 +243,100 @@ fn active_turn_cell_does_not_render_completed_plan_decision() {
 }
 
 #[test]
+fn active_turn_cell_does_not_render_completed_shell_approval_while_live() {
+    let temp = tempdir().unwrap();
+    let mut app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("build tui app");
+    app.active_turn = TranscriptTurn {
+        entries: vec![
+            TranscriptEntry {
+                role: "You".into(),
+                message: "Run the migration helper".into(),
+                payload: None,
+            },
+            TranscriptEntry {
+                role: "Shell Approval Completed".into(),
+                message: "Bash approval: Approved once for command: bash ./scripts/migrate.sh"
+                    .into(),
+                payload: None,
+            },
+            TranscriptEntry {
+                role: "Running".into(),
+                message: "bash ./scripts/migrate.sh".into(),
+                payload: None,
+            },
+        ],
+    };
+    app.set_runtime_phase(
+        RuntimePhase::ProcessingResponse,
+        Some("resuming after approval".into()),
+    );
+
+    let rendered = ActiveTurnCell::new(&app, Some(Path::new(".")))
+        .display_lines(100)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(!rendered.contains(" Shell Approval Completed "));
+    assert!(!rendered.contains("Approved once for command"));
+    assert!(rendered.contains(" Running "));
+    assert!(rendered.contains("bash ./scripts/migrate.sh"));
+}
+
+#[test]
+fn active_turn_cell_falls_back_to_previous_completion_when_shell_approval_is_live() {
+    let temp = tempdir().unwrap();
+    let mut app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("build tui app");
+    app.active_turn = TranscriptTurn {
+        entries: vec![
+            TranscriptEntry {
+                role: "You".into(),
+                message: "Answer and run".into(),
+                payload: None,
+            },
+            TranscriptEntry {
+                role: "Question Answered".into(),
+                message: "User answered: yes".into(),
+                payload: None,
+            },
+            TranscriptEntry {
+                role: "Shell Approval Completed".into(),
+                message: "Bash approval: Approved once for command: cargo check".into(),
+                payload: None,
+            },
+            TranscriptEntry {
+                role: "Running".into(),
+                message: "cargo check".into(),
+                payload: None,
+            },
+        ],
+    };
+    app.set_runtime_phase(
+        RuntimePhase::ProcessingResponse,
+        Some("resuming after approval".into()),
+    );
+
+    let rendered = ActiveTurnCell::new(&app, Some(Path::new(".")))
+        .display_lines(100)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(rendered.contains(" Question Answered "));
+    assert!(rendered.contains("User answered: yes"));
+    assert!(!rendered.contains(" Shell Approval Completed "));
+    assert!(!rendered.contains("Approved once for command"));
+}
+
+#[test]
 fn active_turn_cell_keeps_streaming_response_without_responding_card() {
     let temp = tempdir().unwrap();
     let mut app = TuiApp::new(ConfigManager {

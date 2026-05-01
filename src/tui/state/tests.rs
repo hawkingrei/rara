@@ -94,6 +94,67 @@ fn prioritizes_active_pending_interaction_in_ui_order() {
 }
 
 #[test]
+fn clear_pending_command_approval_removes_only_shell_approval() {
+    let dir = tempdir().expect("tempdir");
+    let cm = ConfigManager {
+        path: dir.path().join("config.json"),
+    };
+    let mut app = TuiApp::new(cm).expect("app");
+    app.config = RaraConfig::default();
+    app.snapshot = RuntimeSnapshot {
+        pending_interactions: vec![
+            PendingInteractionSnapshot {
+                kind: InteractionKind::RequestInput,
+                title: "Question".to_string(),
+                summary: "Need a value".to_string(),
+                options: Vec::new(),
+                note: None,
+                approval: None,
+                source: Some("worker".to_string()),
+            },
+            PendingInteractionSnapshot {
+                kind: InteractionKind::Approval,
+                title: "Pending Approval".to_string(),
+                summary: "run cargo test".to_string(),
+                options: Vec::new(),
+                note: None,
+                approval: None,
+                source: None,
+            },
+            PendingInteractionSnapshot {
+                kind: InteractionKind::PlanApproval,
+                title: "Plan Ready".to_string(),
+                summary: "Review the plan.".to_string(),
+                options: Vec::new(),
+                note: None,
+                approval: None,
+                source: None,
+            },
+        ],
+        ..RuntimeSnapshot::default()
+    };
+
+    assert!(app.pending_command_approval().is_some());
+
+    app.clear_pending_command_approval();
+
+    assert!(app.pending_command_approval().is_none());
+    assert_eq!(app.snapshot.pending_interactions.len(), 2);
+    assert!(
+        app.snapshot
+            .pending_interactions
+            .iter()
+            .any(|item| item.kind == InteractionKind::RequestInput)
+    );
+    assert!(
+        app.snapshot
+            .pending_interactions
+            .iter()
+            .any(|item| item.kind == InteractionKind::PlanApproval)
+    );
+}
+
+#[test]
 fn sync_snapshot_reports_effective_network_access_for_pending_approval() {
     let dir = tempdir().expect("tempdir");
     let root = dir.path().to_path_buf();
