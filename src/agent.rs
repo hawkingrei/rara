@@ -639,9 +639,7 @@ impl Agent {
                 && (request.requires_escalated_permissions()
                     || matches!(self.bash_approval_mode, BashApprovalMode::Suggestion))
             {
-                if !request.requires_escalated_permissions()
-                    && (request.is_read_only() || self.is_bash_prefix_approved(request))
-                {
+                if request.is_read_only() || self.is_bash_prefix_approved(request) {
                     report(AgentEvent::Status(format!(
                         "Shell command allowed by policy: {}",
                         request.summary()
