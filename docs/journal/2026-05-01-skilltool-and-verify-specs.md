@@ -40,5 +40,8 @@ budget-aware prompt rendering.
 
 - Add `.agents/skills/verify/SKILL.md`.
 - Extend `rara-skills` with frontmatter metadata, scope, errors, and overridden-skill reporting.
+- Keep skill metadata structured in the runtime, following Codex's model-visible
+  `name`, `description`, and path list. Markdown headings are a legacy fallback
+  parsed by the loader, not something the model should infer from raw Markdown.
 - Extend `skill` tool responses with source metadata and optional args.
 - Surface skill roots, overrides, parse errors, and invoked skills in `/context` or `/status`.

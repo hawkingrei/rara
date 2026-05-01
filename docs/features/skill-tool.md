@@ -70,8 +70,13 @@ For compatibility:
 
 - `SKILL.md` is the preferred format.
 - Legacy `name.md` remains supported.
-- Frontmatter `name` and `description` should override path-derived name and first-heading
-  description.
+- Frontmatter `name` is the invocation identifier and should override the path-derived name.
+- Frontmatter `title` or `display_name` is a human-facing display label when present.
+- Frontmatter `description` is the model-visible capability summary and should override
+  Markdown-derived fallback text.
+- For legacy markdown without frontmatter, the first Markdown heading is a display-title and
+  description fallback. The loader should extract this into structured metadata; the model should
+  not be asked to infer it from raw Markdown.
 - Malformed frontmatter should produce a skill load error visible in `/context` or `/status`.
 
 Optional metadata to preserve for future use:

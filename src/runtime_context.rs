@@ -73,6 +73,7 @@ pub(crate) async fn initialize_rara_context(
         .into_iter()
         .map(|skill| PromptSkillSummary {
             name: skill.name,
+            title: skill.title,
             description: skill.description,
             display_path: skill.display_path,
         })

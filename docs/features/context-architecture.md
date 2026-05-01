@@ -189,6 +189,9 @@ Before full vector-backed retrieval lands, RARA should still treat memory
 selection as an explicit runtime object instead of letting the assembler make
 ad hoc inclusion decisions inline.
 
+The canonical contract is `docs/features/memory-selection.md`. This section
+keeps the high-level architecture relationship only.
+
 The first cut of `MemorySelection` should:
 
 - collect the currently selected memory-like inputs;
@@ -221,6 +224,10 @@ This lets `/context` explain:
 - what remained available but not injected;
 - which parts of the thread/workspace surface are still placeholder or
   readiness-only paths.
+
+`/context` should be treated as a high-priority delivery surface for this
+contract, because memory selection cannot be safely expanded without a clear
+debug view of selected, available, dropped, and budgeted sources.
 
 RARA should therefore avoid:
 
