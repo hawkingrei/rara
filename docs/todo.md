@@ -72,6 +72,8 @@ Priority order for this phase:
 - [ ] Unify `discover_prompt_sources()` and TUI `/status` source reporting so displayed prompt sources match the actual injected sources.
 - [ ] Preserve stable top-level prompt/context prefixes while adding repo context, skills, hooks, imported agents, and memory sources; new inputs should enter through structured source objects, `MemorySelection`, lifecycle events, or thread-owned agent profiles instead of ad hoc prompt text.
 - [ ] Design a project-scoped extension surface that can ingest Claude/Codex-style repo customizations from `.claude/agents/`, `.claude/hooks/`, and `.agents/skills/`, with explicit precedence and compatibility rules before adding runtime execution.
+- [ ] Add a Claude-style `verify` skill and project-local `verifier-*` skill convention from `docs/features/verify-skill.md`.
+- [ ] Evolve `SkillTool` toward the Codex/Claude-aligned contract in `docs/features/skill-tool.md`: frontmatter metadata, source scopes, load errors, overridden-skill visibility, optional args, invocation tracking, and budget-aware available-skill summaries.
 - [ ] Define and surface skill precedence/override behavior across home, repo, nested repo roots, and workspace-local skill roots.
 - [ ] Extend `SkillManager::list_summaries()` (or equivalent status output) with source precedence and overridden-skill visibility so conflicts are debuggable.
 
@@ -97,6 +99,8 @@ Priority order for this phase:
 ## TUI / UX Parity
 
 - [ ] Continue improving transcript rendering stability across long and streaming sessions: reduce scroll jumps and flicker, strengthen bottom anchoring, and prevent stale transient sections from reappearing after their live phase ends.
+- [ ] Implement the session-scoped Todo runtime from `docs/features/todo-runtime.md`, including `todo_write`, `.rara/sessions/<session_id>/todo.json`, context/status surfacing, restore behavior, and compact TUI update cards.
+- [ ] Implement the `/review` slash command from `docs/features/slash-review-command.md`, including parser/help support, generated review prompt, and runtime command tests.
 - [ ] Add Codex-style non-bracketed paste-burst detection for terminals that deliver pasted text as fast `Char` / `Enter` key streams instead of `Event::Paste`, so embedded newlines are inserted into the composer instead of submitting partial turns.
 - [ ] Improve long-running task progress reporting so the TUI heartbeat reflects the active phase (`sending prompt`, `streaming response`, `running tool`, `waiting for approval`, `checkpointing`) instead of resetting to a generic prompt-sending notice during long tool execution.
 - [ ] Rework long `Exploring` / `Explored` handling to follow Codex more closely: keep live exploration compact and summarize committed exploration into a source-aware digest instead of dumping long raw traces.

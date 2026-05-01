@@ -85,7 +85,9 @@ The target long-term model is a Claude Code-style planning workflow adapted to R
 - The plan artifact is not a todo file.
 - Plan content answers what will change, why, where, and how it will be verified.
 - Todo/checklist state tracks execution progress after approval.
-- A future todo artifact may live beside the plan, such as `.rara/sessions/<session_id>/todo.json`, but it should not replace `plan.md`.
+- The todo artifact lives beside the plan as `.rara/sessions/<session_id>/todo.json`; see
+  [Todo Runtime](todo-runtime.md) for the detailed contract.
+- Todo state must not replace `plan.md` or change plan approval state.
 
 ### State Machine
 
