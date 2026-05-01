@@ -66,7 +66,7 @@ impl Tool for ApplyPatchTool {
     }
 
     fn description(&self) -> &str {
-        "Apply structured file edits using Begin Patch syntax. Prefer this for editing existing files. For update or delete operations, read the full target file first."
+        "Apply structured file edits using Begin Patch syntax. Prefer this for editing existing files. Update operations verify hunks against current file contents."
     }
 
     fn input_schema(&self) -> Value {
@@ -96,9 +96,7 @@ impl Tool for ApplyPatchTool {
             .and_then(Value::as_bool)
             .unwrap_or(false);
         let ops = parse_patch(patch)?;
-        if let Some(read_state) = &self.read_state {
-            validate_patch_read_state(read_state, &ops)?;
-        }
+        validate_patch_update_context(&ops)?;
         let mut stats = PatchStats::default();
         let mut previews = Vec::new();
 
@@ -207,15 +205,20 @@ impl Tool for ApplyPatchTool {
     }
 }
 
-fn validate_patch_read_state(
-    read_state: &SharedFileReadState,
-    ops: &[PatchOp],
-) -> Result<(), ToolError> {
+fn validate_patch_update_context(ops: &[PatchOp]) -> Result<(), ToolError> {
     for op in ops {
-        match op {
-            PatchOp::Add { .. } => {}
-            PatchOp::Delete { path } | PatchOp::Update { path, .. } => {
-                read_state.validate_existing_edit(path)?;
+        if let PatchOp::Update { path, chunks, .. } = op {
+            if chunks.is_empty() {
+                return Err(ToolError::ExecutionFailed(format!(
+                    "Update patch for {path} must include at least one hunk"
+                )));
+            }
+            for chunk in chunks {
+                if !chunk.lines.iter().any(|line| line.kind != '+') {
+                    return Err(ToolError::ExecutionFailed(format!(
+                        "Patch hunk for {path} must include at least one context or removed line"
+                    )));
+                }
             }
         }
     }
@@ -503,28 +506,22 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn update_patch_requires_prior_full_read_when_state_is_enabled() {
+    async fn update_patch_allows_partial_read_when_hunk_matches_current_file() {
         let dir = tempfile::tempdir().expect("tempdir");
         let file = dir.path().join("sample.txt");
         std::fs::write(&file, "hello\nworld\n").expect("write");
         let read_state = Arc::new(FileReadState::default());
+        let read_tool = ReadFileTool::new(read_state.clone());
         let patch_tool = ApplyPatchTool::new(read_state.clone());
-        let patch = format!(
-            "*** Begin Patch\n*** Update File: {}\n@@\n-hello\n+hi\n world\n*** End Patch",
-            file.display()
-        );
 
-        let error = patch_tool
-            .call(json!({ "patch": patch }))
-            .await
-            .expect_err("patch should require read");
-        assert!(error.to_string().contains("File has not been read yet"));
-
-        let read_tool = ReadFileTool::new(read_state);
         read_tool
-            .call(json!({ "path": file.display().to_string() }))
+            .call(json!({
+                "path": file.display().to_string(),
+                "offset": 1,
+                "limit": 1
+            }))
             .await
-            .expect("read file");
+            .expect("partial read");
         let patch = format!(
             "*** Begin Patch\n*** Update File: {}\n@@\n-hello\n+hi\n world\n*** End Patch",
             file.display()
@@ -532,7 +529,87 @@ mod tests {
         patch_tool
             .call(json!({ "patch": patch }))
             .await
-            .expect("patch after read");
+            .expect("patch after partial read");
         assert_eq!(std::fs::read_to_string(&file).expect("read"), "hi\nworld\n");
+    }
+
+    #[tokio::test]
+    async fn update_patch_rejects_add_only_hunk_without_current_context() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("sample.txt");
+        std::fs::write(&file, "hello\n").expect("write");
+        let tool = ApplyPatchTool::default();
+
+        let error = tool
+            .call(json!({
+                "patch": format!(
+                    "*** Begin Patch\n*** Update File: {}\n@@\n+inserted\n*** End Patch",
+                    file.display()
+                )
+            }))
+            .await
+            .expect_err("add-only update hunk should be rejected");
+
+        assert!(
+            error
+                .to_string()
+                .contains("must include at least one context or removed line")
+        );
+        assert_eq!(std::fs::read_to_string(&file).expect("read"), "hello\n");
+    }
+
+    #[tokio::test]
+    async fn update_patch_rejects_empty_hunks() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("sample.txt");
+        let moved = dir.path().join("moved.txt");
+        std::fs::write(&file, "hello\n").expect("write");
+        let tool = ApplyPatchTool::default();
+
+        let error = tool
+            .call(json!({
+                "patch": format!(
+                    "*** Begin Patch\n*** Update File: {}\n*** Move to: {}\n*** End Patch",
+                    file.display(),
+                    moved.display()
+                )
+            }))
+            .await
+            .expect_err("empty update hunk should be rejected");
+
+        assert!(error.to_string().contains("must include at least one hunk"));
+        assert!(file.exists());
+        assert!(!moved.exists());
+    }
+
+    #[tokio::test]
+    async fn delete_patch_allows_partial_read_when_state_is_enabled() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("sample.txt");
+        std::fs::write(&file, "hello\nworld\n").expect("write");
+        let read_state = Arc::new(FileReadState::default());
+        let read_tool = ReadFileTool::new(read_state.clone());
+        let patch_tool = ApplyPatchTool::new(read_state);
+
+        read_tool
+            .call(json!({
+                "path": file.display().to_string(),
+                "offset": 1,
+                "limit": 1
+            }))
+            .await
+            .expect("partial read");
+
+        let result = patch_tool
+            .call(json!({
+                "patch": format!("*** Begin Patch\n*** Delete File: {}\n*** End Patch", file.display())
+            }))
+            .await
+            .expect("delete after partial read");
+
+        assert_eq!(result["status"], "applied");
+        assert_eq!(result["files_changed"], 1);
+        assert_eq!(result["deleted_files"][0], file.display().to_string());
+        assert!(!file.exists());
     }
 }
