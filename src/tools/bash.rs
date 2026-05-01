@@ -11,6 +11,7 @@ use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::time::Instant;
 use tokio::fs;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 use tokio::process::{Child, Command};
@@ -858,6 +859,7 @@ impl Tool for BashTool {
             .envs(&command_env)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        let started_at = Instant::now();
         let mut child = command.spawn().map_err(|err| {
             if wrapped.sandboxed {
                 ToolError::ExecutionFailed(format!(
@@ -920,10 +922,12 @@ impl Tool for BashTool {
 
         let mut stdout_text = String::new();
         let mut stderr_text = String::new();
+        let mut aggregated_output = String::new();
         let mut live_streamed = false;
         if !wrapped.sandboxed {
             let chunk = unsandboxed_execution_warning(&wrapped);
             stderr_text.push_str(&chunk);
+            append_aggregated_bash_output(&mut aggregated_output, BashStreamKind::Stderr, &chunk);
             live_streamed = true;
             report(ToolProgressEvent::Output {
                 stream: ToolOutputStream::Stderr,
@@ -939,6 +943,7 @@ impl Tool for BashTool {
                 BashStreamKind::Stdout => stdout_text.push_str(&chunk),
                 BashStreamKind::Stderr => stderr_text.push_str(&chunk),
             }
+            append_aggregated_bash_output(&mut aggregated_output, stream, &chunk);
             report(ToolProgressEvent::Output {
                 stream: stream.output_stream(),
                 chunk,
@@ -958,13 +963,17 @@ impl Tool for BashTool {
         if wrapped.sandboxed {
             if let Some(hint) = sandbox_output_hint(&stderr_text) {
                 stderr_text.push_str(hint);
+                append_aggregated_bash_output(&mut aggregated_output, BashStreamKind::Stderr, hint);
             }
         }
+        let duration_ms = started_at.elapsed().as_millis() as u64;
 
         Ok(json!({
             "stdout": stdout_text,
             "stderr": stderr_text,
+            "aggregated_output": aggregated_output,
             "exit_code": status.code(),
+            "duration_ms": duration_ms,
             "live_streamed": live_streamed,
             "sandboxed": wrapped.sandboxed,
             "sandbox_backend": wrapped.sandbox_backend,
@@ -1250,6 +1259,26 @@ where
         }
     }
     Ok(())
+}
+
+fn append_aggregated_bash_output(
+    aggregated_output: &mut String,
+    stream: BashStreamKind,
+    chunk: &str,
+) {
+    if chunk.is_empty() {
+        return;
+    }
+    match stream {
+        BashStreamKind::Stdout => aggregated_output.push_str(chunk),
+        BashStreamKind::Stderr => {
+            aggregated_output.push_str("[stderr] ");
+            aggregated_output.push_str(chunk);
+            if !chunk.ends_with('\n') {
+                aggregated_output.push('\n');
+            }
+        }
+    }
 }
 
 fn sandbox_output_hint(stderr: &str) -> Option<&'static str> {
@@ -1723,6 +1752,11 @@ mod tests {
             Some("direct")
         );
         assert_eq!(result.get("stdout").and_then(Value::as_str), Some("direct"));
+        assert_eq!(
+            result.get("aggregated_output").and_then(Value::as_str),
+            Some("direct")
+        );
+        assert!(result.get("duration_ms").and_then(Value::as_u64).is_some());
         assert!(
             result
                 .get("stderr")
@@ -1798,6 +1832,13 @@ mod tests {
             result.get("sandbox_backend").and_then(Value::as_str),
             Some(wrapped.sandbox_backend.as_str())
         );
+        let aggregated_output = result
+            .get("aggregated_output")
+            .and_then(Value::as_str)
+            .expect("aggregated output");
+        assert!(aggregated_output.contains("out"));
+        assert!(aggregated_output.contains("[stderr] err"));
+        assert!(result.get("duration_ms").and_then(Value::as_u64).is_some());
     }
     #[tokio::test]
     async fn background_call_returns_task_and_status_reads_output() {
