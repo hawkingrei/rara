@@ -858,10 +858,6 @@ impl InteractionCompletionKind {
     }
 }
 
-fn completion_role_color(role: &str) -> Option<Color> {
-    InteractionCompletionKind::from_role(role).map(|kind| kind.color())
-}
-
 fn completion_role_kind(role: &str) -> Option<InteractionCompletionKind> {
     InteractionCompletionKind::from_role(role)
 }
@@ -1049,10 +1045,12 @@ impl ActiveCell for ActiveTurnCell<'_> {
                 )
             })
             .map(|entry| (entry.role.as_str(), entry.message.as_str()));
-        let latest_completion = current_turn
-            .iter()
-            .rev()
-            .find(|entry| completion_role_color(entry.role.as_str()).is_some());
+        let latest_completion = current_turn.iter().rev().find(|entry| {
+            let Some(kind) = completion_role_kind(entry.role.as_str()) else {
+                return false;
+            };
+            !(turn_live && matches!(kind, InteractionCompletionKind::ShellApprovalCompleted))
+        });
         let mut cells: Vec<Box<dyn HistoryCell + '_>> = Vec::new();
         let has_live_exploration = !self.app.active_live.exploration_actions.is_empty()
             || !self.app.active_live.exploration_notes.is_empty();

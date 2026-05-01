@@ -1557,6 +1557,13 @@ impl TuiApp {
             .find(|item| item.kind == InteractionKind::Approval)
     }
 
+    pub fn clear_pending_command_approval(&mut self) {
+        self.snapshot
+            .pending_interactions
+            .retain(|item| item.kind != InteractionKind::Approval);
+        self.persist_runtime_state();
+    }
+
     pub fn pending_plan_approval_interaction(&self) -> Option<&PendingInteractionSnapshot> {
         self.snapshot
             .pending_interactions

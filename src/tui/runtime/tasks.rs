@@ -189,6 +189,7 @@ pub(super) fn start_pending_approval_task(
         BashApprovalDecision::Suggestion => "suggestion only",
     };
     app.notice = Some(format!("Answering approval request: {selection_label}."));
+    app.clear_pending_command_approval();
     app.set_runtime_phase(
         RuntimePhase::ProcessingResponse,
         Some("resuming after approval".into()),
