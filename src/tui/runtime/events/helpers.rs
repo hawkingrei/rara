@@ -648,7 +648,6 @@ pub(super) fn format_tool_result(name: &str, content: &str) -> String {
         }
         return summary;
     }
-
     if name == "apply_patch"
         && let Ok(value) = serde_json::from_str::<serde_json::Value>(content)
     {
@@ -685,8 +684,16 @@ pub(super) fn format_tool_result(name: &str, content: &str) -> String {
     {
         let summary = normalize_tool_result_summary(name, summary);
         let mut rendered = format!("{name}: {summary}");
-        if content.contains("<persisted-output>") {
-            rendered.push_str("\\nfull result stored on disk");
+        if content.contains("\nfull result:") {
+            let remainder = content.lines().skip(1).collect::<Vec<_>>().join("\n");
+            if !remainder.trim().is_empty() {
+                rendered.push('\n');
+                rendered.push_str(remainder.trim_end());
+            }
+        } else if content.contains("<persisted-output>") {
+            rendered.push_str("\nfull result stored on disk");
+        } else if content.contains("full_result_path=") {
+            rendered.push_str("\nfull result stored on disk");
         } else if let Some(preview) = tool_result_preview(content) {
             rendered.push_str(&format!("\n{preview}"));
         }

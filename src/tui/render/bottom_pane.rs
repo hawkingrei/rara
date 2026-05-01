@@ -9,8 +9,7 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use super::super::custom_terminal::Frame;
 use super::super::interaction_text::pending_interaction_hint_text;
 use super::super::queued_input::{
-    pending_follow_up_heading, pending_follow_up_hint, queued_follow_up_heading,
-    queued_follow_up_hint,
+    pending_follow_up_hint, queued_follow_up_hint, queued_follow_up_sections,
 };
 use super::super::state::char_offset_to_byte_index;
 use super::super::state::{ActivePendingInteractionKind, TaskKind, TuiApp};
@@ -218,9 +217,7 @@ fn render_composer(f: &mut Frame, app: &TuiApp, area: Rect) -> Option<(u16, u16)
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(2), Constraint::Length(1)])
         .split(area);
-    let composer_lines = if app.input.is_empty() && app.has_queued_follow_up_messages() {
-        queued_follow_up_preview_lines(app)
-    } else if app.input.is_empty() {
+    let composer_lines = if app.input.is_empty() {
         vec![Line::from(vec![
             Span::styled(
                 "› ",
@@ -290,44 +287,12 @@ fn render_composer(f: &mut Frame, app: &TuiApp, area: Rect) -> Option<(u16, u16)
 fn queued_follow_up_preview_lines(app: &TuiApp) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
 
-    if let Some(preview) = app
-        .pending_follow_up_preview()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        lines.push(Line::from(vec![
-            Span::styled(
-                "› ",
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                pending_follow_up_heading(),
-                Style::default().fg(Color::DarkGray),
-            ),
-        ]));
-        lines.push(Line::from(vec![
-            Span::raw("  "),
-            Span::raw(preview.to_string()),
-        ]));
-        let remaining = app.pending_follow_up_count().saturating_sub(1);
-        if remaining > 0 {
-            lines.push(Line::from(vec![
-                Span::raw("  "),
-                Span::styled(
-                    format!("... {remaining} more pending"),
-                    Style::default().fg(Color::DarkGray),
-                ),
-            ]));
-        }
-    }
-
-    if let Some(preview) = app
-        .queued_end_of_turn_preview()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
+    for section in queued_follow_up_sections(
+        app.pending_follow_up_preview(),
+        app.pending_follow_up_count(),
+        app.queued_end_of_turn_preview(),
+        app.queued_follow_up_messages.len(),
+    ) {
         if !lines.is_empty() {
             lines.push(Line::from(""));
         }
@@ -338,21 +303,17 @@ fn queued_follow_up_preview_lines(app: &TuiApp) -> Vec<Line<'static>> {
                     .fg(Color::Cyan)
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::styled(
-                queued_follow_up_heading(),
-                Style::default().fg(Color::DarkGray),
-            ),
+            Span::styled(section.title, Style::default().fg(Color::DarkGray)),
         ]));
         lines.push(Line::from(vec![
             Span::raw("  "),
-            Span::raw(preview.to_string()),
+            Span::raw(section.preview),
         ]));
-        let remaining = app.queued_follow_up_messages.len().saturating_sub(1);
-        if remaining > 0 {
+        if section.remaining > 0 {
             lines.push(Line::from(vec![
                 Span::raw("  "),
                 Span::styled(
-                    format!("... {remaining} more queued"),
+                    format!("... {} {}", section.remaining, section.remaining_label),
                     Style::default().fg(Color::DarkGray),
                 ),
             ]));
@@ -370,6 +331,8 @@ fn composer_hint(app: &TuiApp) -> &'static str {
         ""
     } else if app.input.trim_start().starts_with('/') {
         "slash command  Enter run  Esc close"
+    } else if let Some(pending) = app.active_pending_interaction() {
+        pending_interaction_hint_text(pending.kind)
     } else if app.has_pending_follow_up_messages() {
         pending_follow_up_hint()
     } else if app.has_queued_follow_up_messages() {
@@ -386,8 +349,6 @@ fn composer_hint(app: &TuiApp) -> &'static str {
         }
     } else if app.has_pending_planning_suggestion() {
         "planning suggested  1 enter planning mode  2 continue in execute mode"
-    } else if let Some(pending) = app.active_pending_interaction() {
-        pending_interaction_hint_text(pending.kind)
     } else if app.agent_execution_mode_label() == "plan" {
         "planning mode  read-only planning; approve to execute"
     } else {
@@ -477,16 +438,7 @@ fn desired_composer_height(app: &TuiApp, width: u16, rows: u16) -> u16 {
 
 fn composer_content_line_count(app: &TuiApp, width: u16) -> u16 {
     let content = if app.input.is_empty() {
-        if app.has_queued_follow_up_messages() {
-            queued_follow_up_preview_lines(app)
-                .into_iter()
-                .map(|line| line.to_string())
-                .collect::<Vec<_>>()
-                .join("\n")
-        } else {
-            "Ask about the repo, request a code change, or type /help to browse commands."
-                .to_string()
-        }
+        "Ask about the repo, request a code change, or type /help to browse commands.".to_string()
     } else {
         app.input.clone()
     };
@@ -723,6 +675,31 @@ mod tests {
         assert_eq!(label, "Plan Approval");
         assert!(detail.contains("start implementation"));
         assert!(detail.contains("continue planning"));
+    }
+
+    #[test]
+    fn pending_interaction_hint_takes_priority_over_queued_follow_up() {
+        let temp = tempdir().unwrap();
+        let mut app = TuiApp::new(ConfigManager {
+            path: temp.path().join("config.json"),
+        })
+        .expect("build tui app");
+        app.queue_follow_up_message("then review the diff");
+        app.snapshot
+            .pending_interactions
+            .push(PendingInteractionSnapshot {
+                kind: InteractionKind::Approval,
+                title: "Shell Approval".into(),
+                summary: "git diff origin/main -- src/context/assembler.rs".into(),
+                options: Vec::new(),
+                note: None,
+                approval: None,
+                source: None,
+            });
+
+        let hint = composer_hint(&app);
+        assert!(hint.contains("1 allow once"));
+        assert!(!hint.contains("queued follow-up"));
     }
 
     #[test]

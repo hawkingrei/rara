@@ -10,6 +10,7 @@ use crate::tui::interaction_text::{
 };
 use crate::tui::markdown_render::render_markdown_text_with_width;
 use crate::tui::plan_display::updated_plan_lines;
+use crate::tui::queued_input::QueuedFollowUpSection;
 use crate::tui::render::diff::render_patch_preview;
 use crate::tui::render::{
     display_width, formatted_message_lines, prefixed_message_lines, rendered_markdown_lines,
@@ -443,6 +444,36 @@ impl HistoryCell for PlanningSuggestionCell {
                 .lines()
                 .map(|line| Line::from(format!("  {line}"))),
         );
+        lines
+    }
+}
+
+pub(super) struct QueuedFollowUpCell {
+    sections: Vec<QueuedFollowUpSection>,
+}
+
+impl QueuedFollowUpCell {
+    pub(super) fn new(sections: Vec<QueuedFollowUpSection>) -> Self {
+        Self { sections }
+    }
+}
+
+impl HistoryCell for QueuedFollowUpCell {
+    fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
+        let mut lines = vec![Line::from(section_span(
+            "Queued Follow-up",
+            Color::DarkGray,
+        ))];
+        for section in &self.sections {
+            lines.push(Line::from(format!("  {}", section.title)));
+            lines.push(Line::from(format!("    -> {}", section.preview)));
+            if section.remaining > 0 {
+                lines.push(Line::from(format!(
+                    "    ... {} {}",
+                    section.remaining, section.remaining_label
+                )));
+            }
+        }
         lines
     }
 }

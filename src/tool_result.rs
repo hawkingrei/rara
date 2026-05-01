@@ -67,11 +67,7 @@ impl ToolResultStore {
         }
 
         let stored_path = self.persist_full_result(tool_use_id, tool_name, input, result)?;
-        Ok(persisted_output_message(
-            &stored_path,
-            full_rendered.chars().count(),
-            &head_tail_text(&inline, LARGE_PREVIEW_HEAD, LARGE_PREVIEW_TAIL),
-        ))
+        Ok(render_persisted_compact_result(&inline, &stored_path))
     }
 
     fn persist_full_result(
@@ -446,6 +442,14 @@ fn compact_generic(summary: &str, result: &Value) -> String {
     )
 }
 
+fn render_persisted_compact_result(inline: &str, stored_path: &std::path::Path) -> String {
+    format!(
+        "{}\n\n[tool_result truncated]\nfull result: {}",
+        truncate_text(inline, LARGE_PREVIEW_HEAD),
+        stored_path.display()
+    )
+}
+
 fn compact_bash(result: &Value) -> String {
     if let Some(task_id) = result.get("background_task_id").and_then(Value::as_str) {
         let status = result
@@ -506,7 +510,11 @@ fn compact_bash(result: &Value) -> String {
                 }
             }
         });
-    let mut rendered = format!("bash finished.\nExit code: {exit_code}");
+    let mut rendered = match exit_code.as_str() {
+        "0" => "finished with exit code 0".to_string(),
+        "unknown" => "finished with unknown exit status".to_string(),
+        _ => format!("failed with exit code {exit_code}"),
+    };
     if let Some(duration_ms) = duration_ms {
         rendered.push_str(&format!("\nDuration: {duration_ms} ms"));
     }
@@ -961,13 +969,6 @@ fn char_boundary_before_last_n_chars(text: &str, n: usize) -> usize {
         .unwrap_or(0)
 }
 
-fn persisted_output_message(path: &PathBuf, original_chars: usize, preview: &str) -> String {
-    format!(
-        "<persisted-output>\nOutput too large ({original_chars} chars). Full output saved to: {}\n\nPreview:\n{preview}\n</persisted-output>",
-        path.display()
-    )
-}
-
 pub fn default_tool_result_store_dir() -> Result<PathBuf> {
     let root = std::env::current_dir()?;
     Ok(rara_config::workspace_data_dir_for(&root)?.join("tool-results"))
@@ -1044,8 +1045,7 @@ mod tests {
                 &json!({ "content": "x".repeat(20_000) }),
             )
             .expect("compact result");
-        assert!(output.contains("<persisted-output>"));
-        assert!(output.contains("Full output saved to:"));
+        assert!(output.contains("full result:"));
         assert!(output.contains("Fetched https://example.com"));
         assert!(tempdir.path().join("tool-1.json").exists());
         assert!(
@@ -1077,8 +1077,7 @@ mod tests {
             )
             .expect("compact bash result");
 
-        assert!(output.contains("bash finished."));
-        assert!(output.contains("Exit code: 101"));
+        assert!(output.contains("failed with exit code 101"));
         assert!(output.contains("Duration: 1234 ms"));
         assert!(output.contains("Output:\nchecking\n[stderr] warning"));
         assert!(!output.contains("stdout-only"));

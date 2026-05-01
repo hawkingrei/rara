@@ -211,6 +211,52 @@ fn active_turn_cell_renders_shell_approval_as_interaction_card() {
 }
 
 #[test]
+fn active_turn_cell_renders_queued_follow_up_without_hiding_shell_approval() {
+    let temp = tempdir().unwrap();
+    let mut app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("build tui app");
+    app.active_turn = TranscriptTurn {
+        entries: vec![TranscriptEntry {
+            role: "You".into(),
+            message: "Run a shell command".into(),
+            payload: None,
+        }],
+    };
+    app.queue_follow_up_message("then review the diff");
+    app.snapshot
+        .pending_interactions
+        .push(crate::tui::state::PendingInteractionSnapshot {
+            kind: crate::tui::state::InteractionKind::Approval,
+            title: "Pending Approval".into(),
+            summary: "git diff origin/main -- src/context/assembler.rs".into(),
+            options: Vec::new(),
+            note: None,
+            approval: Some(crate::tui::state::PendingApprovalSnapshot {
+                tool_use_id: "toolu_123".into(),
+                command: "git diff origin/main -- src/context/assembler.rs".into(),
+                allow_net: false,
+                payload: Default::default(),
+            }),
+            source: None,
+        });
+
+    let rendered = ActiveTurnCell::new(&app, Some(Path::new(".")))
+        .display_lines(100)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(rendered.contains(" Shell Approval "));
+    assert!(rendered.contains("1. Allow once"));
+    assert!(rendered.contains(" Queued Follow-up "));
+    assert!(rendered.contains("Queued follow-up messages"));
+    assert!(rendered.contains("then review the diff"));
+}
+
+#[test]
 fn active_turn_cell_does_not_render_completed_plan_decision() {
     let temp = tempdir().unwrap();
     let mut app = TuiApp::new(ConfigManager {
