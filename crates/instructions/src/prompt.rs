@@ -377,6 +377,7 @@ fn default_system_prompt_sections() -> Vec<PromptSection> {
                     "For whole-file deletes, use '*** Delete File: path' by itself; do not include removed file contents under that header.",
                     "Inside an update patch, use '@@' hunks and prefix every content line with exactly one marker: space for unchanged context, '-' for removed text, or '+' for inserted text. Preserve indentation exactly after that marker.",
                     "For update hunks, include enough exact context from the current file for the old lines to match uniquely. If a full read is unavailable because the file or line is too large, use 'apply_patch' with exact context from the current partial read rather than shell text-editing commands.",
+                    "Partial reads are sufficient only for context-backed 'apply_patch' updates whose old/context lines match the current file. Other edit tools may still require a full read as reported by their tool errors.",
                     "If an 'apply_patch' hunk does not match, re-read the file and make the smallest corrected patch rather than guessing.",
                     "Use 'replace' only for one exact, unique snippet that you have verified from the current file contents.",
                     "For 'replace', copy 'old_string' exactly from the current file, including whitespace and indentation.",
@@ -877,6 +878,8 @@ mod tests {
         assert!(prompt.contains("include enough exact context"));
         assert!(prompt.contains("If a full read is unavailable"));
         assert!(prompt.contains("use 'apply_patch' with exact context"));
+        assert!(prompt.contains("Partial reads are sufficient only"));
+        assert!(prompt.contains("Other edit tools may still require a full read"));
         assert!(prompt.contains("Use 'replace' only for one exact, unique snippet"));
         assert!(prompt.contains("copy 'old_string' exactly from the current file"));
         assert!(prompt.contains("not permission to bypass edit tools"));

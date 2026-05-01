@@ -208,6 +208,11 @@ impl Tool for ApplyPatchTool {
 fn validate_patch_update_context(ops: &[PatchOp]) -> Result<(), ToolError> {
     for op in ops {
         if let PatchOp::Update { path, chunks, .. } = op {
+            if chunks.is_empty() {
+                return Err(ToolError::ExecutionFailed(format!(
+                    "Update patch for {path} must include at least one hunk"
+                )));
+            }
             for chunk in chunks {
                 if !chunk.lines.iter().any(|line| line.kind != '+') {
                     return Err(ToolError::ExecutionFailed(format!(
@@ -551,6 +556,30 @@ mod tests {
                 .contains("must include at least one context or removed line")
         );
         assert_eq!(std::fs::read_to_string(&file).expect("read"), "hello\n");
+    }
+
+    #[tokio::test]
+    async fn update_patch_rejects_empty_hunks() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("sample.txt");
+        let moved = dir.path().join("moved.txt");
+        std::fs::write(&file, "hello\n").expect("write");
+        let tool = ApplyPatchTool::default();
+
+        let error = tool
+            .call(json!({
+                "patch": format!(
+                    "*** Begin Patch\n*** Update File: {}\n*** Move to: {}\n*** End Patch",
+                    file.display(),
+                    moved.display()
+                )
+            }))
+            .await
+            .expect_err("empty update hunk should be rejected");
+
+        assert!(error.to_string().contains("must include at least one hunk"));
+        assert!(file.exists());
+        assert!(!moved.exists());
     }
 
     #[tokio::test]
