@@ -65,9 +65,9 @@ The transcript should move toward Codex/Claude-style tool visibility:
 - `pty_start` tool descriptions and input schema must frame PTY as an
   interactive-command surface. Ordinary non-interactive commands should use
   `bash`, while PTY sessions should preserve the same `cwd` guidance as shell
-  execution. Runtime sandboxing is platform-dependent: on macOS, PTY commands
-  currently run unsandboxed because `sandbox-exec` does not preserve
-  interactive PTY stdin reliably.
+  execution. Runtime sandboxing is platform-dependent: with the macOS seatbelt
+  backend, PTY commands currently run unsandboxed because `sandbox-exec` does
+  not preserve interactive PTY stdin reliably.
 - PTY sessions must be inspectable and stoppable without imposing a fixed
   session-count limit:
   - `pty_list` lists known PTY sessions;

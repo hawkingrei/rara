@@ -317,7 +317,7 @@ impl Tool for PtyStartTool {
     }
 
     fn description(&self) -> &str {
-        "Start an interactive PTY session only for commands that need terminal input, terminal control, or an interactive program. For ordinary non-interactive commands, use bash instead. Prefer dedicated RARA tools for file search, file reads, and file edits. Use the cwd field instead of prepending cd. PTY sandboxing is platform-dependent and best-effort; on macOS, PTY commands currently run directly because sandbox-exec does not preserve interactive PTY stdin reliably. Treat allow_net as a network-access toggle, not a sandbox guarantee. Inspect or stop sessions with pty_status, pty_list, and pty_stop."
+        "Start an interactive PTY session only for commands that need terminal input, terminal control, or an interactive program. For ordinary non-interactive commands, use bash instead. Prefer dedicated RARA tools for file search, file reads, and file edits. Use the cwd field instead of prepending cd. PTY sandboxing is platform-dependent and best-effort; with the macOS seatbelt backend, PTY commands currently run directly because sandbox-exec does not preserve interactive PTY stdin reliably. Treat allow_net as a network-access toggle, not a sandbox guarantee. Inspect or stop sessions with pty_status, pty_list, and pty_stop."
     }
 
     fn input_schema(&self) -> Value {
@@ -745,7 +745,7 @@ mod tests {
         assert!(description.contains("Prefer dedicated RARA tools"));
         assert!(description.contains("cwd field"));
         assert!(description.contains("sandboxing is platform-dependent"));
-        assert!(description.contains("macOS"));
+        assert!(description.contains("macOS seatbelt backend"));
         assert!(description.contains("allow_net as a network-access toggle"));
         assert!(description.contains("pty_status"));
         assert!(description.contains("pty_list"));
