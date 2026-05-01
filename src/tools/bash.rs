@@ -740,7 +740,7 @@ impl Tool for BashTool {
         "bash"
     }
     fn description(&self) -> &str {
-        "Run a shell command in the sandbox. Use the cwd field for the working directory when needed, and avoid cd unless it is necessary for the command itself."
+        "Run a shell command in the sandbox for commands that need process execution. Prefer dedicated RARA tools for file search, file reads, and file edits; do not use shell redirection, sed, awk, perl, or ad-hoc scripts to edit files when apply_patch or direct file tools can do the job. Use the cwd field instead of prepending cd, avoid newline-separated command chaining, and keep commands sandboxed unless require_escalated is justified by user request or clear sandbox failure evidence. Use run_in_background for long-running non-interactive commands, then inspect or stop them with background_task_status, background_task_list, and background_task_stop."
     }
     fn input_schema(&self) -> Value {
         json!({
@@ -748,11 +748,11 @@ impl Tool for BashTool {
             "properties": {
                 "command": {
                     "type": "string",
-                    "description": "Legacy shell command string. Prefer program+args for new calls."
+                    "description": "Legacy shell command string. Prefer program+args for new calls. Avoid newline-separated command chaining, and do not use this field for file edits when apply_patch or direct file tools can do the job."
                 },
                 "program": {
                     "type": "string",
-                    "description": "Executable to run directly without a shell."
+                    "description": "Executable to run directly without a shell. Prefer this with args for ordinary commands."
                 },
                 "args": {
                     "type": "array",
@@ -761,7 +761,7 @@ impl Tool for BashTool {
                 },
                 "cwd": {
                     "type": "string",
-                    "description": "Optional working directory override. Defaults to the current turn cwd."
+                    "description": "Optional working directory override. Defaults to the current turn cwd; prefer this over prepending cd to a command."
                 },
                 "env": {
                     "type": "object",
@@ -776,13 +776,13 @@ impl Tool for BashTool {
                 "run_in_background": {
                     "type": "boolean",
                     "default": false,
-                    "description": "Run the command as a background task and return a task id immediately. Use background_task_status to inspect output later."
+                    "description": "Run a long-running non-interactive command as a background task and return a task id immediately. Use background_task_status to inspect output later, background_task_list to find tasks, and background_task_stop to stop them."
                 },
                 "sandbox_permissions": {
                     "type": "string",
                     "enum": ["use_default", "require_escalated"],
                     "default": "use_default",
-                    "description": "Sandbox permissions for the command. Set to require_escalated to request approval to run this command outside the sandbox; defaults to use_default."
+                    "description": "Sandbox permissions for the command. Defaults to use_default. Set to require_escalated only when the user asked for it or sandbox failure evidence shows the command cannot work inside the sandbox."
                 },
                 "justification": {
                     "type": "string",
@@ -791,7 +791,7 @@ impl Tool for BashTool {
                 "prefix_rule": {
                     "type": "array",
                     "items": { "type": "string" },
-                    "description": "Only set if sandbox_permissions is require_escalated. Suggested command prefix to approve for similar future commands, for example [\"git\", \"push\"] or [\"cargo\", \"test\"]."
+                    "description": "Only set if sandbox_permissions is require_escalated. Suggested scoped command prefix to approve for similar future commands, for example [\"git\", \"push\"] or [\"cargo\", \"test\"]. Do not suggest broad prefixes."
                 }
             },
             "anyOf": [
@@ -979,7 +979,7 @@ impl Tool for BackgroundTaskListTool {
     }
 
     fn description(&self) -> &str {
-        "List background bash tasks"
+        "List background bash tasks started with bash run_in_background. Use this before starting duplicate long-running work when task state is unclear."
     }
 
     fn input_schema(&self) -> Value {
@@ -1003,7 +1003,7 @@ impl Tool for BackgroundTaskStatusTool {
     }
 
     fn description(&self) -> &str {
-        "Inspect a background bash task and read the tail of its output"
+        "Inspect a background bash task started with bash run_in_background and read the tail of its output."
     }
 
     fn input_schema(&self) -> Value {
@@ -1061,7 +1061,7 @@ impl Tool for BackgroundTaskStopTool {
     }
 
     fn description(&self) -> &str {
-        "Stop one background bash task, or all running background bash tasks when task_id is omitted"
+        "Stop one background bash task, or all running background bash tasks when task_id is omitted."
     }
 
     fn input_schema(&self) -> Value {
@@ -1376,6 +1376,58 @@ mod tests {
         );
         assert_eq!(input.approval_prefix().as_deref(), Some("cargo check"));
         assert!(!input.is_read_only());
+    }
+
+    #[test]
+    fn bash_tool_schema_guides_command_discipline() {
+        let temp = tempdir().expect("tempdir");
+        let tool = BashTool {
+            sandbox: Arc::new(
+                SandboxManager::new_for_rara_dir(temp.path().join(".rara")).expect("sandbox"),
+            ),
+            background_tasks: Arc::new(
+                BackgroundTaskStore::new(temp.path().join(".rara/background-tasks"))
+                    .expect("background task store"),
+            ),
+            base_env: Arc::new(HashMap::new()),
+            sandbox_network_access: false,
+        };
+
+        let description = tool.description();
+        assert!(description.contains("Prefer dedicated RARA tools"));
+        assert!(description.contains("apply_patch"));
+        assert!(description.contains("cwd field"));
+        assert!(description.contains("newline-separated command chaining"));
+        assert!(description.contains("require_escalated"));
+        assert!(description.contains("background_task_status"));
+
+        let schema = tool.input_schema().to_string();
+        assert!(schema.contains("Prefer program+args"));
+        assert!(schema.contains("direct file tools"));
+        assert!(schema.contains("prefer this over prepending cd"));
+        assert!(schema.contains("sandbox failure evidence"));
+        assert!(schema.contains("Do not suggest broad prefixes"));
+    }
+
+    #[test]
+    fn background_task_tool_descriptions_point_to_run_in_background() {
+        let temp = tempdir().expect("tempdir");
+        let background_tasks = Arc::new(
+            BackgroundTaskStore::new(temp.path().join(".rara/background-tasks"))
+                .expect("background task store"),
+        );
+        let list = BackgroundTaskListTool {
+            background_tasks: background_tasks.clone(),
+        };
+        let status = BackgroundTaskStatusTool {
+            background_tasks: background_tasks.clone(),
+        };
+        let stop = BackgroundTaskStopTool { background_tasks };
+
+        assert!(list.description().contains("run_in_background"));
+        assert!(list.description().contains("duplicate long-running work"));
+        assert!(status.description().contains("run_in_background"));
+        assert!(stop.description().contains("task_id is omitted"));
     }
 
     #[test]
