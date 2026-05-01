@@ -28,6 +28,14 @@ The transcript should move toward Codex/Claude-style tool visibility:
 ### Shell execution
 
 - `bash` tool execution must emit live transcript updates while stdout/stderr are still being produced.
+- `bash` tool descriptions and input schema must carry the command discipline
+  that the model sees at call time:
+  - prefer dedicated RARA tools for file search, reads, and edits;
+  - use `cwd` instead of prepending `cd`;
+  - avoid newline-separated shell chaining;
+  - keep commands sandboxed unless escalation is justified by user request or
+    clear sandbox failure evidence;
+  - use background task controls for long-running non-interactive commands.
 - The final `bash` tool result should keep the exit code and avoid duplicating large output that was already streamed live.
 - When shell execution pauses on a human approval request, the approval card should take visual priority over older live stdout/stderr progress from the same turn.
 - Approval choices should describe both the action and its scope, such as:
@@ -54,6 +62,10 @@ The transcript should move toward Codex/Claude-style tool visibility:
 
 ### PTY sessions
 
+- `pty_start` tool descriptions and input schema must frame PTY as an
+  interactive-command surface. Ordinary non-interactive commands should use
+  `bash`, while PTY sessions should preserve the same `cwd` and sandbox
+  guidance as shell execution.
 - PTY sessions must be inspectable and stoppable without imposing a fixed
   session-count limit:
   - `pty_list` lists known PTY sessions;

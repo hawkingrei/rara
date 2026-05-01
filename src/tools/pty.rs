@@ -317,15 +317,21 @@ impl Tool for PtyStartTool {
     }
 
     fn description(&self) -> &str {
-        "Start an interactive PTY session for commands that need terminal input. Use the cwd field for the working directory when needed, and avoid cd unless it is necessary for the command itself."
+        "Start an interactive PTY session only for commands that need terminal input, terminal control, or an interactive program. For ordinary non-interactive commands, use bash instead. Prefer dedicated RARA tools for file search, file reads, and file edits. Use the cwd field instead of prepending cd, and keep the session sandboxed unless allow_net is needed and supported by config."
     }
 
     fn input_schema(&self) -> Value {
         json!({
             "type": "object",
             "properties": {
-                "command": { "type": "string", "description": "Shell command to run inside a PTY." },
-                "cwd": { "type": "string", "description": "Optional working directory. Defaults to the current turn cwd." },
+                "command": {
+                    "type": "string",
+                    "description": "Shell command to run inside a PTY. Use PTY only for interactive commands; use bash for ordinary non-interactive commands."
+                },
+                "cwd": {
+                    "type": "string",
+                    "description": "Optional working directory. Defaults to the current turn cwd; prefer this over prepending cd to a command."
+                },
                 "env": {
                     "type": "object",
                     "additionalProperties": { "type": "string" },
@@ -387,7 +393,7 @@ impl Tool for PtyReadTool {
     }
 
     fn description(&self) -> &str {
-        "Read recent output from a PTY session"
+        "Read recent output from a PTY session started with pty_start."
     }
 
     fn input_schema(&self) -> Value {
@@ -427,7 +433,7 @@ impl Tool for PtyListTool {
     }
 
     fn description(&self) -> &str {
-        "List PTY sessions"
+        "List PTY sessions started with pty_start. Use this before starting duplicate interactive work when session state is unclear."
     }
 
     fn input_schema(&self) -> Value {
@@ -455,7 +461,7 @@ impl Tool for PtyStatusTool {
     }
 
     fn description(&self) -> &str {
-        "Inspect a PTY session and read the tail of its output"
+        "Inspect a PTY session started with pty_start and read the tail of its output."
     }
 
     fn input_schema(&self) -> Value {
@@ -485,7 +491,7 @@ impl Tool for PtyWriteTool {
     }
 
     fn description(&self) -> &str {
-        "Write input to a running PTY session"
+        "Write input to a running PTY session started with pty_start."
     }
 
     fn input_schema(&self) -> Value {
@@ -520,7 +526,7 @@ impl Tool for PtyKillTool {
     }
 
     fn description(&self) -> &str {
-        "Kill a PTY session"
+        "Kill a PTY session started with pty_start."
     }
 
     fn input_schema(&self) -> Value {
@@ -548,7 +554,7 @@ impl Tool for PtyStopTool {
     }
 
     fn description(&self) -> &str {
-        "Stop one PTY session, or all running PTY sessions when session_id is omitted"
+        "Stop one PTY session, or all running PTY sessions when session_id is omitted."
     }
 
     fn input_schema(&self) -> Value {
@@ -711,6 +717,42 @@ mod tests {
         let err = parse_pty_dimension(Some(&value), 24, "rows").expect_err("overflow rejected");
 
         assert!(matches!(err, ToolError::InvalidInput(_)));
+    }
+
+    #[test]
+    fn pty_tool_schema_guides_interactive_command_discipline() {
+        let temp = tempdir().expect("tempdir");
+        let sessions = Arc::new(PtySessionStore::new(temp.path().join("pty")).expect("pty store"));
+        let start = PtyStartTool {
+            sessions: sessions.clone(),
+            sandbox: Arc::new(
+                SandboxManager::new_for_rara_dir(temp.path().join(".rara")).expect("sandbox"),
+            ),
+            base_env: Arc::new(HashMap::new()),
+            sandbox_network_access: false,
+        };
+        let list = PtyListTool {
+            sessions: sessions.clone(),
+        };
+        let status = PtyStatusTool {
+            sessions: sessions.clone(),
+        };
+        let stop = PtyStopTool { sessions };
+
+        let description = start.description();
+        assert!(description.contains("interactive PTY session only"));
+        assert!(description.contains("use bash instead"));
+        assert!(description.contains("Prefer dedicated RARA tools"));
+        assert!(description.contains("cwd field"));
+        assert!(description.contains("sandboxed"));
+
+        let schema = start.input_schema().to_string();
+        assert!(schema.contains("Use PTY only for interactive commands"));
+        assert!(schema.contains("use bash for ordinary non-interactive commands"));
+        assert!(schema.contains("prefer this over prepending cd"));
+        assert!(list.description().contains("duplicate interactive work"));
+        assert!(status.description().contains("pty_start"));
+        assert!(stop.description().contains("session_id is omitted"));
     }
 
     #[test]
