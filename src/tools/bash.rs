@@ -11,6 +11,7 @@ use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::time::Instant;
 use tokio::fs;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 use tokio::process::{Child, Command};
@@ -65,7 +66,7 @@ pub enum BackgroundTaskStatus {
     Killed,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum BashStreamKind {
     Stdout,
     Stderr,
@@ -858,6 +859,7 @@ impl Tool for BashTool {
             .envs(&command_env)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        let started_at = Instant::now();
         let mut child = command.spawn().map_err(|err| {
             if wrapped.sandboxed {
                 ToolError::ExecutionFailed(format!(
@@ -920,10 +922,18 @@ impl Tool for BashTool {
 
         let mut stdout_text = String::new();
         let mut stderr_text = String::new();
+        let mut aggregated_output = String::new();
+        let mut aggregated_output_stream = None;
         let mut live_streamed = false;
         if !wrapped.sandboxed {
             let chunk = unsandboxed_execution_warning(&wrapped);
             stderr_text.push_str(&chunk);
+            append_aggregated_bash_output(
+                &mut aggregated_output,
+                &mut aggregated_output_stream,
+                BashStreamKind::Stderr,
+                &chunk,
+            );
             live_streamed = true;
             report(ToolProgressEvent::Output {
                 stream: ToolOutputStream::Stderr,
@@ -939,6 +949,12 @@ impl Tool for BashTool {
                 BashStreamKind::Stdout => stdout_text.push_str(&chunk),
                 BashStreamKind::Stderr => stderr_text.push_str(&chunk),
             }
+            append_aggregated_bash_output(
+                &mut aggregated_output,
+                &mut aggregated_output_stream,
+                stream,
+                &chunk,
+            );
             report(ToolProgressEvent::Output {
                 stream: stream.output_stream(),
                 chunk,
@@ -958,13 +974,22 @@ impl Tool for BashTool {
         if wrapped.sandboxed {
             if let Some(hint) = sandbox_output_hint(&stderr_text) {
                 stderr_text.push_str(hint);
+                append_aggregated_bash_output(
+                    &mut aggregated_output,
+                    &mut aggregated_output_stream,
+                    BashStreamKind::Stderr,
+                    hint,
+                );
             }
         }
+        let duration_ms = started_at.elapsed().as_millis() as u64;
 
         Ok(json!({
             "stdout": stdout_text,
             "stderr": stderr_text,
+            "aggregated_output": aggregated_output,
             "exit_code": status.code(),
+            "duration_ms": duration_ms,
             "live_streamed": live_streamed,
             "sandboxed": wrapped.sandboxed,
             "sandbox_backend": wrapped.sandbox_backend,
@@ -1252,6 +1277,35 @@ where
     Ok(())
 }
 
+fn append_aggregated_bash_output(
+    aggregated_output: &mut String,
+    last_stream: &mut Option<BashStreamKind>,
+    stream: BashStreamKind,
+    chunk: &str,
+) {
+    if chunk.is_empty() {
+        return;
+    }
+    match stream {
+        BashStreamKind::Stdout => aggregated_output.push_str(chunk),
+        BashStreamKind::Stderr => {
+            if !aggregated_output.is_empty()
+                && !aggregated_output.ends_with('\n')
+                && !matches!(last_stream, Some(BashStreamKind::Stderr))
+            {
+                aggregated_output.push('\n');
+            }
+            for line in chunk.split_inclusive('\n') {
+                if aggregated_output.is_empty() || aggregated_output.ends_with('\n') {
+                    aggregated_output.push_str("[stderr] ");
+                }
+                aggregated_output.push_str(line);
+            }
+        }
+    }
+    *last_stream = Some(stream);
+}
+
 fn sandbox_output_hint(stderr: &str) -> Option<&'static str> {
     let lower = stderr.to_ascii_lowercase();
     if lower.contains("sandbox: violation")
@@ -1294,8 +1348,8 @@ mod tests {
     use super::{
         BackgroundTaskListTool, BackgroundTaskStatus, BackgroundTaskStatusTool,
         BackgroundTaskStopTool, BackgroundTaskStore, BashCommandInput, BashSandboxPermissions,
-        BashTool, command_env_for_wrapped, read_output_tail, sandbox_command_env,
-        sandbox_output_hint, unsandboxed_execution_warning,
+        BashStreamKind, BashTool, append_aggregated_bash_output, command_env_for_wrapped,
+        read_output_tail, sandbox_command_env, sandbox_output_hint, unsandboxed_execution_warning,
     };
     use crate::sandbox::{SandboxManager, WrappedCommand};
     use crate::tool::{Tool, ToolOutputStream, ToolProgressEvent};
@@ -1723,6 +1777,13 @@ mod tests {
             Some("direct")
         );
         assert_eq!(result.get("stdout").and_then(Value::as_str), Some("direct"));
+        let aggregated_output = result
+            .get("aggregated_output")
+            .and_then(Value::as_str)
+            .expect("aggregated output");
+        assert!(aggregated_output.contains("direct"));
+        assert!(aggregated_output.contains("without sandbox isolation"));
+        assert!(result.get("duration_ms").and_then(Value::as_u64).is_some());
         assert!(
             result
                 .get("stderr")
@@ -1798,7 +1859,61 @@ mod tests {
             result.get("sandbox_backend").and_then(Value::as_str),
             Some(wrapped.sandbox_backend.as_str())
         );
+        let aggregated_output = result
+            .get("aggregated_output")
+            .and_then(Value::as_str)
+            .expect("aggregated output");
+        assert!(aggregated_output.contains("out"));
+        assert!(aggregated_output.contains("[stderr] err"));
+        assert!(result.get("duration_ms").and_then(Value::as_u64).is_some());
     }
+
+    #[test]
+    fn aggregated_stderr_prefixes_only_line_boundaries() {
+        let mut output = String::new();
+        let mut last_stream = None;
+        append_aggregated_bash_output(
+            &mut output,
+            &mut last_stream,
+            BashStreamKind::Stderr,
+            "partial",
+        );
+        append_aggregated_bash_output(
+            &mut output,
+            &mut last_stream,
+            BashStreamKind::Stderr,
+            "-line\nnext",
+        );
+        append_aggregated_bash_output(
+            &mut output,
+            &mut last_stream,
+            BashStreamKind::Stderr,
+            "-line\n",
+        );
+
+        assert_eq!(output, "[stderr] partial-line\n[stderr] next-line\n");
+    }
+
+    #[test]
+    fn aggregated_stderr_starts_on_new_line_after_stdout() {
+        let mut output = String::new();
+        let mut last_stream = None;
+        append_aggregated_bash_output(
+            &mut output,
+            &mut last_stream,
+            BashStreamKind::Stdout,
+            "stdout-without-newline",
+        );
+        append_aggregated_bash_output(
+            &mut output,
+            &mut last_stream,
+            BashStreamKind::Stderr,
+            "stderr-line\n",
+        );
+
+        assert_eq!(output, "stdout-without-newline\n[stderr] stderr-line\n");
+    }
+
     #[tokio::test]
     async fn background_call_returns_task_and_status_reads_output() {
         let temp = tempdir().expect("tempdir");

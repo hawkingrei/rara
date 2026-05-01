@@ -33,6 +33,7 @@ impl ToolResultStore {
     ) -> Result<String> {
         let summary = summarize_tool_result(tool_name, input, result);
         let inline = match tool_name {
+            "bash" => compact_bash(result),
             "apply_patch" => compact_apply_patch(result),
             "write_file" => compact_write_file(result),
             "replace" => compact_replace(input, result),
@@ -335,6 +336,72 @@ fn compact_generic(summary: &str, result: &Value) -> String {
         "{summary}\nPayload:\n{}",
         truncate_text(&rendered, LARGE_PREVIEW_HEAD)
     )
+}
+
+fn compact_bash(result: &Value) -> String {
+    if let Some(task_id) = result.get("background_task_id").and_then(Value::as_str) {
+        let status = result
+            .get("status")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown");
+        let output_path = result
+            .get("output_path")
+            .and_then(Value::as_str)
+            .unwrap_or("<unknown>");
+        let exit_code = result
+            .get("exit_code")
+            .and_then(Value::as_i64)
+            .map(|code| code.to_string())
+            .unwrap_or_else(|| "pending".to_string());
+        return format!(
+            "bash started in background.\nTask id: {task_id}\nStatus: {status}\nExit code: {exit_code}\nOutput path: {output_path}\nUse background_task_status with this task id to inspect output."
+        );
+    }
+
+    let exit_code = result
+        .get("exit_code")
+        .and_then(Value::as_i64)
+        .map(|code| code.to_string())
+        .unwrap_or_else(|| "unknown".to_string());
+    let duration_ms = result.get("duration_ms").and_then(Value::as_u64);
+    let output = result
+        .get("aggregated_output")
+        .and_then(Value::as_str)
+        .filter(|output| !output.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| {
+            let stdout = result
+                .get("stdout")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let stderr = result
+                .get("stderr")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            match (stdout.is_empty(), stderr.is_empty()) {
+                (true, true) => String::new(),
+                (false, true) => stdout.to_string(),
+                (true, false) => prefix_stderr_lines(stderr),
+                (false, false) => {
+                    let separator = if stdout.ends_with('\n') { "" } else { "\n" };
+                    format!("{stdout}{separator}{}", prefix_stderr_lines(stderr))
+                }
+            }
+        });
+    let mut rendered = format!("bash finished.\nExit code: {exit_code}");
+    if let Some(duration_ms) = duration_ms {
+        rendered.push_str(&format!("\nDuration: {duration_ms} ms"));
+    }
+    rendered.push_str("\nOutput:\n");
+    rendered.push_str(&output);
+    rendered
+}
+
+fn prefix_stderr_lines(stderr: &str) -> String {
+    stderr
+        .split_inclusive('\n')
+        .map(|line| format!("[stderr] {line}"))
+        .collect()
 }
 
 fn compact_write_file(result: &Value) -> String {
@@ -815,6 +882,104 @@ mod tests {
                 .expect("default tool result dir")
                 .ends_with(std::path::Path::new("tool-results"))
         );
+    }
+
+    #[test]
+    fn compacts_bash_results_with_exit_code_duration_and_aggregated_output() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let store = ToolResultStore::new(tempdir.path()).expect("store");
+        let output = store
+            .compact_result(
+                "bash",
+                "tool-bash",
+                &json!({ "program": "cargo", "args": ["check"] }),
+                &json!({
+                    "stdout": "stdout-only\n",
+                    "stderr": "stderr-only\n",
+                    "aggregated_output": "checking\n[stderr] warning\n",
+                    "exit_code": 101,
+                    "duration_ms": 1234,
+                    "live_streamed": true,
+                    "sandboxed": true,
+                    "sandbox_backend": "macos-seatbelt"
+                }),
+            )
+            .expect("compact bash result");
+
+        assert!(output.contains("bash finished."));
+        assert!(output.contains("Exit code: 101"));
+        assert!(output.contains("Duration: 1234 ms"));
+        assert!(output.contains("Output:\nchecking\n[stderr] warning"));
+        assert!(!output.contains("stdout-only"));
+        assert!(!output.contains("stderr-only"));
+    }
+
+    #[test]
+    fn compacts_bash_fallback_separates_stdout_and_stderr() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let store = ToolResultStore::new(tempdir.path()).expect("store");
+        let output = store
+            .compact_result(
+                "bash",
+                "tool-bash",
+                &json!({ "program": "sh" }),
+                &json!({
+                    "stdout": "stdout-without-newline",
+                    "stderr": "stderr-line\n",
+                    "exit_code": 1,
+                    "duration_ms": 10,
+                }),
+            )
+            .expect("compact bash result");
+
+        assert!(output.contains("stdout-without-newline\n[stderr] stderr-line"));
+    }
+
+    #[test]
+    fn compacts_bash_fallback_prefixes_each_stderr_line() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let store = ToolResultStore::new(tempdir.path()).expect("store");
+        let output = store
+            .compact_result(
+                "bash",
+                "tool-bash",
+                &json!({ "program": "sh" }),
+                &json!({
+                    "stdout": "",
+                    "stderr": "first\nsecond\n",
+                    "exit_code": 1,
+                    "duration_ms": 10,
+                }),
+            )
+            .expect("compact bash result");
+
+        assert!(output.contains("[stderr] first\n[stderr] second\n"));
+    }
+
+    #[test]
+    fn compacts_background_bash_with_task_id() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let store = ToolResultStore::new(tempdir.path()).expect("store");
+        let output = store
+            .compact_result(
+                "bash",
+                "tool-bash",
+                &json!({ "program": "sh", "run_in_background": true }),
+                &json!({
+                    "background_task_id": "bash-123",
+                    "status": "running",
+                    "output_path": "/tmp/rara/bash-123.log",
+                    "exit_code": null,
+                    "stdout": "",
+                    "stderr": "",
+                }),
+            )
+            .expect("compact background bash result");
+
+        assert!(output.contains("bash started in background."));
+        assert!(output.contains("Task id: bash-123"));
+        assert!(output.contains("Status: running"));
+        assert!(output.contains("background_task_status"));
     }
 
     #[test]

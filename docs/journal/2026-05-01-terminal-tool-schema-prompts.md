@@ -22,6 +22,9 @@ shell execution.
 - Strengthened the `bash` tool description and input schema with command
   discipline for dedicated tools, `cwd`, sandbox escalation, background tasks,
   and shell-edit avoidance.
+- Added a Codex-style foreground Bash result contract: raw results now include
+  `aggregated_output` and `duration_ms`, and model-facing compaction renders a
+  stable exit-code, duration, and output block from the captured result.
 - Strengthened background task tool descriptions so models know to inspect or
   stop long-running work instead of starting duplicates.
 - Strengthened `pty_start` and PTY control descriptions so PTY is reserved for
@@ -33,4 +36,6 @@ shell execution.
 - `cargo test bash_tool_schema_guides_command_discipline -- --nocapture`
 - `cargo test background_task_tool_descriptions_point_to_run_in_background -- --nocapture`
 - `cargo test pty_tool_schema_guides_interactive_command_discipline -- --nocapture`
+- `cargo test streaming_call_reports_stdout_and_stderr_chunks -- --nocapture`
+- `cargo test compacts_bash_results_with_exit_code_duration_and_aggregated_output -- --nocapture`
 - `cargo check`
