@@ -157,9 +157,6 @@ impl Agent {
     }
 
     pub fn is_bash_prefix_approved(&self, request: &BashCommandInput) -> bool {
-        if request.requires_escalated_permissions() {
-            return false;
-        }
         self.approved_bash_prefixes
             .iter()
             .any(|prefix| request.matches_approval_prefix(prefix))
