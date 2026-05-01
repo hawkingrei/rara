@@ -49,7 +49,7 @@ Updated `docs/todo.md` to reflect completed Phase 1 items:
 - Marked ThreadStore lineage/provenance as complete.
 - Left remaining items explicitly tagged with `[ ]`:
   - 1B: LanceDB-backed vector retrieval.
-  - Cache hit/refresh status in `/context`.
+  - Wire actual cache hit/miss signals from `WorkspaceMemory` into `/context` cache status.
   - Tightening `CompactState` / `CompactionRecord` ownership.
 
 ## Validation
@@ -63,6 +63,6 @@ Updated `docs/todo.md` to reflect completed Phase 1 items:
 ## Follow-up
 
 - The largest remaining Phase 1 gap is replacing the mock `VectorDB` with real Lance/LanceDB
-  retrieval (`docs/todo.md` Phase 1, item 2B).
+  retrieval (`docs/todo.md` Phase 1, item 1B).
 - Compaction ownership tightening (`CompactState` vs `CompactionRecord`) can be addressed
   when the durable in-turn checkpoint work begins.

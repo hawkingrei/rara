@@ -345,7 +345,7 @@ fn render_context_assembly_entries(app: &TuiApp, layer: &str, title: &str) -> St
                 .map(|v| format!(" {v}t"))
                 .unwrap_or_default();
             let drop_note = match entry.dropped_reason.as_deref() {
-                Some(r) if !r.is_empty() && r != "-" => format!(" ── dropped: {r}"),
+                Some(r) if !r.is_empty() && r != "-" => format!(" ── reason: {r}"),
                 _ => String::new(),
             };
             format!(
@@ -386,14 +386,15 @@ fn render_memory_selection(app: &TuiApp) -> String {
                     .map(|v| format!(" {v}t"))
                     .unwrap_or_default();
                 let detail_preview = truncate_preview(&item.detail, 60);
+                let selection_reason = truncate_preview(&item.selection_reason, 70);
                 let drop_note = match item.dropped_reason.as_deref() {
                     Some(r) if !r.is_empty() && r != "-" => {
-                        format!(" ── {r}")
+                        format!(" ── reason: {r}")
                     }
                     _ => String::new(),
                 };
                 format!(
-                    "    {connector} [{kind}] {label}{budget}\n    {vertical}   {detail_preview}{drop_note}",
+                    "    {connector} [{kind}] {label}{budget}\n    {vertical}   detail: {detail_preview}{drop_note}\n    {vertical}   reason: {selection_reason}",
                     kind = item.kind,
                     label = item.label,
                 )
