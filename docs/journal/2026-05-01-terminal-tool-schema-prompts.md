@@ -11,7 +11,7 @@ shell execution.
 
 - Codex keeps shell workdir as an explicit tool parameter and resolves it
   against the turn cwd. It also routes patch application through a dedicated
-  apply-patch path instead of encouraging shell-based patch execution.
+  `apply_patch` path instead of encouraging shell-based patch execution.
 - Claude Code puts Bash-specific discipline directly in the Bash tool
   description: keep the working directory stable, prefer dedicated tools, avoid
   shell-based file edits, avoid newline-separated command chaining, and keep
