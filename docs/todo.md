@@ -19,12 +19,23 @@ Goal: lock down the boundaries that are most likely to keep expanding unless the
 
 Acceptance:
 - agent, TUI, and session restore share the same context/runtime assembly contract
-- `/status` (or equivalent debug output) can explain which context sources were injected, where they came from, and in what order
+- `/context` can explain which context and memory sources were injected, where they came from, in what order, why they were selected, what was available, what was dropped, and the budget/cache status behind those decisions
+- `/status` can summarize the same runtime state at a higher level without replacing `/context`
 - `src/main.rs` remains a thin startup orchestrator instead of continuing to own runtime assembly
 
 Priority order for this phase:
 
-1. Complete `MemorySelection` as the authoritative bounded retrieval-selection pipeline
+1. Strengthen `/context` as the primary context and memory-selection debugger
+   - The first target is not a prettier command output; it is a stable inspection contract.
+   - `/context` should show:
+     - context source categories and order;
+     - source paths and provenance;
+     - selected, available, and dropped memory-selection items;
+     - selection/drop reasons;
+     - token or budget contribution;
+     - cache hit or refresh status when known.
+
+2. Complete `MemorySelection` as the authoritative bounded retrieval-selection pipeline
    - The current Stage 1 skeleton exists:
      - candidate pool;
      - selected/dropped reason reporting;
@@ -34,7 +45,7 @@ Priority order for this phase:
      - 1A. promote selection logic into the primary path for thread/workspace candidates;
      - 1B. replace placeholder retrieval with real vector-backed retrieval for thread and workspace memory.
 
-2. Deepen the `ThreadStore` / `ThreadRecorder` boundary into a real thread domain
+3. Deepen the `ThreadStore` / `ThreadRecorder` boundary into a real thread domain
    - The current thread boundary and lifecycle surface now exist:
      - `threads`
      - `thread`
@@ -46,7 +57,7 @@ Priority order for this phase:
      - lineage / fork source / latest-thread contract;
      - which legacy files remain fallback-only.
 
-3. Continue promoting compaction into a first-class runtime lifecycle event
+4. Continue promoting compaction into a first-class runtime lifecycle event
    - Build on the current persisted summaries, token counters, and boundary metadata.
    - Tighten ownership between compaction state and thread/runtime persistence.
    - Keep this coupled to the thread-domain work instead of treating it as a UI-only follow-up.
@@ -55,6 +66,7 @@ Priority order for this phase:
 
 - [ ] Promote the current `MemorySelection` skeleton into the authoritative bounded retrieval-selection pipeline for thread and workspace recall.
 - [ ] Finish the first non-vector cut of `MemorySelection` so thread memory, workspace memory, active thread state, pending interaction state, and recent tool results all flow through one selected/available/dropped explanation path.
+- [ ] Treat `/context` as the high-priority debugger for context and memory selection before expanding retrieval breadth.
 
 ## Configuration / Provider Surface
 
@@ -72,6 +84,8 @@ Priority order for this phase:
 - [ ] Unify `discover_prompt_sources()` and TUI `/status` source reporting so displayed prompt sources match the actual injected sources.
 - [ ] Preserve stable top-level prompt/context prefixes while adding repo context, skills, hooks, imported agents, and memory sources; new inputs should enter through structured source objects, `MemorySelection`, lifecycle events, or thread-owned agent profiles instead of ad hoc prompt text.
 - [ ] Design a project-scoped extension surface that can ingest Claude/Codex-style repo customizations from `.claude/agents/`, `.claude/hooks/`, and `.agents/skills/`, with explicit precedence and compatibility rules before adding runtime execution.
+- [ ] Add a Claude-style `verify` skill and project-local `verifier-*` skill convention from `docs/features/verify-skill.md`.
+- [ ] Evolve `SkillTool` toward the Codex/Claude-aligned contract in `docs/features/skill-tool.md`: frontmatter metadata, source scopes, load errors, overridden-skill visibility, optional args, invocation tracking, and budget-aware available-skill summaries.
 - [ ] Define and surface skill precedence/override behavior across home, repo, nested repo roots, and workspace-local skill roots.
 - [ ] Extend `SkillManager::list_summaries()` (or equivalent status output) with source precedence and overridden-skill visibility so conflicts are debuggable.
 
@@ -96,7 +110,10 @@ Priority order for this phase:
 
 ## TUI / UX Parity
 
+- [ ] Strengthen the `/context` display with a Claude Code-inspired source breakdown: show active context categories, source paths, ordering, token or budget contribution, cache hit rate, selected memory, available-but-omitted memory, and dropped sources.
 - [ ] Continue improving transcript rendering stability across long and streaming sessions: reduce scroll jumps and flicker, strengthen bottom anchoring, and prevent stale transient sections from reappearing after their live phase ends.
+- [ ] Implement the session-scoped Todo runtime from `docs/features/todo-runtime.md`, including `todo_write`, `.rara/sessions/<session_id>/todo.json`, context/status surfacing, restore behavior, and compact TUI update cards.
+- [ ] Implement the `/review` slash command from `docs/features/slash-review-command.md`, including parser/help support, generated review prompt, and runtime command tests.
 - [ ] Add Codex-style non-bracketed paste-burst detection for terminals that deliver pasted text as fast `Char` / `Enter` key streams instead of `Event::Paste`, so embedded newlines are inserted into the composer instead of submitting partial turns.
 - [ ] Improve long-running task progress reporting so the TUI heartbeat reflects the active phase (`sending prompt`, `streaming response`, `running tool`, `waiting for approval`, `checkpointing`) instead of resetting to a generic prompt-sending notice during long tool execution.
 - [ ] Rework long `Exploring` / `Explored` handling to follow Codex more closely: keep live exploration compact and summarize committed exploration into a source-aware digest instead of dumping long raw traces.
@@ -106,7 +123,6 @@ Priority order for this phase:
 - [ ] Add Codex/Claude-style transcript role cards for `You` / `Agent` / `System` without mixing status chrome into committed transcript history.
 - [ ] Bring the main response UI closer to Codex / Claude Code: stabilize active response blocks while streaming and avoid falling back to generic transcript rows for states that should stay in dedicated response cards.
 - [ ] Rework the built-in command TUI (`/help`, `/model`, `/status`, command palette, setup overlays) to more closely match Codex / Claude Code.
-- [ ] Strengthen the `/context` display with a Claude Code-inspired source breakdown: show active context categories, source paths, ordering, token or budget contribution, cache hit rate, and dropped/omitted sources in a denser inspectable UI.
 - [ ] Refine `/status` into a more detailed runtime status surface that separates provider/model state, reasoning settings, sandbox/network policy, context injection state, tool availability, and pending interaction state.
 - [ ] Continue making tool-action transcript summaries more source-aware and file-aware so edit tools (`write_file`, `replace`, `apply_patch`) consistently show what they touched.
 - [ ] Continue refining the live `bash` transcript path so command execution behaves more like Codex: clearer lifecycle framing, streamed stdout/stderr handling, and better long-output folding.

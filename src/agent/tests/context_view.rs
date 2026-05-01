@@ -209,7 +209,7 @@ fn shared_runtime_context_collects_prompt_plan_and_compaction_state() {
     assert_eq!(runtime.retrieval.entries[1].status, "available");
     assert_eq!(runtime.retrieval.entries[2].kind, "vector_memory");
     assert_eq!(runtime.retrieval.entries[2].status, "available");
-    assert_eq!(runtime.retrieval.memory_selection.selected_items.len(), 11);
+    assert_eq!(runtime.retrieval.memory_selection.selected_items.len(), 9);
     assert_eq!(
         runtime.retrieval.memory_selection.selected_items[0].kind,
         "workspace_memory"
@@ -256,29 +256,16 @@ fn shared_runtime_context_collects_prompt_plan_and_compaction_state() {
         runtime.retrieval.memory_selection.selected_items[8].kind,
         "tool_result"
     );
-    assert_eq!(
-        runtime.retrieval.memory_selection.selected_items[9].kind,
-        "retrieved_workspace_memory"
-    );
-    assert!(
-        runtime.retrieval.memory_selection.selected_items[9]
-            .detail
-            .contains("recalled=2 item(s)")
-    );
-    assert_eq!(
-        runtime.retrieval.memory_selection.selected_items[10].kind,
-        "retrieved_thread_context"
-    );
     assert!(
         runtime
             .retrieval
             .memory_selection
             .selected_items
             .iter()
-            .find(|item| item.kind == "retrieved_thread_context")
-            .is_some_and(|item| item
-                .detail
-                .contains("Auth picker already moved behind the shared runtime bootstrap."))
+            .all(|item| !matches!(
+                item.kind.as_str(),
+                "retrieved_workspace_memory" | "retrieved_thread_context"
+            ))
     );
     assert_eq!(runtime.retrieval.memory_selection.available_items.len(), 2);
     assert_eq!(
@@ -289,7 +276,25 @@ fn shared_runtime_context_collects_prompt_plan_and_compaction_state() {
         runtime.retrieval.memory_selection.available_items[1].kind,
         "vector_memory"
     );
-    assert!(runtime.retrieval.memory_selection.dropped_items.is_empty());
+    assert_eq!(runtime.retrieval.memory_selection.dropped_items.len(), 2);
+    assert_eq!(
+        runtime.retrieval.memory_selection.dropped_items[0].kind,
+        "retrieved_workspace_memory"
+    );
+    assert!(
+        runtime.retrieval.memory_selection.dropped_items[0]
+            .detail
+            .contains("recalled=2 item(s)")
+    );
+    assert_eq!(
+        runtime.retrieval.memory_selection.dropped_items[1].kind,
+        "retrieved_thread_context"
+    );
+    assert!(
+        runtime.retrieval.memory_selection.dropped_items[1]
+            .detail
+            .contains("Auth picker already moved behind the shared runtime bootstrap.")
+    );
     assert!(
         runtime
             .retrieval

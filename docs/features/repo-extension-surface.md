@@ -212,8 +212,7 @@ For skill name conflicts:
 RARA loads lower-precedence roots first and lets later roots override earlier
 skills with the same name. The current order is:
 
-1. home/global skills under `~/.rara/skills`, `~/.agents/skills`, and
-   `~/.codex/skills`
+1. home/global skills under `~/.rara/skills` and `~/.agents/skills`
 2. repo-local `.agents/skills` from the repository root toward the current
    working directory
 3. current-working-directory `.rara/skills`
@@ -223,6 +222,21 @@ Within a single root, skill discovery is deterministic. If both `name.md` and
 
 RARA should surface overridden skills in status/debug output instead of hiding
 them.
+
+The detailed `SkillTool` and skill metadata contract is defined in
+[Skill Tool](skill-tool.md). This extension-surface document owns the broader
+repo compatibility boundary; the skill-tool spec owns invocation, prompt
+budgeting, source scopes, and skill-body injection.
+
+Claude-style verification should be handled through ordinary skills first:
+
+- `verify` is the general verification workflow skill;
+- `verifier-*` skills are project-specific evidence-capture protocols;
+- both should live under RARA's native skill roots, especially
+  `.agents/skills/`, until direct `.claude/skills` compatibility is explicitly
+  added.
+
+See [Verify Skill](verify-skill.md) for the detailed verification contract.
 
 ### Imported Agents
 
@@ -356,4 +370,5 @@ The next implementation slice should stay small:
    agents, and Claude hooks;
 2. expose them in `/status`;
 3. record precedence and parse status;
-4. defer runtime execution to a later milestone.
+4. add the initial `verify` skill under `.agents/skills/verify/SKILL.md`;
+5. defer hook and imported-agent runtime execution to a later milestone.

@@ -30,6 +30,7 @@ RARA planning mode is a read-only collaboration mode for non-trivial tasks.
 - planning-mode progress updates should stay short and grounded in inspected code instead of narrating each next file-by-file action;
 - planning mode must not describe file edits, patches, or implementation steps as if they are already happening.
 - plan approval must not be requested in ordinary prose; the model must use `<proposed_plan>` followed by `exit_plan_mode` when the plan is ready, or `<request_user_input>` when a key decision still blocks it.
+- `exit_plan_mode` requires a complete `<proposed_plan>...</proposed_plan>` block in the same assistant response. A message that opens `<proposed_plan>` without the exact closing `</proposed_plan>` tag is treated as malformed and must not enter approval.
 
 Plain narration or status updates are valid only when they are the final answer to a research, review, or planning-advice task. They must not be treated as approval requests.
 
@@ -85,7 +86,9 @@ The target long-term model is a Claude Code-style planning workflow adapted to R
 - The plan artifact is not a todo file.
 - Plan content answers what will change, why, where, and how it will be verified.
 - Todo/checklist state tracks execution progress after approval.
-- A future todo artifact may live beside the plan, such as `.rara/sessions/<session_id>/todo.json`, but it should not replace `plan.md`.
+- The todo artifact lives beside the plan as `.rara/sessions/<session_id>/todo.json`; see
+  [Todo Runtime](todo-runtime.md) for the detailed contract.
+- Todo state must not replace `plan.md` or change plan approval state.
 
 ### State Machine
 

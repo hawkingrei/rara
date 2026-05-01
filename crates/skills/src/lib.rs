@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 #[derive(Debug, Clone, Serialize)]
 pub struct Skill {
     pub name: String,
+    pub title: Option<String>,
     pub description: String,
     pub prompt: String,
     pub display_path: String,
@@ -15,6 +16,7 @@ pub struct Skill {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct SkillSummary {
     pub name: String,
+    pub title: Option<String>,
     pub description: String,
     pub display_path: String,
 }
@@ -69,13 +71,11 @@ impl SkillManager {
 
     fn load_skill_file(&mut self, path: &Path, base_dir: &Path) -> Result<()> {
         let content = fs::read_to_string(path)?;
-        let name = skill_name_from_path(path);
-        let description = content
-            .lines()
-            .find(|line| !line.trim().is_empty())
-            .unwrap_or("No description")
-            .trim_start_matches("# ")
-            .to_string();
+        let metadata = parse_skill_metadata(content.as_str());
+        let name = metadata
+            .name
+            .clone()
+            .unwrap_or_else(|| skill_name_from_path(path));
         let display_path = path
             .strip_prefix(base_dir)
             .unwrap_or(path)
@@ -86,7 +86,8 @@ impl SkillManager {
             name.clone(),
             Skill {
                 name,
-                description,
+                title: metadata.title,
+                description: metadata.description,
                 prompt: content,
                 display_path,
             },
@@ -110,6 +111,7 @@ impl SkillManager {
             .values()
             .map(|skill| SkillSummary {
                 name: skill.name.clone(),
+                title: skill.title.clone(),
                 description: skill.description.clone(),
                 display_path: skill.display_path.clone(),
             })
@@ -120,11 +122,7 @@ impl SkillManager {
 }
 
 fn skill_search_dirs(home: &Path, cwd: &Path) -> Vec<PathBuf> {
-    let mut dirs = vec![
-        home.join(".rara/skills"),
-        home.join(".agents/skills"),
-        home.join(".codex/skills"),
-    ];
+    let mut dirs = vec![home.join(".rara/skills"), home.join(".agents/skills")];
 
     for dir in repo_skill_search_dirs(cwd) {
         dirs.push(dir.join(".agents/skills"));
@@ -181,6 +179,116 @@ fn skill_name_from_path(path: &Path) -> String {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ParsedSkillMetadata {
+    name: Option<String>,
+    title: Option<String>,
+    description: String,
+}
+
+fn parse_skill_metadata(content: &str) -> ParsedSkillMetadata {
+    let (frontmatter, markdown) = split_frontmatter(content);
+    let name = frontmatter.and_then(|frontmatter| frontmatter_value(frontmatter, "name"));
+    let title = frontmatter
+        .and_then(|frontmatter| {
+            frontmatter_value(frontmatter, "title")
+                .or_else(|| frontmatter_value(frontmatter, "display_name"))
+        })
+        .or_else(|| first_markdown_heading(markdown));
+    let description = frontmatter
+        .and_then(|frontmatter| frontmatter_value(frontmatter, "description"))
+        .or_else(|| title.clone())
+        .or_else(|| first_non_empty_markdown_line(markdown))
+        .unwrap_or_else(|| "No description".to_string());
+
+    ParsedSkillMetadata {
+        name,
+        title,
+        description,
+    }
+}
+
+fn split_frontmatter(content: &str) -> (Option<&str>, &str) {
+    let mut lines = content.split_inclusive('\n');
+    let Some(first_line) = lines.next() else {
+        return (None, content);
+    };
+
+    if frontmatter_delimiter(first_line) != "---" {
+        return (None, content);
+    }
+
+    let frontmatter_start = first_line.len();
+    let mut cursor = frontmatter_start;
+
+    for line in lines {
+        let line_start = cursor;
+        cursor += line.len();
+
+        if frontmatter_delimiter(line) == "---" {
+            let frontmatter = content[frontmatter_start..line_start].trim_end_matches(['\r', '\n']);
+            return (Some(frontmatter), &content[cursor..]);
+        }
+    }
+
+    (None, content)
+}
+
+fn frontmatter_delimiter(line: &str) -> &str {
+    line.trim_end_matches('\n').trim_end_matches('\r')
+}
+
+fn frontmatter_value(frontmatter: &str, key: &str) -> Option<String> {
+    frontmatter.lines().find_map(|line| {
+        let trimmed = line.trim();
+        let (candidate_key, value) = trimmed.split_once(':')?;
+        (candidate_key.trim() == key).then(|| clean_frontmatter_value(value))?
+    })
+}
+
+fn clean_frontmatter_value(value: &str) -> Option<String> {
+    let value = value.trim().trim_matches('"').trim_matches('\'').trim();
+    (!value.is_empty()).then(|| value.to_string())
+}
+
+fn first_markdown_heading(markdown: &str) -> Option<String> {
+    markdown.lines().find_map(|line| {
+        let trimmed = line.trim();
+        let hashes = trimmed.chars().take_while(|ch| *ch == '#').count();
+        if hashes == 0 || hashes > 6 {
+            return None;
+        }
+        let title = trimmed[hashes..].trim();
+        (!title.is_empty()).then(|| truncate_metadata_value(title))
+    })
+}
+
+fn first_non_empty_markdown_line(markdown: &str) -> Option<String> {
+    markdown
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .map(|line| {
+            let hashes = line.chars().take_while(|ch| *ch == '#').count();
+            if hashes > 0 && hashes <= 6 {
+                truncate_metadata_value(line[hashes..].trim())
+            } else {
+                truncate_metadata_value(line)
+            }
+        })
+}
+
+fn truncate_metadata_value(value: &str) -> String {
+    const MAX_LEN: usize = 100;
+    if value.chars().count() <= MAX_LEN {
+        return value.to_string();
+    }
+
+    let mut truncated = value.chars().take(MAX_LEN - 3).collect::<String>();
+    truncated.push_str("...");
+    truncated
+}
+
 fn skill_file_sort_key(path: &Path) -> (String, u8, &Path) {
     let name = skill_name_from_path(path);
     let priority = if path.file_name().and_then(|value| value.to_str()) == Some("SKILL.md") {
@@ -206,6 +314,7 @@ mod tests {
         manager.load_from_dir(dir.path()).expect("load");
 
         let skill = manager.get_skill("legacy").expect("legacy skill");
+        assert_eq!(skill.title.as_deref(), Some("Legacy Skill"));
         assert_eq!(skill.description, "Legacy Skill");
         assert_eq!(skill.display_path, "legacy.md");
     }
@@ -221,7 +330,50 @@ mod tests {
         manager.load_from_dir(dir.path()).expect("load");
 
         let skill = manager.get_skill("reviewer").expect("reviewer skill");
+        assert_eq!(skill.title.as_deref(), Some("Reviewer"));
         assert_eq!(skill.description, "Reviewer");
+        assert_eq!(skill.display_path, "reviewer/SKILL.md");
+    }
+
+    #[test]
+    fn loads_codex_style_frontmatter_metadata() {
+        let dir = tempdir().expect("tempdir");
+        let skill_dir = dir.path().join("reviewer");
+        fs::create_dir_all(&skill_dir).expect("mkdir");
+        fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\nname: code-review\ntitle: Code Review\ndescription: Review local code changes.\n---\n\n# Ignored Heading\nworkflow",
+        )
+        .expect("write");
+
+        let mut manager = SkillManager::new();
+        manager.load_from_dir(dir.path()).expect("load");
+
+        let skill = manager.get_skill("code-review").expect("frontmatter skill");
+        assert_eq!(skill.title.as_deref(), Some("Code Review"));
+        assert_eq!(skill.description, "Review local code changes.");
+        assert_eq!(skill.display_path, "reviewer/SKILL.md");
+    }
+
+    #[test]
+    fn loads_frontmatter_metadata_with_crlf_line_endings() {
+        let dir = tempdir().expect("tempdir");
+        let skill_dir = dir.path().join("reviewer");
+        fs::create_dir_all(&skill_dir).expect("mkdir");
+        fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\r\nname: windows-review\r\ntitle: Windows Review\r\ndescription: Review CRLF metadata.\r\n---\r\n\r\n# Ignored Heading\r\nworkflow",
+        )
+        .expect("write");
+
+        let mut manager = SkillManager::new();
+        manager.load_from_dir(dir.path()).expect("load");
+
+        let skill = manager
+            .get_skill("windows-review")
+            .expect("frontmatter skill");
+        assert_eq!(skill.title.as_deref(), Some("Windows Review"));
+        assert_eq!(skill.description, "Review CRLF metadata.");
         assert_eq!(skill.display_path, "reviewer/SKILL.md");
     }
 
@@ -242,7 +394,7 @@ mod tests {
     }
 
     #[test]
-    fn search_dirs_keep_codex_compatible_prefix_order() {
+    fn search_dirs_keep_stable_prefix_order_without_codex_home_root() {
         let temp = tempdir().expect("tempdir");
         let home = temp.path().join("home");
         let repo = temp.path().join("repo");
@@ -257,7 +409,6 @@ mod tests {
             vec![
                 home.join(".rara/skills"),
                 home.join(".agents/skills"),
-                home.join(".codex/skills"),
                 repo.join(".agents/skills"),
                 repo.join("crates/.agents/skills"),
                 nested.join(".agents/skills"),
