@@ -440,11 +440,11 @@ impl Agent {
             self.ensure_active_plan_step();
             let mut turn_output = self.run_model_turn(output_mode, report).await?;
             self.last_query_plan_updated = turn_output.plan_updated;
-            if self.current_plan.is_empty()
-                && turn_output
-                    .tool_calls
-                    .iter()
-                    .any(|tool_call| tool_call.name == EXIT_PLAN_MODE_TOOL_NAME)
+            if turn_output
+                .tool_calls
+                .iter()
+                .any(|tool_call| tool_call.name == EXIT_PLAN_MODE_TOOL_NAME)
+                && (turn_output.malformed_proposed_plan || !turn_output.plan_updated)
             {
                 let content = if turn_output.malformed_proposed_plan {
                     incomplete_proposed_plan_error()
