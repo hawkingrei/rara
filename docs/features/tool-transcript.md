@@ -61,8 +61,8 @@ The transcript should move toward Codex/Claude-style tool visibility:
   commands biased toward the tail so error diagnostics remain visible without
   requiring shell-side `2>&1` redirection.
 - Oversized tool results should be persisted to disk and replaced in model
-  context with a `<persisted-output>` message containing the path and a bounded
-  preview. The full JSON payload remains inspectable from that path.
+  context with a bounded preview plus the display-oriented continuation lines
+  described below. The full JSON payload remains inspectable from that path.
 - A single tool-result batch should enforce an aggregate model-facing budget so
   parallel tool calls cannot combine many individually acceptable results into
   one oversized follow-up turn. The final compacted batch must fit the aggregate
@@ -78,10 +78,11 @@ The transcript should move toward Codex/Claude-style tool visibility:
   - `[tool_result truncated]`
   - `full result: <path>`
 
-  Internal key/value markers such as `full_result_path=<path>` may remain
-  readable for backward compatibility, but new model-facing compact results
-  should use the display contract above. This keeps final transcript rows
-  human-readable while preserving a stable path for full output inspection.
+  Legacy wrappers or key/value markers such as `<persisted-output>` or
+  `full_result_path=<path>` may remain readable for backward compatibility, but
+  new model-facing compact results should use the display contract above. This
+  keeps final transcript rows human-readable while preserving a stable path for
+  full output inspection.
 - When shell execution pauses on a human approval request, the approval card should take visual priority over older live stdout/stderr progress from the same turn.
 - Approval choices should describe both the action and its scope, such as:
   - allow only the current command;

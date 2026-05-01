@@ -59,3 +59,34 @@ pub fn queued_follow_up_sections(
     }
     sections
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{pending_follow_up_heading, queued_follow_up_heading, queued_follow_up_sections};
+
+    #[test]
+    fn queued_follow_up_sections_include_pending_and_end_of_turn_messages() {
+        let sections =
+            queued_follow_up_sections(Some("first follow-up"), 2, Some("second follow-up"), 3);
+
+        assert_eq!(sections.len(), 2);
+        assert_eq!(sections[0].title, pending_follow_up_heading());
+        assert_eq!(sections[0].preview, "first follow-up");
+        assert_eq!(sections[0].remaining, 1);
+        assert_eq!(sections[0].remaining_label, "more pending");
+        assert_eq!(sections[1].title, queued_follow_up_heading());
+        assert_eq!(sections[1].preview, "second follow-up");
+        assert_eq!(sections[1].remaining, 2);
+        assert_eq!(sections[1].remaining_label, "more queued");
+    }
+
+    #[test]
+    fn queued_follow_up_sections_skip_empty_previews() {
+        let sections = queued_follow_up_sections(Some("  "), 2, Some("queued"), 1);
+
+        assert_eq!(sections.len(), 1);
+        assert_eq!(sections[0].title, queued_follow_up_heading());
+        assert_eq!(sections[0].preview, "queued");
+        assert_eq!(sections[0].remaining, 0);
+    }
+}

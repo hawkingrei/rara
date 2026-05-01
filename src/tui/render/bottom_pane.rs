@@ -8,8 +8,6 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use super::super::custom_terminal::Frame;
 use super::super::interaction_text::pending_interaction_hint_text;
-#[cfg(test)]
-use super::super::queued_input::queued_follow_up_sections;
 use super::super::queued_input::{pending_follow_up_hint, queued_follow_up_hint};
 use super::super::state::char_offset_to_byte_index;
 use super::super::state::{ActivePendingInteractionKind, TaskKind, TuiApp};
@@ -284,46 +282,6 @@ fn render_composer(f: &mut Frame, app: &TuiApp, area: Rect) -> Option<(u16, u16)
     ))
 }
 
-#[cfg(test)]
-fn queued_follow_up_preview_lines(app: &TuiApp) -> Vec<Line<'static>> {
-    let mut lines = Vec::new();
-
-    for section in queued_follow_up_sections(
-        app.pending_follow_up_preview(),
-        app.pending_follow_up_count(),
-        app.queued_end_of_turn_preview(),
-        app.queued_follow_up_messages.len(),
-    ) {
-        if !lines.is_empty() {
-            lines.push(Line::from(""));
-        }
-        lines.push(Line::from(vec![
-            Span::styled(
-                "› ",
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(section.title, Style::default().fg(Color::DarkGray)),
-        ]));
-        lines.push(Line::from(vec![
-            Span::raw("  "),
-            Span::raw(section.preview),
-        ]));
-        if section.remaining > 0 {
-            lines.push(Line::from(vec![
-                Span::raw("  "),
-                Span::styled(
-                    format!("... {} {}", section.remaining, section.remaining_label),
-                    Style::default().fg(Color::DarkGray),
-                ),
-            ]));
-        }
-    }
-
-    lines
-}
-
 fn composer_hint(app: &TuiApp) -> &'static str {
     if matches!(
         app.overlay,
@@ -595,7 +553,6 @@ fn display_char_width(ch: char) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use insta::assert_snapshot;
     use std::time::Instant;
 
     use ratatui::{layout::Rect, style::Color};
@@ -610,7 +567,7 @@ mod tests {
 
     use super::{
         activity_status_line, composer_hint, composer_hint_line, footer_summary_text,
-        queued_follow_up_preview_lines, wrapped_text_cursor_position, wrapped_text_rows,
+        wrapped_text_cursor_position, wrapped_text_rows,
     };
 
     #[test]
@@ -719,51 +676,6 @@ mod tests {
         assert_eq!(label, "Warning");
         assert_eq!(color, Color::Yellow);
         assert!(detail.contains("missing an API key"));
-    }
-
-    #[test]
-    fn queued_follow_up_preview_shows_first_message_and_remainder() {
-        let temp = tempdir().unwrap();
-        let mut app = TuiApp::new(ConfigManager {
-            path: temp.path().join("config.json"),
-        })
-        .expect("build tui app");
-        app.begin_running_turn();
-        app.queue_follow_up_message_after_next_tool_boundary("first follow-up");
-        app.queue_follow_up_message("second follow-up");
-
-        let rendered = queued_follow_up_preview_lines(&app)
-            .into_iter()
-            .map(|line| line.to_string())
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        assert!(rendered.contains("Messages to be submitted after next tool call"));
-        assert!(rendered.contains("Queued follow-up messages"));
-        assert!(rendered.contains("first follow-up"));
-        assert!(rendered.contains("second follow-up"));
-    }
-
-    #[test]
-    fn queued_follow_up_preview_snapshot() {
-        let temp = tempdir().unwrap();
-        let mut app = TuiApp::new(ConfigManager {
-            path: temp.path().join("config.json"),
-        })
-        .expect("build tui app");
-        app.begin_running_turn();
-        app.queue_follow_up_message_after_next_tool_boundary(
-            "apply the feedback to the auth picker and rerun focused tests",
-        );
-        app.queue_follow_up_message("then summarize the remaining TODOs");
-
-        let rendered = queued_follow_up_preview_lines(&app)
-            .into_iter()
-            .map(|line| line.to_string())
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        assert_snapshot!("queued_follow_up_preview", rendered);
     }
 
     #[test]
