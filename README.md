@@ -92,7 +92,7 @@ Current backend families:
 - `gemini`
 - `local` / `local-candle`
 - `gemma4`
-- `qwen3` / `qwn3`
+- `qwen3`
 - `mock`
 
 Provider state includes API key, base URL, model, reasoning settings, revision,
