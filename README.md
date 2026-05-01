@@ -117,7 +117,8 @@ approval.
 
 Available tool families include:
 
-- Shell: `bash`, background task list/status/stop.
+- Shell: `bash`, `background_task_list`, `background_task_status`,
+  `background_task_stop`.
 - PTY: start/read/list/status/write/kill/stop.
 - Files: `read_file`, `write_file`, `replace`, `replace_lines`,
   `apply_patch`, `list_files`.
@@ -127,7 +128,7 @@ Available tool families include:
 - Memory: `remember_experience`, `retrieve_experience`,
   `retrieve_session_context`, `update_project_memory`.
 - Skills: `skill`.
-- Agents: `agent`, `explore_agent`, `plan_agent`, `team_create`.
+- Agents: `spawn_agent`, `explore_agent`, `plan_agent`, `team_create`.
 
 Long tool output is folded in the transcript with a preview and a path to the
 full result when needed.
@@ -136,7 +137,9 @@ full result when needed.
 
 Command execution uses a platform-specific sandbox wrapper where available:
 
-- macOS: seatbelt profile through `sandbox-exec`.
+- macOS: non-PTY commands use a seatbelt profile through `sandbox-exec`; PTY
+  commands currently run directly because `sandbox-exec` does not reliably
+  preserve interactive PTY stdin.
 - Linux: bubblewrap.
 - Other or unsupported environments: direct execution.
 
