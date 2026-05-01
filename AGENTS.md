@@ -64,3 +64,17 @@ The current product direction is to make local inference a first-class path inst
 - Better onboarding and runtime status transparency.
 - Stronger local-model prompt formatting and stop-sequence handling.
 - A real embedding backend for local memory retrieval quality.
+
+## 7. Commit Rules
+
+- Use short conventional commit titles.
+- Allowed commit title types:
+  - `feat`: user-visible feature or capability.
+  - `fix`: bug fix or behavior correction.
+  - `chore`: maintenance, dependency, tooling, or non-user-facing cleanup.
+  - `test`: test-only changes.
+- Format commit titles as `type: subject`.
+- Keep the subject concise, imperative, and lowercase unless a proper noun or
+  code identifier requires otherwise.
+- Do not use unlisted types such as `docs`, `refactor`, or `style`; fold those
+  changes into the closest allowed type.
