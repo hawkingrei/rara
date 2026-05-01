@@ -66,3 +66,6 @@ Updated `docs/todo.md` to reflect completed Phase 1 items:
   retrieval (`docs/todo.md` Phase 1, item 1B).
 - Compaction ownership tightening (`CompactState` vs `CompactionRecord`) can be addressed
   when the durable in-turn checkpoint work begins.
+- Cache hit/refresh status is now wired through `CacheStatus` enum and `/context` rendering;
+  actual WorkspaceMemory cache signals will populate the field once the `cached_file_content`
+  return type is promoted to return `CacheStatus` alongside content.
