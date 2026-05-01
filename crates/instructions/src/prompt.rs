@@ -369,16 +369,17 @@ fn default_system_prompt_sections() -> Vec<PromptSection> {
             section(
                 "Tool Use And Safety",
                 &[
-                    "Before modifying an existing file, read the full current file with 'read_file' in this turn unless the tool result proves that the target was already fully read and has not changed.",
-                    "If a file was only partially read, the edit target is stale, or an edit tool reports that the file changed since it was read, re-read the full file before attempting the edit again.",
+                    "Before modifying an existing file, inspect the relevant current file contents with 'read_file' in this turn unless the tool result proves that the target was already read and has not changed.",
+                    "If a file was only partially read, the edit target is stale, or an edit tool reports that the file changed since it was read, re-read the current relevant content before attempting the edit again.",
                     "Never write from memory, a search snippet, or a stale summary when the direct file contents can be read locally.",
                     "Prefer 'apply_patch' for editing existing files because it is diff-shaped and reviewable.",
                     "When using 'apply_patch', send a single patch string that starts with '*** Begin Patch' and ends with '*** End Patch'. Use '*** Add File: path' with '+' lines for new files, '*** Delete File: path' for deletes, and '*** Update File: path' for edits.",
                     "Inside an update patch, use '@@' hunks and prefix every content line with exactly one marker: space for unchanged context, '-' for removed text, or '+' for inserted text. Preserve indentation exactly after that marker.",
-                    "For update hunks, include enough exact context from the current file for the old lines to match uniquely; if a hunk does not match, re-read the file and make the smallest corrected patch rather than guessing.",
+                    "For update hunks, include enough exact context from the current file for the old lines to match uniquely. If a full read is unavailable because the file or line is too large, use 'apply_patch' with exact context from the current partial read rather than shell text-editing commands.",
+                    "If an 'apply_patch' hunk does not match, re-read the file and make the smallest corrected patch rather than guessing.",
                     "Use 'replace' only for one exact, unique snippet that you have verified from the current file contents.",
                     "For 'replace', copy 'old_string' exactly from the current file, including whitespace and indentation.",
-                    "A 'partially read' or stale edit-tool error means you must re-read the file and retry a direct edit; it is not permission to bypass edit tools with sed, perl, shell redirection, or scripts.",
+                    "A 'partially read' or stale edit-tool error means you must re-read the relevant current content and retry a direct edit tool; it is not permission to bypass edit tools with sed, perl, shell redirection, or scripts.",
                     "Use 'replace_lines' only for large deletions or replacements when you have verified exact line numbers from the current file contents; do not pass hundreds of lines through 'replace.old_string'.",
                     "Use 'write_file' only for new files or intentional full-file rewrites after reading the current file when it already exists.",
                     "Do not use shell redirection, sed, perl, or ad-hoc scripts to edit files when direct edit tools or 'apply_patch' can do the job.",
@@ -861,7 +862,7 @@ mod tests {
         assert!(prompt.contains("prefer 'rg' for text search"));
         assert!(prompt.contains("rg --files"));
         assert!(prompt.contains("Before modifying an existing file"));
-        assert!(prompt.contains("read the full current file"));
+        assert!(prompt.contains("inspect the relevant current file contents"));
         assert!(prompt.contains("If a file was only partially read"));
         assert!(prompt.contains("Never write from memory"));
         assert!(prompt.contains("Prefer 'apply_patch' for editing existing files"));
@@ -871,6 +872,8 @@ mod tests {
         assert!(prompt.contains("prefix every content line with exactly one marker"));
         assert!(prompt.contains("Preserve indentation exactly after that marker"));
         assert!(prompt.contains("include enough exact context"));
+        assert!(prompt.contains("If a full read is unavailable"));
+        assert!(prompt.contains("use 'apply_patch' with exact context"));
         assert!(prompt.contains("Use 'replace' only for one exact, unique snippet"));
         assert!(prompt.contains("copy 'old_string' exactly from the current file"));
         assert!(prompt.contains("not permission to bypass edit tools"));
