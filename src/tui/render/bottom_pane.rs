@@ -375,7 +375,15 @@ fn composer_hint(app: &TuiApp) -> &'static str {
     } else if app.has_queued_follow_up_messages() {
         queued_follow_up_hint()
     } else if app.is_busy() {
-        "Enter queue  Esc cancel"
+        if app
+            .running_task
+            .as_ref()
+            .is_some_and(|task| matches!(task.kind, TaskKind::Query))
+        {
+            "Enter queue  Esc cancel"
+        } else {
+            "Enter queue"
+        }
     } else if app.has_pending_planning_suggestion() {
         "planning suggested  1 enter planning mode  2 continue in execute mode"
     } else if let Some(pending) = app.active_pending_interaction() {
@@ -817,6 +825,32 @@ mod tests {
         });
 
         assert_eq!(composer_hint(&app), "Enter queue  Esc cancel");
+
+        if let Some(task) = app.running_task.take() {
+            task.handle.abort();
+        }
+    }
+
+    #[tokio::test]
+    async fn busy_composer_hint_hides_cancel_for_non_query_tasks() {
+        let temp = tempdir().unwrap();
+        let mut app = TuiApp::new(ConfigManager {
+            path: temp.path().join("config.json"),
+        })
+        .expect("build tui app");
+        app.runtime_phase = RuntimePhase::ProcessingResponse;
+        let (_sender, receiver) = mpsc::unbounded_channel();
+        app.running_task = Some(RunningTask {
+            kind: TaskKind::Compact,
+            receiver,
+            handle: tokio::spawn(std::future::pending::<TaskCompletion>()),
+            started_at: Instant::now(),
+            next_heartbeat_after_secs: 2,
+            cancellation_token: None,
+            cancellation_requested: false,
+        });
+
+        assert_eq!(composer_hint(&app), "Enter queue");
 
         if let Some(task) = app.running_task.take() {
             task.handle.abort();
