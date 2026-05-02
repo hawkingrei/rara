@@ -8,6 +8,7 @@ use crate::agent::AgentEvent;
 use crate::tool::ToolOutputStream;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum RuntimeControllerKind {
     LocalTui,
     LocalCli,
@@ -59,7 +60,8 @@ impl RuntimeProvenance {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "payload", rename_all = "snake_case")]
 pub enum RuntimeControlRequest {
     Session(SessionControlRequest),
     Input(InputControlRequest),
@@ -71,7 +73,7 @@ pub enum RuntimeControlRequest {
     Approval(ApprovalControlRequest),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RuntimeControlEnvelope {
     pub request_id: String,
     pub provenance: RuntimeProvenance,
@@ -79,6 +81,7 @@ pub struct RuntimeControlEnvelope {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "payload", rename_all = "snake_case")]
 pub enum SessionControlRequest {
     CreateSession,
     ResumeSession { session_id: String },
@@ -88,6 +91,7 @@ pub enum SessionControlRequest {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "payload", rename_all = "snake_case")]
 pub enum InputControlRequest {
     SubmitUserPrompt { prompt: String },
     AnswerPendingInput { answer: String },
@@ -97,6 +101,7 @@ pub enum InputControlRequest {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ShellApprovalDecision {
     Once,
     Prefix,
@@ -105,12 +110,14 @@ pub enum ShellApprovalDecision {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "payload", rename_all = "snake_case")]
 pub enum OutputSubscriptionRequest {
     Subscribe { subscriber_id: String },
     Unsubscribe { subscriber_id: String },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "payload", rename_all = "snake_case")]
 pub enum PromptSourceLifetime {
     Turns(u32),
     Session,
@@ -128,6 +135,7 @@ pub struct PromptSourceRegistration {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum SourceScope {
     Home,
     Repo,
@@ -137,6 +145,7 @@ pub enum SourceScope {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum SourceLayer {
     System,
     Developer,
@@ -146,6 +155,7 @@ pub enum SourceLayer {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "payload", rename_all = "snake_case")]
 pub enum PromptSourceControlRequest {
     Register(PromptSourceRegistration),
     Unregister { source_id: String },
@@ -153,6 +163,7 @@ pub enum PromptSourceControlRequest {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "payload", rename_all = "snake_case")]
 pub enum SkillSourceControlRequest {
     RegisterRoot {
         source_id: String,
@@ -172,7 +183,8 @@ pub enum SkillSourceControlRequest {
     QuerySkills,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "payload", rename_all = "snake_case")]
 pub enum MemoryControlRequest {
     AddRecord {
         memory_id: String,
@@ -185,12 +197,14 @@ pub enum MemoryControlRequest {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum MemoryScope {
     Thread,
     Workspace,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "payload", rename_all = "snake_case")]
 pub enum HookControlRequest {
     Declare {
         hook_id: String,
@@ -201,6 +215,7 @@ pub enum HookControlRequest {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum HookLifecycle {
     SessionStart,
     UserPromptSubmit,
@@ -211,6 +226,7 @@ pub enum HookLifecycle {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "payload", rename_all = "snake_case")]
 pub enum ApprovalControlRequest {
     AnswerPendingApproval { approval_id: String, approved: bool },
     QueryPendingApprovals,
@@ -225,6 +241,7 @@ pub struct RuntimeControlEvent {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "payload", rename_all = "snake_case")]
 pub enum RuntimeEvent {
     Session(SessionEvent),
     Input(InputEvent),
@@ -242,6 +259,7 @@ pub enum RuntimeEvent {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "payload", rename_all = "snake_case")]
 pub enum SessionEvent {
     Created { session_id: String },
     Resumed { session_id: String },
@@ -253,13 +271,15 @@ pub enum SessionEvent {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "payload", rename_all = "snake_case")]
 pub enum InputEvent {
     UserPromptSubmitted,
-    FollowUpQueued { queue_len: usize },
+    FollowUpQueued { queue_len: u32 },
     PendingInputAnswered,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "payload", rename_all = "snake_case")]
 pub enum AssistantEvent {
     Text(String),
     TextDelta(String),
@@ -267,6 +287,7 @@ pub enum AssistantEvent {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ToolStream {
     Stdout,
     Stderr,
@@ -282,6 +303,7 @@ impl From<ToolOutputStream> for ToolStream {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "payload", rename_all = "snake_case")]
 pub enum ToolEvent {
     Use {
         name: String,
@@ -300,12 +322,14 @@ pub enum ToolEvent {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "payload", rename_all = "snake_case")]
 pub enum ApprovalEvent {
     Requested { approval_id: String, kind: String },
     Answered { approval_id: String, approved: bool },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "payload", rename_all = "snake_case")]
 pub enum PlanEvent {
     Updated,
     Approved,
@@ -313,6 +337,7 @@ pub enum PlanEvent {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "payload", rename_all = "snake_case")]
 pub enum PromptSourceEvent {
     Registered { source_id: String },
     Unregistered { source_id: String },
@@ -320,6 +345,7 @@ pub enum PromptSourceEvent {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "payload", rename_all = "snake_case")]
 pub enum SkillEvent {
     Registered { source_id: String, name: String },
     Shadowed { name: String, by_source_id: String },
@@ -327,12 +353,14 @@ pub enum SkillEvent {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "payload", rename_all = "snake_case")]
 pub enum MemoryEvent {
     RecordAdded { memory_id: String },
     SelectionUpdated,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "payload", rename_all = "snake_case")]
 pub enum HookEvent {
     Declared {
         hook_id: String,
@@ -345,16 +373,19 @@ pub enum HookEvent {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "payload", rename_all = "snake_case")]
 pub enum ContextEvent {
     SnapshotUpdated,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "payload", rename_all = "snake_case")]
 pub enum WarningEvent {
     RuntimeWarning { message: String },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "payload", rename_all = "snake_case")]
 pub enum ErrorEvent {
     RuntimeError { message: String },
 }
@@ -466,10 +497,47 @@ mod tests {
         let value = serde_json::to_value(&request).unwrap();
 
         assert_eq!(value["request_id"], json!("req-1"));
-        assert_eq!(value["provenance"]["controller"], json!("Acp"));
+        assert_eq!(value["provenance"]["controller"], json!("acp"));
         assert_eq!(
-            value["request"]["PromptSource"]["Register"]["lifetime"],
-            json!({ "Turns": 2 })
+            value["request"],
+            json!({
+                "type": "prompt_source",
+                "payload": {
+                    "type": "register",
+                    "payload": {
+                        "source_id": "source-1",
+                        "scope": "protocol",
+                        "layer": "user",
+                        "budget_hint_tokens": 256,
+                        "lifetime": {
+                            "type": "turns",
+                            "payload": 2
+                        },
+                        "content": "adapter context"
+                    }
+                }
+            })
+        );
+    }
+
+    #[test]
+    fn input_event_uses_fixed_width_queue_length_and_stable_wire_shape() {
+        let value = serde_json::to_value(RuntimeEvent::Input(InputEvent::FollowUpQueued {
+            queue_len: 3,
+        }))
+        .unwrap();
+
+        assert_eq!(
+            value,
+            json!({
+                "type": "input",
+                "payload": {
+                    "type": "follow_up_queued",
+                    "payload": {
+                        "queue_len": 3
+                    }
+                }
+            })
         );
     }
 

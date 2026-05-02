@@ -55,6 +55,10 @@ contract:
 - `agent_event_to_runtime_event()` maps existing `AgentEvent` output into the
   shared event shape so protocol subscribers can later reuse the same stream.
 
+The serialized contract uses explicit `type` fields and `snake_case` enum
+names instead of Rust's default externally tagged enum representation. Event
+counts use fixed-width integer fields where they may cross protocol boundaries.
+
 This checkpoint intentionally does not route ACP or Wire through the control
 plane yet. The next slice should add subscriber plumbing and then move ACP
 prompt/cancel/session handling onto these request types.
