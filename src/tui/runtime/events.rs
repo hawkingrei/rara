@@ -44,6 +44,32 @@ pub(super) fn apply_tui_event(app: &mut TuiApp, event: TuiEvent) {
                     } else if let Some(action) = tool_action_label(&message) {
                         app.record_running_action(action);
                     }
+                } else if let Some(request) = subagent_request_input(&message) {
+                    app.advance_running_tool_boundary();
+                    let source = if message.starts_with("explore_agent ") {
+                        if let Some(note) = exploration_result_note(&message) {
+                            app.record_exploration_note(note);
+                        }
+                        "explore_agent"
+                    } else if message.starts_with("plan_agent ") {
+                        if let Some(note) = planning_result_note(&message) {
+                            app.record_planning_note(note);
+                        }
+                        "plan_agent"
+                    } else {
+                        "spawn_agent"
+                    };
+                    app.record_local_request_input(
+                        source,
+                        request.question,
+                        request.options,
+                        request.note,
+                    );
+                    app.set_runtime_phase(
+                        RuntimePhase::RunningTool,
+                        Some(message.lines().next().unwrap_or(role).trim().to_string()),
+                    );
+                    return;
                 } else if let Some(note) = exploration_result_note(&message) {
                     app.advance_running_tool_boundary();
                     app.record_exploration_note(note);
@@ -55,32 +81,6 @@ pub(super) fn apply_tui_event(app: &mut TuiApp, event: TuiEvent) {
                 } else if let Some(note) = planning_result_note(&message) {
                     app.advance_running_tool_boundary();
                     app.record_planning_note(note);
-                    app.set_runtime_phase(
-                        RuntimePhase::RunningTool,
-                        Some(message.lines().next().unwrap_or(role).trim().to_string()),
-                    );
-                    if let Some(request) = subagent_request_input(&message) {
-                        app.record_local_request_input(
-                            "plan_agent",
-                            request.question,
-                            request.options,
-                            request.note,
-                        );
-                    }
-                    return;
-                } else if let Some(request) = subagent_request_input(&message) {
-                    app.advance_running_tool_boundary();
-                    let source = if message.starts_with("explore_agent ") {
-                        "explore_agent"
-                    } else {
-                        "plan_agent"
-                    };
-                    app.record_local_request_input(
-                        source,
-                        request.question,
-                        request.options,
-                        request.note,
-                    );
                     app.set_runtime_phase(
                         RuntimePhase::RunningTool,
                         Some(message.lines().next().unwrap_or(role).trim().to_string()),

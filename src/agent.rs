@@ -103,6 +103,7 @@ struct TurnOutput {
     malformed_proposed_plan: bool,
     continue_inspection: bool,
     had_text_response: bool,
+    had_reasoning_response: bool,
 }
 
 pub struct Agent {
@@ -314,6 +315,7 @@ impl Agent {
         );
 
         let mut streamed_any_text_delta = false;
+        let mut streamed_any_reasoning_delta = false;
         let response = self
             .llm_backend
             .ask_streaming_with_context(&messages, tool_schemas, turn_metadata, &mut |event| {
@@ -323,6 +325,7 @@ impl Agent {
                         report(AgentEvent::AssistantDelta(delta));
                     }
                     LlmStreamEvent::ReasoningDelta(delta) => {
+                        streamed_any_reasoning_delta |= !delta.trim().is_empty();
                         report(AgentEvent::AssistantThinkingDelta(delta));
                     }
                 }
@@ -341,6 +344,7 @@ impl Agent {
         let mut malformed_proposed_plan = false;
         let mut continue_inspection = false;
         let mut had_text_response = false;
+        let mut had_reasoning_response = streamed_any_reasoning_delta;
         let mut sanitized_content = Vec::new();
         for block in &response.content {
             match block {
@@ -392,6 +396,11 @@ impl Agent {
                         key: key.clone(),
                         value: value.clone(),
                     });
+                    if key == "reasoning_content"
+                        && value.as_str().is_some_and(|text| !text.trim().is_empty())
+                    {
+                        had_reasoning_response = true;
+                    }
                 }
             }
         }
@@ -406,6 +415,7 @@ impl Agent {
             malformed_proposed_plan,
             continue_inspection,
             had_text_response,
+            had_reasoning_response,
         })
     }
 
@@ -476,6 +486,7 @@ impl Agent {
                     turn_output.plan_updated,
                     turn_output.continue_inspection,
                     turn_output.had_text_response,
+                    turn_output.had_reasoning_response,
                     *agentic_turns,
                 ) {
                     report(AgentEvent::Status(
