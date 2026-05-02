@@ -1,6 +1,7 @@
 mod app_event;
 mod auth_mode_picker;
 mod command;
+mod constants;
 mod custom_terminal;
 mod event_dispatch;
 mod event_loop;
@@ -15,6 +16,7 @@ mod line_utils;
 mod markdown;
 mod markdown_render;
 mod markdown_stream;
+mod message_role;
 mod plan_display;
 mod provider_flow;
 mod queued_input;
