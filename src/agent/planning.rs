@@ -50,6 +50,7 @@ pub(super) enum RuntimeContinuationPhase {
     ToolResultsAvailable,
     PlanContinuationRequired,
     ExecutionContinuationRequired,
+    ReasoningOnlyContinuationRequired,
     PlanApproved,
 }
 
@@ -505,11 +506,15 @@ impl Agent {
 
     pub(super) fn should_continue_execute_without_tools(
         &self,
-        _agentic_turns: usize,
+        agentic_turns: usize,
         continue_inspection: bool,
+        had_text_response: bool,
+        had_reasoning_response: bool,
     ) -> bool {
+        let reasoning_only_initial_turn =
+            had_reasoning_response && !had_text_response && agentic_turns == 0;
         matches!(self.execution_mode, AgentExecutionMode::Execute)
-            && continue_inspection
+            && (continue_inspection || reasoning_only_initial_turn)
             && self.pending_user_input.is_none()
             && self.pending_approval.is_none()
     }
@@ -794,6 +799,7 @@ impl RuntimeContinuationPhase {
             Self::ToolResultsAvailable => "tool_results_available",
             Self::PlanContinuationRequired => "plan_continuation_required",
             Self::ExecutionContinuationRequired => "execution_continuation_required",
+            Self::ReasoningOnlyContinuationRequired => "reasoning_only_continuation_required",
             Self::PlanApproved => "plan_approved",
         }
     }
@@ -821,6 +827,13 @@ impl RuntimeContinuationPhase {
                 "Keep gathering the next relevant code context now.",
                 "If you mentioned a next file or next inspection step, call the tool for it directly.",
                 "Only stop when you can provide concrete, evidence-based suggestions or when structured user input is required.",
+                "Do not ask the user to continue.",
+            ],
+            Self::ReasoningOnlyContinuationRequired => vec![
+                "The previous model turn produced internal reasoning but no visible assistant text and no tool call.",
+                "Continue the same task immediately.",
+                "Do not rely on the hidden reasoning as an action.",
+                "Either call the next needed tool directly, or provide a visible final answer.",
                 "Do not ask the user to continue.",
             ],
             Self::PlanApproved => vec![

@@ -217,19 +217,28 @@ async fn recoverable_runtime_error_is_returned_to_model_once() {
 
 #[tokio::test]
 async fn reasoning_only_turn_is_not_persisted_as_empty_assistant_message() {
-    let backend = Arc::new(SequencedBackend::new(vec![LlmResponse {
-        content: vec![ContentBlock::ProviderMetadata {
-            provider: "deepseek".to_string(),
-            key: "reasoning_content".to_string(),
-            value: json!("internal planning only"),
-        }],
-        stop_reason: Some("end_turn".to_string()),
-        usage: Some(TokenUsage::default()),
-    }]));
+    let backend = Arc::new(SequencedBackend::new(vec![
+        LlmResponse {
+            content: vec![ContentBlock::ProviderMetadata {
+                provider: "deepseek".to_string(),
+                key: "reasoning_content".to_string(),
+                value: json!("internal planning only"),
+            }],
+            stop_reason: Some("end_turn".to_string()),
+            usage: Some(TokenUsage::default()),
+        },
+        LlmResponse {
+            content: vec![ContentBlock::Text {
+                text: "Visible answer after structured continuation.".to_string(),
+            }],
+            stop_reason: Some("end_turn".to_string()),
+            usage: Some(TokenUsage::default()),
+        },
+    ]));
     let (_temp, session_manager, workspace, rara_dir) = test_runtime_storage();
     let mut agent = Agent::new(
         ToolManager::new(),
-        backend,
+        backend.clone(),
         Arc::new(VectorDB::new(&rara_dir.join("lancedb").to_string_lossy())),
         session_manager,
         workspace,
@@ -241,13 +250,27 @@ async fn reasoning_only_turn_is_not_persisted_as_empty_assistant_message() {
             super::super::AgentOutputMode::Silent,
         )
         .await
-        .expect("reasoning-only response should complete without empty history");
+        .expect("reasoning-only response should continue once");
 
+    let observed_messages = backend.observed_messages();
+    assert_eq!(observed_messages.len(), 2);
+    assert!(observed_messages[1].iter().any(|message| {
+        message
+            .content
+            .to_string()
+            .contains("reasoning_only_continuation_required")
+    }));
+    let assistant_messages = agent
+        .history
+        .iter()
+        .filter(|message| message.role == "assistant")
+        .collect::<Vec<_>>();
+    assert_eq!(assistant_messages.len(), 1);
     assert!(
-        !agent
-            .history
-            .iter()
-            .any(|message| message.role == "assistant")
+        assistant_messages[0]
+            .content
+            .to_string()
+            .contains("Visible answer after structured continuation.")
     );
 }
 
@@ -1408,11 +1431,13 @@ fn execute_mode_continuation_requires_structured_inspection_marker() {
     agent.set_execution_mode(AgentExecutionMode::Execute);
     agent.inspection_progress.source_reads = 1;
 
-    assert!(!agent.should_continue_execute_without_tools(1, false));
-    assert!(agent.should_continue_execute_without_tools(1, true));
+    assert!(!agent.should_continue_execute_without_tools(1, false, true, false));
+    assert!(agent.should_continue_execute_without_tools(1, true, true, false));
+    assert!(agent.should_continue_execute_without_tools(0, false, false, true));
+    assert!(!agent.should_continue_execute_without_tools(1, false, false, true));
 
     agent.inspection_progress.source_reads = 2;
-    assert!(agent.should_continue_execute_without_tools(1, true));
+    assert!(agent.should_continue_execute_without_tools(1, true, true, false));
 }
 
 #[test]
