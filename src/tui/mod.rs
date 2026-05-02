@@ -24,6 +24,7 @@ mod render;
 mod runtime;
 mod session_restore;
 mod state;
+mod status_display;
 mod sub_agent_display;
 mod submit;
 mod terminal_event;
