@@ -112,10 +112,7 @@ fn activity_status_line_renders_warning_notice_in_yellow() {
         path: temp.path().join("config.json"),
     })
     .expect("build tui app");
-    app.notice = Some(
-        "Warning: something went wrong"
-            .to_string(),
-    );
+    app.notice = Some("Warning: something went wrong".to_string());
 
     let (label, color, _detail) = activity_status_line(&app);
     assert_eq!(label, "Warning");

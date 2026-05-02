@@ -1,7 +1,7 @@
 use super::{
-    SandboxBackend, SandboxManager, DEFAULT_SHELL, MACOS_SANDBOX_EXEC,
-    cleanup_profiles_older_than, cleanup_stale_profiles, command_search_install_roots,
-    sandbox_profile_string_literal, sanitize_shell_program, shell_command_flag, shell_program,
+    DEFAULT_SHELL, MACOS_SANDBOX_EXEC, SandboxBackend, SandboxManager, cleanup_profiles_older_than,
+    cleanup_stale_profiles, command_search_install_roots, sandbox_profile_string_literal,
+    sanitize_shell_program, shell_command_flag, shell_program,
 };
 use std::env;
 use std::path::PathBuf;
@@ -143,7 +143,10 @@ fn wrap_pty_shell_command_uses_direct_mode_on_macos() {
         .expect("pty shell wrapper");
 
     assert_eq!(wrapped.program, "/bin/sh");
-    assert_eq!(wrapped.args, vec!["-c".to_string(), "custom-tool --flag".to_string()]);
+    assert_eq!(
+        wrapped.args,
+        vec!["-c".to_string(), "custom-tool --flag".to_string()]
+    );
     assert!(!wrapped.sandboxed);
 }
 
@@ -158,7 +161,9 @@ fn wrap_shell_command_uses_platform_shell() {
     assert_eq!(wrapped.program, MACOS_SANDBOX_EXEC);
     let args_str = wrapped.args.join(" ");
     assert!(
-        args_str.contains("/bin/zsh") || args_str.contains("/bin/bash") || args_str.contains(DEFAULT_SHELL),
+        args_str.contains("/bin/zsh")
+            || args_str.contains("/bin/bash")
+            || args_str.contains(DEFAULT_SHELL),
         "macos shell wrapper should use a known system shell, got args: {args_str}"
     );
 }
@@ -286,15 +291,12 @@ fn wrap_shell_command_uses_minimal_linux_bind_set() {
         "linux sandbox should provide an isolated writable /tmp"
     );
     assert!(
-        wrapped
-            .args
-            .windows(3)
-            .any(|window| window
-                == [
-                    String::from("--ro-bind"),
-                    String::from("/workspace/project"),
-                    String::from("/workspace/project")
-                ]),
+        wrapped.args.windows(3).any(|window| window
+            == [
+                String::from("--ro-bind"),
+                String::from("/workspace/project"),
+                String::from("/workspace/project")
+            ]),
         "linux sandbox should still mount the workspace path itself"
     );
 }
