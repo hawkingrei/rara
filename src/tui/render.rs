@@ -123,7 +123,8 @@ pub(crate) fn transcript_viewport(
 ) -> TranscriptViewport {
     let lines = renderable_transcript_lines(app, width);
     let visual_row_count = transcript_visual_row_count(&lines, width);
-    let scroll_offset = transcript_scroll_offset(app, viewport_height, visual_row_count);
+    let effective_height = viewport_height.saturating_sub(1).max(1);
+    let scroll_offset = transcript_scroll_offset(app, effective_height, visual_row_count);
     TranscriptViewport::new(lines, scroll_offset)
 }
 
