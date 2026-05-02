@@ -14,7 +14,7 @@ use crate::redaction::{redact_secrets, sanitize_url_for_display};
 
 use super::shared::{
     ContextBudget, LlmBackend, LlmStreamEvent, LlmTurnMetadata, collect_assistant_content,
-    extract_message_text, http_client_for_target, model_context_budget,
+    context_budget_from_window, extract_message_text, http_client_for_target, model_context_budget,
     next_stream_item_with_idle_timeout, parse_tool_arguments, render_openai_message_content,
 };
 
@@ -30,6 +30,7 @@ pub struct OpenAiCompatibleBackend {
     pub client: reqwest::Client,
     pub api_key: Option<SecretString>,
     pub base_url: String,
+    pub context_window_override: Option<usize>,
     pub model: String,
     pub endpoint_kind: OpenAiEndpointKind,
     pub reasoning_effort: Option<String>,
@@ -69,6 +70,7 @@ impl OpenAiCompatibleBackend {
             client: http_client_for_target(&base_url)?,
             api_key,
             base_url,
+            context_window_override: None,
             model,
             endpoint_kind,
             reasoning_effort,
@@ -86,6 +88,38 @@ impl OpenAiCompatibleBackend {
         };
         format!("{normalized_base}/{path}")
     }
+}
+
+/// Fetch the model's context window size from GET /v1/models.
+/// Falls back to None if the API call fails or the model is not found.
+pub async fn fetch_model_context_window(
+    client: &reqwest::Client,
+    base_url: &str,
+    api_key: Option<&SecretString>,
+    model: &str,
+) -> Option<usize> {
+    let base = base_url.trim_end_matches('/');
+    let url = if base.ends_with("/v1") {
+        format!("{base}/models")
+    } else {
+        format!("{base}/v1/models")
+    };
+
+    let mut req = client.get(&url);
+    if let Some(key) = api_key {
+        req = req.bearer_auth(key.expose_secret());
+    }
+
+    let res = req.send().await.ok()?;
+    let body: Value = res.json().await.ok()?;
+    let models = body["data"].as_array()?;
+
+    for m in models {
+        if m["id"].as_str() == Some(model) {
+            return m["context_length"].as_u64().map(|n| n as usize);
+        }
+    }
+    None
 }
 
 #[async_trait]
@@ -301,7 +335,9 @@ impl LlmBackend for OpenAiCompatibleBackend {
     }
 
     fn context_budget(&self, _messages: &[Message], _tools: &[Value]) -> Option<ContextBudget> {
-        model_context_budget(self.model.as_str())
+        self.context_window_override
+            .map(|w| context_budget_from_window(w))
+            .or_else(|| model_context_budget(self.model.as_str()))
     }
 }
 

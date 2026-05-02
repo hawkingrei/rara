@@ -340,6 +340,8 @@ pub(super) fn model_context_budget(model: &str) -> Option<ContextBudget> {
     let canonical = model.trim().to_ascii_lowercase();
     let context_window_tokens = if is_deepseek_long_context_model(&canonical) {
         DEEPSEEK_LONG_CONTEXT_WINDOW_TOKENS
+    } else if canonical.starts_with("kimi-") {
+        262_144
     } else if canonical.contains("gpt-5")
         || canonical.contains("codex")
         || canonical.contains("gpt-4.1")
