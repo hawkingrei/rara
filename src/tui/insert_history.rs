@@ -85,10 +85,7 @@ where
 
     let wrap_width = area.width.max(1) as usize;
     let wrapped = lines;
-    let wrapped_lines = wrapped
-        .iter()
-        .map(|line| line.width().max(1).div_ceil(wrap_width))
-        .sum::<usize>() as u16;
+    let wrapped_lines = crate::tui::layout_utils::total_visual_rows(&wrapped, area.width) as u16;
 
     if matches!(mode, InsertHistoryMode::Zellij) {
         let space_below = screen_size.height.saturating_sub(area.bottom());
@@ -198,7 +195,7 @@ where
 /// set foreground/background colors, and write styled spans. Caller is responsible
 /// for cursor positioning and any leading `\r\n`.
 fn write_history_line<W: Write>(writer: &mut W, line: &Line, wrap_width: usize) -> io::Result<()> {
-    let physical_rows = line.width().max(1).div_ceil(wrap_width) as u16;
+    let physical_rows = crate::tui::layout_utils::line_visual_rows(line, wrap_width) as u16;
     if physical_rows > 1 {
         queue!(writer, SavePosition)?;
         for _ in 1..physical_rows {

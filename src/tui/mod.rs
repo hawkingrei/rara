@@ -10,6 +10,7 @@ mod highlight;
 mod insert_history;
 mod interaction_text;
 mod keymap;
+mod layout_utils;
 mod line_utils;
 mod markdown;
 mod markdown_render;
