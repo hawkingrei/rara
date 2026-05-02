@@ -59,6 +59,11 @@ The serialized contract uses explicit `type` fields and `snake_case` enum
 names instead of Rust's default externally tagged enum representation. Event
 counts use fixed-width integer fields where they may cross protocol boundaries.
 
+Wire mode remains a transport adapter over this contract. It should own the
+JSON-RPC 2.0 envelope, Wire method names, PascalCase Wire message names, and
+`event` / `request` framing rather than exposing runtime-control enums directly
+as Wire messages.
+
 This checkpoint intentionally does not route ACP or Wire through the control
 plane yet. The next slice should add subscriber plumbing and then move ACP
 prompt/cancel/session handling onto these request types.
