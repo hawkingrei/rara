@@ -10,6 +10,7 @@ mod viewport;
 
 pub(crate) use helpers::*;
 
+use crate::tui::theme::*;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -445,6 +446,21 @@ fn head_tail_line_window<T>(items: &[T], max_lines: usize) -> (&[T], &[T]) {
     (&items[..1], &items[items.len() - tail_len..])
 }
 
+fn role_prefix_icon(role: &str) -> (&'static str, Color) {
+    match role {
+        "Tool Result" => ("✓ ", STATUS_SUCCESS),
+        "Tool Error" => ("✕ ", STATUS_ERROR),
+        "Tool Progress" => ("… ", STATUS_WARNING),
+        "Tool" => ("⚙ ", TEXT_SECONDARY),
+        "System" => ("ℹ ", STATUS_INFO),
+        "Exploring" => ("🔍 ", PHASE_EXPLORING),
+        "Planning" => ("📋 ", PHASE_PLANNING),
+        "Running" => ("▶ ", PHASE_RUNNING),
+        "Agent" => ("🤖 ", ROLE_PREFIX),
+        _ => ("", TEXT_SECONDARY),
+    }
+}
+
 pub(crate) fn prefixed_message_lines(
     role: &str,
     message: &str,
@@ -454,21 +470,36 @@ pub(crate) fn prefixed_message_lines(
         return user_message_lines(message, max_lines);
     }
 
+    let (icon, color) = role_prefix_icon(role);
+    let prefix = if icon.is_empty() {
+        format!("{}:", role)
+    } else {
+        icon.trim_end().to_string()
+    };
+
     let message_lines = message.lines().collect::<Vec<_>>();
     if message_lines.is_empty() {
-        return vec![Line::from(format!("{role}:"))];
+        return vec![Line::from(vec![Span::styled(
+            prefix,
+            Style::default().fg(color).add_modifier(Modifier::BOLD),
+        )])];
     }
 
     let mut lines = Vec::new();
     let hidden_count = truncated_line_count(message_lines.len(), max_lines);
     let (head, tail) = head_tail_line_window(message_lines.as_slice(), max_lines);
     if let Some(first) = head.first() {
-        lines.push(Line::from(format!("{role}: {first}")));
+        let mut spans = vec![Span::styled(
+            prefix,
+            Style::default().fg(color).add_modifier(Modifier::BOLD),
+        )];
+        spans.push(Span::raw(format!(" {first}")));
+        lines.push(Line::from(spans));
     }
     if hidden_count > 0 {
         lines.push(Line::from(Span::styled(
             format!("  ... {} more line(s)", hidden_count),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(TEXT_SECONDARY),
         )));
     }
     lines.extend(tail.iter().map(|line| Line::from(format!("  {line}"))));
@@ -504,7 +535,15 @@ pub(crate) fn formatted_message_lines(
     cwd: Option<&Path>,
 ) -> Vec<Line<'static>> {
     if role == "Agent" {
-        return bulleted_markdown_message_lines(message, max_lines, cwd);
+        let mut lines = vec![Line::from(Span::styled(
+            "🤖",
+            Style::default()
+                .fg(ROLE_PREFIX)
+                .add_modifier(Modifier::BOLD),
+        ))];
+        let body = bulleted_markdown_message_lines(message, max_lines, cwd);
+        lines.extend(body);
+        return lines;
     }
     if role == "System" {
         return markdown_message_lines(role, message, max_lines, cwd);

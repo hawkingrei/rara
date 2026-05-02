@@ -1,3 +1,4 @@
+use crate::tui::theme::*;
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -16,7 +17,7 @@ use super::super::state::{ActivePendingInteractionKind, TaskKind, TuiApp};
 use super::badge;
 
 const COMPOSER_TAB_WIDTH: usize = 4;
-const BOTTOM_PANE_BG: Color = Color::Rgb(18, 20, 24);
+const BOTTOM_PANE_BG: Color = SURFACE_BOTTOM_PANE_BG;
 
 pub(crate) fn desired_viewport_height(app: &TuiApp, width: u16, rows: u16) -> u16 {
     if app.overlay.is_some() {
@@ -78,11 +79,11 @@ fn render_activity_bar(f: &mut Frame, app: &TuiApp, area: Rect) {
 
     if app.agent_execution_mode_label() == "plan" && !label_already_reflects_planning {
         spans.push(Span::raw("  "));
-        spans.push(badge("mode", "plan", Color::Cyan));
+        spans.push(badge("mode", "plan", TEXT_ACCENT));
     }
     if !detail.is_empty() {
         spans.push(Span::raw("  "));
-        spans.push(Span::styled(detail, Style::default().fg(Color::DarkGray)));
+        spans.push(Span::styled(detail, Style::default().fg(TEXT_SECONDARY)));
     }
     let status = Paragraph::new(Line::from(spans)).style(bottom_pane_style());
     f.render_widget(status, area);
@@ -95,7 +96,7 @@ fn activity_status_line(app: &TuiApp) -> (&'static str, Color, String) {
     ) {
         return (
             "Downloading",
-            Color::LightBlue,
+            STATUS_INFO,
             app.runtime_phase_detail
                 .as_deref()
                 .unwrap_or("preparing backend")
@@ -105,16 +106,16 @@ fn activity_status_line(app: &TuiApp) -> (&'static str, Color, String) {
 
     if let Some(pending) = app.active_pending_interaction() {
         let (label, color) = match pending.kind {
-            ActivePendingInteractionKind::PlanApproval => ("Plan Approval", Color::Cyan),
-            ActivePendingInteractionKind::ShellApproval => ("Shell Approval", Color::Yellow),
-            ActivePendingInteractionKind::PlanningQuestion => ("Planning Question", Color::Cyan),
+            ActivePendingInteractionKind::PlanApproval => ("Plan Approval", TEXT_ACCENT),
+            ActivePendingInteractionKind::ShellApproval => ("Shell Approval", STATUS_WARNING),
+            ActivePendingInteractionKind::PlanningQuestion => ("Planning Question", TEXT_ACCENT),
             ActivePendingInteractionKind::ExplorationQuestion => {
-                ("Exploration Question", Color::Yellow)
+                ("Exploration Question", STATUS_WARNING)
             }
             ActivePendingInteractionKind::SubAgentQuestion => {
-                ("Sub-agent Question", Color::LightGreen)
+                ("Sub-agent Question", STATUS_SUCCESS)
             }
-            ActivePendingInteractionKind::RequestInput => ("Request Input", Color::LightGreen),
+            ActivePendingInteractionKind::RequestInput => ("Request Input", STATUS_SUCCESS),
         };
         let detail = match pending.kind {
             ActivePendingInteractionKind::PlanApproval => {
@@ -140,7 +141,7 @@ fn activity_status_line(app: &TuiApp) -> (&'static str, Color, String) {
     if app.has_pending_planning_suggestion() {
         return (
             "Planning Suggested",
-            Color::Cyan,
+            TEXT_ACCENT,
             "enter planning mode first or continue in execute mode".to_string(),
         );
     }
@@ -157,13 +158,13 @@ fn activity_status_line(app: &TuiApp) -> (&'static str, Color, String) {
                 app.queued_follow_up_count()
             ));
         }
-        return ("Working", Color::Yellow, detail);
+        return ("Working", STATUS_WARNING, detail);
     }
 
     if app.agent_execution_mode_label() == "plan" {
         return (
             "Planning",
-            Color::Cyan,
+            TEXT_ACCENT,
             "read-only planning; approve to execute".to_string(),
         );
     }
@@ -173,12 +174,12 @@ fn activity_status_line(app: &TuiApp) -> (&'static str, Color, String) {
         .as_deref()
         .filter(|value| value.starts_with("Warning:"))
     {
-        return ("Warning", Color::Yellow, warning.to_string());
+        return ("Warning", STATUS_WARNING, warning.to_string());
     }
 
     (
         "Ready",
-        Color::Green,
+        STATUS_READY,
         app.notice
             .as_deref()
             .unwrap_or("waiting for input")
@@ -212,20 +213,20 @@ fn render_composer(f: &mut Frame, app: &TuiApp, area: Rect) -> Option<(u16, u16)
             Span::styled(
                 "› ",
                 Style::default()
-                    .fg(Color::Cyan)
+                    .fg(TEXT_ACCENT)
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(
                 "Ask about the repo, request a code change, or type ",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(TEXT_SECONDARY),
             ),
             Span::styled(
                 "/help",
                 Style::default()
-                    .fg(Color::Cyan)
+                    .fg(TEXT_ACCENT)
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::styled(" to browse commands.", Style::default().fg(Color::DarkGray)),
+            Span::styled(" to browse commands.", Style::default().fg(TEXT_SECONDARY)),
         ])]
     } else {
         wrapped_text_rows(app.input.as_str(), chunks[0].width, Some("› "), Some("  "))
@@ -244,7 +245,7 @@ fn render_composer(f: &mut Frame, app: &TuiApp, area: Rect) -> Option<(u16, u16)
                     spans.push(Span::styled(
                         prefix.to_string(),
                         Style::default()
-                            .fg(Color::Cyan)
+                            .fg(TEXT_ACCENT)
                             .add_modifier(Modifier::BOLD),
                     ));
                 }
@@ -311,7 +312,7 @@ fn composer_hint_line(app: &TuiApp) -> Line<'static> {
     let hint = composer_hint(app);
     let mut spans = Vec::new();
     if !hint.is_empty() {
-        spans.push(Span::styled(hint, Style::default().fg(Color::Gray)));
+        spans.push(Span::styled(hint, Style::default().fg(TEXT_MUTED)));
     }
     if let Some(repo_context) = app.repo_context_hint() {
         if !spans.is_empty() {
@@ -319,7 +320,7 @@ fn composer_hint_line(app: &TuiApp) -> Line<'static> {
         }
         spans.push(Span::styled(
             repo_context,
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(TEXT_SECONDARY),
         ));
     }
     Line::from(spans)
@@ -337,7 +338,7 @@ fn render_footer(f: &mut Frame, app: &TuiApp, area: Rect) {
     f.render_widget(
         Paragraph::new(Line::from(Span::styled(
             summary,
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(TEXT_SECONDARY),
         )))
         .style(bottom_pane_style())
         .alignment(Alignment::Right),

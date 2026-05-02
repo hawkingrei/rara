@@ -1,3 +1,4 @@
+use crate::tui::theme::*;
 use ratatui::{
     style::{Color, Modifier, Style},
     text::{Line, Span},
@@ -62,7 +63,7 @@ pub(crate) fn render_patch_preview(patch: &str, width: u16) -> Vec<Line<'static>
                 Span::raw("    "),
                 Span::styled(
                     "(no inline diff preview)",
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(TEXT_SECONDARY),
                 ),
             ]));
             continue;
@@ -77,7 +78,7 @@ pub(crate) fn render_patch_preview(patch: &str, width: u16) -> Vec<Line<'static>
                             "... {} more diff line(s)",
                             remaining_diff_lines(&files, emitted)
                         ),
-                        Style::default().fg(Color::DarkGray),
+                        Style::default().fg(TEXT_SECONDARY),
                     ),
                 ]));
                 return lines;
@@ -110,7 +111,7 @@ fn render_raw_patch_preview(patch: &str, width: u16) -> Vec<Line<'static>> {
                     "  ... {} more diff line(s)",
                     patch.lines().count().saturating_sub(emitted)
                 ),
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(TEXT_SECONDARY),
             )));
             break;
         }
@@ -195,7 +196,7 @@ fn push_current_file(files: &mut Vec<DiffFile>, current: &mut Option<DiffFile>) 
 fn render_summary_header(files: &[DiffFile]) -> Line<'static> {
     let added: usize = files.iter().map(|file| file.added).sum();
     let removed: usize = files.iter().map(|file| file.removed).sum();
-    let mut spans = vec![Span::styled("* ", Style::default().fg(Color::DarkGray))];
+    let mut spans = vec![Span::styled("* ", Style::default().fg(TEXT_SECONDARY))];
 
     if let [file] = files {
         spans.push(Span::styled(
@@ -226,7 +227,7 @@ fn render_summary_header(files: &[DiffFile]) -> Line<'static> {
 }
 
 fn render_file_header(file: &DiffFile) -> Line<'static> {
-    let mut spans = vec![Span::styled("  - ", Style::default().fg(Color::DarkGray))];
+    let mut spans = vec![Span::styled("  - ", Style::default().fg(TEXT_SECONDARY))];
     spans.extend(path_spans(file));
     spans.push(Span::raw(" "));
     spans.extend(line_count_spans(file.added, file.removed));
@@ -244,9 +245,9 @@ fn path_spans(file: &DiffFile) -> Vec<Span<'static>> {
 fn line_count_spans(added: usize, removed: usize) -> Vec<Span<'static>> {
     vec![
         Span::raw("("),
-        Span::styled(format!("+{added}"), Style::default().fg(Color::Green)),
+        Span::styled(format!("+{added}"), Style::default().fg(STATUS_SUCCESS)),
         Span::raw(" "),
-        Span::styled(format!("-{removed}"), Style::default().fg(Color::Red)),
+        Span::styled(format!("-{removed}"), Style::default().fg(STATUS_ERROR)),
         Span::raw(")"),
     ]
 }
@@ -285,26 +286,30 @@ fn push_wrapped_diff_line(
         DiffLineType::Insert => (
             "+",
             Style::default()
-                .fg(Color::Green)
+                .fg(STATUS_SUCCESS)
                 .add_modifier(Modifier::BOLD),
-            Style::default().fg(Color::Green),
+            Style::default().fg(STATUS_SUCCESS),
         ),
         DiffLineType::Delete => (
             "-",
-            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
-            Style::default().fg(Color::Red).add_modifier(Modifier::DIM),
+            Style::default()
+                .fg(STATUS_ERROR)
+                .add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(STATUS_ERROR)
+                .add_modifier(Modifier::DIM),
         ),
         DiffLineType::Header => (
             " ",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(TEXT_SECONDARY),
             Style::default()
-                .fg(Color::Cyan)
+                .fg(TEXT_ACCENT)
                 .add_modifier(Modifier::BOLD),
         ),
         DiffLineType::Context => (
             " ",
-            Style::default().fg(Color::DarkGray),
-            Style::default().fg(Color::Gray),
+            Style::default().fg(TEXT_SECONDARY),
+            Style::default().fg(TEXT_MUTED),
         ),
     };
 

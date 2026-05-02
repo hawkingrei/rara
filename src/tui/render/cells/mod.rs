@@ -1,3 +1,4 @@
+use crate::tui::theme::*;
 use std::path::Path;
 
 use ratatui::{style::Color, text::Line};
@@ -1561,4 +1562,4 @@ fn is_renderable_system_message(message: &str) -> bool {
 
 #[cfg(test)]
 #[path = "cells_tests.rs"]
-mod tests;
+mod tests; // #[path] set above
