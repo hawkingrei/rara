@@ -113,7 +113,7 @@ fn activity_status_line(app: &TuiApp) -> (&'static str, Color, String) {
                 ("Exploration Question", STATUS_WARNING)
             }
             ActivePendingInteractionKind::SubAgentQuestion => {
-                ("Sub-agent Question", STATUS_SUCCESS)
+                ("Sub-agent Question", INTERACTION_SUB_AGENT)
             }
             ActivePendingInteractionKind::RequestInput => ("Request Input", STATUS_SUCCESS),
         };

@@ -724,13 +724,15 @@ fn tool_action_label(message: &str) -> Option<String> {
         )),
         "spawn_agent" => {
             let kind = SubAgentKind::from_tool_name(name).unwrap();
+            let (icon, _) = kind.action_icon();
             let delegate = compact_delegate_rest(&rest).unwrap_or_else(|| "sub-agent".to_string());
-            Some(format!("{} {}", kind.action_label(), delegate))
+            Some(format!("{}{} {}", icon, kind.action_label(), delegate))
         }
         "explore_agent" | "plan_agent" | "team_create" => {
             let kind = SubAgentKind::from_tool_name(name).unwrap();
+            let (icon, _) = kind.action_icon();
             let abbreviation = compact_instruction(&rest);
-            Some(format!("{} {}", kind.action_label(), abbreviation))
+            Some(format!("{}{} {}", icon, kind.action_label(), abbreviation))
         }
         "web_fetch" => Some(format!(
             "Fetch {}",
