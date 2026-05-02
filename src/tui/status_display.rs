@@ -1,25 +1,30 @@
-// Claude-style /status display — clean, minimal, sectioned layout.
+// Claude-style /status display — clean, sectioned, color-styled output.
 //
-// Replaces the dense key=value grid with semantically grouped
-// sections that use visual hierarchy and color for emphasis.
-use crate::tui::theme::*;
-use ratatui::style::Color;
+// Each line is a ratatui Line with Span-styled values so colors
+// actually render in the TUI, not just plain text.
+use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::{Line, Span};
 
 use crate::tui::state::TuiApp;
 
-pub(crate) fn render_status_lines(app: &TuiApp) -> Vec<String> {
-    let mut lines = Vec::new();
+pub(crate) fn render_status_lines(app: &TuiApp) -> Vec<Line<'static>> {
+    let mut lines: Vec<Line<'static>> = Vec::new();
 
     // ── Provider & Model ──
     section_header(&mut lines, "Provider & Model");
-    kv(&mut lines, "provider", &app.config.provider, TEXT_ACCENT);
-    kv(&mut lines, "model", app.current_model_label(), STATUS_INFO);
+    kv(&mut lines, "provider", &app.config.provider, Color::Cyan);
+    kv(
+        &mut lines,
+        "model",
+        app.current_model_label(),
+        Color::LightBlue,
+    );
     if app.config.provider == "openai-compatible" {
         kv(
             &mut lines,
             "endpoint",
             app.config.active_openai_profile_label().unwrap_or("-"),
-            TEXT_SECONDARY,
+            Color::DarkGray,
         );
     }
 
@@ -30,22 +35,22 @@ pub(crate) fn render_status_lines(app: &TuiApp) -> Vec<String> {
         &mut lines,
         "mode",
         app.agent_execution_mode_label(),
-        STATUS_INFO,
+        Color::LightBlue,
     );
     kv(
         &mut lines,
         "phase",
         app.runtime_phase_label(),
-        TEXT_SECONDARY,
+        Color::DarkGray,
     );
     if let Some(detail) = &app.runtime_phase_detail {
-        kv(&mut lines, "detail", detail, TEXT_MUTED);
+        kv(&mut lines, "detail", detail, Color::Gray);
     }
     kv(
         &mut lines,
         "bash",
         app.bash_approval_mode_label(),
-        TEXT_SECONDARY,
+        Color::DarkGray,
     );
 
     // ── Context ──
@@ -56,14 +61,14 @@ pub(crate) fn render_status_lines(app: &TuiApp) -> Vec<String> {
         &mut lines,
         "history",
         &format!("{} tokens", snap.estimated_history_tokens),
-        TEXT_SECONDARY,
+        Color::DarkGray,
     );
     if let Some(window) = snap.context_window_tokens {
         kv(
             &mut lines,
             "window",
             &format_metric(window as u64),
-            STATUS_INFO,
+            Color::LightBlue,
         );
     }
     if let Some(remaining) = snap.remaining_input_budget {
@@ -72,9 +77,9 @@ pub(crate) fn render_status_lines(app: &TuiApp) -> Vec<String> {
             "budget",
             &format!("{} tokens remaining", remaining),
             if remaining < 1024 {
-                STATUS_WARNING
+                Color::Yellow
             } else {
-                TEXT_SECONDARY
+                Color::DarkGray
             },
         );
     }
@@ -91,7 +96,7 @@ pub(crate) fn render_status_lines(app: &TuiApp) -> Vec<String> {
             &mut lines,
             "cache",
             &format!("{}% hit ({} hits / {} misses)", rate, hit, miss),
-            STATUS_SUCCESS,
+            Color::LightGreen,
         );
     }
     if snap.compaction_count > 0 {
@@ -99,38 +104,38 @@ pub(crate) fn render_status_lines(app: &TuiApp) -> Vec<String> {
             &mut lines,
             "compactions",
             &snap.compaction_count.to_string(),
-            TEXT_SECONDARY,
+            Color::DarkGray,
         );
     }
 
     // ── Workspace ──
     section_spacer(&mut lines);
     section_header(&mut lines, "Workspace");
-    kv_short(&mut lines, "dir", &home_path(&snap.cwd), TEXT_SECONDARY);
-    kv_short(&mut lines, "branch", &snap.branch, TEXT_SECONDARY);
-    kv_short(&mut lines, "session", &snap.session_id, TEXT_MUTED);
+    kv(&mut lines, "dir", &home_path(&snap.cwd), Color::DarkGray);
+    kv(&mut lines, "branch", &snap.branch, Color::DarkGray);
+    kv(&mut lines, "session", &snap.session_id, Color::Gray);
 
     // ── API & Auth ──
     section_spacer(&mut lines);
     section_header(&mut lines, "API & Auth");
     let surface = app.config.effective_provider_surface();
-    kv_short(
+    kv(
         &mut lines,
         "base_url",
         surface.base_url.display_or("-"),
-        TEXT_SECONDARY,
+        Color::DarkGray,
     );
-    kv_short(
+    kv(
         &mut lines,
         "api_key",
         &api_key_label(app),
         if app.config.has_api_key() {
-            STATUS_SUCCESS
+            Color::LightGreen
         } else {
-            STATUS_WARNING
+            Color::Yellow
         },
     );
-    kv_short(
+    kv(
         &mut lines,
         "reasoning",
         &format!(
@@ -138,14 +143,14 @@ pub(crate) fn render_status_lines(app: &TuiApp) -> Vec<String> {
             surface.reasoning_summary.display_or("auto"),
             surface.reasoning_summary.source.label()
         ),
-        TEXT_SECONDARY,
+        Color::DarkGray,
     );
 
     // ── Network & Sandbox ──
     section_spacer(&mut lines);
     section_header(&mut lines, "Network & Sandbox");
-    kv_short(&mut lines, "sandbox", &sandbox_label(app), STATUS_INFO);
-    kv_short(
+    kv(&mut lines, "sandbox", &sandbox_label(app), Color::LightBlue);
+    kv(
         &mut lines,
         "network",
         if app.config.sandbox_workspace_write.network_access {
@@ -154,30 +159,38 @@ pub(crate) fn render_status_lines(app: &TuiApp) -> Vec<String> {
             "restricted"
         },
         if app.config.sandbox_workspace_write.network_access {
-            STATUS_WARNING
+            Color::Yellow
         } else {
-            STATUS_SUCCESS
+            Color::LightGreen
         },
     );
 
     lines
 }
 
-fn section_header(lines: &mut Vec<String>, title: &str) {
-    lines.push(format!("│ {title}"));
-    lines.push("│".to_string());
+// ── helpers ──
+
+fn section_header(lines: &mut Vec<Line<'static>>, title: &str) {
+    lines.push(Line::from(Span::styled(
+        title.to_string(),
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD),
+    )));
+    lines.push(Line::from(""));
 }
 
-fn section_spacer(lines: &mut Vec<String>) {
-    lines.push("│".to_string());
+fn section_spacer(lines: &mut Vec<Line<'static>>) {
+    lines.push(Line::from(""));
 }
 
-fn kv(lines: &mut Vec<String>, key: &str, value: &str, _color: Color) {
-    lines.push(format!("│  {key:<14} {value}"));
-}
-
-fn kv_short(lines: &mut Vec<String>, key: &str, value: &str, _color: Color) {
-    lines.push(format!("│  {key:<14} {value}"));
+fn kv(lines: &mut Vec<Line<'static>>, key: &str, value: &str, value_color: Color) {
+    let key_span = Span::styled(
+        format!("  {key:<14} "),
+        Style::default().fg(Color::DarkGray),
+    );
+    let value_span = Span::styled(value.to_string(), Style::default().fg(value_color));
+    lines.push(Line::from(vec![key_span, value_span]));
 }
 
 fn format_metric(n: u64) -> String {
@@ -213,7 +226,7 @@ fn api_key_label(app: &TuiApp) -> String {
     }
 }
 
-fn sandbox_label(app: &TuiApp) -> String {
+fn sandbox_label(_app: &TuiApp) -> String {
     if cfg!(target_os = "macos") {
         "macos-seatbelt"
     } else if cfg!(target_os = "linux") {
