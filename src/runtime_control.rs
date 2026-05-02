@@ -1,12 +1,10 @@
-// The control-plane contract lands before ACP/Wire adapters are wired to it.
-#![allow(dead_code)]
-
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::agent::AgentEvent;
+use crate::agent::{AgentEvent, BashApprovalDecision};
 use crate::tool::ToolOutputStream;
 
+#[allow(dead_code)]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RuntimeControllerKind {
@@ -18,17 +16,35 @@ pub enum RuntimeControllerKind {
     Runtime,
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RuntimeProvenance {
     pub controller: RuntimeControllerKind,
     pub adapter: Option<String>,
     pub session_id: Option<String>,
     pub source_id: Option<String>,
-    pub trusted: bool,
-    pub user_provided: bool,
-    pub generated: bool,
+    pub trust: RuntimeSourceTrust,
+    pub authorship: RuntimeSourceAuthorship,
 }
 
+#[allow(dead_code)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeSourceTrust {
+    Trusted,
+    Untrusted,
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeSourceAuthorship {
+    UserProvided,
+    Generated,
+    Runtime,
+}
+
+#[allow(dead_code)]
 impl RuntimeProvenance {
     pub fn local_tui(session_id: impl Into<String>) -> Self {
         Self {
@@ -36,9 +52,8 @@ impl RuntimeProvenance {
             adapter: None,
             session_id: Some(session_id.into()),
             source_id: None,
-            trusted: true,
-            user_provided: true,
-            generated: false,
+            trust: RuntimeSourceTrust::Trusted,
+            authorship: RuntimeSourceAuthorship::UserProvided,
         }
     }
 
@@ -53,13 +68,13 @@ impl RuntimeProvenance {
             adapter: Some(adapter.into()),
             session_id,
             source_id,
-            trusted: false,
-            user_provided: true,
-            generated: false,
+            trust: RuntimeSourceTrust::Untrusted,
+            authorship: RuntimeSourceAuthorship::UserProvided,
         }
     }
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "payload", rename_all = "snake_case")]
 pub enum RuntimeControlRequest {
@@ -73,6 +88,7 @@ pub enum RuntimeControlRequest {
     Approval(ApprovalControlRequest),
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RuntimeControlEnvelope {
     pub request_id: String,
@@ -80,6 +96,7 @@ pub struct RuntimeControlEnvelope {
     pub request: RuntimeControlRequest,
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "payload", rename_all = "snake_case")]
 pub enum SessionControlRequest {
@@ -90,6 +107,7 @@ pub enum SessionControlRequest {
     QueryRuntimeState,
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "payload", rename_all = "snake_case")]
 pub enum InputControlRequest {
@@ -100,6 +118,7 @@ pub enum InputControlRequest {
     SubmitFollowUp { prompt: String },
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ShellApprovalDecision {
@@ -109,6 +128,29 @@ pub enum ShellApprovalDecision {
     Suggestion,
 }
 
+impl From<BashApprovalDecision> for ShellApprovalDecision {
+    fn from(decision: BashApprovalDecision) -> Self {
+        match decision {
+            BashApprovalDecision::Once => Self::Once,
+            BashApprovalDecision::Prefix => Self::Prefix,
+            BashApprovalDecision::Always => Self::Always,
+            BashApprovalDecision::Suggestion => Self::Suggestion,
+        }
+    }
+}
+
+impl From<ShellApprovalDecision> for BashApprovalDecision {
+    fn from(decision: ShellApprovalDecision) -> Self {
+        match decision {
+            ShellApprovalDecision::Once => Self::Once,
+            ShellApprovalDecision::Prefix => Self::Prefix,
+            ShellApprovalDecision::Always => Self::Always,
+            ShellApprovalDecision::Suggestion => Self::Suggestion,
+        }
+    }
+}
+
+#[allow(dead_code)]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "payload", rename_all = "snake_case")]
 pub enum OutputSubscriptionRequest {
@@ -116,6 +158,7 @@ pub enum OutputSubscriptionRequest {
     Unsubscribe { subscriber_id: String },
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "payload", rename_all = "snake_case")]
 pub enum PromptSourceLifetime {
@@ -124,6 +167,7 @@ pub enum PromptSourceLifetime {
     Persistent,
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PromptSourceRegistration {
     pub source_id: String,
@@ -134,6 +178,7 @@ pub struct PromptSourceRegistration {
     pub content: String,
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SourceScope {
@@ -144,6 +189,7 @@ pub enum SourceScope {
     Protocol,
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SourceLayer {
@@ -154,6 +200,7 @@ pub enum SourceLayer {
     Skill,
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "payload", rename_all = "snake_case")]
 pub enum PromptSourceControlRequest {
@@ -162,6 +209,7 @@ pub enum PromptSourceControlRequest {
     QuerySources,
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "payload", rename_all = "snake_case")]
 pub enum SkillSourceControlRequest {
@@ -183,6 +231,7 @@ pub enum SkillSourceControlRequest {
     QuerySkills,
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "payload", rename_all = "snake_case")]
 pub enum MemoryControlRequest {
@@ -196,6 +245,7 @@ pub enum MemoryControlRequest {
     SelectionSnapshot,
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MemoryScope {
@@ -203,6 +253,7 @@ pub enum MemoryScope {
     Workspace,
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "payload", rename_all = "snake_case")]
 pub enum HookControlRequest {
@@ -214,6 +265,7 @@ pub enum HookControlRequest {
     QueryHooks,
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HookLifecycle {
@@ -225,6 +277,7 @@ pub enum HookLifecycle {
     PreCompact,
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "payload", rename_all = "snake_case")]
 pub enum ApprovalControlRequest {
@@ -232,6 +285,7 @@ pub enum ApprovalControlRequest {
     QueryPendingApprovals,
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RuntimeControlEvent {
     pub event_id: String,
@@ -240,6 +294,7 @@ pub struct RuntimeControlEvent {
     pub event: RuntimeEvent,
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "payload", rename_all = "snake_case")]
 pub enum RuntimeEvent {
@@ -258,6 +313,7 @@ pub enum RuntimeEvent {
     Error(ErrorEvent),
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "payload", rename_all = "snake_case")]
 pub enum SessionEvent {
@@ -270,6 +326,7 @@ pub enum SessionEvent {
     TurnFinished,
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "payload", rename_all = "snake_case")]
 pub enum InputEvent {
@@ -278,6 +335,7 @@ pub enum InputEvent {
     PendingInputAnswered,
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "payload", rename_all = "snake_case")]
 pub enum AssistantEvent {
@@ -286,6 +344,7 @@ pub enum AssistantEvent {
     ThinkingDelta(String),
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ToolStream {
@@ -302,6 +361,7 @@ impl From<ToolOutputStream> for ToolStream {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "payload", rename_all = "snake_case")]
 pub enum ToolEvent {
@@ -321,6 +381,7 @@ pub enum ToolEvent {
     },
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "payload", rename_all = "snake_case")]
 pub enum ApprovalEvent {
@@ -328,6 +389,7 @@ pub enum ApprovalEvent {
     Answered { approval_id: String, approved: bool },
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "payload", rename_all = "snake_case")]
 pub enum PlanEvent {
@@ -336,6 +398,7 @@ pub enum PlanEvent {
     Continued,
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "payload", rename_all = "snake_case")]
 pub enum PromptSourceEvent {
@@ -344,6 +407,7 @@ pub enum PromptSourceEvent {
     Dropped { source_id: String, reason: String },
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "payload", rename_all = "snake_case")]
 pub enum SkillEvent {
@@ -352,6 +416,7 @@ pub enum SkillEvent {
     Failed { source_id: String, reason: String },
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "payload", rename_all = "snake_case")]
 pub enum MemoryEvent {
@@ -359,6 +424,7 @@ pub enum MemoryEvent {
     SelectionUpdated,
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "payload", rename_all = "snake_case")]
 pub enum HookEvent {
@@ -372,24 +438,28 @@ pub enum HookEvent {
     },
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "payload", rename_all = "snake_case")]
 pub enum ContextEvent {
     SnapshotUpdated,
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "payload", rename_all = "snake_case")]
 pub enum WarningEvent {
     RuntimeWarning { message: String },
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "payload", rename_all = "snake_case")]
 pub enum ErrorEvent {
     RuntimeError { message: String },
 }
 
+#[allow(dead_code)]
 pub fn agent_event_to_runtime_event(event: AgentEvent) -> RuntimeEvent {
     match event {
         AgentEvent::Status(message) => RuntimeEvent::Session(SessionEvent::Status { message }),
@@ -422,6 +492,7 @@ pub fn agent_event_to_runtime_event(event: AgentEvent) -> RuntimeEvent {
     }
 }
 
+#[allow(dead_code)]
 pub fn wrap_agent_event(
     event_id: impl Into<String>,
     sequence: u64,
@@ -498,6 +569,8 @@ mod tests {
 
         assert_eq!(value["request_id"], json!("req-1"));
         assert_eq!(value["provenance"]["controller"], json!("acp"));
+        assert_eq!(value["provenance"]["trust"], json!("untrusted"));
+        assert_eq!(value["provenance"]["authorship"], json!("user_provided"));
         assert_eq!(
             value["request"],
             json!({
@@ -518,6 +591,22 @@ mod tests {
                 }
             })
         );
+    }
+
+    #[test]
+    fn shell_approval_decision_round_trips_runtime_decision() {
+        for (runtime, contract) in [
+            (BashApprovalDecision::Once, ShellApprovalDecision::Once),
+            (BashApprovalDecision::Prefix, ShellApprovalDecision::Prefix),
+            (BashApprovalDecision::Always, ShellApprovalDecision::Always),
+            (
+                BashApprovalDecision::Suggestion,
+                ShellApprovalDecision::Suggestion,
+            ),
+        ] {
+            assert_eq!(ShellApprovalDecision::from(runtime), contract);
+            assert_eq!(BashApprovalDecision::from(contract), runtime);
+        }
     }
 
     #[test]

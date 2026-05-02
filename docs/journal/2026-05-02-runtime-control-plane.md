@@ -64,6 +64,11 @@ JSON-RPC 2.0 envelope, Wire method names, PascalCase Wire message names, and
 `event` / `request` framing rather than exposing runtime-control enums directly
 as Wire messages.
 
+Runtime provenance uses explicit `trust` and `authorship` enums rather than
+independent boolean flags, so callers cannot represent contradictory source
+states. Shell approval control keeps a contract-local enum but has explicit
+round-trip conversions to the runtime `BashApprovalDecision`.
+
 This checkpoint intentionally does not route ACP or Wire through the control
 plane yet. The next slice should add subscriber plumbing and then move ACP
 prompt/cancel/session handling onto these request types.
