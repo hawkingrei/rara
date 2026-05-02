@@ -1008,7 +1008,10 @@ pub(super) struct DelegatedRequestInput {
 }
 
 pub(super) fn subagent_request_input(message: &str) -> Option<DelegatedRequestInput> {
-    if !(message.starts_with("explore_agent ") || message.starts_with("plan_agent ")) {
+    if !(message.starts_with("explore_agent ")
+        || message.starts_with("plan_agent ")
+        || message.starts_with("spawn_agent "))
+    {
         return None;
     }
 

@@ -48,10 +48,12 @@ impl SubAgentKind {
             SubAgentKind::General => {
                 concat!(
                     "## Sub-Agent Role\n",
-                    "- You are a direct worker sub-agent.\n",
+                    "- You are a no-tool reasoning sub-agent.\n",
                     "- Treat the assigned instruction as the complete task contract.\n",
                     "- Honor every constraint in the assigned instruction, including workspace, branch, network, and output limits.\n",
                     "- Stay inside the current workspace unless the assigned instruction explicitly allows another path.\n",
+                    "- You do not have repository, shell, editing, patching, or browser tools in this role.\n",
+                    "- If the assigned instruction requires inspection or mutation, report the limitation and answer only from the provided instruction/context.\n",
                     "- Do not delegate to another agent or spawn sub-agents; complete the assigned work directly."
                 )
             }
@@ -121,7 +123,7 @@ impl Tool for AgentTool {
     }
 
     fn description(&self) -> &str {
-        "Spawn a general-purpose sub-agent"
+        "Spawn a no-tool reasoning sub-agent. It cannot inspect files, run shell commands, edit files, or spawn other agents; use explore_agent or plan_agent for read-only repository inspection."
     }
 
     fn input_schema(&self) -> Value {
@@ -503,6 +505,17 @@ mod tests {
         assert!(prompt.contains("Treat the assigned instruction as the complete task contract."));
         assert!(prompt.contains("Honor every constraint in the assigned instruction"));
         assert!(prompt.contains("Stay inside the current workspace"));
+    }
+
+    #[test]
+    fn general_subagent_prompt_declares_no_tool_access() {
+        let prompt = SubAgentKind::General.append_prompt();
+
+        assert!(prompt.contains("no-tool reasoning sub-agent"));
+        assert!(
+            prompt.contains("do not have repository, shell, editing, patching, or browser tools")
+        );
+        assert!(prompt.contains("answer only from the provided instruction/context"));
     }
 
     #[test]
