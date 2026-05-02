@@ -446,6 +446,21 @@ fn head_tail_line_window<T>(items: &[T], max_lines: usize) -> (&[T], &[T]) {
     (&items[..1], &items[items.len() - tail_len..])
 }
 
+fn role_prefix_icon(role: &str) -> (&'static str, Color) {
+    match role {
+        "Tool Result" => ("✓ ", STATUS_SUCCESS),
+        "Tool Error" => ("✕ ", STATUS_ERROR),
+        "Tool Progress" => ("… ", STATUS_WARNING),
+        "Tool" => ("⚙ ", TEXT_SECONDARY),
+        "System" => ("ℹ ", STATUS_INFO),
+        "Exploring" => ("🔍 ", PHASE_EXPLORING),
+        "Planning" => ("📋 ", PHASE_PLANNING),
+        "Running" => ("▶ ", PHASE_RUNNING),
+        "Agent" => ("🤖 ", ROLE_PREFIX),
+        _ => ("", TEXT_SECONDARY),
+    }
+}
+
 pub(crate) fn prefixed_message_lines(
     role: &str,
     message: &str,
@@ -455,26 +470,31 @@ pub(crate) fn prefixed_message_lines(
         return user_message_lines(message, max_lines);
     }
 
+    let (icon, color) = role_prefix_icon(role);
+    let prefix = if icon.is_empty() {
+        format!("{}: ", role)
+    } else {
+        icon.trim_end().to_string()
+    };
+
     let message_lines = message.lines().collect::<Vec<_>>();
     if message_lines.is_empty() {
-        if role == "Agent" {
-            return vec![Line::from("🤖")];
-        }
-        return vec![Line::from(vec![role_badge(role)])];
+        return vec![Line::from(vec![Span::styled(
+            prefix,
+            Style::default().fg(color).add_modifier(Modifier::BOLD),
+        )])];
     }
 
     let mut lines = Vec::new();
     let hidden_count = truncated_line_count(message_lines.len(), max_lines);
     let (head, tail) = head_tail_line_window(message_lines.as_slice(), max_lines);
     if let Some(first) = head.first() {
-        if role == "Agent" {
-            lines.push(Line::from(format!("🤖 {first}")));
-        } else {
-            lines.push(Line::from(vec![
-                role_badge(role),
-                Span::raw(format!(" {first}")),
-            ]));
-        }
+        let mut spans = vec![Span::styled(
+            prefix,
+            Style::default().fg(color).add_modifier(Modifier::BOLD),
+        )];
+        spans.push(Span::raw(format!(" {first}")));
+        lines.push(Line::from(spans));
     }
     if hidden_count > 0 {
         lines.push(Line::from(Span::styled(
@@ -484,27 +504,6 @@ pub(crate) fn prefixed_message_lines(
     }
     lines.extend(tail.iter().map(|line| Line::from(format!("  {line}"))));
     lines
-}
-
-fn role_badge(role: &str) -> Span<'static> {
-    let (label, color) = match role {
-        "Tool Result" => (role, PHASE_RAN),
-        "Tool Error" => (role, STATUS_ERROR),
-        "Tool Progress" => (role, STATUS_WARNING),
-        "Tool" => (role, TEXT_SECONDARY),
-        "System" => (role, STATUS_INFO),
-        "Exploring" => (role, PHASE_EXPLORING),
-        "Planning" => (role, PHASE_PLANNING),
-        "Running" => (role, PHASE_RUNNING),
-        _ => (role, TEXT_SECONDARY),
-    };
-    Span::styled(
-        format!(" {label} "),
-        Style::default()
-            .fg(BADGE_FG_DARK)
-            .bg(color)
-            .add_modifier(Modifier::BOLD),
-    )
 }
 
 fn user_message_lines(message: &str, max_lines: usize) -> Vec<Line<'static>> {
