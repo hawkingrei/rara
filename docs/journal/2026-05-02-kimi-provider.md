@@ -7,7 +7,7 @@ of relying on users to fill every custom endpoint field manually.
 
 ## Implementation Notes
 
-- Updated the built-in Kimi model default to `kimi-k2-turbo-preview`.
+- Updated the built-in Kimi model default to `kimi-k2-0905-preview`.
 - Kept Kimi on the existing OpenAI-compatible backend path.
 - Added `MOONSHOT_API_KEY` and `KIMI_API_KEY` as runtime-only credential sources
   for active Kimi profiles.

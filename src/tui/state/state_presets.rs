@@ -7,7 +7,7 @@ pub const CODEX_MODEL_PRESETS: [(&str, &str, &str); 0] = [];
 pub const OPENAI_COMPATIBLE_MODEL_PRESETS: [(&str, &str, &str); 4] = [
     ("Custom endpoint", "openai-compatible", "gpt-4o-mini"),
     ("DeepSeek", "openai-compatible", "deepseek-chat"),
-    ("Kimi", "openai-compatible", "kimi-k2-turbo-preview"),
+    ("Kimi", "openai-compatible", "kimi-k2-0905-preview"),
     ("OpenRouter", "openai-compatible", "openai/gpt-4o-mini"),
 ];
 

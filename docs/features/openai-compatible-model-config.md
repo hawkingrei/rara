@@ -73,7 +73,7 @@ Selecting the Kimi profile sets:
 - `provider = "openai-compatible"`
 - `endpoint_kind = "kimi"`
 - `base_url = "https://api.moonshot.cn/v1"` unless a Kimi profile override exists
-- `model = "kimi-k2-turbo-preview"` unless a Kimi profile override exists
+- `model = "kimi-k2-0905-preview"` unless a Kimi profile override exists
 - `revision = None`
 
 Kimi uses the shared OpenAI-compatible chat-completions backend. The runtime
