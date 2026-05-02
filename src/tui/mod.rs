@@ -15,6 +15,7 @@ mod line_utils;
 mod markdown;
 mod markdown_render;
 mod markdown_stream;
+mod message_role;
 mod plan_display;
 mod provider_flow;
 mod queued_input;
