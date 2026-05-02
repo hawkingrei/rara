@@ -1,3 +1,4 @@
+use crate::tui::theme::*;
 #[path = "overlay_setup.rs"]
 mod overlay_setup;
 
@@ -144,7 +145,7 @@ fn render_help_modal(f: &mut Frame, app: &TuiApp, area: Rect, tab: HelpTab) {
         Tabs::new(titles)
             .block(Block::default().borders(Borders::LEFT | Borders::RIGHT))
             .select(selected)
-            .style(Style::default().fg(Color::DarkGray))
+            .style(Style::default().fg(TEXT_SECONDARY))
             .highlight_style(help_selected_tab_style()),
         chunks[0],
     );
@@ -290,7 +291,7 @@ fn command_palette_line(spec: &CommandSpec) -> Line<'static> {
             format!("{:<11}", spec.usage),
             Style::default().add_modifier(Modifier::BOLD),
         ),
-        Span::styled(spec.summary.to_string(), Style::default().fg(Color::Gray)),
+        Span::styled(spec.summary.to_string(), Style::default().fg(TEXT_MUTED)),
     ])
 }
 
@@ -300,15 +301,15 @@ fn panel_text(title: &str, body: &str) -> String {
 
 fn command_list_highlight_style() -> Style {
     Style::default()
-        .fg(Color::White)
-        .bg(Color::DarkGray)
+        .fg(BADGE_FG_DARK)
+        .bg(TEXT_SECONDARY)
         .add_modifier(Modifier::BOLD)
 }
 
 fn help_selected_tab_style() -> Style {
     Style::default()
-        .fg(Color::White)
-        .bg(Color::DarkGray)
+        .fg(BADGE_FG_DARK)
+        .bg(TEXT_SECONDARY)
         .add_modifier(Modifier::BOLD)
 }
 

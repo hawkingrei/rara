@@ -26,6 +26,7 @@ mod terminal_event;
 mod terminal_ui;
 #[cfg(test)]
 mod tests;
+mod theme;
 mod tool_text;
 
 pub(crate) use self::keymap::map_key_to_event;

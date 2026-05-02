@@ -1,3 +1,4 @@
+use crate::tui::theme::*;
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -48,7 +49,7 @@ pub(super) fn render_provider_picker_modal(f: &mut Frame, app: &TuiApp, area: Re
         .map(|(idx, (_, label, detail))| {
             let style = if idx == app.provider_picker_idx {
                 Style::default()
-                    .fg(Color::Cyan)
+                    .fg(TEXT_ACCENT)
                     .add_modifier(Modifier::BOLD)
             } else {
                 Style::default()
@@ -125,7 +126,7 @@ pub(super) fn render_resume_picker_modal(f: &mut Frame, app: &TuiApp, area: Rect
             .map(|(idx, session)| {
                 let style = if idx == app.resume_picker_idx {
                     Style::default()
-                        .fg(Color::Cyan)
+                        .fg(TEXT_ACCENT)
                         .add_modifier(Modifier::BOLD)
                 } else {
                     Style::default()
@@ -187,7 +188,7 @@ pub(super) fn render_model_picker_modal(f: &mut Frame, app: &TuiApp, area: Rect)
             .map(|(idx, preset)| {
                 let style = if idx == app.model_picker_idx {
                     Style::default()
-                        .fg(Color::Cyan)
+                        .fg(TEXT_ACCENT)
                         .add_modifier(Modifier::BOLD)
                 } else {
                     Style::default()
@@ -222,7 +223,7 @@ pub(super) fn render_model_picker_modal(f: &mut Frame, app: &TuiApp, area: Rect)
             .map(|(idx, model)| {
                 let style = if idx == app.model_picker_idx {
                     Style::default()
-                        .fg(Color::Cyan)
+                        .fg(TEXT_ACCENT)
                         .add_modifier(Modifier::BOLD)
                 } else {
                     Style::default()
@@ -241,7 +242,7 @@ pub(super) fn render_model_picker_modal(f: &mut Frame, app: &TuiApp, area: Rect)
         let action_idx = app.deepseek_api_key_action_idx();
         let style = if app.model_picker_idx == action_idx {
             Style::default()
-                .fg(Color::Cyan)
+                .fg(TEXT_ACCENT)
                 .add_modifier(Modifier::BOLD)
         } else {
             Style::default()
@@ -262,7 +263,7 @@ pub(super) fn render_model_picker_modal(f: &mut Frame, app: &TuiApp, area: Rect)
             .map(|(idx, (label, provider, model))| {
                 let style = if idx == app.model_picker_idx {
                     Style::default()
-                        .fg(Color::Cyan)
+                        .fg(TEXT_ACCENT)
                         .add_modifier(Modifier::BOLD)
                 } else {
                     Style::default()
@@ -400,7 +401,7 @@ fn render_openai_profile_manager_modal(f: &mut Frame, app: &TuiApp, area: Rect) 
         Cell::from("Key"),
         Cell::from("Base URL"),
     ])
-    .style(Style::default().fg(Color::DarkGray));
+    .style(Style::default().fg(TEXT_SECONDARY));
     let table = Table::new(
         rows,
         [
@@ -418,7 +419,7 @@ fn render_openai_profile_manager_modal(f: &mut Frame, app: &TuiApp, area: Rect) 
     .highlight_symbol("› ")
     .row_highlight_style(
         Style::default()
-            .fg(Color::Cyan)
+            .fg(TEXT_ACCENT)
             .add_modifier(Modifier::BOLD),
     );
     let selected = if profiles.is_empty() {
@@ -511,7 +512,7 @@ pub(super) fn render_openai_profile_picker_modal(f: &mut Frame, app: &TuiApp, ar
             if idx == app.openai_profile_picker_idx {
                 item.style(
                     Style::default()
-                        .fg(Color::Cyan)
+                        .fg(TEXT_ACCENT)
                         .add_modifier(Modifier::BOLD),
                 )
             } else {
@@ -582,7 +583,7 @@ pub(super) fn render_openai_endpoint_kind_picker_modal(f: &mut Frame, app: &TuiA
             if idx == app.openai_endpoint_kind_picker_idx {
                 item.style(
                     Style::default()
-                        .fg(Color::Cyan)
+                        .fg(TEXT_ACCENT)
                         .add_modifier(Modifier::BOLD),
                 )
             } else {
@@ -633,7 +634,7 @@ pub(super) fn render_reasoning_effort_picker_modal(f: &mut Frame, app: &TuiApp, 
         .map(|(idx, option)| {
             let style = if idx == app.reasoning_effort_picker_idx {
                 Style::default()
-                    .fg(Color::Cyan)
+                    .fg(TEXT_ACCENT)
                     .add_modifier(Modifier::BOLD)
             } else {
                 Style::default()

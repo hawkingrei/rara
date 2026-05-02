@@ -1,3 +1,4 @@
+use crate::tui::theme::*;
 use std::path::Path;
 
 use ratatui::{
@@ -66,7 +67,7 @@ impl HistoryCell for SummaryCell {
                     Span::styled(
                         "diff:",
                         Style::default()
-                            .fg(Color::Cyan)
+                            .fg(PHASE_PLANNING)
                             .add_modifier(Modifier::BOLD),
                     ),
                 ]));
@@ -90,7 +91,7 @@ pub(super) struct ExploredCell {
 impl ExploredCell {
     pub(super) fn new(summary: impl Into<String>) -> Self {
         Self {
-            inner: SummaryCell::new("Explored", Color::Rgb(231, 201, 92), summary),
+            inner: SummaryCell::new("Explored", PHASE_EXPLORED, summary),
         }
     }
 }
@@ -108,7 +109,7 @@ pub(super) struct RanCell {
 impl RanCell {
     pub(super) fn new(summary: impl Into<String>) -> Self {
         Self {
-            inner: SummaryCell::new("Ran", Color::LightYellow, summary),
+            inner: SummaryCell::new("Ran", PHASE_RAN, summary),
         }
     }
 }
@@ -143,9 +144,9 @@ pub(super) struct PlanningCell {
 impl PlanningCell {
     pub(super) fn new(summary: impl Into<String>, active: bool) -> Self {
         let (title, color) = if active {
-            ("Planning", Color::Cyan)
+            ("Planning", PHASE_PLANNING)
         } else {
-            ("Planned", Color::Cyan)
+            ("Planned", PHASE_PLANNING)
         };
         Self {
             inner: SummaryCell::new(title, color, summary),
@@ -166,9 +167,9 @@ pub(super) struct ExploringCell {
 impl ExploringCell {
     pub(super) fn new(summary: impl Into<String>, active: bool) -> Self {
         let (title, color) = if active {
-            ("Exploring", Color::Yellow)
+            ("Exploring", PHASE_EXPLORING)
         } else {
-            ("Explored", Color::Rgb(231, 201, 92))
+            ("Explored", PHASE_EXPLORED)
         };
         Self {
             inner: SummaryCell::new(title, color, summary),
@@ -189,9 +190,9 @@ pub(super) struct RunningCell {
 impl RunningCell {
     pub(super) fn new(summary: impl Into<String>, active: bool) -> Self {
         let (title, color) = if active {
-            ("Running", Color::Yellow)
+            ("Running", PHASE_EXPLORING)
         } else {
-            ("Ran", Color::LightYellow)
+            ("Ran", PHASE_RAN)
         };
         Self {
             inner: SummaryCell::new(title, color, summary),
@@ -226,11 +227,11 @@ impl HistoryCell for ThinkingTextCell {
         let rendered_lines = rendered.lines;
         let start = rendered_lines.len().saturating_sub(self.max_lines);
         let body = markdown_body_lines(&rendered_lines[start..], self.max_lines);
-        let mut lines = vec![Line::from(section_span("Thinking", Color::LightBlue))];
+        let mut lines = vec![Line::from(section_span("Thinking", PHASE_THINKING))];
         if start > 0 {
             lines.push(Line::from(Span::styled(
                 format!("  ... {start} more line(s)"),
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(TEXT_SECONDARY),
             )));
         }
         lines.extend(body.into_iter().map(|mut line| {
@@ -275,11 +276,11 @@ impl HistoryCell for ThinkingGroupCell<'_> {
 
         let start = rendered_lines.len().saturating_sub(self.max_lines);
         let body = markdown_body_lines(&rendered_lines[start..], self.max_lines);
-        let mut lines = vec![Line::from(section_span("Thinking", Color::LightBlue))];
+        let mut lines = vec![Line::from(section_span("Thinking", PHASE_THINKING))];
         if start > 0 {
             lines.push(Line::from(Span::styled(
                 format!("  ... {start} more line(s)"),
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(TEXT_SECONDARY),
             )));
         }
         lines.extend(body.into_iter().map(|mut line| {
@@ -314,10 +315,10 @@ impl TerminalCell {
 
     fn bullet(&self) -> Span<'static> {
         let color = match (self.active, self.success) {
-            (true, _) => Color::Yellow,
-            (false, Some(true)) => Color::LightGreen,
-            (false, Some(false)) => Color::Red,
-            (false, None) => Color::LightYellow,
+            (true, _) => PHASE_EXPLORING,
+            (false, Some(true)) => STATUS_SUCCESS,
+            (false, Some(false)) => STATUS_ERROR,
+            (false, None) => PHASE_RAN,
         };
         Span::styled("•", Style::default().fg(color).add_modifier(Modifier::BOLD))
     }
@@ -363,8 +364,8 @@ impl HistoryCell for TerminalCell {
         for (idx, output) in self.output_lines().into_iter().enumerate() {
             let prefix = if idx == 0 { "  └ " } else { "    " };
             lines.push(Line::from(vec![
-                Span::styled(prefix, Style::default().fg(Color::DarkGray)),
-                Span::styled(output, Style::default().fg(Color::DarkGray)),
+                Span::styled(prefix, Style::default().fg(TEXT_SECONDARY)),
+                Span::styled(output, Style::default().fg(TEXT_SECONDARY)),
             ]));
         }
 
@@ -408,11 +409,11 @@ impl PendingInteractionCell {
     pub(super) fn new(kind: ActivePendingInteractionKind, lines: Vec<String>) -> Self {
         let color = match kind {
             ActivePendingInteractionKind::PlanApproval
-            | ActivePendingInteractionKind::PlanningQuestion => Color::Cyan,
+            | ActivePendingInteractionKind::PlanningQuestion => PHASE_PLANNING,
             ActivePendingInteractionKind::ShellApproval
-            | ActivePendingInteractionKind::ExplorationQuestion => Color::Yellow,
+            | ActivePendingInteractionKind::ExplorationQuestion => PHASE_EXPLORING,
             ActivePendingInteractionKind::SubAgentQuestion
-            | ActivePendingInteractionKind::RequestInput => Color::LightGreen,
+            | ActivePendingInteractionKind::RequestInput => STATUS_SUCCESS,
         };
         Self {
             inner: ApprovalCell::new(pending_interaction_card_title(kind), color, lines),
@@ -438,7 +439,10 @@ impl PlanningSuggestionCell {
 
 impl HistoryCell for PlanningSuggestionCell {
     fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
-        let mut lines = vec![Line::from(section_span("Planning Suggested", Color::Cyan))];
+        let mut lines = vec![Line::from(section_span(
+            "Planning Suggested",
+            PHASE_PLANNING,
+        ))];
         lines.extend(
             self.text
                 .lines()
@@ -460,10 +464,7 @@ impl QueuedFollowUpCell {
 
 impl HistoryCell for QueuedFollowUpCell {
     fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
-        let mut lines = vec![Line::from(section_span(
-            "Queued Follow-up",
-            Color::DarkGray,
-        ))];
+        let mut lines = vec![Line::from(section_span("Queued Follow-up", TEXT_SECONDARY))];
         for section in &self.sections {
             lines.push(Line::from(format!("  {}", section.title)));
             lines.push(Line::from(format!("    -> {}", section.preview)));
@@ -518,7 +519,7 @@ impl HistoryCell for CompletionCell {
             Line::from(Span::styled(
                 format!(" {} ", self.title),
                 Style::default()
-                    .fg(Color::Black)
+                    .fg(BADGE_FG_LIGHT)
                     .bg(self.color)
                     .add_modifier(Modifier::BOLD),
             )),
@@ -531,7 +532,7 @@ pub(super) struct PlanModeCell;
 
 impl HistoryCell for PlanModeCell {
     fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
-        vec![Line::from(section_span("Plan Mode", Color::Cyan))]
+        vec![Line::from(section_span("Plan Mode", PHASE_PLANNING))]
     }
 }
 
@@ -689,7 +690,7 @@ fn compact_message_lines(message: &str, max_lines: usize) -> Vec<Line<'static>> 
     if message_lines.len() > capped {
         lines.push(Line::from(Span::styled(
             format!("  ... {} more line(s)", message_lines.len() - capped),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(TEXT_SECONDARY),
         )));
     }
 
@@ -728,7 +729,7 @@ fn responding_card_lines(
         .unwrap_or(1)
         .clamp(1, available_inner_width.max(1));
 
-    let mut lines = vec![Line::from(section_span(title, Color::Cyan))];
+    let mut lines = vec![Line::from(section_span(title, PHASE_PLANNING))];
     lines.extend(with_border(body_lines, inner_width));
     lines
 }
@@ -829,13 +830,14 @@ pub(super) fn planning_suggestion_text(app: &TuiApp) -> String {
 #[cfg(test)]
 mod tests {
     use super::{HistoryCell, SummaryCell};
+    use crate::tui::theme::PHASE_RAN;
     use ratatui::style::Color;
 
     #[test]
     fn summary_cell_renders_indented_diff_block_as_patch_preview() {
         let cell = SummaryCell::new(
             "Ran",
-            Color::LightYellow,
+            PHASE_RAN,
             "  replace src/main.rs\n  diff:\n  *** Begin Patch\n  *** Update File: src/main.rs\n  @@\n  -old\n  +new\n  *** End Patch",
         );
 
