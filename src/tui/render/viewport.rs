@@ -72,5 +72,5 @@ impl TranscriptViewport {
 }
 
 fn visual_rows_for_line(line: &Line<'static>, wrap_width: usize) -> usize {
-    line.width().max(1).div_ceil(wrap_width)
+    crate::tui::layout_utils::line_visual_rows(line, wrap_width)
 }

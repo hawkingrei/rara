@@ -178,11 +178,7 @@ fn transcript_scroll_offset(
 }
 
 fn transcript_visual_row_count(lines: &[Line<'static>], width: u16) -> usize {
-    let wrap_width = width.max(1) as usize;
-    lines
-        .iter()
-        .map(|line| line.width().max(1).div_ceil(wrap_width))
-        .sum()
+    super::layout_utils::total_visual_rows(lines, width)
 }
 
 fn turn_divider_line(width: u16) -> Line<'static> {
@@ -763,10 +759,5 @@ pub(crate) fn section_span<'a>(title: &'a str, color: Color) -> Span<'a> {
 }
 
 pub(crate) fn wrapped_history_line_count(lines: &[Line<'static>], width: u16) -> u16 {
-    let wrap_width = usize::from(width.max(1));
-    lines
-        .iter()
-        .map(|line| line.width().max(1).div_ceil(wrap_width))
-        .sum::<usize>()
-        .max(1) as u16
+    crate::tui::layout_utils::wrapped_line_count(lines, width)
 }
