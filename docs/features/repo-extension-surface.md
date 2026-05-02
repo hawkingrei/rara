@@ -92,7 +92,8 @@ points:
 - a normalized extension object surfaced by this repository extension contract;
 - a memory or retrieval candidate produced for `MemorySelection`;
 - a lifecycle event handled behind the hook runtime boundary;
-- a child-thread or imported-agent profile executed through the thread domain.
+- a child-thread or imported-agent profile executed through the thread domain;
+- a protocol-registered source routed through the runtime control plane.
 
 They should not:
 
@@ -101,7 +102,10 @@ They should not:
 - rename existing stable prompt sections just to match an external ecosystem;
 - serialize hook, skill, or agent metadata as ordinary user text;
 - add synthetic context prefixes for transient runtime artifacts such as orphan
-  tool results.
+  tool results;
+- let ACP, Wire, or another protocol adapter bypass the same source,
+  `MemorySelection`, hook, skill, and permission boundaries used by local
+  runtime paths.
 
 If a new source needs a label for explainability, that label should be attached
 to the structured source object and rendered by `/context` or `/status`, not
@@ -126,6 +130,11 @@ RARA should separate:
    - how discovered files are mapped into RARA-owned objects;
 3. **execution**
    - when and how those normalized objects affect runtime behavior.
+
+Protocol adapters add a fourth entrypoint shape but not a fourth semantic
+model. ACP, Wire, local TUI commands, and future appserver integrations should
+all adapt into RARA-owned source, hook, skill, memory, thread, and control-event
+objects instead of defining parallel extension semantics.
 
 The first milestone should complete discovery and normalization before adding
 runtime execution.
@@ -347,6 +356,8 @@ That means:
 - context injection still flows through `ContextAssembler` and
   `MemorySelection`;
 - thread persistence still flows through `ThreadStore` / `ThreadRecorder`.
+- third-party protocol control still flows through the runtime control plane
+  before reaching prompt, skill, memory, hook, approval, or output domains.
 
 Compatibility should adapt external formats into RARA-owned objects instead of
 letting external directory conventions define runtime semantics directly.

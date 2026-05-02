@@ -4,12 +4,24 @@ Active backlog only. Keep this file small and current.
 
 ## Suggested Rollout Order
 
-1. Runtime bootstrap and context contracts
-2. Configuration and provider-surface cleanup
-3. Workspace / skill observability and cache correctness
-4. Memory / retrieval / thread persistence
-5. TUI transcript parity and command-surface polish
-6. Terminal-Bench evaluation readiness
+1. Runtime control plane and ACP/Wire-ready context contracts
+2. Runtime bootstrap and source-object unification
+3. Configuration and provider-surface cleanup
+4. Workspace / skill observability and cache correctness
+5. Memory / retrieval / thread persistence
+6. TUI transcript parity and command-surface polish
+7. Terminal-Bench evaluation readiness
+
+## Runtime Control Plane / ACP / Wire
+
+- [ ] Define adapter-neutral runtime control request/event types for ACP, Wire, TUI, CLI, and future appserver entrypoints (see `docs/features/runtime-control-plane.md`).
+- [ ] Route ACP prompt/cancel/session handling through the normal RARA runtime path instead of the current stub.
+- [ ] Add a structured output event bridge from `AgentEvent` / TUI runtime events to protocol subscribers.
+- [ ] Support protocol-registered prompt sources with provenance, scope, budget hints, and `/context` visibility.
+- [ ] Support protocol-registered skill sources through the same `SkillRegistry` precedence and override reporting as local skills.
+- [ ] Add protocol-safe memory mutation/query scaffolding that creates memory records and selection views without bypassing `MemorySelection`.
+- [ ] Add hook declaration scaffolding for protocol and repo extensions; keep execution disabled until permission and sandbox policy are explicit.
+- [ ] Ensure every new skill, memory, prompt, hook, planning, approval, and output feature is control-plane-ready rather than TUI-only.
 
 ## Configuration / Provider Surface
 
@@ -25,7 +37,7 @@ Active backlog only. Keep this file small and current.
 - [ ] Tests for workspace prompt-source discovery and cache invalidation (cwd changes, git branches, nested workspaces).
 - [ ] Define `WorkspaceMemory` cache invalidation rules for prompt files and environment info.
 - [ ] Unify `discover_prompt_sources()` and TUI `/status` source reporting.
-- [ ] New prompt inputs through structured source objects, `MemorySelection`, lifecycle events — not ad hoc text.
+- [ ] New prompt inputs through structured source objects, `MemorySelection`, lifecycle events, and runtime-control provenance — not ad hoc text.
 - [ ] Project-scoped extension surface for `.claude/agents/`, `.claude/hooks/`, `.agents/skills/` with precedence rules.
 - [ ] Claude-style `verify` skill and `verifier-*` convention (see `docs/features/verify-skill.md`).
 - [ ] Evolve `SkillTool` to Codex/Claude contract (see `docs/features/skill-tool.md`): frontmatter, scopes, override visibility.
@@ -45,6 +57,7 @@ Active backlog only. Keep this file small and current.
 - [ ] Thread-scoped and workspace-scoped `MemoryRecord` storage with promotion rules.
 - [ ] Retrieval orchestration layer from `docs/features/context-architecture.md`.
 - [ ] Initialize LanceDB and wire vector index for memory selection.
+- [ ] Make memory mutation/query control-plane-ready so ACP/Wire can inspect and add memory without directly editing prompt text.
 
 ## TUI / Transcript
 
@@ -59,6 +72,7 @@ Active backlog only. Keep this file small and current.
 - [ ] Live `bash` transcript: lifecycle framing, streamed stdout/stderr, long-output folding.
 - [ ] High-fidelity render pass for `write/update`, inline diffs, approval cards, message-card hierarchy.
 - [ ] Expand TUI snapshot coverage.
+- [ ] Keep transcript and pending-interaction state backed by structured events that ACP/Wire output subscribers can reuse.
 
 ## Security / Reliability / Performance
 

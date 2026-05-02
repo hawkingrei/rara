@@ -31,6 +31,7 @@ The effective prompt may draw from:
 - an optional append prompt;
 - workspace instruction files;
 - local memory files;
+- protocol-registered prompt sources routed through the runtime control plane;
 - runtime context;
 - plan-mode specific guidance.
 
@@ -115,13 +116,24 @@ validation before claiming the conflict is resolved.
   text blobs.
 - Prompt source discovery must remain reusable across agent runtime and TUI status reporting.
 
-### 3) Agent Loop Integration
+### 3) Protocol Prompt Sources
+
+- ACP, Wire, and future appserver integrations may register prompt-affecting
+  material only through structured prompt source objects.
+- Protocol prompt sources must carry provenance, source id, scope, lifetime,
+  layer or priority, and budget metadata.
+- Protocol adapters must not concatenate raw text directly into the system
+  prompt or rename top-level prompt sections.
+- `/context`, `/status`, and protocol output subscribers must be able to inspect
+  the same prompt source objects.
+
+### 4) Agent Loop Integration
 
 - `Agent::build_system_prompt()` must delegate to the prompt runtime instead of hand-building the
   prompt inline.
 - Compaction must pass the dedicated compact instruction down to every backend summarization path.
 
-### 4) Runtime Bootstrap Contract
+### 5) Runtime Bootstrap Contract
 
 - Runtime/bootstrap callers must initialize workspace, prompt runtime config, skills, and tools
   through one shared entrypoint instead of wiring those pieces independently in `main.rs` and TUI
@@ -145,6 +157,8 @@ validation before claiming the conflict is resolved.
 - Prompt observability now exists in both `/status` and `/context`, including active selected
   workspace/thread memory items, but deeper memory inspection still needs to cover real recalled
   vector/thread selection instead of only prompt-injected or compacted carry-over.
+- Protocol-registered prompt sources need strict provenance and lifetime rules
+  before ACP/Wire can safely control prompt material.
 
 ## Source Journals
 
@@ -152,3 +166,4 @@ validation before claiming the conflict is resolved.
 - [2026-04-24-context-observability-and-restore](../journal/2026-04-24-context-observability-and-restore.md)
 - [2026-04-25-context-assembly-stage1](../journal/2026-04-25-context-assembly-stage1.md)
 - [2026-05-02-git-conflict-prompt-guidance](../journal/2026-05-02-git-conflict-prompt-guidance.md)
+- [Runtime Control Plane](runtime-control-plane.md)
