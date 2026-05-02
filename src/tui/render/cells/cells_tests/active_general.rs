@@ -62,6 +62,44 @@ fn active_turn_cell_keeps_sections_in_stable_order() {
 }
 
 #[test]
+fn active_turn_cell_renders_pending_approval_without_transcript_entries() {
+    let temp = tempdir().unwrap();
+    let mut app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("build tui app");
+    app.runtime_phase = RuntimePhase::RunningTool;
+    app.runtime_phase_detail = Some("resuming after approval".into());
+    app.snapshot
+        .pending_interactions
+        .push(crate::tui::state::PendingInteractionSnapshot {
+            kind: crate::tui::state::InteractionKind::Approval,
+            title: "Pending Approval".into(),
+            summary: "git diff origin/main -- src/context/assembler.rs".into(),
+            options: Vec::new(),
+            note: None,
+            approval: Some(crate::tui::state::PendingApprovalSnapshot {
+                tool_use_id: "toolu_123".into(),
+                command: "git diff origin/main -- src/context/assembler.rs".into(),
+                allow_net: false,
+                payload: Default::default(),
+            }),
+            source: None,
+        });
+
+    let rendered = ActiveTurnCell::new(&app, Some(Path::new(".")))
+        .display_lines(100)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(rendered.contains(" Shell Approval "));
+    assert!(rendered.contains("git diff origin/main -- src/context/assembler.rs"));
+    assert!(!rendered.contains("resuming after approval"));
+}
+
+#[test]
 fn active_turn_cell_renders_progress_sections_as_compact_stack() {
     let temp = tempdir().unwrap();
     let mut app = TuiApp::new(ConfigManager {

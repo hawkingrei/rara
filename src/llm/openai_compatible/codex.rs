@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 
 use crate::agent::Message;
 use crate::llm::{ContentBlock, LlmResponse};
-use crate::redaction::{redact_secrets, sanitize_url_for_display};
+use crate::redaction::sanitize_url_for_display;
 
 use super::super::codex_tools_compat::ToolDefinition;
 use super::super::codex_tools_compat::ToolSpec;
@@ -18,7 +18,10 @@ use super::super::shared::{
     ContextBudget, LlmBackend, LlmStreamEvent, collect_assistant_content, model_context_budget,
     next_stream_item_with_idle_timeout, parse_tool_arguments, render_openai_message_content,
 };
-use super::{CodexBackend, OpenAiCompatibleBackend};
+use super::{
+    CodexBackend, OpenAiApiError, OpenAiCompatibleBackend, api_error_from_response,
+    is_auxiliary_model_retryable_error,
+};
 
 impl CodexBackend {
     pub fn new(
@@ -32,8 +35,22 @@ impl CodexBackend {
             api_key,
             base_url,
             model,
+            auxiliary_model: None,
             reasoning_effort,
         })
+    }
+
+    pub fn with_auxiliary_model(mut self, auxiliary_model: Option<String>) -> Self {
+        self.auxiliary_model = auxiliary_model
+            .map(|model| model.trim().to_string())
+            .filter(|model| !model.is_empty());
+        self
+    }
+
+    fn summary_model(&self) -> &str {
+        self.auxiliary_model
+            .as_deref()
+            .unwrap_or(self.model.as_str())
     }
 
     fn endpoint_url(&self, path: &str) -> String {
@@ -44,13 +61,14 @@ impl CodexBackend {
 
     async fn ask_responses_streaming(
         &self,
+        model: &str,
         messages: &[Message],
         tools: &[Value],
         metadata: crate::llm::LlmTurnMetadata,
         mut on_event: Option<&mut (dyn FnMut(LlmStreamEvent) + Send)>,
     ) -> Result<LlmResponse> {
         let body = build_codex_responses_request(
-            &self.model,
+            model,
             messages,
             tools,
             self.reasoning_effort.as_deref(),
@@ -68,11 +86,12 @@ impl CodexBackend {
 
         let res = request.json(&body).send().await?;
         if !res.status().is_success() {
-            return Err(anyhow!(
-                "API Error at {}: {}",
-                sanitize_url_for_display(&responses_url),
-                redact_secrets(res.text().await?)
-            ));
+            return Err(
+                anyhow::Error::new(api_error_from_response(res).await).context(format!(
+                    "API Error at {}",
+                    sanitize_url_for_display(&responses_url)
+                )),
+            );
         }
 
         let mut stream = res.bytes_stream().eventsource();
@@ -118,8 +137,14 @@ impl CodexBackend {
 #[async_trait]
 impl LlmBackend for CodexBackend {
     async fn ask(&self, m: &[Message], t: &[Value]) -> Result<LlmResponse> {
-        self.ask_responses_streaming(m, t, crate::llm::LlmTurnMetadata::default(), None)
-            .await
+        self.ask_responses_streaming(
+            self.model.as_str(),
+            m,
+            t,
+            crate::llm::LlmTurnMetadata::default(),
+            None,
+        )
+        .await
     }
 
     async fn ask_streaming(
@@ -129,6 +154,7 @@ impl LlmBackend for CodexBackend {
         on_event: &mut (dyn FnMut(LlmStreamEvent) + Send),
     ) -> Result<LlmResponse> {
         self.ask_responses_streaming(
+            self.model.as_str(),
             messages,
             tools,
             crate::llm::LlmTurnMetadata::default(),
@@ -144,8 +170,14 @@ impl LlmBackend for CodexBackend {
         metadata: crate::llm::LlmTurnMetadata,
         on_event: &mut (dyn FnMut(LlmStreamEvent) + Send),
     ) -> Result<LlmResponse> {
-        self.ask_responses_streaming(messages, tools, metadata, Some(on_event))
-            .await
+        self.ask_responses_streaming(
+            self.model.as_str(),
+            messages,
+            tools,
+            metadata,
+            Some(on_event),
+        )
+        .await
     }
 
     async fn embed(&self, t: &str) -> Result<Vec<f32>> {
@@ -164,7 +196,32 @@ impl LlmBackend for CodexBackend {
             role: "user".to_string(),
             content: json!(instruction),
         });
-        let response = self.ask(&messages, &[]).await?;
+        let summary_model = self.summary_model();
+        let response = self
+            .ask_responses_streaming(
+                summary_model,
+                &messages,
+                &[],
+                crate::llm::LlmTurnMetadata::default(),
+                None,
+            )
+            .await;
+        let response = if summary_model != self.model.as_str()
+            && response
+                .as_ref()
+                .is_err_and(|error| is_auxiliary_model_retryable_error(error))
+        {
+            self.ask_responses_streaming(
+                self.model.as_str(),
+                &messages,
+                &[],
+                crate::llm::LlmTurnMetadata::default(),
+                None,
+            )
+            .await?
+        } else {
+            response?
+        };
         Ok(response
             .content
             .into_iter()
@@ -177,7 +234,7 @@ impl LlmBackend for CodexBackend {
     }
 
     fn context_budget(&self, messages: &[Message], tools: &[Value]) -> Option<ContextBudget> {
-        model_context_budget(self.model.as_str()).or_else(|| {
+        let main_budget = model_context_budget(self.model.as_str()).or_else(|| {
             let inner = OpenAiCompatibleBackend::new(
                 self.api_key.clone(),
                 self.base_url.clone(),
@@ -185,7 +242,25 @@ impl LlmBackend for CodexBackend {
             )
             .ok()?;
             inner.context_budget(messages, tools)
-        })
+        });
+        let summary_model = self.summary_model();
+        let summary_budget = if summary_model == self.model.as_str() {
+            main_budget
+        } else {
+            model_context_budget(summary_model).or(main_budget)
+        };
+        match (main_budget, summary_budget) {
+            (Some(main), Some(summary)) => {
+                if summary.context_window_tokens < main.context_window_tokens {
+                    Some(summary)
+                } else {
+                    Some(main)
+                }
+            }
+            (Some(main), None) => Some(main),
+            (None, Some(summary)) => Some(summary),
+            (None, None) => None,
+        }
     }
 }
 
@@ -315,15 +390,17 @@ pub(crate) fn apply_codex_stream_event(
             });
             Ok(true)
         }
-        Some("response.failed") => Err(anyhow!(
-            "{}",
-            payload
+        Some("response.failed") => {
+            let Some(error) = payload
                 .get("response")
                 .and_then(|response| response.get("error"))
-                .and_then(|error| error.get("message"))
-                .and_then(Value::as_str)
-                .unwrap_or("response.failed event received")
-        )),
+            else {
+                return Err(anyhow!("response.failed event received"));
+            };
+            Err(anyhow::Error::new(
+                OpenAiApiError::from_response_failed_error(error),
+            ))
+        }
         Some("response.incomplete") => Err(anyhow!(
             "Incomplete response returned, reason: {}",
             payload

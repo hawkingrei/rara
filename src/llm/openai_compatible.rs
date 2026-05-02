@@ -2,11 +2,13 @@ mod codex;
 mod usage;
 
 use std::borrow::Cow;
+use std::fmt;
 use std::time::Duration;
 
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use eventsource_stream::Eventsource;
+use reqwest::{Response, StatusCode};
 use secrecy::{ExposeSecret, SecretString};
 use serde_json::{Value, json};
 
@@ -25,6 +27,58 @@ use self::usage::parse_openai_token_usage;
 
 const STREAM_IDLE_RETRY_ATTEMPTS: usize = 1;
 const STREAM_IDLE_ERROR_FRAGMENT: &str = "stream produced no events";
+
+#[derive(Debug)]
+pub(crate) struct OpenAiApiError {
+    status: Option<StatusCode>,
+    sanitized_body: String,
+    error_type: Option<String>,
+    error_code: Option<String>,
+}
+
+impl OpenAiApiError {
+    #[cfg(test)]
+    pub(crate) fn for_test(
+        status: Option<StatusCode>,
+        error_type: Option<&str>,
+        error_code: Option<&str>,
+    ) -> Self {
+        Self {
+            status,
+            sanitized_body: "{}".to_string(),
+            error_type: error_type.map(ToString::to_string),
+            error_code: error_code.map(ToString::to_string),
+        }
+    }
+
+    pub(crate) fn from_response_failed_error(error: &Value) -> Self {
+        let sanitized_body = redact_secrets(error.to_string());
+        Self {
+            status: None,
+            sanitized_body,
+            error_type: error
+                .get("type")
+                .and_then(Value::as_str)
+                .map(ToString::to_string),
+            error_code: error
+                .get("code")
+                .and_then(Value::as_str)
+                .map(ToString::to_string),
+        }
+    }
+}
+
+impl fmt::Display for OpenAiApiError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Some(status) = self.status {
+            write!(f, "API Error (status {status}): {}", self.sanitized_body)
+        } else {
+            write!(f, "API Error: {}", self.sanitized_body)
+        }
+    }
+}
+
+impl std::error::Error for OpenAiApiError {}
 
 #[cfg(test)]
 pub(crate) use self::codex::{
@@ -358,16 +412,39 @@ impl LlmBackend for OpenAiCompatibleBackend {
         let summary = self
             .summarize_with_model(summary_model.as_ref(), &msgs)
             .await;
-        if summary.is_err() && summary_model.as_ref() != self.model.as_str() {
+        if summary_model.as_ref() != self.model.as_str()
+            && summary
+                .as_ref()
+                .is_err_and(|error| is_auxiliary_model_retryable_error(error))
+        {
             return self.summarize_with_model(self.model.as_str(), &msgs).await;
         }
         summary
     }
 
     fn context_budget(&self, _messages: &[Message], _tools: &[Value]) -> Option<ContextBudget> {
-        self.context_window_override
+        let main_budget = self
+            .context_window_override
             .map(|w| context_budget_from_window(w))
-            .or_else(|| model_context_budget(self.model.as_str()))
+            .or_else(|| model_context_budget(self.model.as_str()));
+        let summary_model = self.summary_model();
+        let summary_budget = if summary_model.as_ref() == self.model.as_str() {
+            main_budget
+        } else {
+            model_context_budget(summary_model.as_ref()).or(main_budget)
+        };
+        match (main_budget, summary_budget) {
+            (Some(main), Some(summary)) => {
+                if summary.context_window_tokens < main.context_window_tokens {
+                    Some(summary)
+                } else {
+                    Some(main)
+                }
+            }
+            (Some(main), None) => Some(main),
+            (None, Some(summary)) => Some(summary),
+            (None, None) => None,
+        }
     }
 }
 
@@ -391,11 +468,9 @@ impl OpenAiCompatibleBackend {
         }
         let res = request.json(&body).send().await?;
         if !res.status().is_success() {
-            return Err(anyhow!(
-                "API Error at {}: {}",
-                sanitize_url_for_display(&completions_url),
-                redact_secrets(res.text().await?)
-            ));
+            return Err(api_error_from_response(res)
+                .await
+                .context_url(&completions_url));
         }
         let resp_json: Value = res.json().await?;
         Ok(
@@ -410,6 +485,62 @@ impl OpenAiCompatibleBackend {
             .or_else(|| infer_openai_compatible_auxiliary_model(&self.model, self.endpoint_kind))
             .unwrap_or_else(|| Cow::Borrowed(self.model.as_str()))
     }
+}
+
+trait OpenAiApiErrorContext {
+    fn context_url(self, url: &str) -> anyhow::Error;
+}
+
+impl OpenAiApiErrorContext for OpenAiApiError {
+    fn context_url(self, url: &str) -> anyhow::Error {
+        anyhow::Error::new(self).context(format!("API Error at {}", sanitize_url_for_display(url)))
+    }
+}
+
+pub(super) async fn api_error_from_response(response: Response) -> OpenAiApiError {
+    let status = response.status();
+    let body = response.text().await.unwrap_or_default();
+    let sanitized_body = redact_secrets(body);
+    let parsed = serde_json::from_str::<Value>(&sanitized_body).ok();
+    let error = parsed.as_ref().and_then(|value| value.get("error"));
+    OpenAiApiError {
+        status: Some(status),
+        sanitized_body,
+        error_type: error
+            .and_then(|value| value.get("type"))
+            .and_then(Value::as_str)
+            .map(ToString::to_string),
+        error_code: error
+            .and_then(|value| value.get("code"))
+            .and_then(Value::as_str)
+            .map(ToString::to_string),
+    }
+}
+
+pub(crate) fn is_auxiliary_model_unsupported_error(error: &anyhow::Error) -> bool {
+    let Some(api_error) = error.downcast_ref::<OpenAiApiError>() else {
+        return false;
+    };
+    api_error.status == Some(StatusCode::NOT_FOUND)
+        || matches!(
+            api_error.error_code.as_deref(),
+            Some("model_not_found" | "model_not_supported" | "invalid_model")
+        )
+        || matches!(
+            api_error.error_type.as_deref(),
+            Some("model_not_found" | "model_not_supported" | "invalid_model")
+        )
+}
+
+pub(crate) fn is_auxiliary_model_retryable_error(error: &anyhow::Error) -> bool {
+    is_auxiliary_model_unsupported_error(error) || is_context_window_error(error)
+}
+
+pub(crate) fn is_context_window_error(error: &anyhow::Error) -> bool {
+    let Some(api_error) = error.downcast_ref::<OpenAiApiError>() else {
+        return false;
+    };
+    api_error.error_code.as_deref() == Some("context_length_exceeded")
 }
 
 pub(crate) fn infer_openai_compatible_auxiliary_model(
@@ -429,10 +560,8 @@ fn infer_deepseek_lite_model(model: &str) -> Option<Cow<'_, str>> {
         return None;
     }
     if lower.contains("v4") && lower.ends_with("-pro") {
-        return trimmed
-            .strip_suffix("-pro")
-            .map(|prefix| format!("{prefix}-lite"))
-            .map(Cow::Owned);
+        let prefix = &trimmed[..trimmed.len().saturating_sub("-pro".len())];
+        return Some(Cow::Owned(format!("{prefix}-lite")));
     }
     None
 }
@@ -1197,6 +1326,7 @@ pub struct CodexBackend {
     api_key: Option<SecretString>,
     base_url: String,
     model: String,
+    auxiliary_model: Option<String>,
 }
 
 pub struct GeminiBackend {

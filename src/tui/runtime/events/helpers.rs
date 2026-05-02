@@ -239,13 +239,25 @@ pub(super) fn planning_note_lines(message: &str) -> Vec<String> {
 }
 
 pub(super) fn scrub_internal_control_tokens(message: &str) -> String {
-    let message = if message.contains("｜DSML｜") {
-        strip_dsml_control_blocks(message)
+    let had_deepseek_dsml = message.contains("｜DSML｜");
+    let had_deepseek_eos = message.contains("<｜end▁of▁sentence｜>");
+
+    let message = if had_deepseek_dsml {
+        strip_deepseek_v4_dsml_control_blocks(message)
     } else {
         Cow::Borrowed(message)
     };
-    let message = strip_raw_tool_call_markup(message.as_ref());
-    let message = strip_leading_meta_reasoning(message.as_ref());
+    let message =
+        if (had_deepseek_dsml || had_deepseek_eos) && message.trim_start().starts_with("<think>") {
+            strip_deepseek_leading_think_block(&message)
+        } else {
+            message
+        };
+    let message = if had_deepseek_eos {
+        Cow::Owned(message.replace("<｜end▁of▁sentence｜>", ""))
+    } else {
+        message
+    };
     if !message.contains('<') {
         return message.into_owned();
     }
@@ -284,59 +296,26 @@ pub(super) fn scrub_internal_control_tokens(message: &str) -> String {
     cleaned
 }
 
-fn strip_raw_tool_call_markup(message: &str) -> Cow<'_, str> {
-    if !message.contains("tool_call:") {
+fn strip_deepseek_leading_think_block(message: &str) -> Cow<'_, str> {
+    const THINK_OPEN: &str = "<think>";
+    const THINK_CLOSE: &str = "</think>";
+
+    let trimmed = message.trim_start();
+    if !trimmed.starts_with(THINK_OPEN) {
         return Cow::Borrowed(message);
     }
 
-    let mut output = Vec::new();
-    for line in message.lines() {
-        let Some(idx) = line.find("tool_call:") else {
-            output.push(line.trim_end().to_string());
-            continue;
-        };
-        let prefix = line[..idx].trim_end_matches([' ', '|']).trim_end();
-        if !prefix.trim().is_empty() {
-            output.push(prefix.to_string());
-        }
-    }
-
-    Cow::Owned(output.join("\n"))
-}
-
-fn strip_leading_meta_reasoning(message: &str) -> Cow<'_, str> {
-    let lines = message.lines().collect::<Vec<_>>();
-    let mut first_keep = 0usize;
-    while let Some(line) = lines.get(first_keep) {
-        let trimmed = line.trim();
-        if trimmed.is_empty() || looks_like_leaked_meta_reasoning(trimmed) {
-            first_keep += 1;
-            continue;
-        }
-        break;
-    }
-
-    if first_keep == 0 {
+    let block = &trimmed[THINK_OPEN.len()..];
+    let Some(close_idx) = block.find(THINK_CLOSE) else {
         return Cow::Borrowed(message);
-    }
-    Cow::Owned(lines[first_keep..].join("\n"))
+    };
+
+    Cow::Owned(block[close_idx + THINK_CLOSE.len()..].to_string())
 }
 
-fn looks_like_leaked_meta_reasoning(line: &str) -> bool {
-    let lower = line.to_ascii_lowercase();
-    lower.starts_with("the user asked ")
-        || lower.starts_with("the user is asking ")
-        || lower.starts_with("looking at the conversation")
-        || lower.starts_with("i can see that ")
-        || lower.starts_with("i should ")
-        || lower.starts_with("i need to answer ")
-        || lower.starts_with("i'll answer ")
-}
-
-fn strip_dsml_control_blocks(message: &str) -> Cow<'_, str> {
-    const DSML_OPEN: &str = "<｜DSML｜";
+fn strip_deepseek_v4_dsml_control_blocks(message: &str) -> Cow<'_, str> {
+    const TOOL_CALLS_OPEN: &str = "<｜DSML｜tool_calls>";
     const TOOL_CALLS_CLOSE: &str = "</｜DSML｜tool_calls>";
-    const INVOKE_CLOSE: &str = "</｜DSML｜invoke>";
 
     if !message.contains("｜DSML｜") {
         return Cow::Borrowed(message);
@@ -344,32 +323,135 @@ fn strip_dsml_control_blocks(message: &str) -> Cow<'_, str> {
 
     let mut output = String::new();
     let mut rest = message;
-    while let Some(start) = rest.find(DSML_OPEN) {
+    while let Some(start) = rest.find(TOOL_CALLS_OPEN) {
         output.push_str(&rest[..start]);
         let block = &rest[start..];
-        let Some(skip_len) = block
-            .find(TOOL_CALLS_CLOSE)
-            .map(|idx| idx + TOOL_CALLS_CLOSE.len())
-            .or_else(|| block.find(INVOKE_CLOSE).map(|idx| idx + INVOKE_CLOSE.len()))
-        else {
+        let Some(close_idx) = block.find(TOOL_CALLS_CLOSE) else {
             output.push_str(block);
             rest = "";
             break;
         };
+        let skip_len = close_idx + TOOL_CALLS_CLOSE.len();
+        let candidate = &block[..skip_len];
+        if parse_deepseek_v4_dsml_tool_calls_block(candidate).is_none() {
+            output.push_str(candidate);
+            rest = &block[skip_len..];
+            continue;
+        }
         rest = &block[skip_len..];
         if !output.ends_with('\n') && !rest.trim_start().is_empty() {
             output.push('\n');
         }
     }
     output.push_str(rest);
-    if looks_like_orphaned_dsml_payload(output.trim()) {
+    if looks_like_orphaned_deepseek_v4_dsml_payload(output.trim()) {
         Cow::Owned(String::new())
     } else {
         Cow::Owned(output)
     }
 }
 
-fn looks_like_orphaned_dsml_payload(text: &str) -> bool {
+#[derive(Debug, PartialEq, Eq)]
+struct DeepSeekV4DsmlToolCall<'a> {
+    name: &'a str,
+    parameters: Vec<DeepSeekV4DsmlParameter<'a>>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct DeepSeekV4DsmlParameter<'a> {
+    name: &'a str,
+    value: &'a str,
+    is_string: bool,
+}
+
+fn parse_deepseek_v4_dsml_tool_calls_block(block: &str) -> Option<Vec<DeepSeekV4DsmlToolCall<'_>>> {
+    const TOOL_CALLS_OPEN: &str = "<｜DSML｜tool_calls>";
+    const TOOL_CALLS_CLOSE: &str = "</｜DSML｜tool_calls>";
+
+    let body = block
+        .strip_prefix(TOOL_CALLS_OPEN)?
+        .strip_suffix(TOOL_CALLS_CLOSE)?;
+    let mut rest = body.trim();
+    let mut calls = Vec::new();
+    while !rest.is_empty() {
+        let (call, next) = parse_deepseek_v4_dsml_invoke(rest)?;
+        calls.push(call);
+        rest = next.trim_start();
+    }
+    if calls.is_empty() { None } else { Some(calls) }
+}
+
+fn parse_deepseek_v4_dsml_invoke(input: &str) -> Option<(DeepSeekV4DsmlToolCall<'_>, &str)> {
+    const INVOKE_OPEN: &str = "<｜DSML｜invoke";
+    const INVOKE_CLOSE: &str = "</｜DSML｜invoke>";
+
+    let input = input.trim_start();
+    if !input.starts_with(INVOKE_OPEN) {
+        return None;
+    }
+    let open_end = input.find('>')?;
+    let open_tag = &input[..open_end];
+    let name = parse_deepseek_v4_dsml_quoted_attr(open_tag, "name")?;
+    if name.is_empty() {
+        return None;
+    }
+
+    let after_open = &input[open_end + 1..];
+    let close_start = after_open.find(INVOKE_CLOSE)?;
+    let mut body = after_open[..close_start].trim();
+    let mut parameters = Vec::new();
+    while !body.is_empty() {
+        let (parameter, next) = parse_deepseek_v4_dsml_parameter(body)?;
+        parameters.push(parameter);
+        body = next.trim_start();
+    }
+    let after_close = &after_open[close_start + INVOKE_CLOSE.len()..];
+    Some((DeepSeekV4DsmlToolCall { name, parameters }, after_close))
+}
+
+fn parse_deepseek_v4_dsml_parameter(input: &str) -> Option<(DeepSeekV4DsmlParameter<'_>, &str)> {
+    const PARAM_OPEN: &str = "<｜DSML｜parameter";
+    const PARAM_CLOSE: &str = "</｜DSML｜parameter>";
+
+    let input = input.trim_start();
+    if !input.starts_with(PARAM_OPEN) {
+        return None;
+    }
+    let open_end = input.find('>')?;
+    let open_tag = &input[..open_end];
+    let name = parse_deepseek_v4_dsml_quoted_attr(open_tag, "name")?;
+    if name.is_empty() {
+        return None;
+    }
+    let is_string = match parse_deepseek_v4_dsml_quoted_attr(open_tag, "string") {
+        Some("true") => true,
+        Some("false") | None => false,
+        Some(_) => return None,
+    };
+
+    let after_open = &input[open_end + 1..];
+    let close_start = after_open.find(PARAM_CLOSE)?;
+    let value = &after_open[..close_start];
+    let after_close = &after_open[close_start + PARAM_CLOSE.len()..];
+    Some((
+        DeepSeekV4DsmlParameter {
+            name,
+            value,
+            is_string,
+        },
+        after_close,
+    ))
+}
+
+fn parse_deepseek_v4_dsml_quoted_attr<'a>(tag: &'a str, name: &str) -> Option<&'a str> {
+    let needle = format!("{name}=\"");
+    let start = tag.find(&needle)? + needle.len();
+    let rest = &tag[start..];
+    let end = rest.find('"')?;
+    Some(&rest[..end])
+}
+
+fn looks_like_orphaned_deepseek_v4_dsml_payload(text: &str) -> bool {
     let lines = text
         .lines()
         .map(str::trim)

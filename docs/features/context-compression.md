@@ -134,8 +134,22 @@ This mirrors Gemini's use of dedicated `chat-compression-*` model configs. The r
 - if no lite model is configured or derivable, use the main model;
 - if an auxiliary/lite request fails because the provider does not support it, retry with the main
   model instead of failing compaction;
+- for Codex/Responses streaming, classify `response.failed.error.code` structurally and treat
+  `context_length_exceeded` as a context-window failure, matching Codex's upstream behavior;
+- do not retry with the main model for authentication, rate-limit, network, or other provider
+  failures because those are not auxiliary-model selection failures;
+- when the helper model has a known smaller context window than the main model, compute compaction
+  thresholds against the smaller helper budget so helper prompts are planned conservatively instead
+  of relying on provider error-message parsing;
 - persist metrics in a way that lets `/status` and `/context` distinguish main-model calls from
   auxiliary-model calls.
+
+These controls are runtime-plane behavior, not TUI-only behavior. A compaction request should carry
+the selected main model, optional auxiliary model, budget source, and trigger reason through the
+shared request path. The resulting runtime event should report the model actually used, fallback
+reason when fallback occurred, token usage/cache metrics when available, and any warning that should
+be visible in `/status` or `/context`. TUI surfaces render those events; they must not infer routing
+or fallback behavior from display text.
 
 The parent agent should only apply the returned result through the post-compact assembly pipeline.
 The worker transcript must not be appended to the parent conversation. This keeps prefix order

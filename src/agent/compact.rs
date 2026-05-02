@@ -10,6 +10,7 @@ const RECENT_FILE_EXCERPT_CHAR_LIMIT: usize = 600;
 const RETAINED_HISTORY_BUDGET_FRACTION: usize = 2;
 const COMPACT_BOUNDARY_KIND: &str = "compact_boundary";
 const COMPACT_BOUNDARY_VERSION: u32 = 1;
+const ROLE_ASSISTANT: &str = "assistant";
 // Wait for about two 4K chunks of new context before retrying automatic
 // compaction after a timeout or backend failure.
 const AUTO_COMPACTION_RETRY_HYSTERESIS_TOKENS: usize = 8_192;
@@ -279,15 +280,19 @@ fn build_compact_plan(
 
     let groups = group_history_by_api_round(history)?;
     if groups.len() < 2 {
-        return Ok(Some(CompactPlan {
-            summarize_end: history.len() - 1,
-            retained_start: history.len() - 1,
-        }));
+        return Ok(None);
     }
 
     let retained_budget = retained_history_budget(threshold, force);
     let mut retained_tokens = 0usize;
     let mut retained_group_index = groups.len() - 1;
+    let latest_group = &groups[retained_group_index];
+    if !force && latest_group.token_estimate > retained_budget {
+        return Ok(Some(CompactPlan {
+            summarize_end: history.len(),
+            retained_start: history.len(),
+        }));
+    }
 
     for group_index in (1..groups.len()).rev() {
         let group = &groups[group_index];
@@ -323,12 +328,13 @@ fn retained_history_budget(threshold: usize, force: bool) -> usize {
 }
 
 fn group_history_by_api_round(history: &[Message]) -> Result<Vec<ApiRoundGroup>> {
+    let bpe = tokenizer()?;
     let mut groups = Vec::new();
     let mut group_start = 0usize;
     let mut current_tokens = 0usize;
 
     for (idx, message) in history.iter().enumerate() {
-        let starts_new_round = message.role == "assistant" && idx > group_start;
+        let starts_new_round = message.role == ROLE_ASSISTANT && idx > group_start;
         if starts_new_round {
             debug_assert!(idx > group_start);
             groups.push(ApiRoundGroup {
@@ -339,7 +345,8 @@ fn group_history_by_api_round(history: &[Message]) -> Result<Vec<ApiRoundGroup>>
             group_start = idx;
             current_tokens = 0;
         }
-        current_tokens = current_tokens.saturating_add(estimate_message_tokens(message)?);
+        current_tokens =
+            current_tokens.saturating_add(estimate_message_tokens_with_bpe(message, bpe)?);
     }
 
     if group_start < history.len() {
@@ -759,7 +766,7 @@ mod tests {
             Message {
                 role: "user".to_string(),
                 content: json!([
-                    {"type":"tool_result","tool_use_id":"tool-1","content":"old output"}
+                    {"type":"tool_result","tool_use_id":"tool-1","content":"old output ".repeat(1_000)}
                 ]),
             },
             Message {
@@ -776,11 +783,70 @@ mod tests {
             },
         ];
 
-        let plan = build_compact_plan(&history, 1, false)
+        let plan = build_compact_plan(&history, 600, false)
             .expect("plan")
             .expect("compact plan");
 
         assert_eq!(plan.summarize_end, 3);
         assert_eq!(plan.retained_start, 3);
+    }
+
+    #[test]
+    fn compact_plan_does_not_split_single_assistant_tool_round() {
+        let history = vec![
+            Message {
+                role: "assistant".to_string(),
+                content: json!([
+                    {"type":"tool_use","id":"tool-1","name":"read_file","input":{"path":"src/main.rs"}}
+                ]),
+            },
+            Message {
+                role: "user".to_string(),
+                content: json!([
+                    {"type":"tool_result","tool_use_id":"tool-1","content":"fn main() {}"}
+                ]),
+            },
+        ];
+
+        let plan = build_compact_plan(&history, 1, false).expect("plan");
+
+        assert!(
+            plan.is_none(),
+            "single API round must not retain a detached tool_result"
+        );
+    }
+
+    #[test]
+    fn compact_plan_summarizes_oversized_latest_api_round() {
+        let large_tool_output = "recent output ".repeat(2_000);
+        let history = vec![
+            Message {
+                role: "user".to_string(),
+                content: json!("old request"),
+            },
+            Message {
+                role: "assistant".to_string(),
+                content: json!("old answer"),
+            },
+            Message {
+                role: "assistant".to_string(),
+                content: json!([
+                    {"type":"tool_use","id":"tool-1","name":"read_file","input":{"path":"src/main.rs"}}
+                ]),
+            },
+            Message {
+                role: "user".to_string(),
+                content: json!([
+                    {"type":"tool_result","tool_use_id":"tool-1","content": large_tool_output}
+                ]),
+            },
+        ];
+
+        let plan = build_compact_plan(&history, 100, false)
+            .expect("plan")
+            .expect("compact plan");
+
+        assert_eq!(plan.summarize_end, history.len());
+        assert_eq!(plan.retained_start, history.len());
     }
 }

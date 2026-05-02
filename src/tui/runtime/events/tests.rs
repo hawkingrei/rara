@@ -173,25 +173,110 @@ fn scrub_internal_control_tokens_removes_dsml_tool_blocks() {
 }
 
 #[test]
-fn scrub_internal_control_tokens_removes_raw_tool_call_markup() {
+fn scrub_internal_control_tokens_removes_structured_dsml_tool_block_with_json_parameter() {
     let cleaned = scrub_internal_control_tokens(
-        "Now update docs. | tool_call: read_file arguments: {\"path\":\"docs/todo.md\"} | tool_call: read_file arguments: {\"path\":\"docs/features/README.md\"}",
+        "Before\n<｜DSML｜tool_calls>\n<｜DSML｜invoke name=\"read_file\">\n<｜DSML｜parameter name=\"options\" string=\"false\">{\"path\":\"src/lib.rs\",\"limit\":20}</｜DSML｜parameter>\n</｜DSML｜invoke>\n</｜DSML｜tool_calls>\nAfter",
     );
 
-    assert_eq!(cleaned.trim(), "Now update docs.");
-    assert!(!cleaned.contains("tool_call:"));
-    assert!(!cleaned.contains("arguments:"));
+    assert_eq!(cleaned.trim(), "Before\n\nAfter");
+    assert!(!cleaned.contains("read_file"));
 }
 
 #[test]
-fn scrub_internal_control_tokens_drops_leaked_meta_reasoning_prefix() {
+fn scrub_internal_control_tokens_removes_dsml_after_thinking_like_deepseek_completion() {
     let cleaned = scrub_internal_control_tokens(
-        "The user asked \"was it opened?\"\nLooking at the conversation, PR #147 was created.\nI should confirm this briefly.\n\nPR #147 was created: https://github.com/hawkingrei/rara/pull/147",
+        "<think>The user wants weather. I should use the get_weather tool.</think>\n\n<｜DSML｜tool_calls>\n<｜DSML｜invoke name=\"get_weather\">\n<｜DSML｜parameter name=\"location\" string=\"true\">Beijing</｜DSML｜parameter>\n<｜DSML｜parameter name=\"unit\" string=\"true\">celsius</｜DSML｜parameter>\n</｜DSML｜invoke>\n</｜DSML｜tool_calls><｜end▁of▁sentence｜>",
+    );
+
+    assert_eq!(cleaned.trim(), "");
+    assert!(!cleaned.contains("<think>"));
+    assert!(!cleaned.contains("</think>"));
+    assert!(!cleaned.contains("<｜DSML｜tool_calls>"));
+    assert!(!cleaned.contains("<｜DSML｜invoke"));
+    assert!(!cleaned.contains("<｜DSML｜parameter"));
+    assert!(!cleaned.contains("<｜end▁of▁sentence｜>"));
+}
+
+#[test]
+fn scrub_internal_control_tokens_preserves_malformed_think_block() {
+    let cleaned = scrub_internal_control_tokens(
+        "The literal malformed marker <think> has no closing tag in this answer.",
     );
 
     assert_eq!(
-        cleaned.trim(),
-        "PR #147 was created: https://github.com/hawkingrei/rara/pull/147"
+        cleaned,
+        "The literal malformed marker <think> has no closing tag in this answer."
+    );
+}
+
+#[test]
+fn scrub_internal_control_tokens_preserves_literal_balanced_think_text() {
+    let cleaned = scrub_internal_control_tokens("Use <think>inner</think> in this XML example.");
+
+    assert_eq!(cleaned, "Use <think>inner</think> in this XML example.");
+}
+
+#[test]
+fn scrub_internal_control_tokens_removes_dsml_block_with_multiple_invokes() {
+    let cleaned = scrub_internal_control_tokens(
+        "Before\n<｜DSML｜tool_calls>\n<｜DSML｜invoke name=\"read_file\">\n<｜DSML｜parameter name=\"path\" string=\"true\">src/lib.rs</｜DSML｜parameter>\n</｜DSML｜invoke>\n<｜DSML｜invoke name=\"list_files\">\n<｜DSML｜parameter name=\"path\" string=\"true\">src</｜DSML｜parameter>\n</｜DSML｜invoke>\n</｜DSML｜tool_calls>\nAfter",
+    );
+
+    assert_eq!(cleaned.trim(), "Before\n\nAfter");
+    assert!(!cleaned.contains("read_file"));
+    assert!(!cleaned.contains("list_files"));
+}
+
+#[test]
+fn scrub_internal_control_tokens_removes_dsml_tool_block_without_string_attribute() {
+    let input = "Before\n<｜DSML｜tool_calls>\n<｜DSML｜invoke name=\"read_file\">\n<｜DSML｜parameter name=\"options\">{\"path\":\"src/lib.rs\"}</｜DSML｜parameter>\n</｜DSML｜invoke>\n</｜DSML｜tool_calls>\nAfter";
+    let cleaned = scrub_internal_control_tokens(input);
+
+    assert_eq!(cleaned.trim(), "Before\n\nAfter");
+    assert!(!cleaned.contains("read_file"));
+}
+
+#[test]
+fn scrub_internal_control_tokens_removes_dsml_tool_block_with_duplicate_parameter_names() {
+    let input = "Before\n<｜DSML｜tool_calls>\n<｜DSML｜invoke name=\"read_file\">\n<｜DSML｜parameter name=\"path\" string=\"true\">src/lib.rs</｜DSML｜parameter>\n<｜DSML｜parameter name=\"path\" string=\"true\">src/main.rs</｜DSML｜parameter>\n</｜DSML｜invoke>\n</｜DSML｜tool_calls>\nAfter";
+    let cleaned = scrub_internal_control_tokens(input);
+
+    assert_eq!(cleaned.trim(), "Before\n\nAfter");
+    assert!(!cleaned.contains("read_file"));
+}
+
+#[test]
+fn scrub_internal_control_tokens_preserves_literal_tool_call_text() {
+    let cleaned =
+        scrub_internal_control_tokens("The literal marker `tool_call:` appears in this log line.");
+
+    assert_eq!(
+        cleaned,
+        "The literal marker `tool_call:` appears in this log line."
+    );
+}
+
+#[test]
+fn scrub_internal_control_tokens_preserves_raw_tool_call_text() {
+    let cleaned = scrub_internal_control_tokens(
+        "Here is the raw log: `| tool_call: read_file arguments: {\"path\":\"src/lib.rs\"}`",
+    );
+
+    assert_eq!(
+        cleaned,
+        "Here is the raw log: `| tool_call: read_file arguments: {\"path\":\"src/lib.rs\"}`"
+    );
+}
+
+#[test]
+fn scrub_internal_control_tokens_preserves_single_meta_intro_line() {
+    let cleaned = scrub_internal_control_tokens(
+        "The user asked a good question about plan mode.\nThis answer explains the runtime boundary.",
+    );
+
+    assert_eq!(
+        cleaned,
+        "The user asked a good question about plan mode.\nThis answer explains the runtime boundary."
     );
 }
 
