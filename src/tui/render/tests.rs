@@ -764,7 +764,7 @@ fn openai_model_picker_renders_profile_manager_not_endpoint_presets() {
     assert!(rendered.contains("active"));
     assert!(rendered.contains("C create"));
     assert!(!rendered.contains("DeepSeek (openai-compatible/deepseek-chat)"));
-    assert!(!rendered.contains("Kimi (openai-compatible/kimi-k2-0905-preview)"));
+    assert!(!rendered.contains("Kimi (openai-compatible/kimi-k2.6)"));
     assert!(!rendered.contains("OpenRouter (openai-compatible/openai/gpt-4o-mini)"));
 }
 

@@ -800,7 +800,7 @@ pub(super) fn render_model_name_editor_modal(
     app: &TuiApp,
     area: Rect,
 ) -> Option<(u16, u16)> {
-    let intro_text = "Set the model name for the selected OpenAI-compatible endpoint profile.\nExample: gpt-4o-mini, kimi-k2-0905-preview, deepseek-chat, or any server-specific model id.";
+    let intro_text = "Set the model name for the selected OpenAI-compatible endpoint profile.\nExample: gpt-4o-mini, kimi-k2.6, deepseek-chat, or any server-specific model id.";
     let intro_height = wrapped_text_height(intro_text, area.width);
     let chunks = Layout::default()
         .direction(Direction::Vertical)
