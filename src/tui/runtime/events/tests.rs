@@ -10,7 +10,7 @@ use super::{apply_tui_event, convert_agent_event};
 use crate::agent::{AgentEvent, AgentExecutionMode};
 use crate::config::ConfigManager;
 use crate::tool::ToolOutputStream;
-use crate::tui::state::TranscriptEntryPayload;
+use crate::tui::state::{ActivePendingInteractionKind, TranscriptEntryPayload};
 use crate::tui::state::{RuntimePhase, TuiApp, TuiEvent};
 use crate::tui::terminal_event::{TerminalEvent, TerminalTarget};
 
@@ -28,6 +28,114 @@ fn parses_delegated_request_input_from_subagent_result() {
     assert_eq!(
         parsed.note.as_deref(),
         Some("We need one product decision before editing.")
+    );
+}
+
+#[test]
+fn parses_delegated_request_input_from_spawn_agent_result() {
+    let parsed = subagent_request_input(
+        "spawn_agent worker: Need a decision\nrequest_user_input: Which branch should continue?\noption: Main | Continue on main.",
+    )
+    .expect("spawn_agent request input should parse");
+
+    assert_eq!(parsed.question, "Which branch should continue?");
+    assert_eq!(
+        parsed.options,
+        vec![("Main".into(), "Continue on main.".into())]
+    );
+}
+
+#[test]
+fn explore_agent_result_with_request_input_records_note_and_pending_question() {
+    let temp = tempdir().expect("tempdir");
+    let mut app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("app");
+
+    apply_tui_event(
+        &mut app,
+        TuiEvent::Transcript {
+            role: "Tool Result".into(),
+            message: "explore_agent Found two workspace discovery paths.\nrequest_user_input: Which discovery strategy should we keep?\noption: Minimal | Keep root-level files only.\noption: Generic | Scan instruction markdown files.".into(),
+        },
+    );
+
+    assert_eq!(
+        app.active_live.exploration_notes,
+        vec!["Sub-agent summary: Found two workspace discovery paths.".to_string()]
+    );
+    let pending = app
+        .pending_request_input()
+        .expect("delegated request should become pending input");
+    assert_eq!(pending.source.as_deref(), Some("explore_agent"));
+    assert_eq!(pending.title, "Which discovery strategy should we keep?");
+    assert_eq!(pending.options.len(), 2);
+    assert_eq!(
+        app.active_pending_interaction().map(|item| item.kind),
+        Some(ActivePendingInteractionKind::ExplorationQuestion)
+    );
+}
+
+#[test]
+fn plan_agent_result_with_request_input_records_note_and_pending_question() {
+    let temp = tempdir().expect("tempdir");
+    let mut app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("app");
+
+    apply_tui_event(
+        &mut app,
+        TuiEvent::Transcript {
+            role: "Tool Result".into(),
+            message: "plan_agent Need to choose a rollout boundary.\nrequest_user_input: Which phase should land first?\noption: Runtime | Wire the runtime path first.\noption: UI | Start with visibility.".into(),
+        },
+    );
+
+    assert_eq!(
+        app.active_live.planning_notes,
+        vec!["Sub-agent summary: Need to choose a rollout boundary.".to_string()]
+    );
+    let pending = app
+        .pending_request_input()
+        .expect("delegated request should become pending input");
+    assert_eq!(pending.source.as_deref(), Some("plan_agent"));
+    assert_eq!(pending.title, "Which phase should land first?");
+    assert_eq!(pending.options.len(), 2);
+    assert_eq!(
+        app.active_pending_interaction().map(|item| item.kind),
+        Some(ActivePendingInteractionKind::PlanningQuestion)
+    );
+}
+
+#[test]
+fn spawn_agent_result_with_request_input_records_subagent_question() {
+    let temp = tempdir().expect("tempdir");
+    let mut app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("app");
+
+    apply_tui_event(
+        &mut app,
+        TuiEvent::Transcript {
+            role: "Tool Result".into(),
+            message: "spawn_agent Need user input before continuing.\nrequest_user_input: Which branch should continue?\noption: Current | Continue on the current branch.\noption: New | Create a new branch.".into(),
+        },
+    );
+
+    assert!(app.active_live.exploration_notes.is_empty());
+    assert!(app.active_live.planning_notes.is_empty());
+    let pending = app
+        .pending_request_input()
+        .expect("delegated request should become pending input");
+    assert_eq!(pending.source.as_deref(), Some("spawn_agent"));
+    assert_eq!(pending.title, "Which branch should continue?");
+    assert_eq!(pending.options.len(), 2);
+    assert_eq!(
+        app.active_pending_interaction().map(|item| item.kind),
+        Some(ActivePendingInteractionKind::SubAgentQuestion)
     );
 }
 

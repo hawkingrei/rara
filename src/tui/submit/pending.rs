@@ -97,7 +97,7 @@ fn start_local_request_input_continuation(app: &mut TuiApp, agent: Agent, answer
     app.clear_local_request_input();
 
     let mut prompt = format!(
-        "Continue the same task. A delegated {source} requested additional user input.\nQuestion: {}\nAnswer: {}",
+        "Continue the parent task after a delegated {source} requested additional user input.\nQuestion: {}\nAnswer: {}\n\nUse the delegated result already present in the transcript as context; do not assume the child sub-agent session is still attached.",
         interaction.title, answer
     );
     if let Some(note) = interaction.note.as_deref()
