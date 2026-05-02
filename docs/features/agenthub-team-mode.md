@@ -39,6 +39,9 @@ intentionally distinct from any future local-only team mode:
 - AgentHub should talk to RARA through ACP session and prompt requests.
 - AgentHub team mode is therefore a worker-runtime concern inside ACP request handling, not a
   parallel CLI surface with a separate protocol.
+- ACP should be an adapter over RARA's runtime control plane. AgentHub team mode
+  must not create a separate skills, memory, prompt, hook, approval, or output
+  path.
 - The first implementation target is:
   - ACP prompt arrives;
   - team router evaluates worker relevance;
@@ -116,6 +119,9 @@ The router must return strict JSON:
 
 ## Follow-Up
 
+- Define and implement the runtime control-plane boundary that ACP uses for
+  session, prompt, cancel, output, skills, memory, prompt-source, and hook
+  interactions.
 - Add TUI/router observability.
 - Route sub-agent or worker approvals through the same team runtime boundary.
 - Complete the ACP runtime path so AgentHub can actually use RARA as a worker runtime.

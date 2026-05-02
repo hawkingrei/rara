@@ -21,3 +21,11 @@ Each active feature spec should include:
 - `docs/features/`: stable theme/domain docs only
 - `docs/journal/`: date-prefixed implementation records
 - When a feature evolves, update the canonical feature doc and add or append a journal note.
+
+## Control-Plane Readiness
+
+Features that affect skills, memory, prompt sources, hooks, planning, approvals,
+tool output, `/context`, or `/status` must describe how the behavior can be
+driven through the runtime control plane. Local TUI behavior should be one
+adapter over the same structured request/event contract that ACP, Wire, and
+future appserver integrations can use.
