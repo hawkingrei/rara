@@ -24,9 +24,13 @@ impl TranscriptViewport {
             return (Vec::new(), 0);
         }
 
+        // Reserve one row at the bottom as breathing room so the last
+        // content line isn't visually flush against the bottom pane /
+        // input bar, which can make it look clipped or hidden.
+        let visible_rows = usize::from(height.saturating_sub(1).max(1));
         let wrap_width = usize::from(width.max(1));
         let target_start = usize::from(self.scroll_offset);
-        let target_end = target_start.saturating_add(usize::from(height));
+        let target_end = target_start.saturating_add(visible_rows);
 
         let mut row_cursor = 0usize;
         let mut first_idx = None;

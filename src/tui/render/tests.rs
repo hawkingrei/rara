@@ -591,7 +591,8 @@ fn transcript_viewport_visible_window_slices_to_visible_rows() {
         1,
     );
 
-    let (lines, inner_scroll) = viewport.visible_window(80, 2);
+    // height=3 reserves 1 row as bottom margin, giving 2 visible rows.
+    let (lines, inner_scroll) = viewport.visible_window(80, 3);
     let rendered = lines
         .into_iter()
         .map(|line| line.to_string())
