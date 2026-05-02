@@ -92,7 +92,7 @@ points:
 - a normalized extension object surfaced by this repository extension contract;
 - a memory or retrieval candidate produced for `MemorySelection`;
 - a lifecycle event handled behind the hook runtime boundary;
-- a child-thread or imported-agent profile executed through the thread domain.
+- a child-thread or imported-agent profile executed through the thread domain;
 - a protocol-registered source routed through the runtime control plane.
 
 They should not:
@@ -102,7 +102,7 @@ They should not:
 - rename existing stable prompt sections just to match an external ecosystem;
 - serialize hook, skill, or agent metadata as ordinary user text;
 - add synthetic context prefixes for transient runtime artifacts such as orphan
-  tool results.
+  tool results;
 - let ACP, Wire, or another protocol adapter bypass the same source,
   `MemorySelection`, hook, skill, and permission boundaries used by local
   runtime paths.

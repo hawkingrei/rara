@@ -148,6 +148,15 @@ The first typed request set should include these families.
 Input control must use the same pending-interaction state as the TUI. Protocol
 adapters must not invent parallel approval or question state.
 
+Submitting a follow-up while a turn is running is a queued input operation by
+default. It does not imply cancellation or interruption. Runtime adapters should
+preserve submission order and deliver queued follow-ups after the active turn
+reaches a safe continuation boundary or completes. If queue policy or capacity
+prevents accepting the follow-up, the runtime should return a busy or rejected
+status with a structured reason. Adapters that need preemption must use the
+explicit cancel or interrupt request family instead of overloading follow-up
+submission.
+
 ### Output Subscription
 
 External applications should subscribe to structured runtime events:
@@ -176,12 +185,17 @@ External applications may register prompt sources through structured objects:
 - scope;
 - priority or layer;
 - budget hint;
-- time-to-live or session lifetime;
+- turn-based time-to-live or session lifetime;
 - content;
 - provenance.
 
 Registered prompt sources enter normal prompt assembly and `/context`. They must
 not bypass `PromptRuntime` or introduce unstable top-level prompt prefixes.
+Prompt-source time-to-live is turn-based: a transient source may be active for
+the next N assembled model turns, or for the lifetime of the session. Wall-clock
+expiry is only suitable for adapter leases or connection handles and must not
+silently remove prompt context in the middle of a model turn. Persistent sources
+must be updated or unregistered explicitly.
 
 ### Skill Source Registration
 
@@ -195,6 +209,15 @@ External applications may register:
 These registrations flow into `SkillRegistry` and `SkillTool`. They must expose
 override and parse status through the same observability contract as local
 skills.
+
+Source precedence hints are advisory inside the protocol-registered source
+layer. They must not override the root-based local precedence defined in
+`repo-extension-surface.md` for home, repository, and current-working-directory
+sources. A protocol source may only outrank a local source when the user grants
+that adapter an explicit higher-trust policy. Conflicts between protocol sources
+should be resolved by declared priority first, then registration order, then a
+stable source-id tie breaker. Conflict and shadowing decisions must preserve
+provenance for `/context` and protocol observability.
 
 ### Memory Control
 
@@ -265,7 +288,13 @@ Minimum event families:
 - `MemoryEvent`;
 - `HookEvent`;
 - `ContextEvent`;
+- `WarningEvent`;
 - `ErrorEvent`.
+
+`WarningEvent` carries non-fatal runtime issues that should be visible to
+protocol adapters without aborting the current request, such as skipped prompt
+sources, bootstrap warnings, degraded provider metadata, cache-read misses, or
+ignored unsupported adapter options.
 
 ## Domain Contracts
 

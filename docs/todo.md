@@ -21,7 +21,7 @@ Active backlog only. Keep this file small and current.
 - [ ] Support protocol-registered skill sources through the same `SkillRegistry` precedence and override reporting as local skills.
 - [ ] Add protocol-safe memory mutation/query scaffolding that creates memory records and selection views without bypassing `MemorySelection`.
 - [ ] Add hook declaration scaffolding for protocol and repo extensions; keep execution disabled until permission and sandbox policy are explicit.
-- [ ] Ensure every new skills, memory, prompt, hook, planning, approval, and output feature is control-plane-ready rather than TUI-only.
+- [ ] Ensure every new skill, memory, prompt, hook, planning, approval, and output feature is control-plane-ready rather than TUI-only.
 
 ## Configuration / Provider Surface
 
