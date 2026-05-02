@@ -76,3 +76,7 @@ Active backlog only. Keep this file small and current.
 ## Evaluation / Benchmarks
 
 - [ ] Terminal-Bench readiness: add a headless adapter, preserve structured trajectories, and start with a small smoke run that records RARA revision, dataset version, provider/model, sandbox mode, and failure taxonomy.
+
+## Code Organization / Docs
+
+- [ ] Continue splitting remaining oversized runtime/TUI files, especially `src/tui/render/cells.rs`, `src/tui/render.rs`, `src/tui/command.rs`, and `src/agent/planning.rs`.
