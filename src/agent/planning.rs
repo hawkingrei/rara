@@ -477,23 +477,30 @@ impl Agent {
         plan_updated: bool,
         continue_inspection: bool,
         had_text_response: bool,
+        had_reasoning_response: bool,
         agentic_turns: usize,
     ) -> bool {
         let shallow_initial_plan =
             plan_updated && agentic_turns == 0 && self.current_plan.len() <= 1;
+        let reasoning_only_initial_turn =
+            had_reasoning_response && !had_text_response && agentic_turns == 0;
         let has_inspection_evidence = self.inspection_progress.has_any_evidence();
         let still_missing_inspection_evidence = agentic_turns > 0
             && !plan_updated
             && has_inspection_evidence
             && !self.inspection_progress.has_minimum_review_evidence();
         matches!(self.execution_mode, AgentExecutionMode::Plan)
-            && (continue_inspection || shallow_initial_plan || still_missing_inspection_evidence)
+            && (continue_inspection
+                || shallow_initial_plan
+                || still_missing_inspection_evidence
+                || reasoning_only_initial_turn)
             && self.pending_user_input.is_none()
             && self.pending_approval.is_none()
             && (continue_inspection
                 || has_inspection_evidence
                 || !self.current_plan.is_empty()
-                || had_text_response)
+                || had_text_response
+                || reasoning_only_initial_turn)
     }
 
     pub(super) fn should_continue_execute_without_tools(
