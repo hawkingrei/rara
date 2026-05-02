@@ -15,8 +15,8 @@ pub(crate) enum MessageRole {
 }
 
 impl MessageRole {
-    pub(crate) fn from_str(role: &str) -> Self {
-        match role {
+    pub(crate) fn try_from_str(role: &str) -> Option<Self> {
+        Some(match role {
             "You" => Self::User,
             "Agent" => Self::Agent,
             "System" => Self::System,
@@ -28,8 +28,8 @@ impl MessageRole {
             "Planning" => Self::Planning,
             "Running" => Self::Running,
             "Thinking" => Self::Thinking,
-            _ => panic!("unknown message role: {role}"),
-        }
+            _ => return None,
+        })
     }
 
     pub(crate) fn as_str(self) -> &'static str {
