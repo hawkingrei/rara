@@ -44,6 +44,8 @@ impl Agent {
             history_len: self.history.len(),
             total_input_tokens: self.total_input_tokens,
             total_output_tokens: self.total_output_tokens,
+            total_cache_hit_tokens: self.total_cache_hit_tokens,
+            total_cache_miss_tokens: self.total_cache_miss_tokens,
             execution_mode: self.execution_mode_label().to_string(),
             plan_steps: self
                 .current_plan

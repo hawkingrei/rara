@@ -267,6 +267,8 @@ fn merge_rebuilt_agent_preserves_session_and_turn_state() {
     });
     previous.total_input_tokens = 123;
     previous.total_output_tokens = 45;
+    previous.total_cache_hit_tokens = 90;
+    previous.total_cache_miss_tokens = 10;
     previous.execution_mode = AgentExecutionMode::Plan;
     previous.bash_approval_mode = BashApprovalMode::Suggestion;
     previous.approved_bash_prefixes = vec!["git push".to_string()];
@@ -313,6 +315,8 @@ fn merge_rebuilt_agent_preserves_session_and_turn_state() {
     assert_eq!(merged.history.len(), 1);
     assert_eq!(merged.total_input_tokens, 123);
     assert_eq!(merged.total_output_tokens, 45);
+    assert_eq!(merged.total_cache_hit_tokens, 90);
+    assert_eq!(merged.total_cache_miss_tokens, 10);
     assert_eq!(merged.execution_mode, AgentExecutionMode::Plan);
     assert_eq!(merged.bash_approval_mode, BashApprovalMode::Suggestion);
     assert_eq!(merged.approved_bash_prefixes, vec!["git push".to_string()]);

@@ -6,6 +6,8 @@ use ratatui::{
 };
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
+use crate::tui::format::cache_hit_rate_label;
+
 use super::super::custom_terminal::Frame;
 use super::super::interaction_text::pending_interaction_hint_text;
 use super::super::queued_input::{pending_follow_up_hint, queued_follow_up_hint};
@@ -362,15 +364,27 @@ fn footer_summary_text(app: &TuiApp) -> String {
         Some(window) => format!("ctx~={}/{}", app.snapshot.estimated_history_tokens, window),
         None => format!("ctx~={}", app.snapshot.estimated_history_tokens),
     };
+    let cache_summary = cache_hit_rate_label(
+        app.snapshot.total_cache_hit_tokens,
+        app.snapshot.total_cache_miss_tokens,
+    )
+    .map(|rate| format!("  cache_hit={rate}"))
+    .unwrap_or_default();
     if shows_live_task_stats(app) {
         format!(
-            "{}  tokens={} in / {} out",
-            context, app.snapshot.total_input_tokens, app.snapshot.total_output_tokens
+            "{}  tokens={} in / {} out{}",
+            context,
+            app.snapshot.total_input_tokens,
+            app.snapshot.total_output_tokens,
+            cache_summary
         )
     } else if app.snapshot.compaction_count > 0 {
-        format!("{}  compactions={}", context, app.snapshot.compaction_count)
+        format!(
+            "{}  compactions={}{}",
+            context, app.snapshot.compaction_count, cache_summary
+        )
     } else {
-        context
+        format!("{context}{cache_summary}")
     }
 }
 

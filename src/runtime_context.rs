@@ -12,6 +12,7 @@ use crate::config::{
 };
 use crate::llm::{
     CodexBackend, GeminiBackend, LlmBackend, MockLlm, OllamaBackend, OpenAiCompatibleBackend,
+    fetch_model_context_window,
 };
 use crate::local_backend::{LocalLlmBackend, LocalProgressReporter};
 use crate::prompt::{PromptRuntimeConfig, PromptSkillSummary};
@@ -113,7 +114,7 @@ pub(crate) async fn build_backend_with_progress(
 ) -> Result<Box<dyn LlmBackend>> {
     match config.provider.as_str() {
         "codex" => Ok(Box::new(CodexBackend::new(
-            config.api_key.clone(),
+            config.api_key_secret(),
             config
                 .base_url
                 .clone()
@@ -133,22 +134,32 @@ pub(crate) async fn build_backend_with_progress(
                     "openrouter" => OpenAiEndpointKind::Openrouter,
                     _ => OpenAiEndpointKind::Custom,
                 });
-            Ok(Box::new(
-                OpenAiCompatibleBackend::new_with_endpoint_kind_and_reasoning(
-                    config.api_key.clone(),
-                    config
-                        .base_url
-                        .clone()
-                        .unwrap_or_else(|| kind.default_base_url().to_string()),
-                    config
-                        .model
-                        .clone()
-                        .unwrap_or_else(|| kind.default_model().to_string()),
-                    kind,
-                    config.reasoning_effort.clone(),
-                    config.thinking,
-                )?,
-            ))
+            let model = config
+                .model
+                .clone()
+                .unwrap_or_else(|| kind.default_model().to_string());
+            let base_url = config
+                .base_url
+                .clone()
+                .unwrap_or_else(|| kind.default_base_url().to_string());
+            let mut backend = OpenAiCompatibleBackend::new_with_endpoint_kind_and_reasoning(
+                config.api_key_secret(),
+                base_url.clone(),
+                model.clone(),
+                kind,
+                config.reasoning_effort.clone(),
+                config.thinking,
+            )?;
+            if backend.context_budget(&[], &[]).is_none() {
+                backend.context_window_override = fetch_model_context_window(
+                    &backend.client,
+                    &base_url,
+                    backend.api_key.as_ref(),
+                    &model,
+                )
+                .await;
+            }
+            Ok(Box::new(backend))
         }
         "ollama" | "ollama-native" => Ok(Box::new(OllamaBackend::new(
             config
@@ -163,7 +174,7 @@ pub(crate) async fn build_backend_with_progress(
             config.num_ctx,
         )?)),
         "ollama-openai" => Ok(Box::new(OpenAiCompatibleBackend::new(
-            config.api_key.clone(),
+            config.api_key_secret(),
             config
                 .base_url
                 .clone()

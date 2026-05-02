@@ -30,6 +30,8 @@ fn merge_rebuilt_agent(mut rebuilt: Agent, previous: Agent) -> Agent {
     rebuilt.history = previous.history;
     rebuilt.total_input_tokens = previous.total_input_tokens;
     rebuilt.total_output_tokens = previous.total_output_tokens;
+    rebuilt.total_cache_hit_tokens = previous.total_cache_hit_tokens;
+    rebuilt.total_cache_miss_tokens = previous.total_cache_miss_tokens;
     rebuilt.tool_result_store = previous.tool_result_store;
     rebuilt.execution_mode = previous.execution_mode;
     rebuilt.bash_approval_mode = previous.bash_approval_mode;

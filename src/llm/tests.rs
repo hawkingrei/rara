@@ -241,6 +241,36 @@ fn deepseek_reasoning_content_roundtrips_as_provider_metadata() {
 }
 
 #[test]
+fn openai_usage_tracks_cache_hit_and_miss_tokens() {
+    let response = parse_chat_completion_response(
+        &json!({
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": "Visible answer"
+                },
+                "finish_reason": "stop"
+            }],
+            "usage": {
+                "prompt_tokens": 100,
+                "completion_tokens": 4,
+                "prompt_tokens_details": {
+                    "cached_tokens": 64
+                }
+            }
+        }),
+        OpenAiEndpointKind::Kimi,
+    )
+    .expect("parse response");
+
+    let usage = response.usage.expect("usage");
+    assert_eq!(usage.input_tokens, 100);
+    assert_eq!(usage.output_tokens, 4);
+    assert_eq!(usage.cache_hit_tokens, 64);
+    assert_eq!(usage.cache_miss_tokens, 36);
+}
+
+#[test]
 fn deepseek_skips_reasoning_only_assistant_history() {
     let messages = vec![
         Message {

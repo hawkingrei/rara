@@ -126,6 +126,8 @@ pub struct RuntimeSnapshot {
     pub history_len: usize,
     pub total_input_tokens: u32,
     pub total_output_tokens: u32,
+    pub total_cache_hit_tokens: u32,
+    pub total_cache_miss_tokens: u32,
     pub estimated_history_tokens: usize,
     pub context_window_tokens: Option<usize>,
     pub compact_threshold_tokens: usize,

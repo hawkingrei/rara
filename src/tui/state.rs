@@ -532,7 +532,8 @@ impl TuiApp {
     }
 
     pub fn new(cm: ConfigManager) -> anyhow::Result<Self> {
-        let cfg = cm.load()?;
+        let mut cfg = cm.load()?;
+        cfg.apply_provider_environment_defaults();
         let overlay = None;
         let startup_notice = startup_warning_for_config(&cfg);
         let provider_picker_idx = selected_provider_family_idx_for_config(&cfg);
@@ -1325,6 +1326,8 @@ impl TuiApp {
             history_len: runtime_context.history_len,
             total_input_tokens: runtime_context.total_input_tokens,
             total_output_tokens: runtime_context.total_output_tokens,
+            total_cache_hit_tokens: runtime_context.total_cache_hit_tokens,
+            total_cache_miss_tokens: runtime_context.total_cache_miss_tokens,
             context_window_tokens: runtime_context.budget.context_window_tokens,
             compact_threshold_tokens: runtime_context.budget.compact_threshold_tokens,
             reserved_output_tokens: runtime_context.budget.reserved_output_tokens,

@@ -12,6 +12,10 @@ pub struct LlmResponse {
 pub struct TokenUsage {
     pub input_tokens: u32,
     pub output_tokens: u32,
+    #[serde(default)]
+    pub cache_hit_tokens: u32,
+    #[serde(default)]
+    pub cache_miss_tokens: u32,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

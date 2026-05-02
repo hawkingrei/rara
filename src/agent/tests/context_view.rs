@@ -51,6 +51,8 @@ fn shared_runtime_context_collects_prompt_plan_and_compaction_state() {
     agent.plan_explanation = Some("Prefer one shared bootstrap path.".to_string());
     agent.total_input_tokens = 11;
     agent.total_output_tokens = 7;
+    agent.total_cache_hit_tokens = 5;
+    agent.total_cache_miss_tokens = 3;
     agent.compact_state.estimated_history_tokens = 1234;
     agent.compact_state.context_window_tokens = Some(8192);
     agent.compact_state.compact_threshold_tokens = 7000;
@@ -147,6 +149,8 @@ fn shared_runtime_context_collects_prompt_plan_and_compaction_state() {
     assert_eq!(runtime.history_len, 7);
     assert_eq!(runtime.total_input_tokens, 11);
     assert_eq!(runtime.total_output_tokens, 7);
+    assert_eq!(runtime.total_cache_hit_tokens, 5);
+    assert_eq!(runtime.total_cache_miss_tokens, 3);
     assert_eq!(runtime.prompt.base_prompt_kind, "default");
     assert!(
         runtime

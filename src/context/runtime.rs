@@ -236,6 +236,8 @@ pub struct SharedRuntimeContext {
     pub history_len: usize,
     pub total_input_tokens: u32,
     pub total_output_tokens: u32,
+    pub total_cache_hit_tokens: u32,
+    pub total_cache_miss_tokens: u32,
     pub budget: ContextBudgetView,
     pub assembly: ContextAssemblyView,
     pub prompt: PromptContextView,

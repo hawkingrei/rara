@@ -1,4 +1,7 @@
 mod codex;
+mod usage;
+
+use std::time::Duration;
 
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
@@ -8,14 +11,16 @@ use serde_json::{Value, json};
 
 use crate::agent::Message;
 use crate::config::OpenAiEndpointKind;
-use crate::llm::{ContentBlock, LlmResponse, TokenUsage};
+use crate::llm::{ContentBlock, LlmResponse};
 use crate::redaction::{redact_secrets, sanitize_url_for_display};
 
 use super::shared::{
     ContextBudget, LlmBackend, LlmStreamEvent, LlmTurnMetadata, collect_assistant_content,
-    extract_message_text, http_client_for_target, model_context_budget,
+    context_budget_from_window, extract_message_text, http_client_for_target, model_context_budget,
     next_stream_item_with_idle_timeout, parse_tool_arguments, render_openai_message_content,
 };
+
+use self::usage::parse_openai_token_usage;
 
 #[cfg(test)]
 pub(crate) use self::codex::{
@@ -27,6 +32,7 @@ pub struct OpenAiCompatibleBackend {
     pub client: reqwest::Client,
     pub api_key: Option<SecretString>,
     pub base_url: String,
+    pub context_window_override: Option<usize>,
     pub model: String,
     pub endpoint_kind: OpenAiEndpointKind,
     pub reasoning_effort: Option<String>,
@@ -66,6 +72,7 @@ impl OpenAiCompatibleBackend {
             client: http_client_for_target(&base_url)?,
             api_key,
             base_url,
+            context_window_override: None,
             model,
             endpoint_kind,
             reasoning_effort,
@@ -83,6 +90,41 @@ impl OpenAiCompatibleBackend {
         };
         format!("{normalized_base}/{path}")
     }
+}
+
+/// Fetch the model's context window size from GET /v1/models.
+/// Falls back to None if the API call fails or the model is not found.
+pub async fn fetch_model_context_window(
+    client: &reqwest::Client,
+    base_url: &str,
+    api_key: Option<&SecretString>,
+    model: &str,
+) -> Option<usize> {
+    let base = base_url.trim_end_matches('/');
+    let url = if base.ends_with("/v1") {
+        format!("{base}/models")
+    } else {
+        format!("{base}/v1/models")
+    };
+
+    let mut req = client.get(&url).timeout(Duration::from_secs(5));
+    if let Some(key) = api_key {
+        req = req.bearer_auth(key.expose_secret());
+    }
+
+    let res = req.send().await.ok()?.error_for_status().ok()?;
+    let body: Value = res.json().await.ok()?;
+    let models = body["data"].as_array()?;
+
+    for m in models {
+        if m["id"].as_str() == Some(model) {
+            return m["context_length"]
+                .as_u64()
+                .and_then(|tokens| usize::try_from(tokens).ok())
+                .filter(|tokens| *tokens > 0);
+        }
+    }
+    None
 }
 
 #[async_trait]
@@ -229,10 +271,7 @@ impl LlmBackend for OpenAiCompatibleBackend {
         Ok(LlmResponse {
             content,
             stop_reason,
-            usage: usage.map(|u| TokenUsage {
-                input_tokens: u["prompt_tokens"].as_u64().unwrap_or(0) as u32,
-                output_tokens: u["completion_tokens"].as_u64().unwrap_or(0) as u32,
-            }),
+            usage: usage.as_ref().map(parse_openai_token_usage),
         })
     }
 
@@ -301,7 +340,9 @@ impl LlmBackend for OpenAiCompatibleBackend {
     }
 
     fn context_budget(&self, _messages: &[Message], _tools: &[Value]) -> Option<ContextBudget> {
-        model_context_budget(self.model.as_str())
+        self.context_window_override
+            .map(|w| context_budget_from_window(w))
+            .or_else(|| model_context_budget(self.model.as_str()))
     }
 }
 
@@ -824,10 +865,7 @@ pub(super) fn parse_chat_completion_response(
     {
         content.extend(parsed_dsml_tool_calls);
     }
-    let usage = resp_json.get("usage").map(|u| TokenUsage {
-        input_tokens: u["prompt_tokens"].as_u64().unwrap_or(0) as u32,
-        output_tokens: u["completion_tokens"].as_u64().unwrap_or(0) as u32,
-    });
+    let usage = resp_json.get("usage").map(parse_openai_token_usage);
     Ok(LlmResponse {
         content,
         stop_reason: first_choice

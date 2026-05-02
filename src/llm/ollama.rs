@@ -118,6 +118,7 @@ impl LlmBackend for OllamaBackend {
                     .get("eval_count")
                     .and_then(Value::as_u64)
                     .unwrap_or(0) as u32,
+                ..TokenUsage::default()
             }),
         })
     }
@@ -250,6 +251,7 @@ impl LlmBackend for OllamaBackend {
             usage: Some(TokenUsage {
                 input_tokens,
                 output_tokens,
+                ..TokenUsage::default()
             }),
         })
     }

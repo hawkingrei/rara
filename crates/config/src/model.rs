@@ -150,6 +150,8 @@ pub struct RaraConfig {
         deserialize_with = "deserialize_secret_option"
     )]
     pub api_key: Option<SecretString>,
+    #[serde(skip)]
+    pub runtime_api_key: Option<SecretString>,
     pub base_url: Option<String>,
     pub model: Option<String>,
     pub reasoning_effort: Option<String>,
@@ -182,7 +184,16 @@ impl RaraConfig {
     }
 
     pub fn api_key(&self) -> Option<&str> {
-        self.api_key.as_ref().map(SecretString::expose_secret)
+        self.runtime_api_key
+            .as_ref()
+            .or(self.api_key.as_ref())
+            .map(SecretString::expose_secret)
+    }
+
+    pub fn api_key_secret(&self) -> Option<SecretString> {
+        self.runtime_api_key
+            .clone()
+            .or_else(|| self.api_key.clone())
     }
 
     pub fn has_api_key(&self) -> bool {
@@ -190,13 +201,40 @@ impl RaraConfig {
     }
 
     pub fn set_api_key(&mut self, value: impl Into<String>) {
+        self.runtime_api_key = None;
         self.api_key = Some(SecretString::from(value.into()));
         self.sync_active_provider_state();
     }
 
     pub fn clear_api_key(&mut self) {
+        self.runtime_api_key = None;
         self.api_key = None;
         self.sync_active_provider_state();
+    }
+
+    pub fn apply_provider_environment_defaults(&mut self) {
+        self.apply_provider_environment_defaults_from(|key| std::env::var(key).ok());
+    }
+
+    pub fn apply_provider_environment_defaults_from<F>(&mut self, mut read_env: F)
+    where
+        F: FnMut(&str) -> Option<String>,
+    {
+        if self.has_api_key()
+            || self.effective_openai_endpoint_kind() != Some(OpenAiEndpointKind::Kimi)
+        {
+            return;
+        }
+        for key in ["MOONSHOT_API_KEY", "KIMI_API_KEY"] {
+            let Some(value) = read_env(key) else {
+                continue;
+            };
+            if value.trim().is_empty() {
+                continue;
+            }
+            self.runtime_api_key = Some(SecretString::from(value));
+            return;
+        }
     }
 
     pub fn clear_provider_api_key(&mut self, provider: &str) {
@@ -233,6 +271,7 @@ impl RaraConfig {
                 self.openai_profiles
                     .insert(profile.id.clone(), profile.clone());
                 self.apply_openai_profile(profile);
+                self.apply_provider_environment_defaults();
                 return;
             }
         }
@@ -329,12 +368,14 @@ impl RaraConfig {
                     .or_else(|| profile.and_then(|profile| profile.model.as_deref())),
                 self.model.as_deref(),
                 None,
+                None,
             ),
             base_url: resolve_provider_value(
                 provider_state
                     .and_then(|state| state.base_url.as_deref())
                     .or_else(|| profile.and_then(|profile| profile.base_url.as_deref())),
                 self.base_url.as_deref(),
+                None,
                 None,
             ),
             revision: resolve_provider_value(
@@ -343,6 +384,7 @@ impl RaraConfig {
                     .or_else(|| profile.and_then(|profile| profile.revision.as_deref())),
                 self.revision.as_deref(),
                 None,
+                None,
             ),
             reasoning_effort: resolve_provider_value(
                 provider_state
@@ -350,12 +392,14 @@ impl RaraConfig {
                     .or_else(|| profile.and_then(|profile| profile.reasoning_effort.as_deref())),
                 self.reasoning_effort.as_deref(),
                 None,
+                None,
             ),
             reasoning_summary: resolve_provider_value(
                 provider_state
                     .and_then(|state| state.reasoning_summary.as_deref())
                     .or_else(|| profile.and_then(|profile| profile.reasoning_summary.as_deref())),
                 self.reasoning_summary.as_deref(),
+                None,
                 Some(DEFAULT_REASONING_SUMMARY),
             ),
             api_key: resolve_provider_value(
@@ -367,6 +411,9 @@ impl RaraConfig {
                         })
                     }),
                 self.api_key.as_ref().map(SecretString::expose_secret),
+                self.runtime_api_key
+                    .as_ref()
+                    .map(SecretString::expose_secret),
                 None,
             ),
         }
@@ -391,6 +438,13 @@ impl RaraConfig {
 
     pub fn active_openai_profile_kind(&self) -> Option<OpenAiEndpointKind> {
         self.active_openai_profile().map(|profile| profile.kind)
+    }
+
+    fn effective_openai_endpoint_kind(&self) -> Option<OpenAiEndpointKind> {
+        if self.provider == "openai-compatible" {
+            return self.active_openai_profile_kind();
+        }
+        OpenAiEndpointKind::from_legacy_provider(self.provider.as_str())
     }
 
     pub fn select_openai_profile(
@@ -432,6 +486,7 @@ impl RaraConfig {
         self.active_openai_profile_id = Some(profile_id.clone());
         self.openai_profiles.insert(profile_id, profile.clone());
         self.apply_openai_profile(profile);
+        self.apply_provider_environment_defaults();
     }
 
     fn sync_active_provider_state(&mut self) {
@@ -460,6 +515,7 @@ impl RaraConfig {
     }
 
     fn apply_provider_state(&mut self, state: ProviderConfigState) {
+        self.runtime_api_key = None;
         self.api_key = state.api_key;
         self.base_url = state.base_url;
         self.model = state.model;
@@ -471,6 +527,7 @@ impl RaraConfig {
     }
 
     fn apply_openai_profile(&mut self, profile: OpenAiEndpointProfile) {
+        self.runtime_api_key = None;
         self.api_key = profile.api_key;
         self.base_url = profile.base_url;
         self.model = profile.model;
@@ -482,6 +539,7 @@ impl RaraConfig {
     }
 
     fn reset_provider_scoped_fields(&mut self) {
+        self.runtime_api_key = None;
         self.api_key = None;
         self.base_url = None;
         self.model = None;
@@ -767,6 +825,7 @@ pub fn workspace_data_dir_for_home(root: &Path, rara_home: &Path) -> Result<Path
 fn resolve_provider_value<'a>(
     provider_value: Option<&'a str>,
     legacy_value: Option<&'a str>,
+    environment_value: Option<&'a str>,
     default_value: Option<&'a str>,
 ) -> ResolvedProviderValue<'a> {
     if let Some(value) = provider_value {
@@ -779,6 +838,12 @@ fn resolve_provider_value<'a>(
         return ResolvedProviderValue {
             value: Some(value),
             source: ConfigValueSource::LegacyGlobal,
+        };
+    }
+    if let Some(value) = environment_value {
+        return ResolvedProviderValue {
+            value: Some(value),
+            source: ConfigValueSource::Environment,
         };
     }
     if let Some(value) = default_value {
@@ -835,6 +900,7 @@ mod tests {
         DEFAULT_KIMI_BASE_URL, DEFAULT_KIMI_MODEL, DEFAULT_OPENROUTER_BASE_URL,
         DEFAULT_OPENROUTER_MODEL, DEFAULT_REASONING_SUMMARY, REASONING_SUMMARY_NONE,
     };
+    use crate::provider_surface::ConfigValueSource;
     use secrecy::ExposeSecret;
     use std::collections::BTreeMap;
     use std::fs;
@@ -993,6 +1059,114 @@ mod tests {
         );
         assert_eq!(profile.model.as_deref(), Some("kimi-k2"));
         assert_eq!(config.model.as_deref(), Some("kimi-k2"));
+    }
+
+    #[test]
+    fn kimi_profile_uses_current_documented_defaults() {
+        let mut config = RaraConfig::default();
+
+        config.select_openai_profile(
+            OpenAiEndpointKind::Kimi.default_profile_id(),
+            OpenAiEndpointKind::Kimi.label(),
+            OpenAiEndpointKind::Kimi,
+        );
+
+        assert_eq!(config.provider, "openai-compatible");
+        assert_eq!(
+            config.active_openai_profile_kind(),
+            Some(OpenAiEndpointKind::Kimi)
+        );
+        assert_eq!(config.base_url.as_deref(), Some(DEFAULT_KIMI_BASE_URL));
+        assert_eq!(config.model.as_deref(), Some(DEFAULT_KIMI_MODEL));
+    }
+
+    #[test]
+    fn kimi_profile_can_use_moonshot_api_key_from_environment_without_persisting_it() {
+        let mut config = RaraConfig::default();
+        config.select_openai_profile(
+            OpenAiEndpointKind::Kimi.default_profile_id(),
+            OpenAiEndpointKind::Kimi.label(),
+            OpenAiEndpointKind::Kimi,
+        );
+
+        config.apply_provider_environment_defaults_from(|key| {
+            (key == "MOONSHOT_API_KEY").then(|| "sk-moonshot".to_string())
+        });
+
+        assert_eq!(config.api_key(), Some("sk-moonshot"));
+        assert_eq!(
+            config.effective_provider_surface().api_key.source,
+            ConfigValueSource::Environment
+        );
+        let json = serde_json::to_string(&config).expect("serialize config");
+        assert!(!json.contains("sk-moonshot"));
+        assert!(!json.contains("runtime_api_key"));
+    }
+
+    #[test]
+    fn kimi_profile_can_use_kimi_api_key_from_environment_without_persisting_it() {
+        let mut config = RaraConfig::default();
+        config.select_openai_profile(
+            OpenAiEndpointKind::Kimi.default_profile_id(),
+            OpenAiEndpointKind::Kimi.label(),
+            OpenAiEndpointKind::Kimi,
+        );
+
+        config.apply_provider_environment_defaults_from(|key| {
+            (key == "KIMI_API_KEY").then(|| "sk-kimi".to_string())
+        });
+
+        assert_eq!(config.api_key(), Some("sk-kimi"));
+        assert_eq!(
+            config.effective_provider_surface().api_key.source,
+            ConfigValueSource::Environment
+        );
+        let json = serde_json::to_string(&config).expect("serialize config");
+        assert!(!json.contains("sk-kimi"));
+        assert!(!json.contains("runtime_api_key"));
+    }
+
+    #[test]
+    fn moonshot_api_key_takes_precedence_over_kimi_api_key() {
+        let mut config = RaraConfig::default();
+        config.select_openai_profile(
+            OpenAiEndpointKind::Kimi.default_profile_id(),
+            OpenAiEndpointKind::Kimi.label(),
+            OpenAiEndpointKind::Kimi,
+        );
+
+        config.apply_provider_environment_defaults_from(|key| match key {
+            "MOONSHOT_API_KEY" => Some("sk-moonshot".to_string()),
+            "KIMI_API_KEY" => Some("sk-kimi".to_string()),
+            _ => None,
+        });
+
+        assert_eq!(config.api_key(), Some("sk-moonshot"));
+        assert_eq!(
+            config.effective_provider_surface().api_key.source,
+            ConfigValueSource::Environment
+        );
+    }
+
+    #[test]
+    fn explicit_kimi_api_key_overrides_environment_default() {
+        let mut config = RaraConfig::default();
+        config.select_openai_profile(
+            OpenAiEndpointKind::Kimi.default_profile_id(),
+            OpenAiEndpointKind::Kimi.label(),
+            OpenAiEndpointKind::Kimi,
+        );
+        config.set_api_key("sk-explicit");
+
+        config.apply_provider_environment_defaults_from(|key| {
+            (key == "MOONSHOT_API_KEY").then(|| "sk-moonshot".to_string())
+        });
+
+        assert_eq!(config.api_key(), Some("sk-explicit"));
+        assert_eq!(
+            config.effective_provider_surface().api_key.source,
+            ConfigValueSource::ProviderState
+        );
     }
 
     #[test]
