@@ -472,7 +472,7 @@ pub(crate) fn prefixed_message_lines(
 
     let (icon, color) = role_prefix_icon(role);
     let prefix = if icon.is_empty() {
-        format!("{}: ", role)
+        format!("{}:", role)
     } else {
         icon.trim_end().to_string()
     };

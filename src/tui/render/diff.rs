@@ -309,7 +309,7 @@ fn push_wrapped_diff_line(
         DiffLineType::Context => (
             " ",
             Style::default().fg(TEXT_SECONDARY),
-            Style::default().fg(Color::Gray),
+            Style::default().fg(TEXT_MUTED),
         ),
     };
 

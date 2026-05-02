@@ -190,7 +190,7 @@ pub(super) struct RunningCell {
 impl RunningCell {
     pub(super) fn new(summary: impl Into<String>, active: bool) -> Self {
         let (title, color) = if active {
-            ("Running", PHASE_EXPLORING)
+            ("Running", PHASE_RUNNING)
         } else {
             ("Ran", PHASE_RAN)
         };
