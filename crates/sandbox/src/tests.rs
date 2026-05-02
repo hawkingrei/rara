@@ -114,76 +114,74 @@ fn wrap_command_creates_unique_cleanup_profile_on_macos() {
 
     assert!(cleanup_path.exists(), "profile should be created on disk");
     assert!(
-        cleanup_path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .is_some_and(|name| name.starts_with("sandbox-") && name.ends_with(".sb")),
-        "profile filename should follow the sandbox-*.sb pattern"
+        wrapped
+            .args
+            .iter()
+            .any(|arg| arg == &cleanup_path.display().to_string()),
+        "wrapped command should reference the generated profile path"
+    );
+
+    let profile = std::fs::read_to_string(&cleanup_path).expect("profile contents");
+    assert!(
+        !profile.contains("home-relative-path"),
+        "profile should avoid unsupported home-relative-path forms"
+    );
+    assert!(
+        profile.contains("(deny file-read* (subpath "),
+        "profile should deny sensitive home subpaths using explicit paths"
     );
 }
 
 #[test]
-fn direct_exec_wrapper_preserves_program_and_args() {
+fn wrap_command_can_be_explicitly_direct() {
     let manager = manager("macos", SandboxBackend::Direct);
 
-    let wrapped = manager.wrap_unsandboxed_exec_command("echo", &["hello".to_string()]);
+    let wrapped = manager
+        .wrap_shell_command("find . -maxdepth 1", "/workspace/project", false)
+        .expect("direct fallback wrapper");
 
-    assert!(!wrapped.sandboxed);
-    assert_eq!(wrapped.program, "echo");
-    assert_eq!(wrapped.args, vec!["hello".to_string()]);
-    assert_eq!(wrapped.cleanup_path, None);
+    assert_eq!(wrapped.program, shell_program());
+    assert!(matches!(
+        wrapped.args.as_slice(),
+        [flag, command] if (flag == "-c" || flag == "-lc") && command == "find . -maxdepth 1"
+    ));
+    assert!(wrapped.cleanup_path.is_none());
+    assert!(
+        !wrapped.sandboxed,
+        "direct execution should not apply sandbox env or profiles"
+    );
+    assert_eq!(wrapped.sandbox_backend, "direct");
+    assert!(wrapped.sandbox_home.is_none());
 }
 
 #[test]
-fn wrap_pty_shell_command_uses_direct_mode_on_macos() {
+fn wrap_pty_shell_command_uses_direct_backend_on_macos() {
     let manager = manager("macos", SandboxBackend::MacosSeatbelt);
 
     let wrapped = manager
-        .wrap_pty_shell_command("custom-tool --flag", "/tmp", false)
+        .wrap_pty_shell_command("read line", "/workspace/project", false)
         .expect("pty shell wrapper");
 
-    assert_eq!(wrapped.program, "/bin/sh");
-    assert_eq!(
-        wrapped.args,
-        vec!["-c".to_string(), "custom-tool --flag".to_string()]
-    );
     assert!(!wrapped.sandboxed);
+    assert_eq!(wrapped.sandbox_backend, "direct");
 }
 
 #[test]
-fn wrap_shell_command_uses_platform_shell() {
-    let manager = manager("macos", SandboxBackend::MacosSeatbelt);
-
-    let wrapped = manager
-        .wrap_shell_command("custom-tool --flag", "/tmp", false)
-        .expect("macos shell wrapper");
-
-    assert_eq!(wrapped.program, MACOS_SANDBOX_EXEC);
-    let args_str = wrapped.args.join(" ");
-    assert!(
-        args_str.contains("/bin/zsh")
-            || args_str.contains("/bin/bash")
-            || args_str.contains(DEFAULT_SHELL),
-        "macos shell wrapper should use a known system shell, got args: {args_str}"
-    );
+fn shell_command_flag_uses_login_shell_for_common_user_shells() {
+    assert_eq!(shell_command_flag("/bin/zsh"), "-lc");
+    assert_eq!(shell_command_flag("/usr/bin/bash"), "-lc");
+    assert_eq!(shell_command_flag("sh"), "-c");
 }
 
 #[test]
-fn sandbox_profile_string_literal_escapes_backslashes_and_quotes() {
-    let path = PathBuf::from(r#"/tmp/test"dir"#);
-    let literal = sandbox_profile_string_literal(&path);
-    assert_eq!(literal, r#"/tmp/test\"dir"#);
-}
-
-#[test]
-fn sanitize_shell_program_returns_none_for_relative_or_unknown_paths() {
+fn sanitize_shell_program_rejects_args_and_unmounted_shells() {
     assert_eq!(
         sanitize_shell_program("/bin/zsh"),
         Some("/bin/zsh".to_string())
     );
     assert_eq!(
-        sanitize_shell_program("/bin/bash"),
-        Some("/bin/bash".to_string())
+        sanitize_shell_program("/bin/zsh -i"),
+        Some("/bin/zsh".to_string())
     );
     assert_eq!(sanitize_shell_program("/opt/homebrew/bin/fish"), None);
     assert_eq!(sanitize_shell_program("zsh"), None);
@@ -291,12 +289,99 @@ fn wrap_shell_command_uses_minimal_linux_bind_set() {
         "linux sandbox should provide an isolated writable /tmp"
     );
     assert!(
-        wrapped.args.windows(3).any(|window| window
-            == [
-                String::from("--ro-bind"),
-                String::from("/workspace/project"),
-                String::from("/workspace/project")
-            ]),
+        wrapped
+            .args
+            .windows(2)
+            .any(|window| window == [String::from("--bind"), String::from("/workspace/project")]),
+        "linux sandbox should bind the workspace path back in"
+    );
+    assert!(
+        wrapped.args.contains(&"--unshare-net".to_string()),
+        "linux sandbox should isolate networking when allow_net is false"
+    );
+    assert_eq!(wrapped.sandbox_backend, "linux-bubblewrap");
+    assert_eq!(
+        wrapped.sandbox_home.as_deref(),
+        Some(manager.sandbox_home.as_path())
+    );
+}
+
+#[test]
+fn linux_sandbox_keeps_network_when_allowed() {
+    let manager = manager("linux", SandboxBackend::LinuxBubblewrap);
+
+    let wrapped = manager
+        .wrap_shell_command("curl https://example.com", "/workspace/project", true)
+        .expect("linux sandbox wrapper");
+
+    assert!(
+        !wrapped.args.contains(&"--unshare-net".to_string()),
+        "linux sandbox should not isolate networking when allow_net is true"
+    );
+    assert!(wrapped.network_access);
+}
+
+#[test]
+fn linux_sandbox_creates_home_dirs_inside_bubblewrap() {
+    let manager = manager("linux", SandboxBackend::LinuxBubblewrap);
+
+    let wrapped = manager
+        .wrap_shell_command("echo test", "/workspace/project", false)
+        .expect("linux sandbox wrapper");
+
+    for dir in [
+        manager.sandbox_home.clone(),
+        manager.sandbox_home.join(".config"),
+        manager.sandbox_home.join(".cache"),
+        manager.sandbox_home.join(".local/state"),
+        manager.sandbox_home.join(".local/share"),
+    ] {
+        assert!(
+            wrapped
+                .args
+                .windows(2)
+                .any(|window| { window == [String::from("--dir"), dir.display().to_string()] }),
+            "linux sandbox should create {} inside the tmpfs root",
+            dir.display()
+        );
+    }
+}
+
+#[test]
+fn linux_sandbox_does_not_bind_the_entire_home_directory() {
+    let manager = manager("linux", SandboxBackend::LinuxBubblewrap);
+
+    let wrapped = manager
+        .wrap_shell_command("echo test", "/home/tester/work/project", false)
+        .expect("linux sandbox wrapper");
+
+    assert_eq!(wrapped.program, "bwrap");
+    assert!(
+        !wrapped.args.windows(3).any(|window| {
+            window
+                == [
+                    String::from("--bind"),
+                    String::from("/home/tester"),
+                    String::from("/home/tester"),
+                ]
+                || window
+                    == [
+                        String::from("--ro-bind"),
+                        String::from("/home/tester"),
+                        String::from("/home/tester"),
+                    ]
+        }),
+        "linux sandbox should not mount the entire home directory back in"
+    );
+    assert!(
+        wrapped.args.windows(3).any(|window| {
+            window
+                == [
+                    String::from("--bind"),
+                    String::from("/home/tester/work/project"),
+                    String::from("/home/tester/work/project"),
+                ]
+        }),
         "linux sandbox should still mount the workspace path itself"
     );
 }
@@ -396,12 +481,12 @@ fn macos_profile_allows_command_install_roots() {
         profile_dir: tempdir.path().to_path_buf(),
         sandbox_home: tempdir.path().join("home"),
         backend: SandboxBackend::MacosSeatbelt,
-        command_install_roots: command_search_install_roots(std::env::var_os("PATH").as_deref()),
+        command_install_roots: command_search_install_roots(Some(
+            tool_root.join("bin").as_os_str(),
+        )),
     };
 
-    let wrapped = manager
-        .wrap_shell_command("echo test", "/tmp", false)
-        .expect("macos sandbox wrapper");
+    let profile_path = manager.create_profile(false).expect("macos profile");
 
     if let Some(path) = original_path {
         set_env_var("PATH", path);
@@ -409,47 +494,72 @@ fn macos_profile_allows_command_install_roots() {
         remove_env_var("PATH");
     }
 
-    let profile = std::fs::read_to_string(wrapped.cleanup_path.as_ref().expect("cleanup path"))
-        .expect("read profile");
+    let profile = std::fs::read_to_string(profile_path).expect("profile contents");
+    let expected = tool_root.display().to_string();
     assert!(
-        profile.contains(&format!(
-            "(allow file-read* (subpath \"{}\"))",
-            sandbox_profile_string_literal(&tool_root)
-        )),
-        "macOS sandbox profile should emit a file-read* subpath rule for tool install roots"
+        profile.contains(&format!("(allow file-read* (subpath \"{expected}\"))")),
+        "macos profile should allow reading PATH install roots"
     );
     assert!(
         profile.contains(&format!(
-            "(allow file-map-executable (subpath \"{}\"))",
-            sandbox_profile_string_literal(&tool_root)
+            "(allow file-map-executable (subpath \"{expected}\"))"
         )),
-        "macOS sandbox profile should emit a file-map-executable subpath rule for tool install roots"
+        "macos profile should allow mapping executables from PATH install roots"
     );
 }
 
 #[test]
-fn shell_command_flag_includes_full_shell_and_source_path() {
-    let flag = shell_command_flag(
-        "/bin/zsh",
-        "/tmp",
-        "/tmp/rara-sandbox-home",
-        false,
-        Default::default(),
-    );
-    assert!(flag.contains("ZSH=/bin/zsh"));
-    assert!(flag.contains("source /tmp"));
-    assert!(flag.contains("HOME=/tmp/rara-sandbox-home"));
-    assert!(!flag.contains("NETWORK_ACCESS=1"));
+fn home_bin_path_stays_narrow() {
+    let tempdir = tempdir().expect("tempdir");
+    let home = tempdir.path().join("home");
+    let home_bin = home.join("bin");
+    std::fs::create_dir_all(&home_bin).expect("home bin dir");
+    let home = std::fs::canonicalize(&home).expect("canonical home");
+    let home_bin = home.join("bin");
+    let original_home = std::env::var_os("HOME");
+    set_env_var("HOME", &home);
+
+    let roots = command_search_install_roots(Some(home_bin.as_os_str()));
+
+    if let Some(home) = original_home {
+        set_env_var("HOME", home);
+    } else {
+        remove_env_var("HOME");
+    }
+
+    assert_eq!(roots, vec![home_bin]);
 }
 
 #[test]
-fn shell_command_flag_enables_network_access_when_allow_net() {
-    let flag = shell_command_flag(
-        "/bin/bash",
-        "/tmp",
-        "/tmp/rara-sandbox-home",
-        true,
-        Default::default(),
-    );
-    assert!(flag.contains("NETWORK_ACCESS=1"));
+fn command_search_install_roots_rejects_broad_path_entries() {
+    let tempdir = tempdir().expect("tempdir");
+    let home = tempdir.path().join("home");
+    let tool_root = tempdir.path().join("toolchain");
+    let tool_bin = tool_root.join("bin");
+    std::fs::create_dir_all(&home).expect("home dir");
+    std::fs::create_dir_all(&tool_bin).expect("tool bin dir");
+    let home = std::fs::canonicalize(&home).expect("canonical home");
+    let tool_root = std::fs::canonicalize(&tool_root).expect("canonical tool root");
+    let tool_bin = tool_root.join("bin");
+    let original_home = std::env::var_os("HOME");
+    set_env_var("HOME", &home);
+
+    let path = env::join_paths([PathBuf::from("/"), home.clone(), tool_bin.clone()])
+        .expect("build test PATH");
+    let roots = command_search_install_roots(Some(path.as_os_str()));
+
+    if let Some(home) = original_home {
+        set_env_var("HOME", home);
+    } else {
+        remove_env_var("HOME");
+    }
+
+    assert_eq!(roots, vec![tool_root]);
+}
+
+#[test]
+fn sandbox_profile_string_literal_escapes_control_characters() {
+    let escaped = sandbox_profile_string_literal(PathBuf::from("/tmp/a\nb\tc").as_path());
+
+    assert_eq!(escaped, "/tmp/a\\nb\\tc");
 }

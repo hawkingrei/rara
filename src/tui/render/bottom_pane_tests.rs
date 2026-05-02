@@ -112,152 +112,196 @@ fn activity_status_line_renders_warning_notice_in_yellow() {
         path: temp.path().join("config.json"),
     })
     .expect("build tui app");
-    app.notice = Some("Warning: something went wrong".to_string());
+    app.notice = Some(
+        "Warning: openai-compatible is missing an API key. Use /model to configure the current provider."
+            .into(),
+    );
 
-    let (label, color, _detail) = activity_status_line(&app);
+    let (label, color, detail) = activity_status_line(&app);
     assert_eq!(label, "Warning");
     assert_eq!(color, Color::Yellow);
+    assert!(detail.contains("missing an API key"));
 }
 
 #[test]
-fn composer_hint_line_includes_repo_context_when_present() {
+fn queued_follow_up_hint_overrides_busy_hint() {
     let temp = tempdir().unwrap();
     let mut app = TuiApp::new(ConfigManager {
         path: temp.path().join("config.json"),
     })
     .expect("build tui app");
-    app.set_repo_context_hint("github.com/user/repo PR #42".to_string());
+    app.runtime_phase = RuntimePhase::ProcessingResponse;
+    app.begin_running_turn();
+    app.queue_follow_up_message_after_next_tool_boundary("follow-up");
 
-    let line = composer_hint_line(&app);
-    let text: String = line
-        .spans
-        .iter()
-        .map(|span| span.content.as_ref())
-        .collect();
-    assert!(text.contains("github.com/user/repo PR #42"));
+    assert_eq!(
+        composer_hint(&app),
+        "pending follow-up  will submit after next tool call"
+    );
 }
 
-#[test]
-fn composer_hint_line_omits_repo_context_when_none() {
-    let temp = tempdir().unwrap();
-    let app = TuiApp::new(ConfigManager {
-        path: temp.path().join("config.json"),
-    })
-    .expect("build tui app");
-
-    let line = composer_hint_line(&app);
-    let text: String = line
-        .spans
-        .iter()
-        .map(|span| span.content.as_ref())
-        .collect();
-    assert!(!text.contains("PR #"));
-}
-
-#[test]
-fn composer_hint_reflects_running_query_background_task() {
+#[tokio::test]
+async fn busy_composer_hint_keeps_only_action_keys() {
     let temp = tempdir().unwrap();
     let mut app = TuiApp::new(ConfigManager {
         path: temp.path().join("config.json"),
     })
     .expect("build tui app");
+    app.runtime_phase = RuntimePhase::ProcessingResponse;
+    let (_sender, receiver) = mpsc::unbounded_channel();
     app.running_task = Some(RunningTask {
-        id: "t1".into(),
         kind: TaskKind::Query,
-        command: None,
+        receiver,
+        handle: tokio::spawn(std::future::pending::<TaskCompletion>()),
         started_at: Instant::now(),
-        completed: None,
-        pty_session: None,
-        background_task: None,
+        next_heartbeat_after_secs: 2,
+        cancellation_token: None,
+        cancellation_requested: false,
     });
 
-    let hint = composer_hint(&app);
-    assert!(hint.contains("Enter queue"));
-    assert!(hint.contains("Esc cancel"));
+    assert_eq!(composer_hint(&app), "Enter queue  Esc cancel");
+
+    if let Some(task) = app.running_task.take() {
+        task.handle.abort();
+    }
 }
 
-#[test]
-fn composer_hint_reflects_rebuild_background_task() {
+#[tokio::test]
+async fn busy_composer_hint_hides_cancel_for_non_query_tasks() {
     let temp = tempdir().unwrap();
     let mut app = TuiApp::new(ConfigManager {
         path: temp.path().join("config.json"),
     })
     .expect("build tui app");
+    app.runtime_phase = RuntimePhase::ProcessingResponse;
+    let (_sender, receiver) = mpsc::unbounded_channel();
     app.running_task = Some(RunningTask {
-        id: "t2".into(),
-        kind: TaskKind::Rebuild,
-        command: None,
+        kind: TaskKind::Compact,
+        receiver,
+        handle: tokio::spawn(std::future::pending::<TaskCompletion>()),
         started_at: Instant::now(),
-        completed: None,
-        pty_session: None,
-        background_task: None,
+        next_heartbeat_after_secs: 2,
+        cancellation_token: None,
+        cancellation_requested: false,
     });
 
-    let hint = composer_hint(&app);
-    assert!(hint.contains("Enter queue"));
-    assert!(!hint.contains("Esc cancel"));
+    assert_eq!(composer_hint(&app), "Enter queue");
+
+    if let Some(task) = app.running_task.take() {
+        task.handle.abort();
+    }
 }
 
 #[test]
-fn composer_hint_reflects_pending_planning_suggestion() {
+fn composer_hint_line_includes_repo_context_when_available() {
     let temp = tempdir().unwrap();
     let mut app = TuiApp::new(ConfigManager {
         path: temp.path().join("config.json"),
     })
     .expect("build tui app");
-    app.set_pending_planning_suggestion("Let's plan this out first".to_string());
+    app.repo_slug = Some("hawkingrei/rara".into());
+    app.current_pr_url = Some("https://github.com/hawkingrei/rara/pull/46".into());
+    app.snapshot.branch = "feat/test".into();
 
-    let hint = composer_hint(&app);
-    assert!(hint.contains("1 enter planning mode"));
-    assert!(hint.contains("2 continue in execute mode"));
+    let rendered = composer_hint_line(&app).to_string();
+    assert!(rendered.contains("repo: hawkingrei/rara"));
+    assert!(rendered.contains("branch: feat/test"));
+    assert!(rendered.contains("PR: https://github.com/hawkingrei/rara/pull/46"));
 }
 
 #[test]
-fn composer_hint_reflects_plan_mode() {
+fn composer_hint_line_hides_slash_hint_while_palette_is_open() {
     let temp = tempdir().unwrap();
     let mut app = TuiApp::new(ConfigManager {
         path: temp.path().join("config.json"),
     })
     .expect("build tui app");
-    app.set_agent_execution_mode_label("plan".to_string());
+    app.input = "/".into();
+    app.overlay = Some(crate::tui::state::Overlay::CommandPalette);
+    app.repo_slug = Some("hawkingrei/rara".into());
+    app.snapshot.branch = "main".into();
 
-    let hint = composer_hint(&app);
-    assert!(hint.contains("planning mode"));
-    assert!(hint.contains("read-only planning"));
+    let rendered = composer_hint_line(&app).to_string();
+    assert!(!rendered.contains("slash command"));
+    assert!(rendered.contains("repo: hawkingrei/rara"));
+    assert!(rendered.contains("branch: main"));
 }
 
 #[test]
-fn editor_cursor_position_starts_at_one_one_offset() {
+fn wrapped_text_rows_preserve_space_only_and_blank_lines() {
+    let rows = wrapped_text_rows(" \n\n  ", 12, Some("› "), Some("  "));
+
+    assert_eq!(rows, vec!["›  ", "› ", "›   "]);
+}
+
+#[test]
+fn wrapped_text_cursor_tracks_trailing_blank_composer_line() {
+    let area = Rect {
+        x: 4,
+        y: 2,
+        width: 12,
+        height: 6,
+    };
+
+    let cursor = wrapped_text_cursor_position(
+        "line one\n",
+        "line one\n".chars().count(),
+        area,
+        Some("› "),
+        Some("  "),
+    );
+    assert_eq!(cursor, (6, 3));
+}
+
+#[test]
+fn wrapped_text_rows_treat_tabs_as_fixed_width_columns() {
+    let rows = wrapped_text_rows("\t12345", 8, Some("› "), Some("  "));
+
+    assert_eq!(rows, vec!["› \t12", "  345"]);
+}
+
+#[test]
+fn wrapped_text_cursor_treats_tabs_as_fixed_width_columns() {
     let area = Rect {
         x: 0,
         y: 0,
-        width: 80,
-        height: 24,
+        width: 8,
+        height: 4,
     };
-    let (x, y) = wrapped_text_cursor_position("", 0, area, None, None);
-    assert_eq!(x, 1);
-    assert_eq!(y, 1);
+
+    let cursor = wrapped_text_cursor_position(
+        "\t12345",
+        "\t12345".chars().count(),
+        area,
+        Some("› "),
+        Some("  "),
+    );
+    assert_eq!(cursor, (5, 1));
 }
 
 #[test]
-fn wrapped_text_rows_counts_composer_content_lines() {
-    // Includes indent and subsequent indent in width calculations
-    let rows = wrapped_text_rows("hello world", 80, Some("› "), Some("  "));
-    assert_eq!(rows, 1);
+fn wrapped_text_cursor_tracks_space_only_composer_input() {
+    let area = Rect {
+        x: 0,
+        y: 0,
+        width: 12,
+        height: 4,
+    };
 
-    let long = "a".repeat(90);
-    let rows = wrapped_text_rows(&long, 30, Some("› "), Some("  "));
-    assert!(rows > 1);
+    let cursor =
+        wrapped_text_cursor_position("   ", "   ".chars().count(), area, Some("› "), Some("  "));
+    assert_eq!(cursor, (5, 0));
 }
 
 #[test]
-fn wrapped_text_rows_handles_explicit_newlines() {
-    let rows = wrapped_text_rows("line one\nline two", 50, Some("› "), Some("  "));
-    assert_eq!(rows, 2);
-}
+fn wrapped_text_cursor_can_point_into_the_middle_of_input() {
+    let area = Rect {
+        x: 0,
+        y: 0,
+        width: 12,
+        height: 4,
+    };
 
-#[test]
-fn wrapped_text_rows_handles_empty_text() {
-    let rows = wrapped_text_rows("", 50, Some("› "), Some("  "));
-    assert_eq!(rows, 1);
+    let cursor = wrapped_text_cursor_position("hello world", 5, area, Some("› "), Some("  "));
+    assert_eq!(cursor, (7, 0));
 }
