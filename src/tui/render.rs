@@ -10,6 +10,7 @@ mod viewport;
 
 pub(crate) use helpers::*;
 
+use crate::tui::theme::*;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -454,16 +455,18 @@ pub(crate) fn prefixed_message_lines(
         return user_message_lines(message, max_lines);
     }
 
+    let role_prefix = agent_role_prefix(role);
+
     let message_lines = message.lines().collect::<Vec<_>>();
     if message_lines.is_empty() {
-        return vec![Line::from(format!("{role}:"))];
+        return vec![Line::from(format!("{role_prefix}:"))];
     }
 
     let mut lines = Vec::new();
     let hidden_count = truncated_line_count(message_lines.len(), max_lines);
     let (head, tail) = head_tail_line_window(message_lines.as_slice(), max_lines);
     if let Some(first) = head.first() {
-        lines.push(Line::from(format!("{role}: {first}")));
+        lines.push(Line::from(format!("{role_prefix}: {first}")));
     }
     if hidden_count > 0 {
         lines.push(Line::from(Span::styled(
@@ -504,7 +507,15 @@ pub(crate) fn formatted_message_lines(
     cwd: Option<&Path>,
 ) -> Vec<Line<'static>> {
     if role == "Agent" {
-        return bulleted_markdown_message_lines(message, max_lines, cwd);
+        let mut lines = vec![Line::from(Span::styled(
+            "🤖",
+            Style::default()
+                .fg(ROLE_PREFIX)
+                .add_modifier(Modifier::BOLD),
+        ))];
+        let body = bulleted_markdown_message_lines(message, max_lines, cwd);
+        lines.extend(body);
+        return lines;
     }
     if role == "System" {
         return markdown_message_lines(role, message, max_lines, cwd);
@@ -711,6 +722,10 @@ fn tool_action_label(message: &str) -> Option<String> {
             if rest.is_empty() { other } else { message }
         )),
     }
+}
+
+fn agent_role_prefix(role: &str) -> &str {
+    if role == "Agent" { "🤖" } else { role }
 }
 
 pub(crate) fn section_span<'a>(title: &'a str, color: Color) -> Span<'a> {

@@ -935,7 +935,7 @@ fn prefixed_message_lines_keep_first_and_latest_lines() {
     .map(|line| line.to_string())
     .collect::<Vec<_>>();
 
-    assert_eq!(rendered[0], "Agent: intro");
+    assert_eq!(rendered[0], "🤖: intro");
     assert_eq!(rendered[1], "  ... 2 more line(s)");
     assert_eq!(rendered[2], "  latest 1");
     assert_eq!(rendered[3], "  latest 2");
@@ -947,7 +947,7 @@ fn prefixed_message_lines_show_truncation_when_max_lines_is_one() {
         .into_iter()
         .map(|line| line.to_string())
         .collect::<Vec<_>>();
-    assert_eq!(agent_rendered[0], "Agent: intro");
+    assert_eq!(agent_rendered[0], "🤖: intro");
     assert_eq!(agent_rendered[1], "  ... 1 more line(s)");
 
     let user_rendered = prefixed_message_lines("You", &["intro", "latest 1"].join("\n"), 1)
