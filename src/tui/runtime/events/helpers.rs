@@ -244,6 +244,8 @@ pub(super) fn scrub_internal_control_tokens(message: &str) -> String {
     } else {
         Cow::Borrowed(message)
     };
+    let message = strip_raw_tool_call_markup(message.as_ref());
+    let message = strip_leading_meta_reasoning(message.as_ref());
     if !message.contains('<') {
         return message.into_owned();
     }
@@ -280,6 +282,55 @@ pub(super) fn scrub_internal_control_tokens(message: &str) -> String {
     }
 
     cleaned
+}
+
+fn strip_raw_tool_call_markup(message: &str) -> Cow<'_, str> {
+    if !message.contains("tool_call:") {
+        return Cow::Borrowed(message);
+    }
+
+    let mut output = Vec::new();
+    for line in message.lines() {
+        let Some(idx) = line.find("tool_call:") else {
+            output.push(line.trim_end().to_string());
+            continue;
+        };
+        let prefix = line[..idx].trim_end_matches([' ', '|']).trim_end();
+        if !prefix.trim().is_empty() {
+            output.push(prefix.to_string());
+        }
+    }
+
+    Cow::Owned(output.join("\n"))
+}
+
+fn strip_leading_meta_reasoning(message: &str) -> Cow<'_, str> {
+    let lines = message.lines().collect::<Vec<_>>();
+    let mut first_keep = 0usize;
+    while let Some(line) = lines.get(first_keep) {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || looks_like_leaked_meta_reasoning(trimmed) {
+            first_keep += 1;
+            continue;
+        }
+        break;
+    }
+
+    if first_keep == 0 {
+        return Cow::Borrowed(message);
+    }
+    Cow::Owned(lines[first_keep..].join("\n"))
+}
+
+fn looks_like_leaked_meta_reasoning(line: &str) -> bool {
+    let lower = line.to_ascii_lowercase();
+    lower.starts_with("the user asked ")
+        || lower.starts_with("the user is asking ")
+        || lower.starts_with("looking at the conversation")
+        || lower.starts_with("i can see that ")
+        || lower.starts_with("i should ")
+        || lower.starts_with("i need to answer ")
+        || lower.starts_with("i'll answer ")
 }
 
 fn strip_dsml_control_blocks(message: &str) -> Cow<'_, str> {

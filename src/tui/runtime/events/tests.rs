@@ -173,6 +173,29 @@ fn scrub_internal_control_tokens_removes_dsml_tool_blocks() {
 }
 
 #[test]
+fn scrub_internal_control_tokens_removes_raw_tool_call_markup() {
+    let cleaned = scrub_internal_control_tokens(
+        "Now update docs. | tool_call: read_file arguments: {\"path\":\"docs/todo.md\"} | tool_call: read_file arguments: {\"path\":\"docs/features/README.md\"}",
+    );
+
+    assert_eq!(cleaned.trim(), "Now update docs.");
+    assert!(!cleaned.contains("tool_call:"));
+    assert!(!cleaned.contains("arguments:"));
+}
+
+#[test]
+fn scrub_internal_control_tokens_drops_leaked_meta_reasoning_prefix() {
+    let cleaned = scrub_internal_control_tokens(
+        "The user asked \"was it opened?\"\nLooking at the conversation, PR #147 was created.\nI should confirm this briefly.\n\nPR #147 was created: https://github.com/hawkingrei/rara/pull/147",
+    );
+
+    assert_eq!(
+        cleaned.trim(),
+        "PR #147 was created: https://github.com/hawkingrei/rara/pull/147"
+    );
+}
+
+#[test]
 fn scrub_internal_control_tokens_drops_orphaned_dsml_payload() {
     let cleaned = scrub_internal_control_tokens(
         "kind: format!(\"unknown_retrieval_{tool_name}\"),\nlabel: format!(\"Unknown Retrieval ({tool_name})\"),\n}\n<｜DSML｜parameter name=\"path\" string=\"true\">src/context/selection.rs</｜DSML｜parameter>\n</｜DSML｜invoke>\n</｜DSML｜tool_calls>",

@@ -147,18 +147,7 @@ fn activity_status_line(app: &TuiApp) -> (&'static str, Color, String) {
     }
 
     if app.is_busy() {
-        let mut detail = app
-            .runtime_phase_detail
-            .as_deref()
-            .unwrap_or("waiting for model response")
-            .to_string();
-        if app.has_queued_follow_up_messages() {
-            detail.push_str(&format!(
-                " · {} queued follow-up",
-                app.queued_follow_up_count()
-            ));
-        }
-        return ("Working", STATUS_WARNING, detail);
+        return ("", STATUS_WARNING, String::new());
     }
 
     if app.agent_execution_mode_label() == "plan" {
@@ -182,12 +171,16 @@ fn activity_status_line(app: &TuiApp) -> (&'static str, Color, String) {
         STATUS_READY,
         app.notice
             .as_deref()
+            .filter(|notice| !matches!(*notice, "Prompt finished." | "Planning finished."))
             .unwrap_or("waiting for input")
             .to_string(),
     )
 }
 
 fn animated_activity_label(app: &TuiApp, label: &str) -> String {
+    if label.is_empty() {
+        return String::new();
+    }
     let Some(task) = app.running_task.as_ref() else {
         return label.to_string();
     };

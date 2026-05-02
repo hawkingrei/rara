@@ -247,6 +247,104 @@ model-facing prefixes. In particular, transient runtime artifacts such as
 orphan tool results should not be serialized back into ordinary user text with
 synthetic labels.
 
+## Hook-Driven Context Sources
+
+Hooks can help context management, but they must not become hidden prompt
+append points.
+
+### Core Principle
+
+Hook output is a context candidate, not final prompt text.
+
+Every prompt-affecting hook result should enter the normal context pipeline as
+a structured source object with:
+
+- source id;
+- lifecycle point;
+- provenance;
+- trust and authorship;
+- time-to-live;
+- budget hint;
+- cache or invalidation status when applicable;
+- human-readable inclusion or drop reason for `/context`.
+
+The context assembler and selection layers remain the only owners of final
+model-request injection. This keeps hook output budgeted, inspectable, and
+stable across TUI, ACP, Wire, and future headless adapters.
+
+### Injection Timing
+
+Prompt injection must happen before model request assembly completes. Later
+lifecycle events may produce candidates for future turns, but they must not
+mutate the already assembled request.
+
+The stable turn pipeline is:
+
+1. collect raw inputs and runtime state;
+2. run eligible pre-assembly hook discovery;
+3. convert hook, memory, skill, prompt, and protocol inputs into context
+   candidates;
+4. run context and memory selection with ordering, deduplication, budget, and
+   drop reasons;
+5. assemble the final model request;
+6. record tool and runtime events;
+7. feed resulting context candidates into the next turn or compaction cycle.
+
+This ordering avoids mid-stream prompt mutation, unstable source ordering, and
+context that cannot be explained by `/context`.
+
+### Lifecycle Responsibilities
+
+`SessionStart` may discover session-level context such as environment facts,
+workspace roots, adapter capabilities, and static extension declarations. If
+the first model request must see that output, RARA should finish the relevant
+session-start context work before assembling the first request. Late
+session-start output must be marked as next-turn context instead of silently
+patching an in-flight prompt.
+
+`UserPromptSubmit` may attach structured metadata related to the submitted
+input. It must not rewrite the user's original text. Any added context enters
+selection as a candidate source.
+
+Workspace-change hooks, when added, should invalidate prompt-source, memory,
+skill, or environment caches. They should prefer dirty markers over direct
+prompt injection.
+
+`PreToolUse` is primarily for policy, permission, and environment checks. If it
+discovers missing context, it should emit a warning, request, or candidate for a
+future assembly step rather than changing the semantics of an already generated
+tool call.
+
+`PostToolUse` may emit context deltas such as touched files, generated
+artifacts, test summaries, or important stderr summaries. These deltas belong
+in thread/runtime state first. Whether they reach the model is decided by the
+next assembly pass.
+
+`PreCompact` may provide retain hints, such as files, decisions, constraints,
+or failures that should survive compaction. Compaction remains owned by RARA;
+hook output is advisory and must be visible in compaction/context
+observability.
+
+`Stop` may perform validation or final context reconciliation, but it must be
+bounded and loop-safe. RARA should not run stop hooks on prompt-too-long or API
+error paths that could create an error, hook block, retry, compact, error
+cycle.
+
+### Observability
+
+`/context` should show hook-created context separately from ordinary prompt
+sources and memory candidates, including:
+
+- declared hook source and lifecycle;
+- whether the hook is supported, ignored, executed, or deferred;
+- selected hook context items;
+- available but not injected hook items;
+- dropped hook items and drop reasons;
+- cache invalidations or retain hints emitted by hooks.
+
+`/status` should summarize active hook support and last hook failures without
+requiring users to inspect raw logs.
+
 ### Memory Scopes
 
 RARA should distinguish at least two memory scopes.

@@ -67,6 +67,16 @@ state and conflicted file, preserve complementary changes instead of blindly cho
 structured edits where practical, scan for remaining conflict markers, and run the narrowest relevant
 validation before claiming the conflict is resolved.
 
+Large-write guidance follows the same edit-tool boundary:
+
+- use diff-shaped edit tools or `apply_patch` for modifications to existing files;
+- reserve `write_file` for new files or intentional complete rewrites after reading an existing file;
+- treat failed, truncated, or apparently non-persistent large writes as tool-result failures to
+  diagnose, not as a reason to fall back to shell heredocs, redirection, or PTY writes;
+- preserve the Codex distinction that heredoc can be a transport for `apply_patch`, while Claude's
+  Bash/PowerShell guidance routes ordinary file writes through Write rather than `cat <<EOF`,
+  `echo >`, `Set-Content`, or `Out-File`.
+
 ### 4) Compact Prompt
 
 - Context compaction must not use the normal system prompt.

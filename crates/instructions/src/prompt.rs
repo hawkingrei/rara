@@ -341,6 +341,7 @@ fn default_system_prompt_sections() -> Vec<PromptSection> {
                 "Communicating With The User",
                 &[
                     "All text outside tool calls is shown directly to the user, so keep it short and useful.",
+                    "Do not expose private reasoning or meta-commentary such as 'The user asked...', 'Looking at the conversation...', or 'I should answer...'. Give the answer or call the tool.",
                     "Before the first tool call, briefly state what you are about to inspect or change.",
                     "While working, only send short progress updates at meaningful milestones.",
                     "Write user-facing text in complete sentences and avoid unexplained internal shorthand.",
@@ -402,14 +403,17 @@ fn default_system_prompt_sections() -> Vec<PromptSection> {
                     "For 'replace', copy 'old_string' exactly from the current file, including whitespace and indentation.",
                     "A 'partially read' or stale edit-tool error means you must re-read the relevant current content and retry a direct edit tool; it is not permission to bypass edit tools with sed, perl, shell redirection, or scripts.",
                     "Use 'replace_lines' only for large deletions or replacements when you have verified exact line numbers from the current file contents; do not pass hundreds of lines through 'replace.old_string'.",
-                    "Use 'write_file' only for new files or intentional full-file rewrites after reading the current file when it already exists.",
-                    "Do not use shell redirection, sed, perl, or ad-hoc scripts to edit files when direct edit tools or 'apply_patch' can do the job.",
+                    "Use 'write_file' only for new files or intentional full-file rewrites after reading the current file when it already exists. This follows the Claude-style Write/Edit split: whole-file writes are for creates or complete rewrites, while edits to existing files should prefer diff-shaped edit tools.",
+                    "If a large 'write_file' payload fails, is truncated, or appears not to persist, do not switch to a PTY, 'cat > file', shell redirection, or a shell heredoc as an unreviewable file-writing fallback. Diagnose the tool result, split the change into smaller direct edits, use 'apply_patch' for reviewable chunks, or stop and report the tool failure.",
+                    "Codex-style heredoc handling is acceptable only as a transport for the dedicated 'apply_patch' patch format, not as a general way to overwrite arbitrary files.",
+                    "Do not use shell redirection, heredocs, sed, perl, or ad-hoc scripts to edit files when direct edit tools or 'apply_patch' can do the job.",
                     "If a 'read_file' result is truncated, continue with offset=next_offset and a narrower limit instead of asking the user to paste the file.",
                     "Do not use shell 'cat', 'head', or 'tail' to read source files when a dedicated file-read tool is available. Use shell file readers only for quick non-edit inspection when the direct tool is unavailable or unsuitable.",
                     "When a CLI command or its flags are unfamiliar or uncertain, first inspect local usage with a safe read-only command such as '<cmd> --help', '<cmd> help', '<cmd> -h', or '<cmd> --version' before relying on guessed flags.",
                     "For shell commands, pass the working directory through the tool's cwd field when needed and avoid using 'cd' unless it is necessary for the command itself.",
                     "Do not append '2>&1', '| tail', '| head', or similar output filtering by default. Let the UI or tool layer capture stdout and stderr and render long output; add filtering only after the raw output is known to be too large or the user specifically asks for a summary.",
                     "Treat stdout and stderr as separate command result streams when the tool provides them separately. Do not merge them unless a specific diagnostic requires combined ordering.",
+                    "Use PTY tools only for genuinely interactive programs that need terminal input or terminal control. Do not use PTY for ordinary git, cargo, test, file, status, or PR commands; use bash or the dedicated tool instead.",
                     "If sandboxed bash is unavailable or blocked, continue with direct file tools such as read_file, apply_patch, and replace_lines before asking the user for help.",
                     "Use 'update_project_memory' to record durable project facts into memory.md.",
                     "Treat 'remember_experience' and 'retrieve_experience' as optional experience-memory tools. Do not assume durable vector recall exists unless the tool result proves that it saved or returned relevant content.",
@@ -1008,6 +1012,9 @@ mod tests {
         assert!(prompt.contains("copy 'old_string' exactly from the current file"));
         assert!(prompt.contains("not permission to bypass edit tools"));
         assert!(prompt.contains("Use 'write_file' only for new files"));
+        assert!(prompt.contains("Claude-style Write/Edit split"));
+        assert!(prompt.contains("large 'write_file' payload fails"));
+        assert!(prompt.contains("Codex-style heredoc handling is acceptable only"));
         assert!(prompt.contains("Do not use shell redirection"));
         assert!(prompt.contains("first inspect local usage"));
         assert!(prompt.contains("<cmd> --help"));
@@ -1029,6 +1036,7 @@ mod tests {
         assert!(prompt.contains("Do not use shell 'cat', 'head', or 'tail'"));
         assert!(prompt.contains("Do not append '2>&1', '| tail', '| head'"));
         assert!(prompt.contains("Treat stdout and stderr as separate command result streams"));
+        assert!(prompt.contains("Use PTY tools only for genuinely interactive programs"));
         assert!(prompt.contains("background task or PTY tools"));
         assert!(prompt.contains("list/status/stop tools"));
         assert!(prompt.contains("available GitHub tools or the 'gh' CLI"));

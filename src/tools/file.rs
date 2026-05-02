@@ -467,14 +467,14 @@ impl Tool for WriteFileTool {
         "write_file"
     }
     fn description(&self) -> &str {
-        "Create a new file or intentionally rewrite a whole file. For existing files, read the full file first and prefer apply_patch for partial edits."
+        "Create a new file or intentionally rewrite one whole file. For existing files, read the full file first and prefer apply_patch for partial edits. If a large write fails or appears truncated, retry with direct edit tools or report the tool failure; do not fall back to shell heredocs or redirection to write files."
     }
     fn input_schema(&self) -> Value {
         json!({
             "type": "object",
             "properties": {
                 "path": { "type": "string", "description": "Path to create or fully rewrite." },
-                "content": { "type": "string", "description": "Complete new file contents. Do not use for small edits to existing files." }
+                "content": { "type": "string", "description": "Complete new file contents for exactly this path. Do not use for small edits to existing files or shell heredoc fallbacks." }
             },
             "required": ["path", "content"]
         })

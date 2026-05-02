@@ -11,8 +11,8 @@ use crate::tui::state::{
 };
 
 use super::{
-    activity_status_line, composer_hint, composer_hint_line, footer_summary_text,
-    wrapped_text_cursor_position, wrapped_text_rows,
+    activity_status_line, animated_activity_label, composer_hint, composer_hint_line,
+    footer_summary_text, wrapped_text_cursor_position, wrapped_text_rows,
 };
 
 #[test]
@@ -329,7 +329,7 @@ fn wrapped_text_cursor_can_point_into_the_middle_of_input() {
 }
 
 #[tokio::test]
-async fn activity_status_line_shows_multiple_queued_follow_ups_while_busy() {
+async fn activity_status_line_hides_busy_progress_from_composer_bar() {
     let temp = tempdir().unwrap();
     let mut app = TuiApp::new(ConfigManager {
         path: temp.path().join("config.json"),
@@ -351,8 +351,9 @@ async fn activity_status_line_shows_multiple_queued_follow_ups_while_busy() {
     app.queue_follow_up_message("third follow-up");
 
     let (label, _, detail) = activity_status_line(&app);
-    assert_eq!(label, "Working");
-    assert!(detail.contains("3 queued follow-up"));
+    assert_eq!(label, "");
+    assert_eq!(detail, "");
+    assert_eq!(animated_activity_label(&app, label), "");
 
     if let Some(task) = app.running_task.take() {
         task.handle.abort();
@@ -374,4 +375,19 @@ fn composer_hint_shows_queued_follow_up_when_idle_with_messages() {
         composer_hint(&app),
         "queued follow-up  will submit after current turn"
     );
+}
+
+#[test]
+fn activity_status_line_hides_completed_prompt_notice() {
+    let temp = tempdir().unwrap();
+    let mut app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("build tui app");
+    app.notice = Some("Prompt finished.".into());
+
+    let (label, _, detail) = activity_status_line(&app);
+
+    assert_eq!(label, "Ready");
+    assert_eq!(detail, "waiting for input");
 }
