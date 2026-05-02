@@ -112,13 +112,16 @@ pub async fn fetch_model_context_window(
         req = req.bearer_auth(key.expose_secret());
     }
 
-    let res = req.send().await.ok()?;
+    let res = req.send().await.ok()?.error_for_status().ok()?;
     let body: Value = res.json().await.ok()?;
     let models = body["data"].as_array()?;
 
     for m in models {
         if m["id"].as_str() == Some(model) {
-            return m["context_length"].as_u64().map(|n| n as usize);
+            return m["context_length"]
+                .as_u64()
+                .and_then(|tokens| usize::try_from(tokens).ok())
+                .filter(|tokens| *tokens > 0);
         }
     }
     None
