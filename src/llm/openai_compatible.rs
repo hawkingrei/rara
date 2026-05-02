@@ -1,6 +1,7 @@
 mod codex;
 mod usage;
 
+use std::borrow::Cow;
 use std::time::Duration;
 
 use anyhow::{Result, anyhow};
@@ -37,6 +38,7 @@ pub struct OpenAiCompatibleBackend {
     pub base_url: String,
     pub context_window_override: Option<usize>,
     pub model: String,
+    pub auxiliary_model: Option<String>,
     pub endpoint_kind: OpenAiEndpointKind,
     pub reasoning_effort: Option<String>,
     pub thinking: Option<bool>,
@@ -77,10 +79,18 @@ impl OpenAiCompatibleBackend {
             base_url,
             context_window_override: None,
             model,
+            auxiliary_model: None,
             endpoint_kind,
             reasoning_effort,
             thinking,
         })
+    }
+
+    pub fn with_auxiliary_model(mut self, auxiliary_model: Option<String>) -> Self {
+        self.auxiliary_model = auxiliary_model
+            .map(|model| model.trim().to_string())
+            .filter(|model| !model.is_empty());
+        self
     }
 
     fn endpoint_url(&self, path: &str) -> String {
@@ -344,9 +354,28 @@ impl LlmBackend for OpenAiCompatibleBackend {
             role: "user".to_string(),
             content: json!(instruction),
         });
+        let summary_model = self.summary_model();
+        let summary = self
+            .summarize_with_model(summary_model.as_ref(), &msgs)
+            .await;
+        if summary.is_err() && summary_model.as_ref() != self.model.as_str() {
+            return self.summarize_with_model(self.model.as_str(), &msgs).await;
+        }
+        summary
+    }
+
+    fn context_budget(&self, _messages: &[Message], _tools: &[Value]) -> Option<ContextBudget> {
+        self.context_window_override
+            .map(|w| context_budget_from_window(w))
+            .or_else(|| model_context_budget(self.model.as_str()))
+    }
+}
+
+impl OpenAiCompatibleBackend {
+    async fn summarize_with_model(&self, model: &str, msgs: &[Message]) -> Result<String> {
         let body = build_chat_completion_request_body(
-            &self.model,
-            &msgs,
+            model,
+            msgs,
             &[],
             self.endpoint_kind,
             self.reasoning_effort.as_deref(),
@@ -374,12 +403,38 @@ impl LlmBackend for OpenAiCompatibleBackend {
                 .unwrap_or_default(),
         )
     }
-
-    fn context_budget(&self, _messages: &[Message], _tools: &[Value]) -> Option<ContextBudget> {
-        self.context_window_override
-            .map(|w| context_budget_from_window(w))
-            .or_else(|| model_context_budget(self.model.as_str()))
+    fn summary_model(&self) -> Cow<'_, str> {
+        self.auxiliary_model
+            .as_deref()
+            .map(Cow::Borrowed)
+            .or_else(|| infer_openai_compatible_auxiliary_model(&self.model, self.endpoint_kind))
+            .unwrap_or_else(|| Cow::Borrowed(self.model.as_str()))
     }
+}
+
+pub(crate) fn infer_openai_compatible_auxiliary_model(
+    model: &str,
+    endpoint_kind: OpenAiEndpointKind,
+) -> Option<Cow<'_, str>> {
+    if endpoint_kind != OpenAiEndpointKind::Deepseek {
+        return None;
+    }
+    infer_deepseek_lite_model(model)
+}
+
+fn infer_deepseek_lite_model(model: &str) -> Option<Cow<'_, str>> {
+    let trimmed = model.trim();
+    let lower = trimmed.to_ascii_lowercase();
+    if !lower.contains("deepseek") || lower.contains("lite") {
+        return None;
+    }
+    if lower.contains("v4") && lower.ends_with("-pro") {
+        return trimmed
+            .strip_suffix("-pro")
+            .map(|prefix| format!("{prefix}-lite"))
+            .map(Cow::Owned);
+    }
+    None
 }
 
 pub(super) fn build_chat_completion_request_body(

@@ -10,8 +10,9 @@ use super::ollama::{
 };
 use super::openai_compatible::{
     apply_codex_stream_event, build_chat_completion_request_body, build_codex_responses_request,
-    build_streaming_response_content, is_openai_stream_idle_error, merge_streaming_tool_calls,
-    parse_chat_completion_response, parse_codex_response, to_codex_input_items, to_openai_messages,
+    build_streaming_response_content, infer_openai_compatible_auxiliary_model,
+    is_openai_stream_idle_error, merge_streaming_tool_calls, parse_chat_completion_response,
+    parse_codex_response, to_codex_input_items, to_openai_messages,
     to_openai_messages_for_endpoint,
 };
 use super::shared::{
@@ -413,6 +414,23 @@ fn deepseek_reasoner_defaults_preserve_standard_body() {
         body["tools"]
             .as_array()
             .is_some_and(|tools| tools.len() == 1)
+    );
+}
+
+#[test]
+fn deepseek_v4_pro_infers_lite_auxiliary_model() {
+    assert_eq!(
+        infer_openai_compatible_auxiliary_model("deepseek-v4-pro", OpenAiEndpointKind::Deepseek)
+            .as_deref(),
+        Some("deepseek-v4-lite")
+    );
+    assert_eq!(
+        infer_openai_compatible_auxiliary_model("deepseek-v4-lite", OpenAiEndpointKind::Deepseek),
+        None
+    );
+    assert_eq!(
+        infer_openai_compatible_auxiliary_model("deepseek-v4-pro", OpenAiEndpointKind::Custom),
+        None
     );
 }
 

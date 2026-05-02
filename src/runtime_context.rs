@@ -149,7 +149,8 @@ pub(crate) async fn build_backend_with_progress(
                 kind,
                 config.reasoning_effort.clone(),
                 config.thinking,
-            )?;
+            )?
+            .with_auxiliary_model(config.auxiliary_model.clone());
             if backend.context_budget(&[], &[]).is_none() {
                 backend.context_window_override = fetch_model_context_window(
                     &backend.client,

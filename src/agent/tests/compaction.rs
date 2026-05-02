@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use serde_json::json;
 
 use crate::agent::{Agent, AgentEvent, CompactState, ContentBlock, Message};
-use crate::llm::{LlmBackend, LlmResponse, TokenUsage};
+use crate::llm::{ContextBudget, LlmBackend, LlmResponse, TokenUsage};
 use crate::session::SessionManager;
 use crate::tool::ToolManager;
 use crate::vectordb::VectorDB;
@@ -14,6 +14,8 @@ use crate::workspace::WorkspaceMemory;
 use super::support::SequencedBackend;
 
 struct SlowSummarizeBackend;
+
+struct TinyBudgetSummaryBackend;
 
 #[async_trait]
 impl LlmBackend for SlowSummarizeBackend {
@@ -38,6 +40,43 @@ impl LlmBackend for SlowSummarizeBackend {
     async fn summarize(&self, _messages: &[Message], _instruction: &str) -> Result<String> {
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
         Ok("slow summary".to_string())
+    }
+}
+
+#[async_trait]
+impl LlmBackend for TinyBudgetSummaryBackend {
+    async fn ask(
+        &self,
+        _messages: &[Message],
+        _tools: &[serde_json::Value],
+    ) -> Result<LlmResponse> {
+        Ok(LlmResponse {
+            content: vec![ContentBlock::Text {
+                text: "query completed".to_string(),
+            }],
+            stop_reason: Some("end_turn".to_string()),
+            usage: Some(TokenUsage::default()),
+        })
+    }
+
+    async fn embed(&self, _text: &str) -> Result<Vec<f32>> {
+        Ok(vec![0.0; 8])
+    }
+
+    async fn summarize(&self, _messages: &[Message], _instruction: &str) -> Result<String> {
+        Ok("summary".to_string())
+    }
+
+    fn context_budget(
+        &self,
+        _messages: &[Message],
+        _tools: &[serde_json::Value],
+    ) -> Option<ContextBudget> {
+        Some(ContextBudget {
+            context_window_tokens: 16,
+            reserved_output_tokens: 4,
+            compact_threshold_tokens: 1,
+        })
     }
 }
 
@@ -338,4 +377,70 @@ async fn manual_compact_prefers_latest_excerpt_and_tracks_apply_patch() {
     assert!(excerpts.contains("new snippet"));
     assert!(!excerpts.contains("old snippet"));
     assert!(excerpts.contains("lines 10-12"));
+}
+
+#[tokio::test]
+async fn manual_compact_preserves_recent_api_round_pair() {
+    let backend = Arc::new(TinyBudgetSummaryBackend);
+    let mut agent = Agent::new(
+        ToolManager::new(),
+        backend,
+        Arc::new(VectorDB::new("data/lancedb")),
+        Arc::new(SessionManager::new().expect("session manager")),
+        Arc::new(WorkspaceMemory::new().expect("workspace memory")),
+    );
+    agent.history = vec![
+        Message {
+            role: "user".to_string(),
+            content: json!("inspect old state"),
+        },
+        Message {
+            role: "assistant".to_string(),
+            content: json!([
+                {"type":"tool_use","id":"tool-old","name":"read_file","input":{"path":"src/old.rs"}}
+            ]),
+        },
+        Message {
+            role: "user".to_string(),
+            content: json!([
+                {"type":"tool_result","tool_use_id":"tool-old","content":"old output"}
+            ]),
+        },
+        Message {
+            role: "assistant".to_string(),
+            content: json!([
+                {"type":"tool_use","id":"tool-recent","name":"read_file","input":{"path":"src/recent.rs"}}
+            ]),
+        },
+        Message {
+            role: "user".to_string(),
+            content: json!([
+                {"type":"tool_result","tool_use_id":"tool-recent","content":"recent output"}
+            ]),
+        },
+    ];
+
+    let compacted = agent
+        .compact_now_with_reporter(|_| {})
+        .await
+        .expect("compact should succeed");
+
+    assert!(compacted);
+    let recent_tool_use_index = agent
+        .history
+        .iter()
+        .position(|message| message.content.to_string().contains("tool-recent"))
+        .expect("recent tool use should be retained");
+    assert_eq!(agent.history[recent_tool_use_index].role, "assistant");
+    assert_eq!(
+        agent.history[recent_tool_use_index + 1].role,
+        "user",
+        "tool result should stay with the retained assistant API round"
+    );
+    assert!(
+        agent.history[recent_tool_use_index + 1]
+            .content
+            .to_string()
+            .contains("tool-recent")
+    );
 }

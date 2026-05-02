@@ -29,6 +29,8 @@ pub struct ProviderConfigState {
     pub api_key: Option<SecretString>,
     pub base_url: Option<String>,
     pub model: Option<String>,
+    #[serde(default, alias = "utility_model")]
+    pub auxiliary_model: Option<String>,
     pub reasoning_effort: Option<String>,
     pub reasoning_summary: Option<String>,
     pub revision: Option<String>,
@@ -112,6 +114,8 @@ pub struct OpenAiEndpointProfile {
     pub api_key: Option<SecretString>,
     pub base_url: Option<String>,
     pub model: Option<String>,
+    #[serde(default, alias = "utility_model")]
+    pub auxiliary_model: Option<String>,
     pub reasoning_effort: Option<String>,
     pub reasoning_summary: Option<String>,
     pub revision: Option<String>,
@@ -154,6 +158,8 @@ pub struct RaraConfig {
     pub runtime_api_key: Option<SecretString>,
     pub base_url: Option<String>,
     pub model: Option<String>,
+    #[serde(default, alias = "utility_model")]
+    pub auxiliary_model: Option<String>,
     pub reasoning_effort: Option<String>,
     pub reasoning_summary: Option<String>,
     pub revision: Option<String>,
@@ -301,6 +307,11 @@ impl RaraConfig {
         self.sync_active_provider_state();
     }
 
+    pub fn set_auxiliary_model(&mut self, value: Option<String>) {
+        self.auxiliary_model = normalize_optional_string(value);
+        self.sync_active_provider_state();
+    }
+
     pub fn set_reasoning_effort(&mut self, value: Option<String>) {
         self.reasoning_effort = normalize_optional_string(value);
         self.sync_active_provider_state();
@@ -367,6 +378,14 @@ impl RaraConfig {
                     .and_then(|state| state.model.as_deref())
                     .or_else(|| profile.and_then(|profile| profile.model.as_deref())),
                 self.model.as_deref(),
+                None,
+                None,
+            ),
+            auxiliary_model: resolve_provider_value(
+                provider_state
+                    .and_then(|state| state.auxiliary_model.as_deref())
+                    .or_else(|| profile.and_then(|profile| profile.auxiliary_model.as_deref())),
+                self.auxiliary_model.as_deref(),
                 None,
                 None,
             ),
@@ -506,6 +525,7 @@ impl RaraConfig {
             api_key: self.api_key.clone(),
             base_url: self.base_url.clone(),
             model: self.model.clone(),
+            auxiliary_model: self.auxiliary_model.clone(),
             reasoning_effort: self.reasoning_effort.clone(),
             reasoning_summary: self.reasoning_summary.clone(),
             revision: self.revision.clone(),
@@ -519,6 +539,7 @@ impl RaraConfig {
         self.api_key = state.api_key;
         self.base_url = state.base_url;
         self.model = state.model;
+        self.auxiliary_model = state.auxiliary_model;
         self.reasoning_effort = state.reasoning_effort;
         self.reasoning_summary = state.reasoning_summary;
         self.revision = state.revision;
@@ -531,6 +552,7 @@ impl RaraConfig {
         self.api_key = profile.api_key;
         self.base_url = profile.base_url;
         self.model = profile.model;
+        self.auxiliary_model = profile.auxiliary_model;
         self.reasoning_effort = profile.reasoning_effort;
         self.reasoning_summary = profile.reasoning_summary;
         self.revision = profile.revision;
@@ -543,6 +565,7 @@ impl RaraConfig {
         self.api_key = None;
         self.base_url = None;
         self.model = None;
+        self.auxiliary_model = None;
         self.reasoning_effort = None;
         self.reasoning_summary = Some(DEFAULT_REASONING_SUMMARY.to_string());
         self.revision = None;
@@ -567,6 +590,7 @@ impl RaraConfig {
         profile.api_key = self.api_key.clone();
         profile.base_url = self.base_url.clone();
         profile.model = self.model.clone();
+        profile.auxiliary_model = self.auxiliary_model.clone();
         profile.reasoning_effort = self.reasoning_effort.clone();
         profile.reasoning_summary = self.reasoning_summary.clone();
         profile.revision = self.revision.clone();
@@ -595,6 +619,7 @@ impl RaraConfig {
             api_key: None,
             base_url: Some(kind.default_base_url().to_string()),
             model: Some(kind.default_model().to_string()),
+            auxiliary_model: None,
             reasoning_effort: None,
             reasoning_summary: Some(DEFAULT_REASONING_SUMMARY.to_string()),
             revision: None,
@@ -636,6 +661,7 @@ impl RaraConfig {
                             .or_else(|| Some(kind.default_base_url().to_string())),
                         model: normalize_optional_string(state.model)
                             .or_else(|| Some(kind.default_model().to_string())),
+                        auxiliary_model: normalize_optional_string(state.auxiliary_model),
                         reasoning_effort: normalize_optional_string(state.reasoning_effort),
                         reasoning_summary: normalize_reasoning_summary(state.reasoning_summary)
                             .or_else(|| Some(DEFAULT_REASONING_SUMMARY.to_string())),
@@ -680,6 +706,7 @@ impl RaraConfig {
                             .or_else(|| Some(target_kind.default_base_url().to_string())),
                         model: normalize_optional_string(self.model.clone())
                             .or_else(|| Some(target_kind.default_model().to_string())),
+                        auxiliary_model: normalize_optional_string(self.auxiliary_model.clone()),
                         reasoning_effort: normalize_optional_string(self.reasoning_effort.clone()),
                         reasoning_summary: normalize_reasoning_summary(
                             self.reasoning_summary.clone(),
@@ -986,6 +1013,49 @@ mod tests {
     }
 
     #[test]
+    fn auxiliary_model_reads_legacy_utility_model_key() {
+        let config: RaraConfig = serde_json::from_str(
+            r#"{
+                "provider": "deepseek",
+                "utility_model": "deepseek-v4-lite",
+                "provider_states": {
+                    "codex": {
+                        "utility_model": "gpt-5.4-mini"
+                    }
+                },
+                "openai_profiles": {
+                    "deepseek-default": {
+                        "id": "deepseek-default",
+                        "label": "DeepSeek",
+                        "kind": "deepseek",
+                        "utility_model": "deepseek-v4-lite"
+                    }
+                }
+            }"#,
+        )
+        .expect("deserialize config");
+
+        assert_eq!(config.auxiliary_model.as_deref(), Some("deepseek-v4-lite"));
+        assert_eq!(
+            config
+                .provider_states
+                .get("codex")
+                .and_then(|state| state.auxiliary_model.as_deref()),
+            Some("gpt-5.4-mini")
+        );
+        assert_eq!(
+            config
+                .openai_profiles
+                .get("deepseek-default")
+                .and_then(|profile| profile.auxiliary_model.as_deref()),
+            Some("deepseek-v4-lite")
+        );
+        let json = serde_json::to_string(&config).expect("serialize config");
+        assert!(json.contains("auxiliary_model"));
+        assert!(!json.contains("utility_model"));
+    }
+
+    #[test]
     fn provider_switch_restores_provider_specific_settings() {
         let mut config = RaraConfig {
             provider: "codex".to_string(),
@@ -993,6 +1063,7 @@ mod tests {
         };
         config.set_api_key("sk-codex");
         config.set_model(Some("codex".to_string()));
+        config.set_auxiliary_model(Some("gpt-5.4-mini".to_string()));
         config.set_reasoning_effort(Some("high".to_string()));
         config.set_reasoning_summary(Some("detailed".to_string()));
         config.set_base_url(Some("http://localhost:8080".to_string()));
@@ -1010,6 +1081,7 @@ mod tests {
         config.set_provider("codex");
         assert_eq!(config.api_key(), Some("sk-codex"));
         assert_eq!(config.model.as_deref(), Some("codex"));
+        assert_eq!(config.auxiliary_model.as_deref(), Some("gpt-5.4-mini"));
         assert_eq!(config.reasoning_effort.as_deref(), Some("high"));
         assert_eq!(config.reasoning_summary.as_deref(), Some("detailed"));
         assert_eq!(config.base_url.as_deref(), Some("http://localhost:8080"));
@@ -1017,6 +1089,7 @@ mod tests {
 
         config.set_provider("ollama");
         assert_eq!(config.model.as_deref(), Some("qwen3"));
+        assert!(config.auxiliary_model.is_none());
         assert_eq!(config.reasoning_effort, None);
         assert_eq!(
             config.reasoning_summary.as_deref(),
