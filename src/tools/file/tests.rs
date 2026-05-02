@@ -460,6 +460,12 @@ fn file_tool_descriptions_encode_safe_edit_contract() {
     );
     assert!(write_tool.description().contains("large write fails"));
     assert!(write_tool.description().contains("shell heredocs"));
+    assert!(
+        write_tool
+            .input_schema()
+            .to_string()
+            .contains("shell heredoc fallbacks")
+    );
     assert!(replace_tool.description().contains("exact, unique string"));
     assert!(
         replace_tool

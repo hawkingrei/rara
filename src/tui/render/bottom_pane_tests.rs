@@ -11,8 +11,8 @@ use crate::tui::state::{
 };
 
 use super::{
-    activity_status_line, composer_hint, composer_hint_line, footer_summary_text,
-    wrapped_text_cursor_position, wrapped_text_rows,
+    activity_status_line, animated_activity_label, composer_hint, composer_hint_line,
+    footer_summary_text, wrapped_text_cursor_position, wrapped_text_rows,
 };
 
 #[test]
@@ -353,6 +353,7 @@ async fn activity_status_line_hides_busy_progress_from_composer_bar() {
     let (label, _, detail) = activity_status_line(&app);
     assert_eq!(label, "");
     assert_eq!(detail, "");
+    assert_eq!(animated_activity_label(&app, label), "");
 
     if let Some(task) = app.running_task.take() {
         task.handle.abort();

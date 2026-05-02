@@ -178,6 +178,9 @@ fn activity_status_line(app: &TuiApp) -> (&'static str, Color, String) {
 }
 
 fn animated_activity_label(app: &TuiApp, label: &str) -> String {
+    if label.is_empty() {
+        return String::new();
+    }
     let Some(task) = app.running_task.as_ref() else {
         return label.to_string();
     };

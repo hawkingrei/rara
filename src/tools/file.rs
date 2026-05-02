@@ -474,7 +474,7 @@ impl Tool for WriteFileTool {
             "type": "object",
             "properties": {
                 "path": { "type": "string", "description": "Path to create or fully rewrite." },
-                "content": { "type": "string", "description": "Complete new file contents for exactly this path. Do not use for small edits to existing files or shell-heredoc fallbacks." }
+                "content": { "type": "string", "description": "Complete new file contents for exactly this path. Do not use for small edits to existing files or shell heredoc fallbacks." }
             },
             "required": ["path", "content"]
         })
