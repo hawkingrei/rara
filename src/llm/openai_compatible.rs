@@ -22,6 +22,9 @@ use super::shared::{
 
 use self::usage::parse_openai_token_usage;
 
+const STREAM_IDLE_RETRY_ATTEMPTS: usize = 1;
+const STREAM_IDLE_ERROR_FRAGMENT: &str = "stream produced no events";
+
 #[cfg(test)]
 pub(crate) use self::codex::{
     apply_codex_stream_event, build_codex_responses_request, build_codex_stream_response,
@@ -90,87 +93,8 @@ impl OpenAiCompatibleBackend {
         };
         format!("{normalized_base}/{path}")
     }
-}
 
-/// Fetch the model's context window size from GET /v1/models.
-/// Falls back to None if the API call fails or the model is not found.
-pub async fn fetch_model_context_window(
-    client: &reqwest::Client,
-    base_url: &str,
-    api_key: Option<&SecretString>,
-    model: &str,
-) -> Option<usize> {
-    let base = base_url.trim_end_matches('/');
-    let url = if base.ends_with("/v1") {
-        format!("{base}/models")
-    } else {
-        format!("{base}/v1/models")
-    };
-
-    let mut req = client.get(&url).timeout(Duration::from_secs(5));
-    if let Some(key) = api_key {
-        req = req.bearer_auth(key.expose_secret());
-    }
-
-    let res = req.send().await.ok()?.error_for_status().ok()?;
-    let body: Value = res.json().await.ok()?;
-    let models = body["data"].as_array()?;
-
-    for m in models {
-        if m["id"].as_str() == Some(model) {
-            return m["context_length"]
-                .as_u64()
-                .and_then(|tokens| usize::try_from(tokens).ok())
-                .filter(|tokens| *tokens > 0);
-        }
-    }
-    None
-}
-
-#[async_trait]
-impl LlmBackend for OpenAiCompatibleBackend {
-    async fn ask(&self, messages: &[Message], tools: &[Value]) -> Result<LlmResponse> {
-        self.ask_with_context(messages, tools, LlmTurnMetadata::default())
-            .await
-    }
-
-    async fn ask_with_context(
-        &self,
-        messages: &[Message],
-        tools: &[Value],
-        metadata: LlmTurnMetadata,
-    ) -> Result<LlmResponse> {
-        let body = build_chat_completion_request_body(
-            &self.model,
-            messages,
-            tools,
-            self.endpoint_kind,
-            self.reasoning_effort.as_deref(),
-            self.thinking,
-            metadata.clone(),
-        );
-
-        let completions_url = self.endpoint_url("chat/completions");
-        let mut request = self.client.post(&completions_url);
-        if let Some(api_key) = self.api_key.as_ref().map(SecretString::expose_secret) {
-            if !api_key.is_empty() {
-                request = request.header("Authorization", format!("Bearer {api_key}"));
-            }
-        }
-        let res = request.json(&body).send().await?;
-
-        if !res.status().is_success() {
-            return Err(anyhow!(
-                "API Error at {}: {}",
-                sanitize_url_for_display(&completions_url),
-                redact_secrets(res.text().await?)
-            ));
-        }
-        let resp_json: Value = res.json().await?;
-        parse_chat_completion_response(&resp_json, self.endpoint_kind)
-    }
-
-    async fn ask_streaming_with_context(
+    async fn ask_streaming_once(
         &self,
         messages: &[Message],
         tools: &[Value],
@@ -273,6 +197,118 @@ impl LlmBackend for OpenAiCompatibleBackend {
             stop_reason,
             usage: usage.as_ref().map(parse_openai_token_usage),
         })
+    }
+}
+
+/// Fetch the model's context window size from GET /v1/models.
+/// Falls back to None if the API call fails or the model is not found.
+pub async fn fetch_model_context_window(
+    client: &reqwest::Client,
+    base_url: &str,
+    api_key: Option<&SecretString>,
+    model: &str,
+) -> Option<usize> {
+    let base = base_url.trim_end_matches('/');
+    let url = if base.ends_with("/v1") {
+        format!("{base}/models")
+    } else {
+        format!("{base}/v1/models")
+    };
+
+    let mut req = client.get(&url).timeout(Duration::from_secs(5));
+    if let Some(key) = api_key {
+        req = req.bearer_auth(key.expose_secret());
+    }
+
+    let res = req.send().await.ok()?.error_for_status().ok()?;
+    let body: Value = res.json().await.ok()?;
+    let models = body["data"].as_array()?;
+
+    for m in models {
+        if m["id"].as_str() == Some(model) {
+            return m["context_length"]
+                .as_u64()
+                .and_then(|tokens| usize::try_from(tokens).ok())
+                .filter(|tokens| *tokens > 0);
+        }
+    }
+    None
+}
+
+#[async_trait]
+impl LlmBackend for OpenAiCompatibleBackend {
+    async fn ask(&self, messages: &[Message], tools: &[Value]) -> Result<LlmResponse> {
+        self.ask_with_context(messages, tools, LlmTurnMetadata::default())
+            .await
+    }
+
+    async fn ask_with_context(
+        &self,
+        messages: &[Message],
+        tools: &[Value],
+        metadata: LlmTurnMetadata,
+    ) -> Result<LlmResponse> {
+        let body = build_chat_completion_request_body(
+            &self.model,
+            messages,
+            tools,
+            self.endpoint_kind,
+            self.reasoning_effort.as_deref(),
+            self.thinking,
+            metadata.clone(),
+        );
+
+        let completions_url = self.endpoint_url("chat/completions");
+        let mut request = self.client.post(&completions_url);
+        if let Some(api_key) = self.api_key.as_ref().map(SecretString::expose_secret) {
+            if !api_key.is_empty() {
+                request = request.header("Authorization", format!("Bearer {api_key}"));
+            }
+        }
+        let res = request.json(&body).send().await?;
+
+        if !res.status().is_success() {
+            return Err(anyhow!(
+                "API Error at {}: {}",
+                sanitize_url_for_display(&completions_url),
+                redact_secrets(res.text().await?)
+            ));
+        }
+        let resp_json: Value = res.json().await?;
+        parse_chat_completion_response(&resp_json, self.endpoint_kind)
+    }
+
+    async fn ask_streaming_with_context(
+        &self,
+        messages: &[Message],
+        tools: &[Value],
+        metadata: LlmTurnMetadata,
+        on_event: &mut (dyn FnMut(LlmStreamEvent) + Send),
+    ) -> Result<LlmResponse> {
+        let mut attempts = 0usize;
+        loop {
+            let mut emitted_delta = false;
+            let mut relay_event = |event: LlmStreamEvent| {
+                emitted_delta = true;
+                on_event(event);
+            };
+            let result = self
+                .ask_streaming_once(messages, tools, metadata.clone(), &mut relay_event)
+                .await;
+            match result {
+                Ok(response) => return Ok(response),
+                Err(error)
+                    if attempts < STREAM_IDLE_RETRY_ATTEMPTS
+                        && !emitted_delta
+                        && is_openai_stream_idle_error(&error) =>
+                {
+                    attempts += 1;
+                    metadata.ensure_not_cancelled()?;
+                    continue;
+                }
+                Err(error) => return Err(error),
+            }
+        }
     }
 
     async fn embed(&self, text: &str) -> Result<Vec<f32>> {
@@ -537,6 +573,12 @@ fn render_legacy_openai_content(content: &Value) -> String {
         Value::Null => String::new(),
         other => other.to_string(),
     }
+}
+
+pub(super) fn is_openai_stream_idle_error(error: &anyhow::Error) -> bool {
+    error
+        .chain()
+        .any(|cause| cause.to_string().contains(STREAM_IDLE_ERROR_FRAGMENT))
 }
 
 fn apply_deepseek_thinking_options(
