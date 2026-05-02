@@ -1104,6 +1104,51 @@ mod tests {
     }
 
     #[test]
+    fn kimi_profile_can_use_kimi_api_key_from_environment_without_persisting_it() {
+        let mut config = RaraConfig::default();
+        config.select_openai_profile(
+            OpenAiEndpointKind::Kimi.default_profile_id(),
+            OpenAiEndpointKind::Kimi.label(),
+            OpenAiEndpointKind::Kimi,
+        );
+
+        config.apply_provider_environment_defaults_from(|key| {
+            (key == "KIMI_API_KEY").then(|| "sk-kimi".to_string())
+        });
+
+        assert_eq!(config.api_key(), Some("sk-kimi"));
+        assert_eq!(
+            config.effective_provider_surface().api_key.source,
+            ConfigValueSource::Environment
+        );
+        let json = serde_json::to_string(&config).expect("serialize config");
+        assert!(!json.contains("sk-kimi"));
+        assert!(!json.contains("runtime_api_key"));
+    }
+
+    #[test]
+    fn moonshot_api_key_takes_precedence_over_kimi_api_key() {
+        let mut config = RaraConfig::default();
+        config.select_openai_profile(
+            OpenAiEndpointKind::Kimi.default_profile_id(),
+            OpenAiEndpointKind::Kimi.label(),
+            OpenAiEndpointKind::Kimi,
+        );
+
+        config.apply_provider_environment_defaults_from(|key| match key {
+            "MOONSHOT_API_KEY" => Some("sk-moonshot".to_string()),
+            "KIMI_API_KEY" => Some("sk-kimi".to_string()),
+            _ => None,
+        });
+
+        assert_eq!(config.api_key(), Some("sk-moonshot"));
+        assert_eq!(
+            config.effective_provider_surface().api_key.source,
+            ConfigValueSource::Environment
+        );
+    }
+
+    #[test]
     fn explicit_kimi_api_key_overrides_environment_default() {
         let mut config = RaraConfig::default();
         config.select_openai_profile(

@@ -78,9 +78,10 @@ Selecting the Kimi profile sets:
 
 Kimi uses the shared OpenAI-compatible chat-completions backend. The runtime
 should accept a saved profile API key, `RARA_API_KEY`, or the provider-native
-`MOONSHOT_API_KEY` environment variable. `MOONSHOT_API_KEY` is a runtime-only
-credential source and must not be serialized back into `config.json` unless the
-user explicitly saves it through the normal API-key editor.
+`MOONSHOT_API_KEY` / `KIMI_API_KEY` environment variables. These provider-native
+environment variables are runtime-only credential sources and must not be
+serialized back into `config.json` unless the user explicitly saves them through
+the normal API-key editor.
 
 For thinking-capable DeepSeek models, RARA sends DeepSeek's documented
 thinking-mode controls on chat-completions requests:
@@ -137,7 +138,7 @@ The model-name editor is a separate overlay so the user can update the remote mo
 - the current `reasoning_summary`;
 - whether each value came from built-in defaults, provider-scoped state, or legacy global config.
 - whether the API key came from a runtime environment variable such as
-  `MOONSHOT_API_KEY`.
+  `MOONSHOT_API_KEY` or `KIMI_API_KEY`.
 - cumulative provider usage cache counters, when the response includes them:
   `cache_hit_tokens`, `cache_miss_tokens`, and
   `cache_hit_rate = hit / (hit + miss)`.

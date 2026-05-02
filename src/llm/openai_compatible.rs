@@ -1,6 +1,8 @@
 mod codex;
 mod usage;
 
+use std::time::Duration;
+
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use eventsource_stream::Eventsource;
@@ -105,7 +107,7 @@ pub async fn fetch_model_context_window(
         format!("{base}/v1/models")
     };
 
-    let mut req = client.get(&url);
+    let mut req = client.get(&url).timeout(Duration::from_secs(5));
     if let Some(key) = api_key {
         req = req.bearer_auth(key.expose_secret());
     }

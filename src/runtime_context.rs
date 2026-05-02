@@ -150,13 +150,15 @@ pub(crate) async fn build_backend_with_progress(
                 config.reasoning_effort.clone(),
                 config.thinking,
             )?;
-            backend.context_window_override = fetch_model_context_window(
-                &backend.client,
-                &base_url,
-                config.api_key_secret().as_ref(),
-                &model,
-            )
-            .await;
+            if backend.context_budget(&[], &[]).is_none() {
+                backend.context_window_override = fetch_model_context_window(
+                    &backend.client,
+                    &base_url,
+                    backend.api_key.as_ref(),
+                    &model,
+                )
+                .await;
+            }
             Ok(Box::new(backend))
         }
         "ollama" | "ollama-native" => Ok(Box::new(OllamaBackend::new(
