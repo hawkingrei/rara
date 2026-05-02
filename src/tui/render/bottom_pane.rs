@@ -34,16 +34,7 @@ pub(crate) fn desired_viewport_height(app: &TuiApp, width: u16, rows: u16) -> u1
         return rows.max(1);
     }
 
-    let history_reserve = if rows >= 18 {
-        6
-    } else if rows >= 12 {
-        4
-    } else {
-        2
-    };
-
-    rows.saturating_sub(history_reserve)
-        .max(bottom_pane_height)
+    rows.saturating_sub(bottom_pane_height)
         .max(1)
 }
 
