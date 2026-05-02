@@ -34,8 +34,7 @@ pub(crate) fn desired_viewport_height(app: &TuiApp, width: u16, rows: u16) -> u1
         return rows.max(1);
     }
 
-    rows.saturating_sub(bottom_pane_height)
-        .max(1)
+    rows.saturating_sub(bottom_pane_height).max(1)
 }
 
 pub(crate) fn desired_bottom_pane_height(app: &TuiApp, width: u16, rows: u16) -> u16 {

@@ -1,12 +1,12 @@
 mod bottom_pane;
 pub(crate) mod cells;
 pub(crate) mod diff;
+mod helpers;
 mod history_pipeline;
 mod overlay;
 #[cfg(test)]
 mod tests;
 mod viewport;
-mod helpers;
 
 pub(crate) use helpers::*;
 
