@@ -247,6 +247,25 @@ The first implementation should record and display hook declarations without
 executing them. Later executable hooks must still go through RARA-owned
 permission, sandbox, and failure handling.
 
+Hooks that affect prompt context must follow the context-architecture injection
+contract. A hook may declare or produce context candidates, cache invalidations,
+post-tool deltas, or compaction retain hints, but it must not concatenate raw
+text into the final prompt. Final injection happens only during model request
+assembly after normal context selection, ordering, deduplication, budget checks,
+and `/context` visibility have been applied.
+
+Lifecycle timing is part of the safety boundary:
+
+- `SessionStart` context that must affect the first request has to finish before
+  that first request is assembled;
+- `UserPromptSubmit` may attach metadata or candidates, but must not rewrite the
+  original user text;
+- `PostToolUse` output is next-turn context unless the runtime explicitly
+  starts a new assembly step;
+- `PreCompact` output is advisory retain metadata for the compaction lifecycle;
+- `Stop` hooks must be bounded and should not run on prompt-too-long or API
+  error paths where hook retry could create a loop.
+
 ### Approval and Permission Bridge
 
 External applications may display or relay approval decisions, but RARA remains

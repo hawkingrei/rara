@@ -24,6 +24,27 @@ The transcript should move toward Codex/Claude-style tool visibility:
   - created / updated / deleted / moved files;
   - a short change preview.
 - `write_file` and `replace` must render file-aware summaries instead of generic action labels.
+- `write_file` follows the Claude-style Write/Edit split: use it for new files
+  or intentional full-file rewrites, and prefer diff-shaped edit tools for
+  modifications to existing files. Claude's own tool guidance says Write
+  overwrites existing files, existing files should be read first in read-gated
+  environments, and Edit is preferred for modifying existing files because it
+  sends only the diff.
+- Shell file-writing fallbacks should be treated as a different and riskier
+  path. Claude's Bash/PowerShell guidance routes file writes through Write
+  rather than `echo >`, `cat <<EOF`, `Set-Content`, or `Out-File`, and routes
+  file edits through Edit rather than `sed` or `awk`. RARA should therefore not
+  let a failed or oversized `write_file` call silently degrade into PTY,
+  heredoc, redirection, `sed`, `perl`, or script-based file edits when direct
+  edit tools or `apply_patch` can express the change.
+- Codex uses `apply_patch` as the primary reviewable edit surface. Its heredoc
+  support is an `apply_patch` transport shape, not a general recommendation to
+  overwrite arbitrary files through shell heredocs.
+- For large generated or rewritten files, the model-facing rule is to keep the
+  write scoped to the target file, inspect the actual tool result, and verify
+  with a direct read, diff, or focused check when persistence is uncertain.
+  Large-write failure is a tool/result problem to diagnose, not permission to
+  batch multiple shell writes into one opaque command.
 - `replace` is an exact-match edit tool. When file read-state tracking is
   enabled, it still requires the file to have been read at least once, but it may
   proceed after a partial read because the edit re-reads the current file and
@@ -157,8 +178,10 @@ The TUI should keep input state, display data, and visual cells separate:
   thing: pending interaction, queued follow-up, running command, completed
   command, thinking group, or message text.
 - The bottom pane owns composer text, cursor placement, and one-line hints. It
-  should not render durable transcript status, approval options, or queued
-  follow-up bodies.
+  should not render durable transcript status, approval options, queued
+  follow-up bodies, or long-lived query progress text such as `Working` /
+  `Sending prompt to model`. Runtime progress belongs in transcript/status
+  events where it can scroll with the turn and remain ordered with tool output.
 - Active-turn composition owns ordering. Pending interactions must be placed
   before queued follow-up status so approval options remain visible. Queued
   status should be appended near the newest active cell instead of being

@@ -329,7 +329,7 @@ fn wrapped_text_cursor_can_point_into_the_middle_of_input() {
 }
 
 #[tokio::test]
-async fn activity_status_line_shows_multiple_queued_follow_ups_while_busy() {
+async fn activity_status_line_hides_busy_progress_from_composer_bar() {
     let temp = tempdir().unwrap();
     let mut app = TuiApp::new(ConfigManager {
         path: temp.path().join("config.json"),
@@ -351,8 +351,8 @@ async fn activity_status_line_shows_multiple_queued_follow_ups_while_busy() {
     app.queue_follow_up_message("third follow-up");
 
     let (label, _, detail) = activity_status_line(&app);
-    assert_eq!(label, "Working");
-    assert!(detail.contains("3 queued follow-up"));
+    assert_eq!(label, "");
+    assert_eq!(detail, "");
 
     if let Some(task) = app.running_task.take() {
         task.handle.abort();
