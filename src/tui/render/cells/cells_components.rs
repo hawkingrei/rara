@@ -83,42 +83,50 @@ impl HistoryCell for SummaryCell {
         lines
     }
 }
-
-pub(super) struct ExploredCell {
-    inner: SummaryCell,
-}
-
-impl ExploredCell {
-    pub(super) fn new(summary: impl Into<String>) -> Self {
-        Self {
-            inner: SummaryCell::new("Explored", PHASE_EXPLORED, summary),
+macro_rules! summary_cell {
+    ($name:ident, $title:expr, $color:expr) => {
+        pub(super) struct $name {
+            inner: SummaryCell,
         }
-    }
-}
-
-impl HistoryCell for ExploredCell {
-    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        self.inner.display_lines(width)
-    }
-}
-
-pub(super) struct RanCell {
-    inner: SummaryCell,
-}
-
-impl RanCell {
-    pub(super) fn new(summary: impl Into<String>) -> Self {
-        Self {
-            inner: SummaryCell::new("Ran", PHASE_RAN, summary),
+        impl $name {
+            pub(super) fn new(summary: impl Into<String>) -> Self {
+                Self {
+                    inner: SummaryCell::new($title, $color, summary),
+                }
+            }
         }
-    }
+        impl HistoryCell for $name {
+            fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+                self.inner.display_lines(width)
+            }
+        }
+    };
+    ($name:ident, $active_title:expr, $active_color:expr, $done_title:expr, $done_color:expr) => {
+        pub(super) struct $name {
+            inner: SummaryCell,
+        }
+        impl $name {
+            pub(super) fn new(summary: impl Into<String>, active: bool) -> Self {
+                let (title, color) = if active {
+                    ($active_title, $active_color)
+                } else {
+                    ($done_title, $done_color)
+                };
+                Self {
+                    inner: SummaryCell::new(title, color, summary),
+                }
+            }
+        }
+        impl HistoryCell for $name {
+            fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+                self.inner.display_lines(width)
+            }
+        }
+    };
 }
 
-impl HistoryCell for RanCell {
-    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        self.inner.display_lines(width)
-    }
-}
+summary_cell!(ExploredCell, "Explored", PHASE_EXPLORED);
+summary_cell!(RanCell, "Ran", PHASE_RAN);
 
 pub(super) struct PlanSummaryCell {
     steps: Vec<(String, String)>,
@@ -137,74 +145,21 @@ impl HistoryCell for PlanSummaryCell {
     }
 }
 
-pub(super) struct PlanningCell {
-    inner: SummaryCell,
-}
-
-impl PlanningCell {
-    pub(super) fn new(summary: impl Into<String>, active: bool) -> Self {
-        let (title, color) = if active {
-            ("Planning", PHASE_PLANNING)
-        } else {
-            ("Planned", PHASE_PLANNING)
-        };
-        Self {
-            inner: SummaryCell::new(title, color, summary),
-        }
-    }
-}
-
-impl HistoryCell for PlanningCell {
-    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        self.inner.display_lines(width)
-    }
-}
-
-pub(super) struct ExploringCell {
-    inner: SummaryCell,
-}
-
-impl ExploringCell {
-    pub(super) fn new(summary: impl Into<String>, active: bool) -> Self {
-        let (title, color) = if active {
-            ("Exploring", PHASE_EXPLORING)
-        } else {
-            ("Explored", PHASE_EXPLORED)
-        };
-        Self {
-            inner: SummaryCell::new(title, color, summary),
-        }
-    }
-}
-
-impl HistoryCell for ExploringCell {
-    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        self.inner.display_lines(width)
-    }
-}
-
-pub(super) struct RunningCell {
-    inner: SummaryCell,
-}
-
-impl RunningCell {
-    pub(super) fn new(summary: impl Into<String>, active: bool) -> Self {
-        let (title, color) = if active {
-            ("Running", PHASE_RUNNING)
-        } else {
-            ("Ran", PHASE_RAN)
-        };
-        Self {
-            inner: SummaryCell::new(title, color, summary),
-        }
-    }
-}
-
-impl HistoryCell for RunningCell {
-    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        self.inner.display_lines(width)
-    }
-}
+summary_cell!(
+    PlanningCell,
+    "Planning",
+    PHASE_PLANNING,
+    "Planned",
+    PHASE_PLANNING
+);
+summary_cell!(
+    ExploringCell,
+    "Exploring",
+    PHASE_EXPLORING,
+    "Explored",
+    PHASE_EXPLORED
+);
+summary_cell!(RunningCell, "Running", PHASE_RUNNING, "Ran", PHASE_RAN);
 
 pub(super) struct ThinkingTextCell {
     message: String,
