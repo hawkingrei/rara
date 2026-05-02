@@ -239,7 +239,8 @@ pub(crate) fn current_turn_exploration_summary_from_entries(
 ) -> Option<String> {
     let mut actions = Vec::new();
     for entry in current_turn {
-        if entry.role != "Tool" {
+        use crate::tui::message_role::MessageRole;
+        if MessageRole::try_from_str(&entry.role) != Some(MessageRole::Tool) {
             continue;
         }
         if let Some(action) = exploration_action_label(&entry.message) {
@@ -268,8 +269,9 @@ pub(crate) fn current_turn_tool_summary(
     let mut lines = Vec::new();
     let mut pending_tool = false;
     for entry in current_turn {
-        match entry.role.as_str() {
-            "Tool" => {
+        use crate::tui::message_role::MessageRole;
+        match MessageRole::try_from_str(&entry.role) {
+            Some(MessageRole::Tool) => {
                 if let Some(action) = tool_action_label(&entry.message) {
                     lines.push(format!("└ {action}"));
                     pending_tool = true;
@@ -277,7 +279,7 @@ pub(crate) fn current_turn_tool_summary(
                     pending_tool = false;
                 }
             }
-            "Tool Result" | "Tool Error" if pending_tool => {
+            Some(MessageRole::ToolResult) | Some(MessageRole::ToolError) if pending_tool => {
                 lines.extend(
                     tool_result_summary_lines(&entry.message, RESULT_LINE_LIMIT)
                         .into_iter()
