@@ -72,3 +72,7 @@ Active backlog only. Keep this file small and current.
 - [ ] Review path/command validation in `bash`, file tools, sandbox.
 - [ ] Rework token accounting in `src/agent.rs` (avoid re-encoding full history).
 - [ ] Replace fixed 100ms TUI event polling loop.
+
+## Evaluation / Benchmarks
+
+- [ ] Terminal-Bench readiness: add a headless adapter, preserve structured trajectories, and start with a small smoke run that records RARA revision, dataset version, provider/model, sandbox mode, and failure taxonomy.
