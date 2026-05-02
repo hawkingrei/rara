@@ -34,3 +34,6 @@ pub(crate) const SURFACE_BOTTOM_PANE_BG: Color = Color::Rgb(18, 20, 24);
 // ── Badge / section label ───────────────────────────────────────
 pub(crate) const BADGE_FG_DARK: Color = Color::White;
 pub(crate) const BADGE_FG_LIGHT: Color = Color::Black;
+
+// ── Interaction ─────────────────────────────────────────────────
+pub(crate) const INTERACTION_SUB_AGENT: Color = Color::Rgb(231, 201, 92); // gold distinct from green RequestInput

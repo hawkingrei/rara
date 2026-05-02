@@ -17,8 +17,8 @@ use super::{
     committed_turn_cell, compact_progress_summary_lines, compact_recent_first_summary_lines,
     compact_summary_text, current_turn_exploration_summary_from_entries, current_turn_tool_summary,
     desired_bottom_pane_height, desired_viewport_height, formatted_message_lines,
-    prefixed_message_lines, renderable_transcript_lines, transcript_scroll_offset,
-    transcript_viewport, transcript_visual_row_count,
+    prefixed_message_lines, renderable_transcript_lines, tool_action_label,
+    transcript_scroll_offset, transcript_viewport, transcript_visual_row_count,
 };
 
 fn provider_family_idx(family: ProviderFamily) -> usize {
@@ -212,10 +212,31 @@ fn tool_summary_compacts_spawn_agent_instruction_json() {
     let refs = entries.iter().collect::<Vec<_>>();
 
     let rendered = current_turn_tool_summary(&refs, false, None).expect("tool summary");
-    assert!(rendered.contains("Delegate fix-assembler: Fix the file src/context/assembler.rs"));
+    assert!(rendered.contains("🤖 Delegate fix-assembler: Fix the file src/context/assembler.rs"));
     assert!(rendered.contains('…'));
     assert!(!rendered.contains("\"instruction\""));
     assert!(!rendered.contains("avoid one giant replacement payload"));
+}
+
+#[test]
+fn tool_action_label_uses_explore_icon_for_explore_agent() {
+    let rendered = tool_action_label("explore_agent inspect the runtime path");
+    assert!(rendered.is_some());
+    assert!(rendered.unwrap().starts_with("🔍 Explore"));
+}
+
+#[test]
+fn tool_action_label_uses_plan_icon_for_plan_agent() {
+    let rendered = tool_action_label("plan_agent reorganize the module");
+    assert!(rendered.is_some());
+    assert!(rendered.unwrap().starts_with("📋 Plan"));
+}
+
+#[test]
+fn tool_action_label_uses_team_icon_for_team_create() {
+    let rendered = tool_action_label("team_create review PR");
+    assert!(rendered.is_some());
+    assert!(rendered.unwrap().starts_with("👥 Team"));
 }
 
 #[test]

@@ -1,3 +1,4 @@
+use crate::tui::sub_agent_display::SUB_AGENT_QUESTION_COLOR;
 use crate::tui::theme::*;
 use std::path::Path;
 
@@ -367,8 +368,8 @@ impl PendingInteractionCell {
             | ActivePendingInteractionKind::PlanningQuestion => PHASE_PLANNING,
             ActivePendingInteractionKind::ShellApproval
             | ActivePendingInteractionKind::ExplorationQuestion => PHASE_EXPLORING,
-            ActivePendingInteractionKind::SubAgentQuestion
-            | ActivePendingInteractionKind::RequestInput => STATUS_SUCCESS,
+            ActivePendingInteractionKind::SubAgentQuestion => SUB_AGENT_QUESTION_COLOR,
+            ActivePendingInteractionKind::RequestInput => STATUS_SUCCESS,
         };
         Self {
             inner: ApprovalCell::new(pending_interaction_card_title(kind), color, lines),
