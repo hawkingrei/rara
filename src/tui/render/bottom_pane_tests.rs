@@ -328,14 +328,24 @@ fn wrapped_text_cursor_can_point_into_the_middle_of_input() {
     assert_eq!(cursor, (7, 0));
 }
 
-#[test]
-fn activity_status_line_shows_multiple_queued_follow_ups_while_busy() {
+#[tokio::test]
+async fn activity_status_line_shows_multiple_queued_follow_ups_while_busy() {
     let temp = tempdir().unwrap();
     let mut app = TuiApp::new(ConfigManager {
         path: temp.path().join("config.json"),
     })
     .expect("build tui app");
     app.runtime_phase = RuntimePhase::ProcessingResponse;
+    let (_sender, receiver) = mpsc::unbounded_channel();
+    app.running_task = Some(RunningTask {
+        kind: TaskKind::Query,
+        receiver,
+        handle: tokio::spawn(std::future::pending::<TaskCompletion>()),
+        started_at: Instant::now(),
+        next_heartbeat_after_secs: 2,
+        cancellation_token: None,
+        cancellation_requested: false,
+    });
     app.queue_follow_up_message("first follow-up");
     app.queue_follow_up_message("second follow-up");
     app.queue_follow_up_message("third follow-up");
@@ -343,6 +353,10 @@ fn activity_status_line_shows_multiple_queued_follow_ups_while_busy() {
     let (label, _, detail) = activity_status_line(&app);
     assert_eq!(label, "Working");
     assert!(detail.contains("3 queued follow-up"));
+
+    if let Some(task) = app.running_task.take() {
+        task.handle.abort();
+    }
 }
 
 #[test]
