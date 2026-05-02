@@ -29,6 +29,7 @@ use super::custom_terminal::Frame;
 use super::line_utils::prefix_lines;
 use super::state::{TranscriptEntry, TuiApp};
 use super::tool_text::{compact_delegate_rest, compact_instruction};
+use crate::tui::sub_agent_display::SubAgentKind;
 
 pub fn render(f: &mut Frame, app: &TuiApp) {
     let bottom_pane_height = desired_bottom_pane_height(app, f.area().width, f.area().height);
@@ -721,10 +722,16 @@ fn tool_action_label(message: &str) -> Option<String> {
                 rest.as_str()
             }
         )),
-        "spawn_agent" => Some(format!(
-            "Delegate {}",
-            compact_delegate_rest(&rest).unwrap_or_else(|| "sub-agent".to_string())
-        )),
+        "spawn_agent" => {
+            let kind = SubAgentKind::from_tool_name(name).unwrap();
+            let delegate = compact_delegate_rest(&rest).unwrap_or_else(|| "sub-agent".to_string());
+            Some(format!("{} {}", kind.action_label(), delegate))
+        }
+        "explore_agent" | "plan_agent" | "team_create" => {
+            let kind = SubAgentKind::from_tool_name(name).unwrap();
+            let abbreviation = compact_instruction(&rest);
+            Some(format!("{} {}", kind.action_label(), abbreviation))
+        }
         "web_fetch" => Some(format!(
             "Fetch {}",
             if rest.is_empty() {
