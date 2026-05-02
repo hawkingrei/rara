@@ -1,11 +1,14 @@
 mod bottom_pane;
 pub(crate) mod cells;
 pub(crate) mod diff;
+mod helpers;
 mod history_pipeline;
 mod overlay;
 #[cfg(test)]
 mod tests;
 mod viewport;
+
+pub(crate) use helpers::*;
 
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
@@ -14,7 +17,6 @@ use ratatui::{
     widgets::{Paragraph, Wrap},
 };
 use std::path::Path;
-use unicode_width::UnicodeWidthStr;
 
 pub(crate) use self::bottom_pane::desired_viewport_height;
 use self::bottom_pane::{desired_bottom_pane_height, render_bottom_pane};
@@ -728,112 +730,4 @@ pub(crate) fn wrapped_history_line_count(lines: &[Line<'static>], width: u16) ->
         .map(|line| line.width().max(1).div_ceil(wrap_width))
         .sum::<usize>()
         .max(1) as u16
-}
-
-fn badge<'a>(label: &'a str, value: &'a str, color: Color) -> Span<'a> {
-    let fg = match color {
-        Color::Black
-        | Color::DarkGray
-        | Color::Gray
-        | Color::Blue
-        | Color::Red
-        | Color::Magenta => Color::White,
-        _ => Color::Black,
-    };
-    Span::styled(
-        format!(" {}={} ", label, value),
-        Style::default()
-            .fg(fg)
-            .bg(color)
-            .add_modifier(Modifier::BOLD),
-    )
-}
-
-pub(crate) fn display_directory_for_startup(app: &TuiApp) -> String {
-    let cwd = if app.snapshot.cwd.is_empty() {
-        std::env::current_dir()
-            .ok()
-            .map(|path| path.display().to_string())
-            .unwrap_or_else(|| ".".to_string())
-    } else {
-        app.snapshot.cwd.clone()
-    };
-    if let Ok(home) = std::env::var("HOME") {
-        if let Some(stripped) = cwd.strip_prefix(&home) {
-            return format!("~{stripped}");
-        }
-    }
-    cwd
-}
-
-pub(crate) fn truncate_for_startup_card(value: &str, width: usize) -> String {
-    if display_width(value) <= width {
-        return value.to_string();
-    }
-    if width <= 1 {
-        return "…".to_string();
-    }
-    let kept = value.chars().take(width - 1).collect::<String>();
-    format!("{kept}…")
-}
-
-pub(crate) fn truncate_path_middle(value: &str, width: usize) -> String {
-    if display_width(value) <= width {
-        return value.to_string();
-    }
-    if width <= 1 {
-        return "…".to_string();
-    }
-    if width <= 5 {
-        return truncate_for_startup_card(value, width);
-    }
-
-    let keep_left = (width - 1) / 2;
-    let keep_right = width - 1 - keep_left;
-    let chars = value.chars().collect::<Vec<_>>();
-    let left = chars.iter().take(keep_left).collect::<String>();
-    let right = chars
-        .iter()
-        .rev()
-        .take(keep_right)
-        .collect::<Vec<_>>()
-        .into_iter()
-        .rev()
-        .collect::<String>();
-    format!("{left}…{right}")
-}
-
-pub(crate) fn startup_card_inner_width(width: u16) -> Option<usize> {
-    if width < 8 {
-        return None;
-    }
-    Some(std::cmp::min(width.saturating_sub(4) as usize, 56))
-}
-
-pub(crate) fn with_border(lines: Vec<Line<'static>>, inner_width: usize) -> Vec<Line<'static>> {
-    let mut out = Vec::with_capacity(lines.len() + 3);
-    let border_inner_width = inner_width + 2;
-    out.push(Line::from(format!("╭{}╮", "─".repeat(border_inner_width))));
-
-    for line in lines {
-        let used_width = line
-            .iter()
-            .map(|span| display_width(span.content.as_ref()))
-            .sum::<usize>();
-        let mut spans = Vec::with_capacity(line.spans.len() + 3);
-        spans.push(Span::from("│ "));
-        spans.extend(line.into_iter());
-        if used_width < inner_width {
-            spans.push(Span::from(" ".repeat(inner_width - used_width)));
-        }
-        spans.push(Span::from(" │"));
-        out.push(Line::from(spans));
-    }
-
-    out.push(Line::from(format!("╰{}╯", "─".repeat(border_inner_width))));
-    out
-}
-
-pub(crate) fn display_width(value: &str) -> usize {
-    UnicodeWidthStr::width(value)
 }
