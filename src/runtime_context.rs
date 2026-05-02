@@ -113,7 +113,7 @@ pub(crate) async fn build_backend_with_progress(
 ) -> Result<Box<dyn LlmBackend>> {
     match config.provider.as_str() {
         "codex" => Ok(Box::new(CodexBackend::new(
-            config.api_key.clone(),
+            config.api_key_secret(),
             config
                 .base_url
                 .clone()
@@ -135,7 +135,7 @@ pub(crate) async fn build_backend_with_progress(
                 });
             Ok(Box::new(
                 OpenAiCompatibleBackend::new_with_endpoint_kind_and_reasoning(
-                    config.api_key.clone(),
+                    config.api_key_secret(),
                     config
                         .base_url
                         .clone()
@@ -163,7 +163,7 @@ pub(crate) async fn build_backend_with_progress(
             config.num_ctx,
         )?)),
         "ollama-openai" => Ok(Box::new(OpenAiCompatibleBackend::new(
-            config.api_key.clone(),
+            config.api_key_secret(),
             config
                 .base_url
                 .clone()

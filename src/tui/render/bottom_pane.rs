@@ -362,16 +362,33 @@ fn footer_summary_text(app: &TuiApp) -> String {
         Some(window) => format!("ctx~={}/{}", app.snapshot.estimated_history_tokens, window),
         None => format!("ctx~={}", app.snapshot.estimated_history_tokens),
     };
+    let cache_summary = cache_hit_rate_label(
+        app.snapshot.total_cache_hit_tokens,
+        app.snapshot.total_cache_miss_tokens,
+    )
+    .map(|rate| format!("  cache_hit={rate}"))
+    .unwrap_or_default();
     if shows_live_task_stats(app) {
         format!(
-            "{}  tokens={} in / {} out",
-            context, app.snapshot.total_input_tokens, app.snapshot.total_output_tokens
+            "{}  tokens={} in / {} out{}",
+            context,
+            app.snapshot.total_input_tokens,
+            app.snapshot.total_output_tokens,
+            cache_summary
         )
     } else if app.snapshot.compaction_count > 0 {
-        format!("{}  compactions={}", context, app.snapshot.compaction_count)
+        format!(
+            "{}  compactions={}{}",
+            context, app.snapshot.compaction_count, cache_summary
+        )
     } else {
-        context
+        format!("{context}{cache_summary}")
     }
+}
+
+fn cache_hit_rate_label(hit_tokens: u32, miss_tokens: u32) -> Option<String> {
+    let total = hit_tokens.saturating_add(miss_tokens);
+    (total > 0).then(|| format!("{:.1}%", hit_tokens as f64 * 100.0 / total as f64))
 }
 
 fn shows_live_task_stats(app: &TuiApp) -> bool {

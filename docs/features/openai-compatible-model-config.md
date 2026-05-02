@@ -68,6 +68,20 @@ root with the active API key. If the model-list request fails, the picker may
 fall back to the built-in DeepSeek model list, but the failure must stay visible
 as a notice or system message.
 
+Selecting the Kimi profile sets:
+
+- `provider = "openai-compatible"`
+- `endpoint_kind = "kimi"`
+- `base_url = "https://api.moonshot.cn/v1"` unless a Kimi profile override exists
+- `model = "kimi-k2-turbo-preview"` unless a Kimi profile override exists
+- `revision = None`
+
+Kimi uses the shared OpenAI-compatible chat-completions backend. The runtime
+should accept a saved profile API key, `RARA_API_KEY`, or the provider-native
+`MOONSHOT_API_KEY` environment variable. `MOONSHOT_API_KEY` is a runtime-only
+credential source and must not be serialized back into `config.json` unless the
+user explicitly saves it through the normal API-key editor.
+
 For thinking-capable DeepSeek models, RARA sends DeepSeek's documented
 thinking-mode controls on chat-completions requests:
 
@@ -122,6 +136,11 @@ The model-name editor is a separate overlay so the user can update the remote mo
 - the current `base_url`;
 - the current `reasoning_summary`;
 - whether each value came from built-in defaults, provider-scoped state, or legacy global config.
+- whether the API key came from a runtime environment variable such as
+  `MOONSHOT_API_KEY`.
+- cumulative provider usage cache counters, when the response includes them:
+  `cache_hit_tokens`, `cache_miss_tokens`, and
+  `cache_hit_rate = hit / (hit + miss)`.
 
 For `codex`, `/status` should also surface the current auth/endpoint shape for the running
 provider surface:

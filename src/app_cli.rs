@@ -74,6 +74,7 @@ pub(crate) async fn run_cli() -> Result<()> {
     let config_manager = ConfigManager::new()?;
     let mut config = config_manager.load()?;
     let command = apply_cli_overrides(&mut config, cli);
+    config.apply_provider_environment_defaults();
 
     let oauth_manager = OAuthManager::new()?;
 

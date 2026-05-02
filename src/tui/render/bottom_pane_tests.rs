@@ -56,6 +56,28 @@ fn footer_summary_text_shows_tokens_only_while_busy() {
 }
 
 #[test]
+fn footer_summary_text_shows_cache_hit_rate_when_usage_has_cache_tokens() {
+    let temp = tempdir().unwrap();
+    let mut app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("build tui app");
+    app.runtime_phase = RuntimePhase::ProcessingResponse;
+    app.snapshot = RuntimeSnapshot {
+        estimated_history_tokens: 2048,
+        context_window_tokens: Some(32768),
+        total_input_tokens: 111,
+        total_output_tokens: 22,
+        total_cache_hit_tokens: 80,
+        total_cache_miss_tokens: 20,
+        ..RuntimeSnapshot::default()
+    };
+
+    let rendered = footer_summary_text(&app);
+    assert!(rendered.contains("cache_hit=80.0%"));
+}
+
+#[test]
 fn activity_status_line_prefers_pending_interactions() {
     let temp = tempdir().unwrap();
     let mut app = TuiApp::new(ConfigManager {

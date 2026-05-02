@@ -185,6 +185,7 @@ impl LlmBackend for LocalLlmBackend {
             usage: Some(TokenUsage {
                 input_tokens: result.input_tokens,
                 output_tokens: result.output_tokens,
+                ..TokenUsage::default()
             }),
         })
     }

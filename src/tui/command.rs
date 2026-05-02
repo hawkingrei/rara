@@ -812,10 +812,17 @@ pub fn status_resources_text(app: &TuiApp) -> String {
             .collect::<Vec<_>>()
             .join(", ")
     };
+    let cache_hit_rate = cache_hit_rate_label(
+        app.snapshot.total_cache_hit_tokens,
+        app.snapshot.total_cache_miss_tokens,
+    );
     format!(
-        "tokens={} in / {} out\ncontext_estimate={}\nretrieval_budget={}\nretrieval_selected={}\ncompactions={} (last: {}, ratio: {})\ncompact_boundary={}\nrecent_compact_file_count={}\nrecent_compact_files={}\ncache={}\nstate_db={}",
+        "tokens={} in / {} out\ncache_hit_tokens={}\ncache_miss_tokens={}\ncache_hit_rate={}\ncontext_estimate={}\nretrieval_budget={}\nretrieval_selected={}\ncompactions={} (last: {}, ratio: {})\ncompact_boundary={}\nrecent_compact_file_count={}\nrecent_compact_files={}\ncache={}\nstate_db={}",
         app.snapshot.total_input_tokens,
         app.snapshot.total_output_tokens,
+        app.snapshot.total_cache_hit_tokens,
+        app.snapshot.total_cache_miss_tokens,
+        cache_hit_rate,
         context,
         retrieval_budget,
         retrieval_selected,
@@ -828,6 +835,14 @@ pub fn status_resources_text(app: &TuiApp) -> String {
         cache,
         state_db,
     )
+}
+
+fn cache_hit_rate_label(hit_tokens: u32, miss_tokens: u32) -> String {
+    let total = hit_tokens.saturating_add(miss_tokens);
+    if total == 0 {
+        return "-".to_string();
+    }
+    format!("{:.1}%", hit_tokens as f64 * 100.0 / total as f64)
 }
 
 pub fn status_prompt_sources_text(app: &TuiApp) -> String {
@@ -1327,6 +1342,8 @@ mod tests {
             estimated_history_tokens: 12_345,
             context_window_tokens: Some(22_537),
             reserved_output_tokens: 2_000,
+            total_cache_hit_tokens: 75,
+            total_cache_miss_tokens: 25,
             memory_selection: crate::context::MemorySelectionContextView {
                 selection_budget_tokens: Some(8_192),
                 selected_items: vec![
@@ -1366,6 +1383,9 @@ mod tests {
         };
 
         let rendered = status_resources_text(&app);
+        assert!(rendered.contains("cache_hit_tokens=75"));
+        assert!(rendered.contains("cache_miss_tokens=25"));
+        assert!(rendered.contains("cache_hit_rate=75.0%"));
         assert!(rendered.contains("retrieval_budget=8192"));
         assert!(
             rendered.contains("retrieval_selected=workspace_memory, retrieved_workspace_memory")

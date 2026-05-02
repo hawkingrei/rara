@@ -6,7 +6,7 @@ use secrecy::{ExposeSecret, SecretString};
 use serde_json::{Value, json};
 
 use crate::agent::Message;
-use crate::llm::{ContentBlock, LlmResponse, TokenUsage};
+use crate::llm::{ContentBlock, LlmResponse};
 use crate::redaction::{redact_secrets, sanitize_url_for_display};
 
 use super::super::codex_tools_compat::ToolDefinition;
@@ -538,10 +538,7 @@ pub(crate) fn parse_codex_response(resp_json: &Value) -> Result<LlmResponse> {
             }
         }
     }
-    let usage = resp_json.get("usage").map(|u| TokenUsage {
-        input_tokens: u["input_tokens"].as_u64().unwrap_or(0) as u32,
-        output_tokens: u["output_tokens"].as_u64().unwrap_or(0) as u32,
-    });
+    let usage = resp_json.get("usage").map(super::parse_openai_token_usage);
     Ok(LlmResponse {
         content,
         stop_reason: resp_json

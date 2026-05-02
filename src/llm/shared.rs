@@ -151,6 +151,7 @@ impl LlmBackend for MockLlm {
             usage: Some(TokenUsage {
                 input_tokens: 10,
                 output_tokens: 20,
+                ..TokenUsage::default()
             }),
         })
     }

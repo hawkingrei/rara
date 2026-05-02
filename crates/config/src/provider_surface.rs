@@ -2,6 +2,7 @@
 pub enum ConfigValueSource {
     ProviderState,
     LegacyGlobal,
+    Environment,
     BuiltInDefault,
     Unset,
 }
@@ -11,6 +12,7 @@ impl ConfigValueSource {
         match self {
             Self::ProviderState => "provider_state",
             Self::LegacyGlobal => "legacy_global",
+            Self::Environment => "environment",
             Self::BuiltInDefault => "built_in_default",
             Self::Unset => "unset",
         }

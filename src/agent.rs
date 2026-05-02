@@ -115,6 +115,8 @@ pub struct Agent {
     pub session_id: String,
     pub total_input_tokens: u32,
     pub total_output_tokens: u32,
+    pub total_cache_hit_tokens: u32,
+    pub total_cache_miss_tokens: u32,
     pub tool_result_store: ToolResultStore,
     pub execution_mode: AgentExecutionMode,
     pub bash_approval_mode: BashApprovalMode,
@@ -151,6 +153,8 @@ impl Agent {
             session_id: Uuid::new_v4().to_string(),
             total_input_tokens: 0,
             total_output_tokens: 0,
+            total_cache_hit_tokens: 0,
+            total_cache_miss_tokens: 0,
             tool_result_store: ToolResultStore::new(
                 default_tool_result_store_dir().expect("tool result store dir"),
             )
@@ -328,6 +332,8 @@ impl Agent {
         if let Some(usage) = &response.usage {
             self.total_input_tokens += usage.input_tokens;
             self.total_output_tokens += usage.output_tokens;
+            self.total_cache_hit_tokens += usage.cache_hit_tokens;
+            self.total_cache_miss_tokens += usage.cache_miss_tokens;
         }
 
         let mut tool_calls = Vec::new();

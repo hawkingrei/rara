@@ -1,4 +1,5 @@
 mod codex;
+mod usage;
 
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
@@ -8,7 +9,7 @@ use serde_json::{Value, json};
 
 use crate::agent::Message;
 use crate::config::OpenAiEndpointKind;
-use crate::llm::{ContentBlock, LlmResponse, TokenUsage};
+use crate::llm::{ContentBlock, LlmResponse};
 use crate::redaction::{redact_secrets, sanitize_url_for_display};
 
 use super::shared::{
@@ -16,6 +17,8 @@ use super::shared::{
     extract_message_text, http_client_for_target, model_context_budget,
     next_stream_item_with_idle_timeout, parse_tool_arguments, render_openai_message_content,
 };
+
+use self::usage::parse_openai_token_usage;
 
 #[cfg(test)]
 pub(crate) use self::codex::{
@@ -229,10 +232,7 @@ impl LlmBackend for OpenAiCompatibleBackend {
         Ok(LlmResponse {
             content,
             stop_reason,
-            usage: usage.map(|u| TokenUsage {
-                input_tokens: u["prompt_tokens"].as_u64().unwrap_or(0) as u32,
-                output_tokens: u["completion_tokens"].as_u64().unwrap_or(0) as u32,
-            }),
+            usage: usage.as_ref().map(parse_openai_token_usage),
         })
     }
 
@@ -824,10 +824,7 @@ pub(super) fn parse_chat_completion_response(
     {
         content.extend(parsed_dsml_tool_calls);
     }
-    let usage = resp_json.get("usage").map(|u| TokenUsage {
-        input_tokens: u["prompt_tokens"].as_u64().unwrap_or(0) as u32,
-        output_tokens: u["completion_tokens"].as_u64().unwrap_or(0) as u32,
-    });
+    let usage = resp_json.get("usage").map(parse_openai_token_usage);
     Ok(LlmResponse {
         content,
         stop_reason: first_choice
