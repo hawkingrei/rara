@@ -14,9 +14,9 @@ Active backlog only. Keep this file small and current.
 
 ## Runtime Control Plane / ACP / Wire
 
-- [ ] Define adapter-neutral runtime control request/event types for ACP, Wire, TUI, CLI, and future appserver entrypoints (see `docs/features/runtime-control-plane.md`).
+- [x] Define adapter-neutral runtime control request/event types for ACP, Wire, TUI, CLI, and future appserver entrypoints (see `docs/features/runtime-control-plane.md`).
 - [ ] Route ACP prompt/cancel/session handling through the normal RARA runtime path instead of the current stub.
-- [ ] Add a structured output event bridge from `AgentEvent` / TUI runtime events to protocol subscribers.
+- [ ] Add protocol subscriber plumbing on top of the structured `AgentEvent` runtime-control bridge.
 - [ ] Support protocol-registered prompt sources with provenance, scope, budget hints, and `/context` visibility.
 - [ ] Support protocol-registered skill sources through the same `SkillRegistry` precedence and override reporting as local skills.
 - [ ] Add protocol-safe memory mutation/query scaffolding that creates memory records and selection views without bypassing `MemorySelection`.

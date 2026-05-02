@@ -40,3 +40,21 @@ It updates:
 Next implementation work should start with adapter-neutral request/event types
 and a structured output event bridge before attempting full ACP or Wire feature
 coverage.
+
+## Implementation Checkpoint
+
+Added `src/runtime_control.rs` with the first adapter-neutral runtime control
+contract:
+
+- `RuntimeControlRequest` covers session, input, output subscription, prompt
+  source, skill source, memory, hook, and approval request families;
+- `RuntimeEvent` covers the event families named by the spec, including
+  session status, assistant, tool, context, warning, and error events;
+- `RuntimeProvenance` records controller, adapter, session, source, trust, and
+  authorship metadata;
+- `agent_event_to_runtime_event()` maps existing `AgentEvent` output into the
+  shared event shape so protocol subscribers can later reuse the same stream.
+
+This checkpoint intentionally does not route ACP or Wire through the control
+plane yet. The next slice should add subscriber plumbing and then move ACP
+prompt/cancel/session handling onto these request types.

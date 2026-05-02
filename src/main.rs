@@ -10,6 +10,7 @@ mod oauth;
 mod prompt;
 mod redaction;
 mod runtime_context;
+mod runtime_control;
 mod sandbox;
 mod session;
 mod shell_env;
