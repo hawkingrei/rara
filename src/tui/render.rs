@@ -73,6 +73,7 @@ fn render_startup_header(f: &mut Frame, app: &TuiApp, area: Rect) -> Rect {
 fn shows_startup_header(app: &TuiApp) -> bool {
     !app.has_any_transcript()
         && app.active_turn.entries.is_empty()
+        && !app.is_busy()
         && !app.has_pending_planning_suggestion()
 }
 

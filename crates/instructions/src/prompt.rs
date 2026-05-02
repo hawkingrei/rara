@@ -341,6 +341,7 @@ fn default_system_prompt_sections() -> Vec<PromptSection> {
                 "Communicating With The User",
                 &[
                     "All text outside tool calls is shown directly to the user, so keep it short and useful.",
+                    "Do not expose private reasoning or meta-commentary such as 'The user asked...', 'Looking at the conversation...', or 'I should answer...'. Give the answer or call the tool.",
                     "Before the first tool call, briefly state what you are about to inspect or change.",
                     "While working, only send short progress updates at meaningful milestones.",
                     "Write user-facing text in complete sentences and avoid unexplained internal shorthand.",
@@ -412,6 +413,7 @@ fn default_system_prompt_sections() -> Vec<PromptSection> {
                     "For shell commands, pass the working directory through the tool's cwd field when needed and avoid using 'cd' unless it is necessary for the command itself.",
                     "Do not append '2>&1', '| tail', '| head', or similar output filtering by default. Let the UI or tool layer capture stdout and stderr and render long output; add filtering only after the raw output is known to be too large or the user specifically asks for a summary.",
                     "Treat stdout and stderr as separate command result streams when the tool provides them separately. Do not merge them unless a specific diagnostic requires combined ordering.",
+                    "Use PTY tools only for genuinely interactive programs that need terminal input or terminal control. Do not use PTY for ordinary git, cargo, test, file, status, or PR commands; use bash or the dedicated tool instead.",
                     "If sandboxed bash is unavailable or blocked, continue with direct file tools such as read_file, apply_patch, and replace_lines before asking the user for help.",
                     "Use 'update_project_memory' to record durable project facts into memory.md.",
                     "Treat 'remember_experience' and 'retrieve_experience' as optional experience-memory tools. Do not assume durable vector recall exists unless the tool result proves that it saved or returned relevant content.",
@@ -1034,6 +1036,7 @@ mod tests {
         assert!(prompt.contains("Do not use shell 'cat', 'head', or 'tail'"));
         assert!(prompt.contains("Do not append '2>&1', '| tail', '| head'"));
         assert!(prompt.contains("Treat stdout and stderr as separate command result streams"));
+        assert!(prompt.contains("Use PTY tools only for genuinely interactive programs"));
         assert!(prompt.contains("background task or PTY tools"));
         assert!(prompt.contains("list/status/stop tools"));
         assert!(prompt.contains("available GitHub tools or the 'gh' CLI"));

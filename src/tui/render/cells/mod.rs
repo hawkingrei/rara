@@ -361,6 +361,15 @@ impl ActiveCell for ActiveTurnCell<'_> {
                 trim_trailing_empty_lines(&mut lines);
                 return lines;
             }
+            if turn_live {
+                return RespondingCell::working(
+                    self.app
+                        .runtime_phase_detail
+                        .as_deref()
+                        .unwrap_or("waiting for the current turn to finish"),
+                )
+                .display_lines(width);
+            }
             return Vec::new();
         }
         let has_tool_activity = current_turn.iter().any(|entry| {

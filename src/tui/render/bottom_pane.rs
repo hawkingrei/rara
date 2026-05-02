@@ -171,6 +171,7 @@ fn activity_status_line(app: &TuiApp) -> (&'static str, Color, String) {
         STATUS_READY,
         app.notice
             .as_deref()
+            .filter(|notice| !matches!(*notice, "Prompt finished." | "Planning finished."))
             .unwrap_or("waiting for input")
             .to_string(),
     )

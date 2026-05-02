@@ -215,6 +215,26 @@ fn active_turn_cell_renders_planning_suggestion_without_active_turn_entries() {
 }
 
 #[test]
+fn active_turn_cell_shows_busy_feedback_without_active_turn_entries() {
+    let temp = tempdir().unwrap();
+    let mut app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("build tui app");
+    app.runtime_phase = RuntimePhase::SendingPrompt;
+    app.runtime_phase_detail = Some("sending prompt to provider".into());
+
+    let rendered = ActiveTurnCell::new(&app, Some(Path::new(".")))
+        .display_lines(100)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(rendered.contains("• sending prompt to provider"));
+}
+
+#[test]
 fn active_turn_cell_keeps_exploration_notes_inside_exploring_block() {
     let temp = tempdir().unwrap();
     let mut app = TuiApp::new(ConfigManager {

@@ -375,3 +375,18 @@ fn composer_hint_shows_queued_follow_up_when_idle_with_messages() {
         "queued follow-up  will submit after current turn"
     );
 }
+
+#[test]
+fn activity_status_line_hides_completed_prompt_notice() {
+    let temp = tempdir().unwrap();
+    let mut app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("build tui app");
+    app.notice = Some("Prompt finished.".into());
+
+    let (label, _, detail) = activity_status_line(&app);
+
+    assert_eq!(label, "Ready");
+    assert_eq!(detail, "waiting for input");
+}
