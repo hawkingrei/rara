@@ -342,6 +342,29 @@ The first Wire milestone should reuse the same request and event families. Wire
 may define different transport framing, but it should not define a separate
 skills, memory, prompt, or hook runtime model.
 
+Wire compatibility is an adapter responsibility, not the native runtime-control
+serialization format. A Wire adapter should use the Wire transport framing:
+
+- JSON-RPC 2.0 messages over stdin/stdout, one JSON value per line;
+- client-to-agent methods such as `initialize`, `prompt`, `steer`,
+  `set_plan_mode`, and `cancel`;
+- agent-to-client `event` notifications with `params: { type, payload }`;
+- agent-to-client `request` calls with `params: { type, payload }` for
+  approvals, questions, tool calls, and hook requests.
+
+Runtime-control events should be translated into Wire message names at the
+adapter boundary. For example, internal assistant/tool/status events may become
+Wire `ContentPart`, `ToolCall`, `ToolResult`, `StatusUpdate`, or
+`ApprovalRequest` messages. The Wire-facing names should follow the external
+Wire contract, while runtime-control names remain protocol-neutral and stable
+inside RARA.
+
+Wire `steer` maps to runtime follow-up submission during an active turn. The
+runtime must still decide when the input is safely consumed. The Wire adapter
+should emit the corresponding consumed-input event only after the follow-up has
+actually been appended to the next model step, not when the client request is
+merely accepted.
+
 ## Observability
 
 `/context` should show:

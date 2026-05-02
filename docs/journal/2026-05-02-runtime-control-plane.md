@@ -40,3 +40,35 @@ It updates:
 Next implementation work should start with adapter-neutral request/event types
 and a structured output event bridge before attempting full ACP or Wire feature
 coverage.
+
+## Implementation Checkpoint
+
+Added `src/runtime_control.rs` with the first adapter-neutral runtime control
+contract:
+
+- `RuntimeControlRequest` covers session, input, output subscription, prompt
+  source, skill source, memory, hook, and approval request families;
+- `RuntimeEvent` covers the event families named by the spec, including
+  session status, assistant, tool, context, warning, and error events;
+- `RuntimeProvenance` records controller, adapter, session, source, trust, and
+  authorship metadata;
+- `agent_event_to_runtime_event()` maps existing `AgentEvent` output into the
+  shared event shape so protocol subscribers can later reuse the same stream.
+
+The serialized contract uses explicit `type` fields and `snake_case` enum
+names instead of Rust's default externally tagged enum representation. Event
+counts use fixed-width integer fields where they may cross protocol boundaries.
+
+Wire mode remains a transport adapter over this contract. It should own the
+JSON-RPC 2.0 envelope, Wire method names, PascalCase Wire message names, and
+`event` / `request` framing rather than exposing runtime-control enums directly
+as Wire messages.
+
+Runtime provenance uses explicit `trust` and `authorship` enums rather than
+independent boolean flags, so callers cannot represent contradictory source
+states. Shell approval control keeps a contract-local enum but has explicit
+round-trip conversions to the runtime `BashApprovalDecision`.
+
+This checkpoint intentionally does not route ACP or Wire through the control
+plane yet. The next slice should add subscriber plumbing and then move ACP
+prompt/cancel/session handling onto these request types.
