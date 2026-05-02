@@ -24,7 +24,9 @@ impl TranscriptViewport {
             return (Vec::new(), 0);
         }
 
-        let visible_rows = usize::from(height);
+        // Reserve one bottom row as breathing room so content isn't
+        // visually flush against the input bar at any scroll position.
+        let visible_rows = usize::from(height.saturating_sub(1).max(1));
         let wrap_width = usize::from(width.max(1));
         let target_start = usize::from(self.scroll_offset);
         let target_end = target_start.saturating_add(visible_rows);
