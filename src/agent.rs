@@ -506,10 +506,11 @@ impl Agent {
                     turn_output.had_text_response,
                     turn_output.had_reasoning_response,
                 ) {
-                    let phase = if turn_output.had_reasoning_response
-                        && !turn_output.had_text_response
-                        && *agentic_turns == 0
-                    {
+                    let phase = if Self::is_reasoning_only_initial_turn(
+                        turn_output.had_text_response,
+                        turn_output.had_reasoning_response,
+                        *agentic_turns,
+                    ) {
                         report(AgentEvent::Status(
                             "Model produced reasoning only. Continuing for a visible answer or tool call."
                                 .to_string(),

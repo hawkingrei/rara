@@ -483,8 +483,11 @@ impl Agent {
     ) -> bool {
         let shallow_initial_plan =
             plan_updated && agentic_turns == 0 && self.current_plan.len() <= 1;
-        let reasoning_only_initial_turn =
-            had_reasoning_response && !had_text_response && agentic_turns == 0;
+        let reasoning_only_initial_turn = Self::is_reasoning_only_initial_turn(
+            had_text_response,
+            had_reasoning_response,
+            agentic_turns,
+        );
         let has_inspection_evidence = self.inspection_progress.has_any_evidence();
         let still_missing_inspection_evidence = agentic_turns > 0
             && !plan_updated
@@ -511,12 +514,23 @@ impl Agent {
         had_text_response: bool,
         had_reasoning_response: bool,
     ) -> bool {
-        let reasoning_only_initial_turn =
-            had_reasoning_response && !had_text_response && agentic_turns == 0;
+        let reasoning_only_initial_turn = Self::is_reasoning_only_initial_turn(
+            had_text_response,
+            had_reasoning_response,
+            agentic_turns,
+        );
         matches!(self.execution_mode, AgentExecutionMode::Execute)
             && (continue_inspection || reasoning_only_initial_turn)
             && self.pending_user_input.is_none()
             && self.pending_approval.is_none()
+    }
+
+    pub(super) fn is_reasoning_only_initial_turn(
+        had_text_response: bool,
+        had_reasoning_response: bool,
+        agentic_turns: usize,
+    ) -> bool {
+        had_reasoning_response && !had_text_response && agentic_turns == 0
     }
 
     pub(super) fn ensure_active_plan_step(&mut self) {
