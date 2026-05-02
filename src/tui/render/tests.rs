@@ -377,6 +377,41 @@ fn transcript_scroll_offset_uses_wrapped_visual_height() {
 }
 
 #[test]
+fn effective_height_includes_final_row_at_bottom_sticky() {
+    let temp = tempdir().expect("tempdir");
+    let mut app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("build tui app");
+
+    // Pre-build committed turns so that visual rows exceed a 5-row viewport.
+    let entries: Vec<TranscriptEntry> = (0..8)
+        .map(|i| TranscriptEntry {
+            role: "Agent".into(),
+            message: format!("Line {i}"),
+            payload: None,
+        })
+        .collect();
+    app.restore_committed_turns(vec![TranscriptTurn { entries }]);
+
+    let viewport = transcript_viewport(&app, 80, 5);
+    let (visible_lines, _inner) = viewport.visible_window(80, 5);
+
+    // Effective height = 5 - 1 = 4. With scroll=0 (bottom sticky),
+    // the viewport should show the last 4 content rows.
+    assert_eq!(visible_lines.len(), 4);
+
+    let last_line = visible_lines
+        .last()
+        .map(|line| line.to_string())
+        .unwrap_or_default();
+    assert!(
+        last_line.contains("Line 7"),
+        "bottom sticky should include final content row ('Line 7') not: {last_line}"
+    );
+}
+
+#[test]
 fn renderable_transcript_lines_cache_is_invalidated_when_committed_turns_change() {
     let temp = tempdir().expect("tempdir");
     let mut app = TuiApp::new(ConfigManager {
