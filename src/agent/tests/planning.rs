@@ -252,6 +252,123 @@ async fn reasoning_only_turn_is_not_persisted_as_empty_assistant_message() {
 }
 
 #[tokio::test]
+async fn plan_mode_reasoning_only_initial_turn_continues_to_next_model_turn() {
+    let backend = Arc::new(SequencedBackend::new(vec![
+        LlmResponse {
+            content: vec![ContentBlock::ProviderMetadata {
+                provider: "deepseek".to_string(),
+                key: "reasoning_content".to_string(),
+                value: json!("Need to inspect cells before planning."),
+            }],
+            stop_reason: Some("end_turn".to_string()),
+            usage: Some(TokenUsage::default()),
+        },
+        LlmResponse {
+            content: vec![ContentBlock::Text {
+                text: "I need to inspect the TUI cell code before proposing the split.".to_string(),
+            }],
+            stop_reason: Some("end_turn".to_string()),
+            usage: Some(TokenUsage::default()),
+        },
+    ]));
+    let (_temp, session_manager, workspace, rara_dir) = test_runtime_storage();
+    let mut agent = Agent::new(
+        ToolManager::new(),
+        backend.clone(),
+        Arc::new(VectorDB::new(&rara_dir.join("lancedb").to_string_lossy())),
+        session_manager,
+        workspace,
+    );
+    agent.set_execution_mode(AgentExecutionMode::Plan);
+
+    agent
+        .query_with_mode(
+            "plan the cells split".to_string(),
+            super::super::AgentOutputMode::Silent,
+        )
+        .await
+        .expect("reasoning-only plan turn should continue once");
+
+    let observed_messages = backend.observed_messages();
+    assert_eq!(observed_messages.len(), 2);
+    assert!(observed_messages[1].iter().any(|message| {
+        message
+            .content
+            .to_string()
+            .contains("plan_continuation_required")
+    }));
+    assert!(agent.history.last().is_some_and(|message| {
+        message
+            .content
+            .to_string()
+            .contains("I need to inspect the TUI cell code")
+    }));
+}
+
+#[tokio::test]
+async fn plan_mode_consecutive_reasoning_only_turns_stop_after_one_continuation() {
+    let backend = Arc::new(SequencedBackend::new(vec![
+        LlmResponse {
+            content: vec![ContentBlock::ProviderMetadata {
+                provider: "deepseek".to_string(),
+                key: "reasoning_content".to_string(),
+                value: json!("Need one more pass."),
+            }],
+            stop_reason: Some("end_turn".to_string()),
+            usage: Some(TokenUsage::default()),
+        },
+        LlmResponse {
+            content: vec![ContentBlock::ProviderMetadata {
+                provider: "deepseek".to_string(),
+                key: "reasoning_content".to_string(),
+                value: json!("Still thinking only."),
+            }],
+            stop_reason: Some("end_turn".to_string()),
+            usage: Some(TokenUsage::default()),
+        },
+        LlmResponse {
+            content: vec![ContentBlock::Text {
+                text: "This response should not be reached.".to_string(),
+            }],
+            stop_reason: Some("end_turn".to_string()),
+            usage: Some(TokenUsage::default()),
+        },
+    ]));
+    let (_temp, session_manager, workspace, rara_dir) = test_runtime_storage();
+    let mut agent = Agent::new(
+        ToolManager::new(),
+        backend.clone(),
+        Arc::new(VectorDB::new(&rara_dir.join("lancedb").to_string_lossy())),
+        session_manager,
+        workspace,
+    );
+    agent.set_execution_mode(AgentExecutionMode::Plan);
+
+    agent
+        .query_with_mode(
+            "plan the cells split".to_string(),
+            super::super::AgentOutputMode::Silent,
+        )
+        .await
+        .expect("consecutive reasoning-only plan turns should stop after one retry");
+
+    let observed_messages = backend.observed_messages();
+    assert_eq!(observed_messages.len(), 2);
+    let continuation_text = observed_messages[1]
+        .iter()
+        .filter_map(|message| message.content.get(0)?.get("text")?.as_str())
+        .find(|text| text.contains("<agent_runtime>"))
+        .expect("continuation message text");
+    assert!(continuation_text.contains("\"agentic_turns\": 1"));
+    assert!(!agent.history.iter().any(|message| {
+        message
+            .content
+            .to_string()
+            .contains("This response should not be reached.")
+    }));
+}
+
+#[tokio::test]
 async fn suggestion_mode_auto_allows_read_only_bash_commands() {
     let backend = Arc::new(SequencedBackend::new(vec![
         LlmResponse {
@@ -743,12 +860,13 @@ async fn does_not_append_continuation_without_tools() {
         usage: Some(TokenUsage::default()),
     }]));
 
+    let (_temp, session_manager, workspace, rara_dir) = test_runtime_storage();
     let mut agent = Agent::new(
         ToolManager::new(),
         backend.clone(),
-        Arc::new(VectorDB::new("data/lancedb")),
-        Arc::new(SessionManager::new().expect("session manager")),
-        Arc::new(WorkspaceMemory::new().expect("workspace memory")),
+        Arc::new(VectorDB::new(&rara_dir.join("lancedb").to_string_lossy())),
+        session_manager,
+        workspace,
     );
 
     agent
@@ -1265,7 +1383,7 @@ fn shallow_initial_plan_continues_even_after_plan_update() {
         status: PlanStepStatus::Pending,
     }];
 
-    assert!(agent.should_continue_plan_without_tools(true, false, true, 0,));
+    assert!(agent.should_continue_plan_without_tools(true, false, true, false, 0,));
 }
 
 #[test]
@@ -1273,7 +1391,15 @@ fn missing_minimum_review_evidence_continues_without_plan_update() {
     let mut agent = new_planning_agent();
     agent.inspection_progress.source_reads = 1;
 
-    assert!(agent.should_continue_plan_without_tools(false, false, true, 1,));
+    assert!(agent.should_continue_plan_without_tools(false, false, true, false, 1,));
+}
+
+#[test]
+fn reasoning_only_initial_plan_turn_continues_once() {
+    let agent = new_planning_agent();
+
+    assert!(agent.should_continue_plan_without_tools(false, false, false, true, 0,));
+    assert!(!agent.should_continue_plan_without_tools(false, false, false, true, 1,));
 }
 
 #[test]
