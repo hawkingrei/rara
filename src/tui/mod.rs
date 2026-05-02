@@ -5,6 +5,7 @@ mod custom_terminal;
 mod event_dispatch;
 mod event_loop;
 mod event_stream;
+mod format;
 mod highlight;
 mod insert_history;
 mod interaction_text;

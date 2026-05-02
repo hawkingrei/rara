@@ -6,6 +6,8 @@ use ratatui::{
 };
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
+use crate::tui::format::cache_hit_rate_label;
+
 use super::super::custom_terminal::Frame;
 use super::super::interaction_text::pending_interaction_hint_text;
 use super::super::queued_input::{pending_follow_up_hint, queued_follow_up_hint};
@@ -384,11 +386,6 @@ fn footer_summary_text(app: &TuiApp) -> String {
     } else {
         format!("{context}{cache_summary}")
     }
-}
-
-fn cache_hit_rate_label(hit_tokens: u32, miss_tokens: u32) -> Option<String> {
-    let total = hit_tokens.saturating_add(miss_tokens);
-    (total > 0).then(|| format!("{:.1}%", hit_tokens as f64 * 100.0 / total as f64))
 }
 
 fn shows_live_task_stats(app: &TuiApp) -> bool {

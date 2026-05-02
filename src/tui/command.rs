@@ -1,5 +1,6 @@
 use crate::config::RaraConfig;
 use crate::context::{CacheStatus, DropReason};
+use crate::tui::format::cache_hit_rate_label;
 
 use super::state::{
     CommandSpec, LocalCommand, LocalCommandKind, PROVIDER_FAMILIES, PendingInteractionSnapshot,
@@ -815,7 +816,8 @@ pub fn status_resources_text(app: &TuiApp) -> String {
     let cache_hit_rate = cache_hit_rate_label(
         app.snapshot.total_cache_hit_tokens,
         app.snapshot.total_cache_miss_tokens,
-    );
+    )
+    .unwrap_or_else(|| "-".to_string());
     format!(
         "tokens={} in / {} out\ncache_hit_tokens={}\ncache_miss_tokens={}\ncache_hit_rate={}\ncontext_estimate={}\nretrieval_budget={}\nretrieval_selected={}\ncompactions={} (last: {}, ratio: {})\ncompact_boundary={}\nrecent_compact_file_count={}\nrecent_compact_files={}\ncache={}\nstate_db={}",
         app.snapshot.total_input_tokens,
@@ -835,14 +837,6 @@ pub fn status_resources_text(app: &TuiApp) -> String {
         cache,
         state_db,
     )
-}
-
-fn cache_hit_rate_label(hit_tokens: u32, miss_tokens: u32) -> String {
-    let total = hit_tokens.saturating_add(miss_tokens);
-    if total == 0 {
-        return "-".to_string();
-    }
-    format!("{:.1}%", hit_tokens as f64 * 100.0 / total as f64)
 }
 
 pub fn status_prompt_sources_text(app: &TuiApp) -> String {
