@@ -4,8 +4,6 @@ Active backlog only. Keep this file small and current.
 
 ## Suggested Rollout Order
 
-From higher-leverage structural work toward later UX parity work:
-
 1. Runtime bootstrap and context contracts
 2. Configuration and provider-surface cleanup
 3. Workspace / skill observability and cache correctness
@@ -13,137 +11,72 @@ From higher-leverage structural work toward later UX parity work:
 5. TUI transcript parity and command-surface polish
 6. Terminal-Bench evaluation readiness
 
-## Phase 1: Architecture Closure
-
-Goal: lock down the boundaries that are most likely to keep expanding unless they are made explicit now.
-
-Acceptance:
-- agent, TUI, and session restore share the same context/runtime assembly contract
-- `/context` can explain which context and memory sources were injected, where they came from, in what order, why they were selected, what was available, what was dropped, and the budget/cache status behind those decisions
-- `/status` can summarize the same runtime state at a higher level without replacing `/context`
-- `src/main.rs` remains a thin startup orchestrator instead of continuing to own runtime assembly
-
-Priority order for this phase:
-
-1. Strengthen `/context` as the primary context and memory-selection debugger
-   - ✅ The data pipeline is solid: `ContextAssemblyView` → `RuntimeSnapshot` → `status_context_text`.
-   - ✅ Rendering includes all layers, memory selection (selected/available/dropped), budget, compaction, and retrieval sources.
-   - ✅ Added `CacheStatus` enum (`Hit`/`Miss`/`NoCache`) to `src/context/runtime.rs`, threading it through `ContextAssemblyEntry`, and rendering known cache state in `/context` with compact markers (`●` hit, `○` miss, `-` no-cache).
-
-2. Complete `MemorySelection` as the authoritative bounded retrieval-selection pipeline
-   - ✅ 1A. Selection logic is the primary path — `memory_selection()` assembles fixed + discretionary items with budget-aware ranking. 6 focused tests added to `src/context/memory_selection.rs`.
-   - [ ] 1B. Replace placeholder retrieval with real vector-backed retrieval for thread and workspace memory (requires LanceDB backend).
-
-3. Deepen the `ThreadStore` / `ThreadRecorder` boundary into a real thread domain
-   - ✅ Added `ThreadMetadata::is_fork()`, `ThreadMetadata::lineage()`, `ThreadSnapshot::provenance_description()`, `ThreadMaterializationProvenance::describe()` for explicit lineage and fallback-hierarchy inspection.
-   - ✅ Provenance tracking distinguishes canonical sources from legacy backfill and StateDb fallback.
-
-4. Continue promoting compaction into a first-class runtime lifecycle event
-   - ✅ Compaction events persist through `PersistedCompactionEvent` in the structured rollout events log.
-   - [ ] Tighten ownership between `CompactState` (runtime) and `CompactionRecord` (persisted) so compaction metadata flows through one authoritative boundary instead of two parallel representations.
-
-## Architecture / Runtime
-
-- [x] Promote the current `MemorySelection` skeleton into the authoritative bounded retrieval-selection pipeline for thread and workspace recall.
-- [x] Finish the first non-vector cut of `MemorySelection` so thread memory, workspace memory, active thread state, pending interaction state, and recent tool results all flow through one selected/available/dropped explanation path.
-- [x] Treat `/context` as the high-priority debugger for context and memory selection before expanding retrieval breadth.
-
 ## Configuration / Provider Surface
 
 - [ ] Complete `reasoning_summary` rollout across backend requests, switching flows, and status surfaces; retire remaining `thinking`-only behavior outside migration fallback.
-- [ ] Surface provider-scoped reasoning configuration in `/status` and provider/model switching flows, including where the effective value came from.
-- [ ] Study Gemini/Codex-style multi-model routing and add first-class support for using a top-tier model and a flash/fast model together, with `/status` showing the effective routing policy, assigned model roles, and provider/model provenance.
-- [ ] Deepen provider-surface continuity after hot-swap landed: tighten auth-mode/endpoint alignment, provenance reporting, and remaining runtime continuity edge cases.
-- [ ] Align Codex endpoint selection with auth mode so ChatGPT/Codex login and OpenAI API key sessions do not blindly share the same provider URL.
-- [ ] Split Codex-specific persisted auth/config back out to `~/.codex` while keeping provider-agnostic RARA config and runtime/session state under `~/.rara`.
+- [ ] Surface provider-scoped reasoning configuration in `/status` and provider/model switching flows.
+- [ ] Study Gemini/Codex-style multi-model routing for top-tier + flash/fast model pairing.
+- [ ] Deepen provider-surface continuity after hot-swap: auth-mode/endpoint alignment, provenance reporting.
+- [ ] Align Codex endpoint selection with auth mode (ChatGPT/Codex login vs API key).
+- [ ] Split Codex-specific persisted auth/config to `~/.codex`, keep RARA config under `~/.rara`.
 
 ## Workspace / Skills / Prompt Sources
 
-- [ ] Expand focused tests around workspace prompt-source discovery and cache invalidation across cwd changes, git branch changes, nested workspaces, and outside-workspace fallback.
-- [ ] Define and document `WorkspaceMemory` cache invalidation rules for prompt files and environment info instead of relying on implicit behavior.
-- [ ] Unify `discover_prompt_sources()` and TUI `/status` source reporting so displayed prompt sources match the actual injected sources.
-- [ ] Preserve stable top-level prompt/context prefixes while adding repo context, skills, hooks, imported agents, and memory sources; new inputs should enter through structured source objects, `MemorySelection`, lifecycle events, or thread-owned agent profiles instead of ad hoc prompt text.
-- [ ] Design a project-scoped extension surface that can ingest Claude/Codex-style repo customizations from `.claude/agents/`, `.claude/hooks/`, and `.agents/skills/`, with explicit precedence and compatibility rules before adding runtime execution.
-- [ ] Add a Claude-style `verify` skill and project-local `verifier-*` skill convention from `docs/features/verify-skill.md`.
-- [ ] Evolve `SkillTool` toward the Codex/Claude-aligned contract in `docs/features/skill-tool.md`: frontmatter metadata, source scopes, load errors, overridden-skill visibility, optional args, invocation tracking, and budget-aware available-skill summaries.
-- [ ] Define and surface skill precedence/override behavior across home, repo, nested repo roots, and workspace-local skill roots.
-- [ ] Extend `SkillManager::list_summaries()` (or equivalent status output) with source precedence and overridden-skill visibility so conflicts are debuggable.
+- [ ] Tests for workspace prompt-source discovery and cache invalidation (cwd changes, git branches, nested workspaces).
+- [ ] Define `WorkspaceMemory` cache invalidation rules for prompt files and environment info.
+- [ ] Unify `discover_prompt_sources()` and TUI `/status` source reporting.
+- [ ] New prompt inputs through structured source objects, `MemorySelection`, lifecycle events — not ad hoc text.
+- [ ] Project-scoped extension surface for `.claude/agents/`, `.claude/hooks/`, `.agents/skills/` with precedence rules.
+- [ ] Claude-style `verify` skill and `verifier-*` convention (see `docs/features/verify-skill.md`).
+- [ ] Evolve `SkillTool` to Codex/Claude contract (see `docs/features/skill-tool.md`): frontmatter, scopes, override visibility.
+- [ ] Surface skill precedence/override across home, repo, nested roots.
 
 ## Web Tools
 
-- [ ] Replace the initial lightweight `web_fetch` HTML-to-text conversion with a higher-fidelity markdown conversion layer while preserving the current `web_fetch` result contract.
+- [ ] Replace `web_fetch` HTML-to-text with higher-fidelity markdown conversion.
 
 ## Memory / Retrieval / Persistence
 
-- [ ] Extend the local `ThreadStore` / `ThreadRecorder` boundary from a façade over `SessionManager` + `StateDb` into a true structured thread store with explicit thread metadata and rollout-item ownership.
-- [ ] Complete the thread lifecycle surface around the new thread boundary: stable `threads`/`thread`/`resume --last`/`fork` flows now exist, but richer lineage metadata and a clearer `latest thread` contract still need to land.
-- [ ] Add durable in-turn checkpoints for long-running agent tasks, aligned with Codex-style turn/item status tracking and Claude-style JSONL transcript replay:
-  - persist after the user message is accepted, after each assistant message, after each tool-result batch, after runtime continuation messages, and before waiting for pending user approval;
-  - make `SessionManager::save_session` crash-tolerant by writing through a temporary file and atomic rename instead of overwriting `history.json` directly;
-  - separate resumable transcript history from transient TUI task state so interrupted turns can resume with a clear `in progress` / `interrupted` / `failed` boundary rather than only an end-of-turn save.
-- [ ] Define background task restart/reattach semantics before persisting background task metadata across process restarts; the durable index should make completed logs discoverable without pretending killed parent processes are still attachable.
-- [ ] Make compaction a first-class runtime lifecycle event with persisted summaries, token counters, and boundary metadata ownership aligned with the thread domain.
-- [ ] Define thread-scoped and workspace-scoped `MemoryRecord` storage plus promotion rules so durable findings are not mixed with transient turn context.
-- [ ] Replace the current placeholder retrieval path with real vector retrieval over Lance/LanceDB, including metadata-aware ranking for thread and workspace memory selection.
-- [ ] Add the retrieval orchestration layer described in `docs/features/context-architecture.md` so thread recall, vector recall, and later graph recall compose into one bounded `MemorySelection`.
-- [ ] Design Graph RAG as a later retrieval layer on top of durable memory and extracted relationships instead of as prompt-only glue.
+- [ ] Real vector-backed retrieval via LanceDB for thread and workspace memory.
+- [ ] Durable in-turn checkpoints: persist after each message/tool-result batch, atomic writes, crash-tolerant `SessionManager`.
+- [ ] Define background task restart/reattach semantics.
+- [ ] Compaction as first-class lifecycle event: persist summaries, token counters, metadata ownership.
+- [ ] `ThreadStore` / `ThreadRecorder`: from façade over `SessionManager`+`StateDb` to true structured thread store.
+- [ ] Thread-scoped and workspace-scoped `MemoryRecord` storage with promotion rules.
+- [ ] Retrieval orchestration layer from `docs/features/context-architecture.md`.
+- [ ] Initialize LanceDB and wire vector index for memory selection.
 
-## TUI / UX Parity
+## TUI / Transcript
 
-- [ ] Strengthen the `/context` display with a Claude Code-inspired source breakdown: show active context categories, source paths, ordering, token or budget contribution, cache hit rate, selected memory, available-but-omitted memory, and dropped sources.
-- [ ] Continue improving transcript rendering stability across long and streaming sessions: reduce scroll jumps and flicker, strengthen bottom anchoring, and prevent stale transient sections from reappearing after their live phase ends.
-- [ ] Implement the session-scoped Todo runtime from `docs/features/todo-runtime.md`, including `todo_write`, `.rara/sessions/<session_id>/todo.json`, context/status surfacing, restore behavior, and compact TUI update cards.
-- [ ] Implement the `/review` slash command from `docs/features/slash-review-command.md`, including parser/help support, generated review prompt, and runtime command tests.
-- [ ] Add Codex-style non-bracketed paste-burst detection for terminals that deliver pasted text as fast `Char` / `Enter` key streams instead of `Event::Paste`, so embedded newlines are inserted into the composer instead of submitting partial turns.
-- [ ] Improve long-running task progress reporting so the TUI heartbeat reflects the active phase (`sending prompt`, `streaming response`, `running tool`, `waiting for approval`, `checkpointing`) instead of resetting to a generic prompt-sending notice during long tool execution.
-- [ ] Rework long `Exploring` / `Explored` handling to follow Codex more closely: keep live exploration compact and summarize committed exploration into a source-aware digest instead of dumping long raw traces.
-- [ ] Decouple setup/help/model overlays from transcript layout so overlays behave as a pure top layer and do not perturb history viewport sizing.
-- [ ] After exit, print a Codex/Claude-style resume hint that tells the user how to restore the current thread quickly (for example the exact `rara resume <THREAD_ID>` or `rara resume --last` command to use).
-- [ ] Add Claude-style repository context hints beneath the input area, especially the current GitHub PR link when the workspace maps to an open PR.
-- [ ] Add Codex/Claude-style transcript role cards for `You` / `Agent` / `System` without mixing status chrome into committed transcript history.
-- [ ] Bring the main response UI closer to Codex / Claude Code: stabilize active response blocks while streaming and avoid falling back to generic transcript rows for states that should stay in dedicated response cards.
-- [ ] Rework the built-in command TUI (`/help`, `/model`, `/status`, command palette, setup overlays) to more closely match Codex / Claude Code.
-- [ ] Refine `/status` into a more detailed runtime status surface that separates provider/model state, reasoning settings, sandbox/network policy, context injection state, tool availability, and pending interaction state.
-- [ ] Continue making tool-action transcript summaries more source-aware and file-aware so edit tools (`write_file`, `replace`, `apply_patch`) consistently show what they touched.
-- [ ] Continue refining the live `bash` transcript path so command execution behaves more like Codex: clearer lifecycle framing, streamed stdout/stderr handling, and better long-output folding.
-- [ ] Add a high-fidelity Claude Code / Codex transcript rendering pass for `write/update`, inline diff display, approval cards, and message-card hierarchy.
-- [ ] Expand TUI snapshot coverage for transcript-heavy widgets, overlays, status surfaces, and auth/model picker flows.
+- [ ] Decouple overlays from transcript layout (pure top layer, no viewport perturbation).
+- [ ] Post-exit resume hint (e.g. `rara resume --last`).
+- [ ] Claude-style repo context hints beneath input area (GitHub PR link).
+- [ ] Codex/Claude-style transcript role cards (`You` / `Agent` / `System`).
+- [ ] Stabilize active response blocks while streaming, avoid generic transcript fallback.
+- [ ] Rework built-in command TUI (`/help`, `/model`, `/status`, command palette, overlays) to match Codex/Claude.
+- [ ] Refine `/status`: provider/model state, reasoning, sandbox/network, context injection, tool availability.
+- [ ] Tool-action summaries more source-aware and file-aware.
+- [ ] Live `bash` transcript: lifecycle framing, streamed stdout/stderr, long-output folding.
+- [ ] High-fidelity render pass for `write/update`, inline diffs, approval cards, message-card hierarchy.
+- [ ] Expand TUI snapshot coverage.
 
 ## Security / Reliability / Performance
 
-- [ ] Replace the current string-based shell execution path in `src/tools/bash.rs` and `crates/sandbox` with a structured command model (`program`, `args`, `cwd`, `allow_net`).
-- [ ] Implement the classifier and routing model from `docs/features/classifier-and-routing.md`: keep auto-permission classification, background-task state classification, and plan-mode entry as separate surfaces instead of one generic router.
-- [ ] Design an auditable command permission and sandbox-bypass rule model inspired by Codex and Claude Code:
-  - keep approval rules separate from sandbox rules;
-  - make deny rules take precedence over allow / bypass rules;
-  - support explicit command-prefix or command-pattern rules for trusted commands;
-  - allow unsandboxed execution only when policy permits it and the transcript/status surface makes the bypass visible;
-  - add a structured sandbox-denial error path for Codex-style `on-failure` approval and retry without stderr keyword matching;
-  - document that convenience exclusions are not a security boundary.
-- [ ] Add a structured auto-permission classifier side query after deterministic deny rules, with compact transcript projection that includes user intent and tool actions but excludes assistant prose.
-- [ ] Add a background-task state classifier for long-running agents that reports `working` / `blocked` / `done` / `failed` as derived status while keeping persisted task transcript as source of truth.
-- [ ] Move API key handling in config/backend paths to `secrecy::SecretString` end to end and audit error/reporting paths so secrets are never echoed.
-- [ ] Replace `.expect(...)` around provider credential/model setup with structured `anyhow::Context` errors that remain useful without leaking sensitive values.
-- [ ] Review path and command validation around `bash`, file tools, and sandbox handoff instead of relying on minimal escaping.
-- [ ] Rework token accounting in `src/agent.rs` so repeated checks do not need to re-encode full history every time.
-- [ ] Replace the fixed 100ms TUI event polling loop in `src/tui/mod.rs` with a more event-driven wakeup model when the app is idle.
-- [ ] Add stronger terminal panic/teardown guards so alternate-screen/raw-mode cleanup is robust on unexpected failures.
+- [ ] Structured command model (`program`, `args`, `cwd`, `allow_net`) in `src/tools/bash.rs` and `crates/sandbox`.
+- [ ] Classifier and routing model from `docs/features/classifier-and-routing.md`.
+- [ ] Auditable permission + sandbox-bypass rules (Codex/Claude-inspired).
+- [ ] Structured auto-permission classifier with compact transcript projection.
+- [ ] Background-task state classifier: `working` / `blocked` / `done` / `failed`.
+- [ ] `secrecy::SecretString` end-to-end for API keys, audit error paths.
+- [ ] Replace `.expect(...)` with structured `anyhow::Context` errors.
+- [ ] Review path/command validation in `bash`, file tools, sandbox.
+- [ ] Rework token accounting in `src/agent.rs` (avoid re-encoding full history).
+- [ ] Replace fixed 100ms TUI event polling loop.
 
 ## Evaluation / Benchmarks
 
-- [ ] Make Terminal-Bench compatibility an explicit product-quality target: add a headless Harbor/Terminal-Bench adapter, preserve structured trajectories, and keep benchmark data out of prompts, memories, fixtures, and training-oriented artifacts. See `docs/features/terminal-bench-evaluation.md`.
-- [ ] Add a small Terminal-Bench smoke run target before attempting full benchmark runs, with recorded RARA revision, dataset version, provider/model, sandbox mode, and failure taxonomy.
+- [ ] Terminal-Bench readiness: add a headless adapter, preserve structured trajectories, and start with a small smoke run that records RARA revision, dataset version, provider/model, sandbox mode, and failure taxonomy.
 
 ## Code Organization / Docs
 
-- [ ] Continue splitting the remaining near-limit runtime/TUI files so the 800-line guideline keeps holding in practice, especially `src/tui/runtime/events/helpers.rs`, `src/tui/custom_terminal.rs`, `src/tui/command.rs`, and `src/agent/planning.rs`.
-- [ ] Add module-level documentation for the agent lifecycle, tool loop, context assembly, plan/update flow, and sandbox model.
-- [ ] Add comments around non-obvious continuation / plan / current-turn rendering logic so future refactors do not regress the Codex-style workflow.
-- [ ] Replace remaining policy-like magic numbers in the TUI/runtime path with named constants.
-- [ ] Split backlog planning between architecture/runtime work and TUI/UX parity work if this file starts accumulating duplicate or umbrella-incompatible items again.
-
-## Maintenance Rules
-
-- Keep only open work here.
-- Remove completed items after evidence lands in a journal, PR, or canonical feature spec.
-- Prefer one umbrella rollout item over many duplicated micro-items for the same surface.
+- [ ] Continue splitting remaining oversized runtime/TUI files, especially `src/tui/render/cells.rs`, `src/tui/render.rs`, `src/tui/command.rs`, and `src/agent/planning.rs`.
