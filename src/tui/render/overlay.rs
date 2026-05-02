@@ -26,6 +26,7 @@ use super::super::custom_terminal::Frame;
 use super::super::interaction_text::status_active_pending_interaction_text;
 use super::super::plan_display::status_plan_text;
 use super::super::state::{CommandSpec, HelpTab, Overlay, TuiApp};
+use crate::tui::status_display::render_status_lines;
 
 pub(super) fn render_overlay(
     f: &mut Frame,
@@ -409,108 +410,21 @@ mod tests {
         assert!(popup.width >= 90);
     }
 }
-
 fn render_status_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
+    let lines = render_status_lines(app);
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(8),
-            Constraint::Length(6),
-            Constraint::Length(8),
-            Constraint::Length(8),
-            Constraint::Min(6),
-            Constraint::Length(2),
-        ])
+        .constraints([Constraint::Fill(1), Constraint::Length(1)])
         .split(area);
-    let top = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage(34),
-            Constraint::Percentage(33),
-            Constraint::Percentage(33),
-        ])
-        .split(chunks[0]);
-    let middle = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-        .split(chunks[1]);
     f.render_widget(
-        Paragraph::new(panel_text("runtime", &status_runtime_text(app)))
-            .block(Block::default().borders(Borders::LEFT | Borders::RIGHT))
-            .wrap(Wrap { trim: false }),
-        top[0],
+        Paragraph::new(lines).block(Block::default().borders(Borders::LEFT | Borders::RIGHT)),
+        chunks[0],
     );
     f.render_widget(
-        Paragraph::new(panel_text("workspace", &status_workspace_text(app)))
-            .block(Block::default().borders(Borders::LEFT | Borders::RIGHT))
-            .wrap(Wrap { trim: false }),
-        top[1],
-    );
-    f.render_widget(
-        Paragraph::new(panel_text("resources", &status_resources_text(app)))
-            .block(Block::default().borders(Borders::LEFT | Borders::RIGHT))
-            .wrap(Wrap { trim: false }),
-        top[2],
-    );
-    f.render_widget(
-        Paragraph::new(panel_text(
-            "prompt sources",
-            &status_prompt_sources_text(app),
-        ))
-        .block(Block::default().borders(Borders::LEFT | Borders::RIGHT))
-        .wrap(Wrap { trim: false }),
+        Paragraph::new(" ↑↓ scroll  Esc close  /context detailed view")
+            .style(Style::default().fg(Color::DarkGray))
+            .alignment(Alignment::Center),
         chunks[1],
-    );
-    let right_panel = download_status_text(app).unwrap_or_else(|| quick_actions_text().to_string());
-    f.render_widget(
-        Paragraph::new(panel_text("models", &model_help_text(app)))
-            .block(Block::default().borders(Borders::LEFT | Borders::RIGHT))
-            .wrap(Wrap { trim: false }),
-        middle[0],
-    );
-    f.render_widget(
-        Paragraph::new(panel_text("downloads / actions", &right_panel))
-            .block(Block::default().borders(Borders::LEFT | Borders::RIGHT))
-            .wrap(Wrap { trim: false }),
-        middle[1],
-    );
-    f.render_widget(
-        Paragraph::new(panel_text("updated plan", &status_plan_text(app)))
-            .block(Block::default().borders(Borders::LEFT | Borders::RIGHT))
-            .wrap(Wrap { trim: false }),
-        chunks[2],
-    );
-    let lower = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-        .split(chunks[3]);
-    let interaction_text = status_active_pending_interaction_text(app)
-        .map(|(_, text)| text)
-        .unwrap_or_else(|| "No pending interaction.".to_string());
-    f.render_widget(
-        Paragraph::new(panel_text("request input", &interaction_text))
-            .block(Block::default().borders(Borders::LEFT | Borders::RIGHT))
-            .wrap(Wrap { trim: false }),
-        lower[0],
-    );
-    f.render_widget(
-        Paragraph::new(panel_text("current turn", &current_turn_preview(app, 10)))
-            .block(Block::default().borders(Borders::LEFT | Borders::RIGHT))
-            .wrap(Wrap { trim: false }),
-        lower[1],
-    );
-    f.render_widget(
-        Paragraph::new(panel_text(
-            "recent activity",
-            &recent_transcript_preview(app, 8),
-        ))
-        .block(Block::default().borders(Borders::LEFT | Borders::RIGHT))
-        .wrap(Wrap { trim: false }),
-        chunks[4],
-    );
-    f.render_widget(
-        Paragraph::new("esc close  enter close  /help  /model").alignment(Alignment::Center),
-        chunks[5],
     );
 }
 
