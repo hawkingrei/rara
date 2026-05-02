@@ -443,16 +443,17 @@ fn head_tail_line_window<T>(items: &[T], max_lines: usize) -> (&[T], &[T]) {
 }
 
 fn role_prefix_icon(role: &str) -> (&'static str, Color) {
-    match role {
-        "Tool Result" => ("✓ ", STATUS_SUCCESS),
-        "Tool Error" => ("✕ ", STATUS_ERROR),
-        "Tool Progress" => ("… ", STATUS_WARNING),
-        "Tool" => ("⚙ ", TEXT_SECONDARY),
-        "System" => ("ℹ ", STATUS_INFO),
-        "Exploring" => ("🔍 ", PHASE_EXPLORING),
-        "Planning" => ("📋 ", PHASE_PLANNING),
-        "Running" => ("▶ ", PHASE_RUNNING),
-        "Agent" => ("🤖 ", ROLE_PREFIX),
+    use crate::tui::message_role::MessageRole;
+    match MessageRole::try_from_str(role) {
+        Some(MessageRole::ToolResult) => ("✓ ", STATUS_SUCCESS),
+        Some(MessageRole::ToolError) => ("✕ ", STATUS_ERROR),
+        Some(MessageRole::ToolProgress) => ("… ", STATUS_WARNING),
+        Some(MessageRole::Tool) => ("⚙ ", TEXT_SECONDARY),
+        Some(MessageRole::System) => ("ℹ ", STATUS_INFO),
+        Some(MessageRole::Exploring) => ("🔍 ", PHASE_EXPLORING),
+        Some(MessageRole::Planning) => ("📋 ", PHASE_PLANNING),
+        Some(MessageRole::Running) => ("▶ ", PHASE_RUNNING),
+        Some(MessageRole::Agent) => ("🤖 ", ROLE_PREFIX),
         _ => ("", TEXT_SECONDARY),
     }
 }
@@ -462,7 +463,8 @@ pub(crate) fn prefixed_message_lines(
     message: &str,
     max_lines: usize,
 ) -> Vec<Line<'static>> {
-    if role == "You" {
+    use crate::tui::message_role::MessageRole;
+    if MessageRole::try_from_str(role) == Some(MessageRole::User) {
         return user_message_lines(message, max_lines);
     }
 
@@ -530,7 +532,9 @@ pub(crate) fn formatted_message_lines(
     max_lines: usize,
     cwd: Option<&Path>,
 ) -> Vec<Line<'static>> {
-    if role == "Agent" {
+    use crate::tui::message_role::MessageRole;
+    let role_kind = MessageRole::try_from_str(role);
+    if role_kind == Some(MessageRole::Agent) {
         let mut lines = vec![Line::from(Span::styled(
             "🤖",
             Style::default()
@@ -541,7 +545,7 @@ pub(crate) fn formatted_message_lines(
         lines.extend(body);
         return lines;
     }
-    if role == "System" {
+    if role_kind == Some(MessageRole::System) {
         return markdown_message_lines(role, message, max_lines, cwd);
     }
     prefixed_message_lines(role, message, max_lines)
