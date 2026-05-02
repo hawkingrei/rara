@@ -503,16 +503,30 @@ impl Agent {
                 if self.should_continue_execute_without_tools(
                     *agentic_turns,
                     turn_output.continue_inspection,
+                    turn_output.had_text_response,
+                    turn_output.had_reasoning_response,
                 ) {
-                    report(AgentEvent::Status(
-                        "Repository review needs more code inspection. Continuing the same turn."
-                            .to_string(),
-                    ));
-                    *agentic_turns += 1;
-                    self.push_history_message(self.runtime_continuation_message(
-                        RuntimeContinuationPhase::ExecutionContinuationRequired,
+                    let phase = if Self::is_reasoning_only_initial_turn(
+                        turn_output.had_text_response,
+                        turn_output.had_reasoning_response,
                         *agentic_turns,
-                    ));
+                    ) {
+                        report(AgentEvent::Status(
+                            "Model produced reasoning only. Continuing for a visible answer or tool call."
+                                .to_string(),
+                        ));
+                        RuntimeContinuationPhase::ReasoningOnlyContinuationRequired
+                    } else {
+                        report(AgentEvent::Status(
+                            "Repository review needs more code inspection. Continuing the same turn."
+                                .to_string(),
+                        ));
+                        RuntimeContinuationPhase::ExecutionContinuationRequired
+                    };
+                    *agentic_turns += 1;
+                    self.push_history_message(
+                        self.runtime_continuation_message(phase, *agentic_turns),
+                    );
                     self.checkpoint_session()?;
                     continue;
                 }

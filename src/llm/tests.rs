@@ -10,8 +10,8 @@ use super::ollama::{
 };
 use super::openai_compatible::{
     apply_codex_stream_event, build_chat_completion_request_body, build_codex_responses_request,
-    build_streaming_response_content, merge_streaming_tool_calls, parse_chat_completion_response,
-    parse_codex_response, to_codex_input_items, to_openai_messages,
+    build_streaming_response_content, is_openai_stream_idle_error, merge_streaming_tool_calls,
+    parse_chat_completion_response, parse_codex_response, to_codex_input_items, to_openai_messages,
     to_openai_messages_for_endpoint,
 };
 use super::shared::{
@@ -1766,4 +1766,13 @@ fn bypasses_proxy_for_local_ollama_hosts() {
     assert!(should_bypass_proxy("http://localhost:11434"));
     assert!(should_bypass_proxy("http://127.0.0.1:11434"));
     assert!(!should_bypass_proxy("https://openrouter.ai/api/v1"));
+}
+
+#[test]
+fn detects_openai_stream_idle_timeout_as_retryable() {
+    let error = anyhow::anyhow!("OpenAI-compatible SSE stream produced no events for 120 seconds");
+    assert!(is_openai_stream_idle_error(&error));
+
+    let parse_error = anyhow::anyhow!("Failed to parse SSE payload: expected value");
+    assert!(!is_openai_stream_idle_error(&parse_error));
 }
