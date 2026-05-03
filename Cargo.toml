@@ -84,13 +84,13 @@ candle = { git = "https://github.com/huggingface/candle", rev = "34625ab6d1567a0
 candle-nn = { git = "https://github.com/huggingface/candle", rev = "34625ab6d1567a0bc132ac6bc8dc2cce0e16d86d", package = "candle-nn" }
 candle-transformers = { git = "https://github.com/huggingface/candle", rev = "34625ab6d1567a0bc132ac6bc8dc2cce0e16d86d", package = "candle-transformers" }
 backon = "1.6.0"
+ethnum = "1.5.3"
 
 [dev-dependencies]
 tempfile = "3.17"
 insta = "1.43"
 
 [patch.crates-io]
-ethnum = "1.5.3"
 tokio-tungstenite = { git = "https://github.com/openai-oss-forks/tokio-tungstenite", rev = "132f5b39c862e3a970f731d709608b3e6276d5f6" }
 tungstenite = { git = "https://github.com/openai-oss-forks/tungstenite-rs", rev = "9200079d3b54a1ff51072e24d81fd354f085156f" }
 
