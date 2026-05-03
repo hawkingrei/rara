@@ -10,8 +10,12 @@ use std::io::{Read, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use uuid::Uuid;
+
+const PTY_START_QUICK_COMPLETION_TIMEOUT: Duration = Duration::from_millis(750);
+const PTY_START_QUICK_COMPLETION_POLL: Duration = Duration::from_millis(25);
 
 pub struct PtyStartTool {
     pub sessions: Arc<PtySessionStore>,
@@ -195,6 +199,39 @@ impl PtySessionStore {
             .map(PtySessionRecord::snapshot)
     }
 
+    async fn wait_for_quick_completion(&self, id: &str, timeout: Duration) -> PtySessionSnapshot {
+        let Some(deadline) = Instant::now().checked_add(timeout) else {
+            // Timeout too large — return whatever snapshot we have now.
+            return self
+                .get(id)
+                .unwrap_or_else(|| PtySessionSnapshot::missing(id));
+        };
+
+        // Fetch the session handle once so we can poll status without
+        // calling self.get(id) (which clones the whole snapshot) on every
+        // iteration.  We still refresh the full snapshot on completion.
+        let mut snapshot = match self.get(id) {
+            Some(snap) => snap,
+            None => return PtySessionSnapshot::missing(id),
+        };
+
+        while matches!(snapshot.status, PtySessionStatus::Running) {
+            let now = Instant::now();
+            if now >= deadline {
+                break;
+            }
+            let remaining = deadline - now;
+            let sleep_duration = remaining.min(PTY_START_QUICK_COMPLETION_POLL);
+            tokio::time::sleep(sleep_duration).await;
+
+            match self.get(id) {
+                Some(next) => snapshot = next,
+                None => break,
+            }
+        }
+        snapshot
+    }
+
     fn list(&self) -> Vec<PtySessionSnapshot> {
         let mut snapshots = self
             .sessions
@@ -266,6 +303,20 @@ struct PtySessionSnapshot {
     sandbox_backend: String,
     network_access: bool,
     status: PtySessionStatus,
+}
+
+impl PtySessionSnapshot {
+    fn missing(id: &str) -> Self {
+        Self {
+            id: id.to_string(),
+            command: String::new(),
+            output_path: PathBuf::new(),
+            sandboxed: false,
+            sandbox_backend: String::new(),
+            network_access: false,
+            status: PtySessionStatus::Completed,
+        }
+    }
 }
 
 impl PtySessionRecord {
@@ -379,8 +430,12 @@ impl Tool for PtyStartTool {
             })?;
         let rows = parse_pty_dimension(input.get("rows"), 24, "rows")?;
         let cols = parse_pty_dimension(input.get("cols"), 120, "cols")?;
+        let started =
+            self.sessions
+                .start(command, wrapped, cwd, &self.base_env, env, rows, cols)?;
         self.sessions
-            .start(command, wrapped, cwd, &self.base_env, env, rows, cols)?
+            .wait_for_quick_completion(&started.id, PTY_START_QUICK_COMPLETION_TIMEOUT)
+            .await
             .into_json(12_000)
             .await
     }
@@ -868,6 +923,85 @@ mod tests {
             output.contains("got:hello from pty"),
             "last pty output did not contain expected marker: {last}"
         );
+    }
+
+    #[tokio::test]
+    async fn pty_start_waits_briefly_for_quick_command_output() {
+        let temp = tempdir().expect("tempdir");
+        let sessions = Arc::new(PtySessionStore::new(temp.path().join("pty")).expect("pty store"));
+
+        let command = "printf 'quick-done\\n'".to_string();
+        let started = sessions
+            .start(
+                command.clone(),
+                WrappedCommand {
+                    program: "/bin/sh".to_string(),
+                    args: vec!["-c".to_string(), command],
+                    cleanup_path: None,
+                    sandboxed: false,
+                    sandbox_backend: "direct".to_string(),
+                    sandbox_home: None,
+                    network_access: true,
+                },
+                temp.path().display().to_string(),
+                &HashMap::new(),
+                HashMap::new(),
+                24,
+                120,
+            )
+            .expect("start pty");
+        let inspected = sessions
+            .wait_for_quick_completion(&started.id, PTY_START_QUICK_COMPLETION_TIMEOUT)
+            .await
+            .into_json(12_000)
+            .await
+            .expect("pty json");
+
+        assert_eq!(
+            inspected.get("status").and_then(Value::as_str),
+            Some("completed")
+        );
+        assert!(
+            inspected
+                .get("output")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .contains("quick-done"),
+            "quick command output should be available in pty_start result: {inspected}"
+        );
+    }
+
+    #[tokio::test]
+    async fn pty_start_keeps_long_running_session_running_after_brief_wait() {
+        let temp = tempdir().expect("tempdir");
+        let sessions = Arc::new(PtySessionStore::new(temp.path().join("pty")).expect("pty store"));
+
+        let command = "sleep 2".to_string();
+        let started = sessions
+            .start(
+                command.clone(),
+                WrappedCommand {
+                    program: "/bin/sh".to_string(),
+                    args: vec!["-c".to_string(), command],
+                    cleanup_path: None,
+                    sandboxed: false,
+                    sandbox_backend: "direct".to_string(),
+                    sandbox_home: None,
+                    network_access: true,
+                },
+                temp.path().display().to_string(),
+                &HashMap::new(),
+                HashMap::new(),
+                24,
+                120,
+            )
+            .expect("start pty");
+        let inspected = sessions
+            .wait_for_quick_completion(&started.id, Duration::from_millis(100))
+            .await;
+
+        assert_eq!(inspected.status, PtySessionStatus::Running);
+        sessions.kill(&started.id).expect("cleanup pty");
     }
 
     #[tokio::test]
