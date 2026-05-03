@@ -27,7 +27,6 @@ use crate::tui::interaction_text::{
 };
 use crate::tui::plan_display::should_show_updated_plan;
 use crate::tui::queued_input::queued_follow_up_sections;
-use crate::tui::render::helpers::display_width;
 use crate::tui::render::{
     compact_progress_summary_lines, compact_recent_first_summary_lines, compact_summary_lines,
     compact_summary_text, current_turn_exploration_summary_from_entries, current_turn_tool_summary,

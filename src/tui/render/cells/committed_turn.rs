@@ -9,13 +9,12 @@ use super::components::{
 use super::progress::{explicit_progress_entry_groups, push_progress_group};
 use super::terminal::terminal_cell_from_entries;
 use super::{
-    HistoryCell, InteractionCompletionKind, TerminalCellData, is_progress_stack_title,
-    trim_trailing_empty_lines,
+    HistoryCell, InteractionCompletionKind, is_progress_stack_title, trim_trailing_empty_lines,
 };
 use crate::tui::render::{
     current_turn_exploration_summary_from_entries, current_turn_tool_summary,
 };
-use crate::tui::state::{TranscriptEntry, TranscriptEntryPayload, TuiApp};
+use crate::tui::state::{TranscriptEntry, TranscriptEntryPayload};
 pub(crate) struct CommittedTurnCell<'a> {
     entries: &'a [TranscriptEntry],
     cwd: Option<&'a Path>,

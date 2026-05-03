@@ -122,14 +122,14 @@ pub(super) async fn execute_local_command(
                     RuntimePhase::LocalCommand,
                     Some("preparing review prompt".into()),
                 );
-                let diff = capture_git_diff();
+                let diff = capture_git_diff(&app.snapshot.cwd);
                 let mut prompt = String::from("Please review the following code changes. ");
                 prompt.push_str(
                     "Point out potential issues, suggest improvements, and highlight any concerns about correctness, performance, or maintainability.\n\n",
                 );
                 if diff.is_empty() {
                     prompt.push_str("No local git changes found. The working tree is clean.");
-                } else if diff.lines().count() > 800 {
+                } else if diff.lines().take(801).count() > 800 {
                     let preview: String =
                         diff.lines().take(600).map(|l| format!("{l}\n")).collect();
                     prompt.push_str(&format!(
@@ -191,14 +191,31 @@ fn handle_base_url_command(arg: Option<&str>, app: &mut TuiApp) -> anyhow::Resul
     Ok(())
 }
 
-fn capture_git_diff() -> String {
+fn capture_git_diff(cwd: &str) -> String {
+    use std::path::Path;
     use std::process::Command;
-    let run = |args: &[&str]| -> Option<String> {
-        Command::new("git")
-            .args(args)
-            .output()
+    let dir = if cwd.is_empty() {
+        None
+    } else {
+        Some(Path::new(cwd))
+    };
+    let cmd = |args: &[&str]| {
+        let mut c = Command::new("git");
+        c.args(args);
+        if let Some(d) = dir {
+            c.current_dir(d);
+        }
+        c.output()
+    };
+    let run = |args| -> Option<String> {
+        cmd(args)
             .ok()
-            .and_then(|out| String::from_utf8(out.stdout).ok())
+            .and_then(|out| {
+                if !out.stderr.is_empty() {
+                    let _stderr_msg = String::from_utf8_lossy(&out.stderr);
+                }
+                String::from_utf8(out.stdout).ok()
+            })
             .filter(|s| !s.trim().is_empty())
     };
     let staged = run(&["diff", "--staged"]);
