@@ -1,5 +1,6 @@
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
+use backon::{ExponentialBuilder, Retryable};
 use futures::{Stream, StreamExt};
 use serde_json::{Value, json};
 use std::sync::{
@@ -279,6 +280,57 @@ pub(super) fn parse_tool_arguments(arguments: &Value) -> Result<Value> {
         Value::Null => Ok(json!({})),
         _ => Err(anyhow!("tool arguments must be a string or object")),
     }
+}
+
+use reqwest::StatusCode;
+
+/// Retryable HTTP errors for Ollama, OpenAI-compatible backends, and web tools.
+/// Official API backends (Codex/Gemini) handle their own retry.
+pub(crate) fn is_retryable_http_error(error: &anyhow::Error) -> bool {
+    if let Some(e) = error.downcast_ref::<reqwest::Error>() {
+        if e.is_timeout() || e.is_connect() {
+            return true;
+        }
+        if let Some(status) = e.status() {
+            return status.is_server_error() || status == StatusCode::TOO_MANY_REQUESTS;
+        }
+    }
+    let msg = error.to_string().to_lowercase();
+    msg.contains("timeout")
+        || msg.contains("timed out")
+        || msg.contains("connection refused")
+        || msg.contains("connection reset")
+        || msg.contains("unreachable")
+        || (msg.contains("not found") && msg.contains("dns"))
+}
+
+/// Send a POST JSON request with exponential-backoff retry.
+/// Checks response status inside the closure so 429/5xx trigger retry.
+pub(crate) async fn retry_send_json(
+    client: &reqwest::Client,
+    url: &str,
+    body: &Value,
+    api_key: Option<&str>,
+) -> Result<reqwest::Response> {
+    (|| async {
+        let mut request = client.post(url);
+        if let Some(key) = api_key {
+            if !key.is_empty() {
+                request = request.header("Authorization", format!("Bearer {key}"));
+            }
+        }
+        let res = request.json(body).send().await.map_err(|e| anyhow!(e))?;
+        let status = res.status();
+        if status.is_server_error() || status == StatusCode::TOO_MANY_REQUESTS {
+            let body_text = res.text().await.unwrap_or_default();
+            let preview = body_text.chars().take(200).collect::<String>();
+            return Err(anyhow!("HTTP {}: {preview}", status.as_u16()));
+        }
+        Ok(res)
+    })
+    .retry(ExponentialBuilder::default().with_jitter())
+    .when(|e: &anyhow::Error| is_retryable_http_error(e))
+    .await
 }
 
 const HTTP_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);

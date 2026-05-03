@@ -12,7 +12,7 @@ use crate::redaction::{redact_secrets, sanitize_url_for_display};
 use super::shared::{
     ContextBudget, LlmBackend, LlmStreamEvent, collect_assistant_content,
     context_budget_from_window, extract_single_tool_result, hashed_embedding,
-    http_client_for_target, parse_tool_arguments, render_openai_message_content,
+    http_client_for_target, parse_tool_arguments, render_openai_message_content, retry_send_json,
 };
 
 pub struct OllamaBackend {
@@ -71,7 +71,7 @@ impl LlmBackend for OllamaBackend {
             );
         }
 
-        let res = self.client.post(&endpoint).json(&body).send().await?;
+        let res = retry_send_json(&self.client, &endpoint, &body, None).await?;
 
         if !res.status().is_success() {
             return Err(anyhow!(
@@ -173,7 +173,7 @@ impl LlmBackend for OllamaBackend {
             );
         }
 
-        let res = self.client.post(&endpoint).json(&body).send().await?;
+        let res = retry_send_json(&self.client, &endpoint, &body, None).await?;
         if !res.status().is_success() {
             return Err(anyhow!(
                 "API Error at {}: {}",
