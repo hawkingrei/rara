@@ -4,7 +4,9 @@ use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::Line,
-    widgets::{Block, Borders, Cell, List, ListItem, ListState, Paragraph, Row, Table, TableState, Wrap},
+    widgets::{
+        Block, Borders, Cell, List, ListItem, ListState, Paragraph, Row, Table, TableState, Wrap,
+    },
 };
 use secrecy::ExposeSecret;
 use unicode_width::UnicodeWidthChar;
@@ -714,10 +716,7 @@ pub(super) fn render_base_url_editor_modal(
 }
 
 pub(super) fn render_skills_picker_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
-    let title = format!(
-        " Skills ({} loaded) ",
-        app.skill_picker_entries.len()
-    );
+    let title = format!(" Skills ({} loaded) ", app.skill_picker_entries.len());
     let intro = "Space toggle enable/disable  Esc close";
     let intro_height = wrapped_text_height(intro, area.width);
     let chunks = Layout::default()
@@ -731,11 +730,7 @@ pub(super) fn render_skills_picker_modal(f: &mut Frame, app: &TuiApp, area: Rect
 
     f.render_widget(
         Paragraph::new(intro)
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title(title.as_str()),
-            )
+            .block(Block::default().borders(Borders::ALL).title(title.as_str()))
             .wrap(Wrap { trim: false }),
         chunks[0],
     );

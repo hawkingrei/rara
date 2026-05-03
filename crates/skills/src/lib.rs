@@ -413,7 +413,9 @@ mod tests {
         fs::write(dir.path().join("legacy.md"), "# Legacy Skill\nbody").expect("write");
 
         let mut manager = SkillManager::new();
-        manager.load_from_dir(dir.path(), SkillScope::Cwd).expect("load");
+        manager
+            .load_from_dir(dir.path(), SkillScope::Cwd)
+            .expect("load");
 
         let skill = manager.get_skill("legacy").expect("legacy skill");
         assert_eq!(skill.title.as_deref(), Some("Legacy Skill"));
@@ -430,7 +432,9 @@ mod tests {
         fs::write(skill_dir.join("SKILL.md"), "# Reviewer\nworkflow").expect("write");
 
         let mut manager = SkillManager::new();
-        manager.load_from_dir(dir.path(), SkillScope::Cwd).expect("load");
+        manager
+            .load_from_dir(dir.path(), SkillScope::Cwd)
+            .expect("load");
 
         let skill = manager.get_skill("reviewer").expect("reviewer skill");
         assert_eq!(skill.title.as_deref(), Some("Reviewer"));
@@ -451,7 +455,9 @@ mod tests {
         .expect("write");
 
         let mut manager = SkillManager::new();
-        manager.load_from_dir(dir.path(), SkillScope::Cwd).expect("load");
+        manager
+            .load_from_dir(dir.path(), SkillScope::Cwd)
+            .expect("load");
 
         let skill = manager.get_skill("code-review").expect("frontmatter skill");
         assert_eq!(skill.title.as_deref(), Some("Code Review"));
@@ -472,7 +478,9 @@ mod tests {
         .expect("write");
 
         let mut manager = SkillManager::new();
-        manager.load_from_dir(dir.path(), SkillScope::Cwd).expect("load");
+        manager
+            .load_from_dir(dir.path(), SkillScope::Cwd)
+            .expect("load");
 
         let skill = manager
             .get_skill("windows-review")
@@ -492,7 +500,9 @@ mod tests {
         fs::write(skill_dir.join("SKILL.md"), "# Directory Reviewer\nworkflow").expect("write");
 
         let mut manager = SkillManager::new();
-        manager.load_from_dir(dir.path(), SkillScope::Cwd).expect("load");
+        manager
+            .load_from_dir(dir.path(), SkillScope::Cwd)
+            .expect("load");
 
         let skill = manager.get_skill("reviewer").expect("reviewer skill");
         assert_eq!(skill.description, "Directory Reviewer");
@@ -618,7 +628,9 @@ mod tests {
         .expect("write");
 
         let mut manager = SkillManager::new();
-        manager.load_from_dir(dir.path(), SkillScope::Cwd).expect("load");
+        manager
+            .load_from_dir(dir.path(), SkillScope::Cwd)
+            .expect("load");
 
         let skill = manager.get_skill("restricted").expect("restricted skill");
         assert!(skill.disable_model_invocation);
@@ -634,7 +646,9 @@ mod tests {
         .expect("write");
 
         let mut manager = SkillManager::new();
-        manager.load_from_dir(dir.path(), SkillScope::Cwd).expect("load");
+        manager
+            .load_from_dir(dir.path(), SkillScope::Cwd)
+            .expect("load");
 
         let skill = manager.get_skill("open").expect("open skill");
         assert!(!skill.disable_model_invocation);

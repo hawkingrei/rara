@@ -41,10 +41,12 @@ impl Tool for SkillTool {
                 let name = i["skill_name"]
                     .as_str()
                     .ok_or(ToolError::InvalidInput("name".into()))?;
-                let skill = self
-                    .skill_manager
-                    .get_skill(name)
-                    .ok_or(ToolError::ExecutionFailed(format!("Skill not found: {name}")))?;
+                let skill =
+                    self.skill_manager
+                        .get_skill(name)
+                        .ok_or(ToolError::ExecutionFailed(format!(
+                            "Skill not found: {name}"
+                        )))?;
                 Ok(json!({
                     "name": skill.name,
                     "title": skill.title,

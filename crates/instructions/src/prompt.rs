@@ -974,11 +974,7 @@ mod tests {
                 .text
                 .contains(r#""file":".agents/skills/unsafe\\skill/SKILL.md""#)
         );
-        assert!(
-            effective
-                .text
-                .contains(r#""scope":"cwd""#)
-        );
+        assert!(effective.text.contains(r#""scope":"cwd""#));
         assert!(effective.text.contains(r#""disableModelInvocation":false"#));
     }
 

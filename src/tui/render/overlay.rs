@@ -14,8 +14,7 @@ use self::overlay_setup::{
     render_model_name_editor_modal, render_model_picker_modal,
     render_openai_endpoint_kind_picker_modal, render_openai_profile_label_editor_modal,
     render_openai_profile_picker_modal, render_provider_picker_modal,
-    render_reasoning_effort_picker_modal, render_resume_picker_modal,
-    render_skills_picker_modal,
+    render_reasoning_effort_picker_modal, render_resume_picker_modal, render_skills_picker_modal,
 };
 use super::super::command::{
     general_help_text, matching_commands, model_help_text, palette_commands,
