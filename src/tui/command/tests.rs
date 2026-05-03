@@ -477,14 +477,11 @@ fn status_resources_text_includes_token_and_cache_summary() {
     app.snapshot.compaction_count = 2;
     app.snapshot.last_compaction_before_tokens = Some(10_000);
     app.snapshot.last_compaction_after_tokens = Some(3_000);
-    app.snapshot.last_compaction_boundary_recent_file_count = Some(3);
-    app.snapshot.compaction_source_entries = vec![crate::context::CompactionSourceContextEntry {
-        order: 1,
-        kind: "compacted_summary".into(),
-        label: "Compacted Thread Summary".into(),
-        detail: "User Intent".into(),
-        inclusion_reason: "compacted older history".into(),
-    }];
+    app.snapshot.last_compaction_recent_files = vec![
+        "src/agent/compact.rs".to_string(),
+        "crates/instructions/src/prompt.rs".to_string(),
+        "src/tui/render/bottom_pane.rs".to_string(),
+    ];
     app.state_db_status = Some("sqlite:/tmp/rara/state.db".into());
     app.snapshot.memory_selection.selection_budget_tokens = Some(20_000);
     app.snapshot.memory_selection.selected_items =
@@ -503,7 +500,7 @@ fn status_resources_text_includes_token_and_cache_summary() {
     assert!(rendered.contains("cache_hit_tokens=300"));
     assert!(rendered.contains("cache_miss_tokens=100"));
     assert!(rendered.contains("compactions=2"));
-    assert!(rendered.contains("last: 3000 tokens, ratio: 30.0%"));
+    assert!(rendered.contains("last: 10000 -> 3000, ratio: 0.30"));
     assert!(rendered.contains("recent_compact_file_count=3"));
-    assert!(rendered.contains("recent_compact_files=compacted_summary"));
+    assert!(rendered.contains("recent_compact_files=src/agent/compact.rs, crates/instructions/src/prompt.rs, src/tui/render/bottom_pane.rs"));
 }

@@ -158,7 +158,7 @@ pub fn parse_local_command(input: &str) -> Option<LocalCommand> {
         "approval" => LocalCommandKind::Approval,
         "compact" => LocalCommandKind::Compact,
         "model" | "models" => LocalCommandKind::Model,
-        "model-name" => LocalCommandKind::Model,
+        "model-name" => LocalCommandKind::ModelName,
         "base-url" => LocalCommandKind::BaseUrl,
         "login" | "auth" => LocalCommandKind::Login,
         "logout" => LocalCommandKind::Logout,
@@ -186,11 +186,11 @@ pub fn command_spec_by_name(name: &str) -> Option<&'static CommandSpec> {
 }
 
 pub fn recommended_commands(app: &TuiApp) -> Vec<&'static CommandSpec> {
-    let mut names = vec!["help", "status", "model"];
-    if !app.committed_turns.is_empty() || !app.active_turn.entries.is_empty() {
-        names.push("compact");
-        names.push("plan");
-    }
+    let names: &[&str] = if app.is_busy() {
+        &["context", "help", "status"]
+    } else {
+        &["context", "help", "model", "resume", "status"]
+    };
     names
         .iter()
         .filter_map(|name| command_spec_by_name(name))
