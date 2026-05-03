@@ -6,11 +6,13 @@ use crate::context::{
 
 impl Agent {
     pub fn assemble_context(&self) -> AssembledContext {
-        self.context_assembler()
-            .assemble(match self.execution_mode {
+        self.context_assembler().assemble({
+            match self.execution_mode {
                 AgentExecutionMode::Execute => PromptMode::Execute,
                 AgentExecutionMode::Plan => PromptMode::Plan,
-            })
+                AgentExecutionMode::Review => PromptMode::Review,
+            }
+        })
     }
 
     pub(super) fn context_assembler(&self) -> ContextAssembler<'_> {
@@ -21,6 +23,7 @@ impl Agent {
         let mode = match self.execution_mode {
             AgentExecutionMode::Execute => PromptMode::Execute,
             AgentExecutionMode::Plan => PromptMode::Plan,
+            AgentExecutionMode::Review => PromptMode::Review,
         };
         self.context_assembler()
             .assemble_turn(mode, self.runtime_context_inputs())
@@ -30,6 +33,7 @@ impl Agent {
         let mode = match self.execution_mode {
             AgentExecutionMode::Execute => PromptMode::Execute,
             AgentExecutionMode::Plan => PromptMode::Plan,
+            AgentExecutionMode::Review => PromptMode::Review,
         };
         self.context_assembler()
             .assemble_runtime(mode, self.runtime_context_inputs())

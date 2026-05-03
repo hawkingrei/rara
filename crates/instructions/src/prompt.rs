@@ -10,6 +10,7 @@ use crate::workspace::WorkspaceMemory;
 pub enum PromptMode {
     Execute,
     Plan,
+    Review,
 }
 
 const PLAN_MODE_PROMPT_MARKER: &str = "Planning mode is active.";
@@ -17,6 +18,14 @@ const PLAN_MODE_PROMPT_MARKER: &str = "Planning mode is active.";
 static PLAN_MODE_PROMPT: LazyLock<String> = LazyLock::new(|| {
     format!(
         "## Current Execution Mode\n- {PLAN_MODE_PROMPT_MARKER}\n- You are in Plan mode until the runtime explicitly switches you back to execute mode.\n- User intent, tone, or imperative wording does not change the mode by itself.\n- If the user asks you to implement while still in Plan mode, treat it as a request to refine the implementation plan, not as permission to edit files.\n- Use this mode to inspect the codebase, clarify constraints, answer analysis questions, and refine an implementation approach before execution.\n\n## Allowed Work In Plan Mode\n- You may inspect files, search the repository, read documentation, and run read-only shell commands such as status, listing, search, test, build, or check commands.\n- Tests, builds, and checks are allowed only when they do not intentionally modify repository-tracked files.\n- Do not call tools that edit files, apply patches, update project memory, save experience, spawn general-purpose sub-agents, run background tasks, or perform side-effectful shell commands.\n- Prefer 'explore_agent' when you want a delegated read-only repo inspection.\n- Prefer 'plan_agent' when you want a delegated read-only sub-plan or implementation-planning pass.\n\n## Planning Progress Style\n- Explore first with targeted non-mutating tool calls when local repository context can answer the question.\n- While you are still exploring or refining tradeoffs, keep progress updates short, concrete, and grounded in inspected code.\n- Do not narrate every next action with phrases like 'I will now read ...' or 'I will inspect ...'. Let the tool transcript show inspection steps.\n- Do not turn planning updates into long prose status reports.\n- If more repository evidence is needed, either call a non-mutating inspection tool in the same response or end with <continue_inspection/>.\n- A message with no tool call and no <continue_inspection/> is treated as the final answer for the current turn.\n- If code changes are needed, express them only as inspected findings, plan steps, or a structured clarification request.\n- Do not claim that you are applying patches, writing files, or making code edits in this turn.\n\n## Planning Outcomes\n- For research, review, diagnosis, planning-advice, or code-inspection tasks, provide the final answer directly without a structured plan block.\n- If you entered Plan mode yourself because the task needed inspection, continue inspecting and then write the answer yourself. Do not wait for the user to tell you to analyze, refine, or finalize.\n- Use <continue_inspection/> only when you are explicitly asking runtime to keep the same planning turn open for more inspection.\n- Use <request_user_input> only when a material decision or unknown blocks a good plan and cannot be discovered locally.\n- Inside <request_user_input>, write one 'question: ...' line and up to three 'option: label | description' lines.\n- Use <proposed_plan> only when the user has asked for implementation or the task clearly requires code changes, and the plan is decision-complete and ready for implementation.\n- When implementation is needed and the proposed plan is ready, emit a complete <proposed_plan>...</proposed_plan> block and then call 'exit_plan_mode' at the end of the turn to request structured approval.\n- Never call 'exit_plan_mode' without a complete <proposed_plan>...</proposed_plan> block earlier in the same assistant response.\n- If no concrete implementation plan is ready, do not call 'exit_plan_mode'; provide a normal plan-mode answer, ask structured user input, or continue read-only inspection instead.\n- Do not ask 'should I proceed?' or request plan approval in ordinary prose; use 'exit_plan_mode' for approval.\n\n## Proposed Plan Contract\n- Do not emit a <proposed_plan> block for analysis-only, review-only, diagnosis-only, or planning-advice tasks.\n- Do not emit a <proposed_plan> block until the plan is decision-complete and ready for the runtime to continue.\n- When the plan is ready, start your response with <proposed_plan>, finish it with the exact closing tag </proposed_plan>, and keep the artifact concise.\n- The opening <proposed_plan> tag and closing </proposed_plan> tag must both appear in the same assistant message before 'exit_plan_mode'.\n- Include a short title or summary, the public APIs/interfaces/types affected when relevant, concrete implementation steps, and test cases or scenarios.\n- Prefer one step per line in the form '- [pending] Step', '- [in_progress] Step', or '- [completed] Step'. Plain bullet and numbered steps are also accepted.\n- After </proposed_plan>, provide at most one or two short sentences grounded in the inspected code, then call 'exit_plan_mode'.\n- The 'exit_plan_mode' tool is only a submission signal for a plan already written in <proposed_plan>; it is not a general way to leave Plan mode.\n- Do not restate the entire plan in prose before or after the block."
+    )
+});
+
+const REVIEW_MODE_PROMPT_MARKER: &str = "Code Review mode is active.";
+
+static REVIEW_MODE_PROMPT: LazyLock<String> = LazyLock::new(|| {
+    format!(
+        "## Current Execution Mode\n- {REVIEW_MODE_PROMPT_MARKER}\n- You are in a focused code review mode. Your task is to review the provided code changes.\n- Do not enter planning mode. Do not propose implementation plans.\n- Do not ask the user follow-up questions unless a blocking ambiguity makes the review impossible.\n\n## Review Instructions\n- Analyze the diff for bugs, logic errors, security vulnerabilities, race conditions, edge cases, and maintainability issues.\n- Flag missing tests, missing error handling, and unclear naming.\n- Do not flag style or formatting issues unless they obscure meaning.\n- Every finding must reference specific file paths and line ranges from the diff.\n- For each finding, provide: title (≤80 chars), priority (P0/P1/P2/P3), description with file:line references, confidence score (0.0-1.0), and an optional concrete suggestion.\n- After listing findings, give an overall verdict: \"Patch is correct\" or \"Patch is incorrect\" with a brief justification.\n\n## Priority Levels\n- P0: Must fix before merge — blocking correctness, security, or data loss.\n- P1: Should fix in the next revision — likely bugs or significant design concerns.\n- P2: Consider fixing — maintainability, performance, or minor issues.\n- P3: Nice to have — nitpicks and optional improvements.\n\n## Tool and Tone Constraints\n- You may inspect files, search the repository, and run read-only shell commands such as tests, builds, and checks to verify findings.\n- Do not edit files, apply patches, or run side-effectful commands.\n- Prefer explore_agent for delegated read-only inspection of related code paths.\n- Keep the review output concise and actionable. Do not narrate your process.\n- After the final verdict, stop. Do not continue the agent loop."
     )
 });
 
@@ -632,6 +641,10 @@ fn dynamic_system_prompt_sections(
             "plan_mode",
             matches!(mode, PromptMode::Plan).then(plan_mode_prompt),
         ),
+        PromptSection::optional(
+            "review_mode",
+            matches!(mode, PromptMode::Review).then(review_mode_prompt),
+        ),
     ]
 }
 
@@ -772,6 +785,10 @@ fn plan_mode_prompt() -> String {
         "\n- Markdown headings such as '## Plan', plain bullets, or prose like 'Plan ready' are not valid substitutes for a <proposed_plan> block.\n- Prefer the API-structured path: call exit_plan_mode with a proposed_plan object containing summary, steps, and validation fields.\n- If structured tool arguments are unavailable, the <proposed_plan> artifact should use this structure exactly:\n<proposed_plan>\nsummary: One concise sentence describing the implementation.\nsteps:\n- [pending] First concrete implementation step\n- [pending] Second concrete implementation step\nvalidation:\n- Focused test or command to run\n</proposed_plan>",
     );
     prompt
+}
+
+fn review_mode_prompt() -> String {
+    REVIEW_MODE_PROMPT.clone()
 }
 
 fn default_compact_prompt() -> String {

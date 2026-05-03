@@ -154,6 +154,7 @@ impl Agent {
         match self.execution_mode {
             AgentExecutionMode::Execute => "execute",
             AgentExecutionMode::Plan => "plan",
+            AgentExecutionMode::Review => "review",
         }
     }
 
@@ -373,6 +374,20 @@ impl Agent {
     pub(super) fn is_tool_allowed_in_current_mode(&self, name: &str) -> bool {
         match self.execution_mode {
             AgentExecutionMode::Execute => name != EXIT_PLAN_MODE_TOOL_NAME,
+            AgentExecutionMode::Review => !matches!(
+                name,
+                ENTER_PLAN_MODE_TOOL_NAME
+                    | EXIT_PLAN_MODE_TOOL_NAME
+                    | "write_file"
+                    | "replace"
+                    | "replace_lines"
+                    | "apply_patch"
+                    | "update_project_memory"
+                    | TODO_WRITE_TOOL_NAME
+                    | "remember_experience"
+                    | "spawn_agent"
+                    | "team_create"
+            ),
             AgentExecutionMode::Plan => !matches!(
                 name,
                 ENTER_PLAN_MODE_TOOL_NAME

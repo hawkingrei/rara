@@ -3,7 +3,7 @@ use std::sync::Arc;
 use super::super::state::{
     HelpTab, LocalCommand, LocalCommandKind, Overlay, RuntimePhase, StatusTab, TuiApp,
 };
-use super::tasks::{start_compact_task, start_rebuild_task};
+use super::tasks::{start_compact_task, start_rebuild_task, start_review_task};
 use crate::agent::{Agent, AgentExecutionMode, BashApprovalMode};
 use crate::oauth::OAuthManager;
 
@@ -117,18 +117,10 @@ pub(super) async fn execute_local_command(
         LocalCommandKind::Review => {
             if app.is_busy() {
                 app.push_notice("A task is already running. Wait for it to finish.");
-            } else {
-                app.set_runtime_phase(
-                    RuntimePhase::LocalCommand,
-                    Some("preparing review prompt".into()),
-                );
+            } else if let Some(agent) = agent_slot.take() {
                 let diff = capture_git_diff(&app.snapshot.cwd);
-                let mut prompt = String::from("Please review the following code changes. ");
-                prompt.push_str(
-                    "Point out potential issues, suggest improvements, and highlight any concerns about correctness, performance, or maintainability.\n\n",
-                );
-                if diff.is_empty() {
-                    prompt.push_str("No local git changes found. The working tree is clean.");
+                let prompt = if diff.is_empty() {
+                    "No local git changes found. The working tree is clean.".to_string()
                 } else {
                     let lines: Vec<&str> = diff.lines().collect();
                     if lines.len() > 800 {
@@ -138,15 +130,14 @@ pub(super) async fn execute_local_command(
                             .copied()
                             .collect::<Vec<_>>()
                             .join("\n");
-                        prompt.push_str(&format!(
-                            "```diff\n{preview}\n...\n```\n\n(Truncated; use the agent tools to inspect the full diff if needed.)"
-                        ));
+                        format!(
+                            "Review the following code changes:\n\n```diff\n{preview}\n...\n```\n\n(Full diff truncated; use tools to inspect if needed.)"
+                        )
                     } else {
-                        prompt.push_str(&format!("```diff\n{diff}\n```"));
+                        format!("Review the following code changes:\n\n```diff\n{diff}\n```")
                     }
-                }
-                app.set_input(prompt);
-                app.push_notice("Review prompt ready. Press Enter to send it to the agent.");
+                };
+                start_review_task(app, prompt, agent);
             }
         }
         LocalCommandKind::Quit => {

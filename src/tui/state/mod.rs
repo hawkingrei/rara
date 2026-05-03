@@ -1169,6 +1169,7 @@ impl TuiApp {
         match self.agent_execution_mode {
             AgentExecutionMode::Execute => "execute",
             AgentExecutionMode::Plan => "plan",
+            AgentExecutionMode::Review => "review",
         }
     }
 
