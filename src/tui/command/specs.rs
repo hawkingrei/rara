@@ -1,6 +1,6 @@
 use crate::tui::state::{CommandSpec, LocalCommand, LocalCommandKind, TuiApp};
 
-pub const COMMAND_SPECS: [CommandSpec; 19] = [
+pub const COMMAND_SPECS: [CommandSpec; 20] = [
     CommandSpec {
         category: "Session",
         name: "help",
@@ -129,6 +129,13 @@ pub const COMMAND_SPECS: [CommandSpec; 19] = [
     },
     CommandSpec {
         category: "Session",
+        name: "review",
+        usage: "/review",
+        summary: "Compose a code review prompt with the current git diff.",
+        detail: "Capture staged and unstaged git diff in the workspace and set up a review prompt that the agent can use to review the current changes. The diff is included as context in the prompt.",
+    },
+    CommandSpec {
+        category: "Session",
         name: "quit",
         usage: "/quit",
         summary: "Exit the TUI session.",
@@ -162,6 +169,7 @@ pub fn parse_local_command(input: &str) -> Option<LocalCommand> {
         "base-url" => LocalCommandKind::BaseUrl,
         "login" | "auth" => LocalCommandKind::Login,
         "logout" => LocalCommandKind::Logout,
+        "review" => LocalCommandKind::Review,
         _ => return None,
     };
 

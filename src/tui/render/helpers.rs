@@ -113,3 +113,17 @@ pub(crate) fn badge<'a>(label: &'a str, value: &'a str, color: Color) -> Span<'a
             .add_modifier(Modifier::BOLD),
     )
 }
+
+pub(crate) fn section_span<'a>(title: &'a str, color: Color) -> Span<'a> {
+    Span::styled(
+        format!(" {} ", title),
+        Style::default()
+            .fg(Color::Black)
+            .bg(color)
+            .add_modifier(Modifier::BOLD),
+    )
+}
+
+pub(crate) fn wrapped_history_line_count(lines: &[Line<'static>], width: u16) -> u16 {
+    crate::tui::layout_utils::wrapped_line_count(lines, width)
+}
