@@ -72,6 +72,21 @@ Thread stored (LanceDB)
 
 Storage: `~/.rara/threads/`.
 
+Current backend slice:
+
+- `load_thread(session_id) -> ThreadSnapshot` materializes canonical history,
+  state-db metadata, plan state, interactions, turns, and compaction events.
+- `fork_thread(session_id) -> String` copies the materialized state into a new
+  session id and records lineage.
+- `export_thread_markdown(session_id) -> String` renders a portable markdown
+  transcript with frontmatter, summary, and message sections.
+- `distill_thread_summary(memory_store, session_id) -> Option<MemoryRecord>`
+  persists one summary-style `MemoryRecord` linked to the source session/thread.
+
+The current implementation still stores thread metadata in `StateDb` and
+history/rollout artifacts through `SessionManager`; it is a structured backend
+contract, not yet a dedicated LanceDB thread table.
+
 ## Conversation Markdown Format
 
 ```markdown
@@ -121,6 +136,14 @@ Distillation rules:
 - Use `MemorySelection` for any immediate context carry-over; do not inject
   distilled memories directly into prompts.
 
+Runtime status:
+
+- Implemented: summary distillation for a loaded thread into one
+  `ThreadDistill` memory record with `session_id`, `thread_id`, and source span.
+- Open: LLM-assisted extraction of 2-8 independently useful records,
+  duplicate detection against existing memories, and long-thread chunking.
+
 ## Source Journals
 
 - 2026-05-03-memory-records-and-threads-spec.md
+- 2026-05-03-memory-record-persistence-and-thread-export.md

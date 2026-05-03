@@ -53,9 +53,12 @@ Active backlog only. Keep this file small and current.
 - [x] Add `MemoryRecord` runtime model with title, Markdown content, labels, importance, timestamps, source, and scope.
 - [x] Introduce `MemoryStore` as the memory-domain façade over the current LanceDB-backed `VectorDB`.
 - [x] Turn `remember_experience` and `retrieve_experience` into compatibility adapters over `MemoryStore`.
+- [x] Persist full `MemoryRecord` domain records with session id, thread id, and source span provenance.
+- [x] Replace `retrieve_session_context` stub with LanceDB hybrid search over conversation checkpoints.
+- [x] Add backend `ThreadStore` APIs for markdown export and summary-to-memory distillation.
 - [ ] Promote LanceDB-backed retrieval from `MemoryStore` into ranked `MemorySelection` candidates.
 - [ ] Add memory update/delete/list-label control-plane scaffolding for ACP/Wire without exposing LanceDB APIs.
-- [ ] Add thread distillation into deduplicated `MemoryRecord`s with source message spans.
+- [ ] Upgrade thread distillation from summary capture to LLM-assisted 2-8 record extraction with deduplication.
 - [ ] Move raw session checkpoints into per-session append shards instead of the global LanceDB `conversations` table.
 - [ ] Add periodic promotion from session shards into global `MemoryRecord`s.
 - [ ] Durable in-turn checkpoints: persist after each message/tool-result batch, atomic writes, crash-tolerant `SessionManager`.
