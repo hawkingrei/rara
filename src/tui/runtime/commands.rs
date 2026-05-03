@@ -123,20 +123,16 @@ pub(super) async fn execute_local_command(
                     Some("preparing review prompt".into()),
                 );
                 let diff = capture_git_diff();
-                let mut prompt = String::from(
-                    "Please review the following code changes. ",
-                );
+                let mut prompt =
+                    String::from("Please review the following code changes. ");
                 prompt.push_str(
                     "Point out potential issues, suggest improvements, and highlight any concerns about correctness, performance, or maintainability.\n\n",
                 );
                 if diff.is_empty() {
                     prompt.push_str("No local git changes found. The working tree is clean.");
                 } else if diff.lines().count() > 800 {
-                    let preview: String = diff
-                        .lines()
-                        .take(600)
-                        .map(|l| format!("{l}\n"))
-                        .collect();
+                    let preview: String =
+                        diff.lines().take(600).map(|l| format!("{l}\n")).collect();
                     prompt.push_str(&format!(
                         "```diff\n{}...\n```\n\n(Truncated; use the agent tools to inspect the full diff if needed.)",
                         preview

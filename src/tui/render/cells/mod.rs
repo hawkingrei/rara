@@ -51,7 +51,7 @@ pub(crate) trait ActiveCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>>;
 }
 
-enum OrderedActiveSegment<'a> {
+pub(super) enum OrderedActiveSegment<'a> {
     Exploration(Vec<String>),
     Agent(&'a str),
 }
