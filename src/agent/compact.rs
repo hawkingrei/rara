@@ -1,8 +1,9 @@
+use std::sync::OnceLock;
+use std::time::Duration;
+
 use super::*;
 use crate::llm::ContextBudget;
 use crate::session::PersistedCompactionEvent;
-use std::sync::OnceLock;
-use std::time::Duration;
 
 const RECENT_FILE_CARRY_OVER_LIMIT: usize = 5;
 const RECENT_FILE_EXCERPT_LIMIT: usize = 3;
@@ -686,9 +687,10 @@ pub fn latest_compact_boundary_metadata(history: &[Message]) -> Option<CompactBo
 
 #[cfg(test)]
 mod tests {
+    use serde_json::{Map, Value, json};
+
     use super::{build_compact_plan, group_history_by_api_round, read_file_line_range};
     use crate::agent::Message;
-    use serde_json::{Map, Value, json};
 
     fn object(value: Value) -> Map<String, Value> {
         value.as_object().expect("object").clone()

@@ -1,8 +1,10 @@
-use crate::skill::SkillManager;
-use crate::tool::{Tool, ToolError};
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use serde_json::{Value, json};
-use std::sync::Arc;
+
+use crate::skill::SkillManager;
+use crate::tool::{Tool, ToolError};
 
 pub struct SkillTool {
     pub skill_manager: Arc<SkillManager>,

@@ -1,12 +1,11 @@
+use codex_models_manager::manager::RefreshStrategy;
 use secrecy::{ExposeSecret, SecretString};
 
+use super::state::{Overlay, ProviderFamily, TuiApp};
 use crate::agent::Agent;
 use crate::codex_model_catalog::load_codex_model_catalog;
 use crate::config::OpenAiEndpointKind;
 use crate::oauth::OAuthManager;
-
-use super::state::{Overlay, ProviderFamily, TuiApp};
-use codex_models_manager::manager::RefreshStrategy;
 
 pub(super) fn sync_codex_credential_from_auth_store(
     app: &mut TuiApp,

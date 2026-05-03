@@ -7,12 +7,6 @@ use ratatui::{buffer::Buffer, layout::Rect};
 use serde_json::json;
 use tempfile::tempdir;
 
-use crate::config::{ConfigManager, OpenAiEndpointKind, RaraConfig};
-use crate::tui::custom_terminal::Frame;
-use crate::tui::state::{
-    Overlay, ProviderFamily, RuntimeSnapshot, StatusTab, TranscriptEntry, TranscriptTurn, TuiApp,
-};
-
 use super::cells::HistoryCell;
 use super::viewport::TranscriptViewport;
 use super::{
@@ -21,6 +15,11 @@ use super::{
     desired_bottom_pane_height, desired_viewport_height, formatted_message_lines,
     prefixed_message_lines, renderable_transcript_lines, tool_action_label,
     transcript_scroll_offset, transcript_viewport, transcript_visual_row_count,
+};
+use crate::config::{ConfigManager, OpenAiEndpointKind, RaraConfig};
+use crate::tui::custom_terminal::Frame;
+use crate::tui::state::{
+    Overlay, ProviderFamily, RuntimeSnapshot, StatusTab, TranscriptEntry, TranscriptTurn, TuiApp,
 };
 
 fn provider_family_idx(family: ProviderFamily) -> usize {

@@ -1,12 +1,11 @@
 use std::sync::Arc;
 
-use crate::agent::{Agent, AgentExecutionMode, BashApprovalMode};
-use crate::oauth::OAuthManager;
-
 use super::super::state::{
     HelpTab, LocalCommand, LocalCommandKind, Overlay, RuntimePhase, StatusTab, TuiApp,
 };
 use super::tasks::{start_compact_task, start_rebuild_task};
+use crate::agent::{Agent, AgentExecutionMode, BashApprovalMode};
+use crate::oauth::OAuthManager;
 
 pub(super) async fn execute_local_command(
     command: LocalCommand,

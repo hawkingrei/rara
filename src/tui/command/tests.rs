@@ -1,3 +1,5 @@
+use tempfile::tempdir;
+
 use super::specs::normalize_command_token;
 use super::status::truncate_preview;
 use super::{
@@ -9,7 +11,6 @@ use crate::config::{ConfigManager, OpenAiEndpointKind};
 use crate::context::{PromptSourceContextEntry, TodoContextView};
 use crate::todo::TodoSummary;
 use crate::tui::state::{LocalCommandKind, RuntimeSnapshot, TuiApp};
-use tempfile::tempdir;
 
 #[test]
 fn parses_model_command_argument() {

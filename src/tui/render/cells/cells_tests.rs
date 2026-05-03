@@ -2,9 +2,6 @@
 
 use std::path::Path;
 
-use crate::config::ConfigManager;
-use crate::tui::state::{RuntimePhase, RuntimeSnapshot, TranscriptEntry, TranscriptTurn, TuiApp};
-use crate::tui::terminal_event::{TerminalCommandEvent, TerminalEvent, TerminalTarget};
 use insta::assert_snapshot;
 use tempfile::tempdir;
 
@@ -12,6 +9,9 @@ use super::{
     ActiveCell, ActiveTurnCell, CommittedTurnCell, HistoryCell, ProgressRole,
     explicit_progress_entry_groups,
 };
+use crate::config::ConfigManager;
+use crate::tui::state::{RuntimePhase, RuntimeSnapshot, TranscriptEntry, TranscriptTurn, TuiApp};
+use crate::tui::terminal_event::{TerminalCommandEvent, TerminalEvent, TerminalTarget};
 
 #[path = "cells_tests/active_general.rs"]
 mod active_general;

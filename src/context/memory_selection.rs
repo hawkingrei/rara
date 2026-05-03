@@ -1,15 +1,16 @@
+use std::collections::HashMap;
+
+use serde_json::Value;
+
 use crate::agent::{Message, PlanStepStatus};
+use crate::context::assembler::{
+    RuntimeInteractionInput, estimate_text_tokens, latest_tool_results, latest_user_request,
+};
 use crate::context::{
     CompactionSourceContextEntry, DropReason, MemorySelectionContextView,
     MemorySelectionItemContextEntry,
 };
 use crate::prompt::PromptSource;
-use serde_json::Value;
-use std::collections::HashMap;
-
-use crate::context::assembler::{
-    RuntimeInteractionInput, estimate_text_tokens, latest_tool_results, latest_user_request,
-};
 
 pub(crate) fn memory_selection(
     prompt_sources: &[PromptSource],
@@ -579,8 +580,9 @@ pub(crate) fn extract_tool_result_payload(content: &str) -> Option<Value> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use serde_json::json;
+
+    use super::*;
 
     #[test]
     fn extract_tool_result_payload_falls_back_to_plain_json_content() {

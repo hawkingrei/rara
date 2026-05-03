@@ -3,26 +3,25 @@ mod oauth;
 #[cfg(test)]
 mod tests;
 
-use secrecy::ExposeSecret;
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
 };
 use std::time::Instant;
 
+use builder::rebuild_agent_with_progress;
 use rara_provider_catalog::{
     ModelCatalogProvider, ModelCatalogRequest, fallback_models, load_model_catalog,
 };
+use secrecy::ExposeSecret;
 use tokio::sync::mpsc;
-
-use crate::agent::{Agent, AgentOutputMode, BashApprovalDecision};
-use crate::redaction::sanitize_url_for_display;
 
 use super::super::state::{
     OAuthLoginMode, RunningTask, RuntimePhase, TaskCompletion, TaskKind, TuiApp, TuiEvent,
 };
 use super::events::{apply_tui_event, convert_agent_event, format_error_chain};
-use builder::rebuild_agent_with_progress;
+use crate::agent::{Agent, AgentOutputMode, BashApprovalDecision};
+use crate::redaction::sanitize_url_for_display;
 
 fn merge_rebuilt_agent(mut rebuilt: Agent, previous: Agent) -> Agent {
     let previous_prompt_config = previous.prompt_config().clone();

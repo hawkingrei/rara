@@ -404,6 +404,7 @@ fn skill_file_sort_key(path: &Path) -> (String, u8, &Path) {
 mod tests {
     use super::{SkillManager, SkillScope, repo_skill_search_dirs, skill_search_dirs};
     use std::fs;
+
     use tempfile::tempdir;
 
     #[test]

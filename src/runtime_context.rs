@@ -235,13 +235,14 @@ fn ollama_thinking_enabled(config: &RaraConfig) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use tempfile::tempdir;
+
     use super::{
         build_backend_with_progress, initialize_rara_context, ollama_thinking_enabled,
         vector_db_uri_for_workspace,
     };
     use crate::config::{DEFAULT_REASONING_SUMMARY, REASONING_SUMMARY_NONE, RaraConfig};
     use crate::workspace::WorkspaceMemory;
-    use tempfile::tempdir;
 
     #[test]
     fn vector_db_uri_is_workspace_scoped() {

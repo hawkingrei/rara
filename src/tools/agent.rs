@@ -1,3 +1,8 @@
+use std::sync::Arc;
+
+use async_trait::async_trait;
+use serde_json::{Value, json};
+
 use crate::agent::{Agent, AgentExecutionMode, Message, PendingUserInput, PlanStep};
 use crate::llm::LlmBackend;
 use crate::prompt::PromptRuntimeConfig;
@@ -7,9 +12,6 @@ use crate::tools::file::{ListFilesTool, ReadFileTool};
 use crate::tools::search::{GlobTool, GrepTool};
 use crate::vectordb::VectorDB;
 use crate::workspace::WorkspaceMemory;
-use async_trait::async_trait;
-use serde_json::{Value, json};
-use std::sync::Arc;
 
 #[derive(Clone, Copy)]
 enum SubAgentKind {
@@ -442,13 +444,14 @@ fn serialize_pending_user_input(request: &PendingUserInput) -> Value {
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::{
         SubAgentKind, append_subagent_prompt, build_read_only_tool_manager,
         build_subagent_tool_manager, latest_assistant_text_from_history,
     };
     use crate::agent::Message;
     use crate::prompt::PromptRuntimeConfig;
-    use serde_json::json;
 
     #[test]
     fn read_only_subagent_manager_excludes_mutating_and_agent_tools() {

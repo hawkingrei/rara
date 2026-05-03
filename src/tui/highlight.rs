@@ -1,8 +1,9 @@
+use std::sync::{OnceLock, RwLock};
+
 use ratatui::{
     style::{Color as RtColor, Modifier, Style},
     text::{Line, Span},
 };
-use std::sync::{OnceLock, RwLock};
 use syntect::{
     easy::HighlightLines,
     highlighting::{Color as SyntectColor, FontStyle, Style as SyntectStyle, Theme},

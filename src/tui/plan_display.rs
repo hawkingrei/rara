@@ -126,10 +126,9 @@ pub(crate) fn updated_plan_lines(
 mod tests {
     use tempfile::tempdir;
 
+    use super::{should_show_updated_plan, updated_plan_lines, updated_plan_text};
     use crate::config::ConfigManager;
     use crate::tui::state::TuiApp;
-
-    use super::{should_show_updated_plan, updated_plan_lines, updated_plan_text};
 
     #[test]
     fn updated_plan_text_formats_note_and_checklist() {

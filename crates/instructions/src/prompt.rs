@@ -1,8 +1,10 @@
-use crate::workspace::WorkspaceMemory;
-use rara_config::RaraConfig;
 use std::fs;
 use std::path::Path;
 use std::sync::LazyLock;
+
+use rara_config::RaraConfig;
+
+use crate::workspace::WorkspaceMemory;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PromptMode {
@@ -786,13 +788,14 @@ fn section(title: &str, items: &[&str]) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use super::{
         PromptMode, PromptRuntimeConfig, PromptSkillSummary, PromptSourceKind,
         build_compact_instruction, build_effective_prompt, build_system_prompt,
         discover_prompt_sources,
     };
     use crate::workspace::WorkspaceMemory;
-    use std::fs;
 
     #[test]
     fn prompt_runtime_prefers_inline_override_over_file() {

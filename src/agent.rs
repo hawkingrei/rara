@@ -5,6 +5,13 @@ mod prompting;
 #[cfg(test)]
 mod tests;
 
+use std::sync::{Arc, atomic::AtomicBool};
+
+use anyhow::Result;
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+use uuid::Uuid;
+
 use crate::llm::{ContentBlock, LlmBackend, LlmStreamEvent, LlmTurnMetadata};
 use crate::prompt::{self, PromptMode, PromptRuntimeConfig};
 use crate::redaction::redact_secrets;
@@ -21,11 +28,6 @@ use crate::tools::planning::{ENTER_PLAN_MODE_TOOL_NAME, EXIT_PLAN_MODE_TOOL_NAME
 use crate::tools::todo::TODO_WRITE_TOOL_NAME;
 use crate::vectordb::{MemoryMetadata, VectorDB};
 use crate::workspace::WorkspaceMemory;
-use anyhow::Result;
-use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
-use std::sync::{Arc, atomic::AtomicBool};
-use uuid::Uuid;
 
 const MAX_RUNTIME_ERROR_RECOVERY_ATTEMPTS: usize = 1;
 const MAX_PLAN_EXIT_REPAIR_ATTEMPTS: usize = 1;
