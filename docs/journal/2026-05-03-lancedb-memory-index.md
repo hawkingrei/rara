@@ -48,7 +48,7 @@ a guessed vector dimension before the first write.
 
 ## Memory Product Contract Addendum
 
-The Nowledge Mem-style design is broader than the current LanceDB index slice.
+The durable memory design is broader than the current LanceDB index slice.
 RARA has the retrieval substrate, but not the complete durable memory product
 model yet.
 
