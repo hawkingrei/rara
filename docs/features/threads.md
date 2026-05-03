@@ -11,6 +11,10 @@ durable memories.
 `Thread` is a durable conversation record. Threads are the raw material from
 which `MemoryRecord`s are distilled.
 
+Threads are not memories. A thread can be long, contextual, and useful only when
+read with its surrounding messages. A memory must stand on its own as one
+durable decision, insight, fact, procedure, or experience.
+
 ## Data Model
 
 ```rust
@@ -106,6 +110,16 @@ Optional YAML frontmatter with `title`, `source`, `date`.
 - Identify independently meaningful units.
 - Auto-generate title, labels, importance.
 - For >50 messages: chunked Smart Background Distillation.
+
+Distillation rules:
+
+- Do not persist every message as a memory.
+- Prefer fewer, independently useful records over many thin summaries.
+- Preserve source provenance: thread id, message span, session id, and
+  workspace scope.
+- Deduplicate against existing memories before insert.
+- Use `MemorySelection` for any immediate context carry-over; do not inject
+  distilled memories directly into prompts.
 
 ## Source Journals
 

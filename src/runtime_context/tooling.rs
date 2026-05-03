@@ -103,10 +103,12 @@ pub(super) fn create_full_tool_manager(
     tm.register(Box::new(ExitPlanModeTool));
     tm.register(Box::new(RememberExperienceTool {
         backend: backend.clone(),
+        vdb: vdb.clone(),
         db_uri: vector_db_uri.clone(),
     }));
     tm.register(Box::new(RetrieveExperienceTool {
         backend: backend.clone(),
+        vdb: vdb.clone(),
         db_uri: vector_db_uri,
     }));
     tm.register(Box::new(RetrieveSessionContextTool {

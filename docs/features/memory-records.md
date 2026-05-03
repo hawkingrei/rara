@@ -9,8 +9,14 @@ history. Without real memory records, each session starts fresh.
 ## Scope
 
 `MemoryRecord` is the durable, independently meaningful unit of memory — one
-decision, insight, fact, procedure, or experience. `MemoryStore` replaces the
-mock `VectorDB` with a real LanceDB backend.
+decision, insight, fact, procedure, or experience. The storage path uses
+LanceDB as a unified local memory index: raw text, metadata, full-text search,
+and vector search live in one table, while context assembly still goes through
+`MemorySelection`.
+
+This spec describes the target product contract. The first implementation slice
+only provides the LanceDB-backed index and retrieval tools; the complete memory
+domain model is not yet runtime-complete.
 
 ## Six Design Laws (Cross-Industry Consensus)
 
@@ -37,8 +43,8 @@ User scope (`~/.rara/memories/`), project scope (`memory.md`), session scope.
 | Axis | Position |
 |------|----------|
 | Extraction | Automation-first (novice users), human override available |
-| Storage | LanceDB structured, `memory.md` stays flat-file |
-| Injection | Zero-call for human sources, budgeted vector retrieval for AI |
+| Storage | LanceDB structured with FTS + vector columns, `memory.md` stays flat-file |
+| Injection | Zero-call for human sources, budgeted hybrid retrieval for AI |
 | Forgetting | Discrete with importance gating; `UserCreated` exempt |
 | Architecture | Core built-in now, plugin surface deferred |
 
@@ -60,31 +66,147 @@ pub enum MemoryLabel { Insight, Decision, Fact, Procedure, Experience }
 pub enum MemorySource { AgentTurn, UserCreated, ThreadDistill, FileImport }
 ```
 
+## Product Contract
+
+RARA memory should eventually behave like a durable knowledge object, not just a
+retrieval row.
+
+Each memory owns:
+
+- `title`: short human-readable summary.
+- `content`: Markdown body containing the durable knowledge.
+- `labels`: reusable classification tags for filtering and routing.
+- `importance`: ranking signal from `0.1` to `1.0`.
+- `created_at` and `updated_at`: temporal search and evolution metadata.
+- `source`: provenance such as user-created, agent turn, thread distillation,
+  file import, or protocol write.
+- `scope`: user, workspace, project, thread, or session visibility boundary.
+- `embedding`: optional vector representation for semantic retrieval.
+
+Standard labels:
+
+| Label | Intended Use |
+|-------|--------------|
+| `insight` | Durable lessons and realizations. |
+| `decision` | Choices with rationale and trade-offs. |
+| `fact` | Reference information and stable data points. |
+| `procedure` | Repeatable workflows and steps. |
+| `experience` | Events, conversations, outcomes, and incident notes. |
+
+Importance scale:
+
+| Range | Meaning |
+|-------|---------|
+| `0.8..=1.0` | Critical architectural decisions, incidents, or high-value procedures. |
+| `0.5..0.8` | Useful project learnings and ordinary decisions. |
+| `0.1..0.5` | Background reference and low-priority notes. |
+
+## Product Capability Matrix
+
+| Capability | Target Behavior | Current Runtime Status |
+|------------|-----------------|------------------------|
+| Memory record anatomy | Title, Markdown content, labels, importance, timestamps, source, scope, embedding. | Spec only. Runtime LanceDB rows currently store `id`, `session_id`, `turn_index`, `text`, and `vector`. |
+| Memory creation | Agent or user creates a durable `MemoryRecord`; title, labels, and importance can be generated or explicit. | Partial. `remember_experience` writes raw text to the `experiences` table without full record metadata. |
+| Memory search | Hybrid semantic + keyword search with metadata filters and explainable scores. | Partial. LanceDB vector, FTS, and hybrid helpers exist behind the current `VectorDB` façade. |
+| Memory update | Existing records can be edited without creating duplicates. | Not implemented. |
+| Memory delete | User or control-plane request can delete records with audit-safe semantics. | Not implemented as a public memory capability. |
+| Thread distillation | Thread history can be distilled into 2-8 durable memory records. | Spec only. |
+| Context injection | Ranked memory candidates pass through `MemorySelection` before prompt injection. | Partial. `MemorySelection` exists, but LanceDB search results are not yet direct ranked candidates. |
+| Graph retrieval | Entity and relationship traversal complements vector recall. | Future work. |
+| Working memory | Daily or session briefing summarizes recent and important memories. | Future work. |
+| MCP / ACP / Wire memory APIs | Protocol clients can query and mutate memory through the runtime control plane. | Future work. |
+
+## Memories vs Threads
+
+Threads preserve conversation history. Memories preserve durable knowledge.
+
+RARA should not treat every thread message as a memory. Raw turn checkpoints are
+useful for crash recovery, browsing, and future distillation, but a
+`MemoryRecord` must be independently useful without the full thread.
+
+The runtime should therefore keep three separate objects:
+
+- `Thread`: full or summarized conversation record.
+- `MemoryRecord`: distilled durable knowledge unit.
+- `MemorySelectionItem`: per-turn context candidate selected from prompt files,
+  thread recall, memory retrieval, or future protocol sources.
+
+This separation prevents a storage backend from bypassing context policy:
+LanceDB may store and retrieve candidates, but `MemorySelection` decides whether
+they enter the model context.
+
 ## MemoryStore API
 
 - `insert(record) -> Uuid` — persist with auto-embedding
-- `search(query, labels?, min_importance, limit) -> Vec<(MemoryRecord, f32)>`
+- `search(query, labels?, min_importance, scope?, limit) -> Vec<(MemoryRecord, f32)>`
+- `update(id, patch) -> MemoryRecord`
 - `get(id) -> Option<MemoryRecord>`
 - `delete(id) -> ()`
+- `list_labels(scope?) -> Vec<(MemoryLabel, usize)>`
 
-Storage: `~/.rara/memories/` (LanceDB).
+Storage: `~/.rara/lancedb/` (LanceDB).
+
+## LanceDB Index Contract
+
+The first runtime slice keeps the existing `VectorDB` façade but backs it with
+LanceDB instead of a mock.
+
+The current table shape is intentionally small:
+
+- `id`: stable memory id.
+- `session_id`: source session or scope.
+- `turn_index`: source turn index or deterministic tool-write id.
+- `text`: raw memory text; indexed with LanceDB FTS / BM25.
+- `vector`: embedding column; searched with LanceDB vector search.
+
+Search modes:
+
+- vector search via `search_with_metadata`;
+- FTS search via `full_text_search_with_metadata`;
+- hybrid search via `hybrid_search_with_metadata`, combining LanceDB FTS and
+  vector search while returning debug scores (`fts_score`, `vector_distance`).
+
+Search must not create tables. Only write paths create tables using the real
+embedding dimension. This avoids fixing an empty table to a guessed vector
+dimension before the first memory write.
 
 ## Integration
 
 | Component | Integration |
 |-----------|-------------|
-| `create_memory` tool | Agent persists records with auto-labels |
-| `retrieve_experience` | Searches MemoryStore instead of conversation history |
+| `remember_experience` | Current compatibility tool; should become a thin adapter over `MemoryStore::insert` |
+| `memory_add` / `memory_update` / `memory_delete` | Future protocol-safe memory mutation tools |
+| `retrieve_experience` | Current compatibility retrieval tool; should delegate to `MemoryStore::search` |
+| `memory_search` | Future protocol-safe search tool with labels, scope, and importance filters |
 | `MemorySelection` | `vector_memory_candidate` becomes `selectable: true` |
 | `MemoryDistiller` | Thread → MemoryRecords with auto-labels + importance |
 
+Current implementation checkpoint:
+
+- `remember_experience` writes to the LanceDB-backed `experiences` table.
+- `retrieve_experience` performs LanceDB hybrid retrieval and returns both
+  `relevant_experiences` and retrieval diagnostics.
+- Agent turn checkpoints continue writing to the `conversations` table.
+- `MemorySelection` is not yet switched to direct ranked memory candidates;
+  retrieved memories still enter through retrieval-tool results.
+
 ## Migration
 
-1. Add `MemoryStore` alongside mock `VectorDB`.
-2. Wire `memory_selection` and tools to `MemoryStore`.
-3. Deprecate `VectorDB`.
-4. Remove `VectorDB`.
+1. Replace mock `VectorDB` with LanceDB-backed FTS/vector/hybrid index.
+2. Wire retrieval tools to the LanceDB-backed index.
+3. Add the `MemoryRecord` domain model with title, labels, importance, source,
+   scope, and timestamps.
+4. Add the `MemoryStore` domain façade over `VectorDB`.
+5. Make `remember_experience` and `retrieve_experience` compatibility adapters
+   over `MemoryStore`.
+6. Wire `MemorySelection` to ranked memory candidates.
+7. Add update/delete/list-label control-plane scaffolding without exposing
+   storage internals.
+8. Add thread distillation into `MemoryRecord`.
+9. Deprecate `VectorDB`.
+10. Remove `VectorDB`.
 
 ## Source Journals
 
 - 2026-05-03-memory-records-and-threads-spec.md
+- 2026-05-03-lancedb-memory-index.md
