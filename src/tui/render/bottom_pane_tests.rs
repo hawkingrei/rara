@@ -215,20 +215,19 @@ async fn busy_composer_hint_hides_cancel_for_non_query_tasks() {
 }
 
 #[test]
-fn composer_hint_line_includes_repo_context_when_available() {
+fn composer_hint_line_excludes_repo_context() {
     let temp = tempdir().unwrap();
     let mut app = TuiApp::new(ConfigManager {
         path: temp.path().join("config.json"),
     })
     .expect("build tui app");
     app.repo_slug = Some("hawkingrei/rara".into());
-    app.current_pr_url = Some("https://github.com/hawkingrei/rara/pull/46".into());
     app.snapshot.branch = "feat/test".into();
 
     let rendered = composer_hint_line(&app).to_string();
-    assert!(rendered.contains("repo: hawkingrei/rara"));
-    assert!(rendered.contains("branch: feat/test"));
-    assert!(rendered.contains("PR: https://github.com/hawkingrei/rara/pull/46"));
+    assert!(!rendered.contains("repo:"));
+    assert!(!rendered.contains("branch:"));
+    assert!(rendered.contains("Enter submit"));
 }
 
 #[test]
@@ -240,13 +239,29 @@ fn composer_hint_line_hides_slash_hint_while_palette_is_open() {
     .expect("build tui app");
     app.input = "/".into();
     app.overlay = Some(crate::tui::state::Overlay::CommandPalette);
-    app.repo_slug = Some("hawkingrei/rara".into());
-    app.snapshot.branch = "main".into();
 
     let rendered = composer_hint_line(&app).to_string();
     assert!(!rendered.contains("slash command"));
+}
+
+#[test]
+fn footer_summary_text_includes_repo_context_when_available() {
+    let temp = tempdir().unwrap();
+    let mut app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("build tui app");
+    app.repo_slug = Some("hawkingrei/rara".into());
+    app.current_pr_url = Some("https://github.com/hawkingrei/rara/pull/46".into());
+    app.snapshot.branch = "feat/test".into();
+    app.snapshot.estimated_history_tokens = 1234;
+    app.snapshot.context_window_tokens = Some(32768);
+
+    let rendered = footer_summary_text(&app);
     assert!(rendered.contains("repo: hawkingrei/rara"));
-    assert!(rendered.contains("branch: main"));
+    assert!(rendered.contains("branch: feat/test"));
+    assert!(rendered.contains("PR: https://github.com/hawkingrei/rara/pull/46"));
+    assert!(rendered.contains("ctx~=1234/32768"));
 }
 
 #[test]
@@ -351,9 +366,9 @@ async fn activity_status_line_hides_busy_progress_from_composer_bar() {
     app.queue_follow_up_message("third follow-up");
 
     let (label, _, detail) = activity_status_line(&app);
-    assert_eq!(label, "");
-    assert_eq!(detail, "");
-    assert_eq!(animated_activity_label(&app, label), "");
+    assert_eq!(label, "Working");
+    assert!(detail.contains("esc to interrupt"));
+    assert!(animated_activity_label(&app, label).starts_with("Working"));
 
     if let Some(task) = app.running_task.take() {
         task.handle.abort();
