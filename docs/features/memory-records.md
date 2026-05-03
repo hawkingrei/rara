@@ -58,6 +58,7 @@ pub struct MemoryRecord {
     pub content: String,       // Markdown
     pub labels: Vec<MemoryLabel>,
     pub importance: f32,       // 0.1–1.0
+    pub pinned: bool,
     pub source: MemorySource,
     pub created_at: DateTime,
     pub embedding: Option<Vec<f32>>,
@@ -78,6 +79,8 @@ Each memory owns:
 - `content`: Markdown body containing the durable knowledge.
 - `labels`: reusable classification tags for filtering and routing.
 - `importance`: ranking signal from `0.1` to `1.0`.
+- `pinned`: explicit retention guard for durable facts that must not be removed
+  by automatic cleanup.
 - `created_at` and `updated_at`: temporal search and evolution metadata.
 - `source`: provenance such as user-created, agent turn, thread distillation,
   file import, or protocol write.
@@ -113,6 +116,7 @@ Importance scale:
 | Memory search | Hybrid semantic + keyword search with metadata filters and explainable scores. | Partial. LanceDB vector, FTS, and hybrid helpers exist; `MemoryStore::search` rehydrates full persisted records before returning hits. |
 | Memory update | Existing records can be edited without creating duplicates. | Not implemented as a public memory capability. |
 | Memory delete | User or control-plane request can delete records with audit-safe semantics. | Not implemented as a public memory capability. |
+| Memory retention | Pinned, user-created, and high-importance memories are protected from automatic cleanup; explicit delete remains possible with provenance. | Spec only. No automatic cleanup path exists yet. |
 | Thread distillation | Thread history can be distilled into 2-8 durable memory records. | Partial. `ThreadStore::distill_thread_summary` can persist one thread-linked summary record; LLM extraction and deduplication remain future work. |
 | Context injection | Ranked memory candidates pass through `MemorySelection` before prompt injection. | Partial. `MemorySelection` exists, but LanceDB search results are not yet direct ranked candidates. |
 | Graph retrieval | Entity and relationship traversal complements vector recall. | Future work. |
@@ -163,7 +167,14 @@ not the final session-storage contract.
 - `update(id, patch) -> MemoryRecord`
 - `get(id) -> Option<MemoryRecord>`
 - `delete(id) -> ()`
+- `set_pinned(id, pinned) -> MemoryRecord`
 - `list_labels(scope?) -> Vec<(MemoryLabel, usize)>`
+
+Search ranking should not rely on LanceDB score alone. The final memory ranking
+layer should combine hybrid search score, `importance`, exact keyword/path
+matches, recency where appropriate, and duplicate suppression. `/context` should
+show the selected/dropped reason for memory candidates, including whether
+`importance` or `pinned` status affected the decision.
 
 Storage:
 
@@ -243,15 +254,17 @@ Current implementation checkpoint:
 6. Persist full `MemoryRecord` records separately from the LanceDB search index.
    Done.
 7. Wire `MemorySelection` to ranked memory candidates.
-8. Add update/delete/list-label control-plane scaffolding without exposing
+8. Add pinned/retention policy so pinned, user-created, and high-importance
+   memories are excluded from automatic cleanup.
+9. Add update/delete/list-label control-plane scaffolding without exposing
    storage internals.
-9. Add thread distillation into `MemoryRecord`. Partial: summary distillation is
+10. Add thread distillation into `MemoryRecord`. Partial: summary distillation is
    implemented; multi-record LLM extraction and deduplication remain open.
-10. Move raw session checkpoints out of the global `conversations` LanceDB table
+11. Move raw session checkpoints out of the global `conversations` LanceDB table
    into per-session append shards.
-11. Add periodic promotion from session shards into global `MemoryRecord`s.
-12. Deprecate `VectorDB`.
-13. Remove `VectorDB`.
+12. Add periodic promotion from session shards into global `MemoryRecord`s.
+13. Deprecate `VectorDB`.
+14. Remove `VectorDB`.
 
 ## Source Journals
 
