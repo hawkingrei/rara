@@ -17,14 +17,12 @@ use self::overlay_setup::{
     render_reasoning_effort_picker_modal, render_resume_picker_modal,
 };
 use super::super::command::{
-    current_turn_preview, download_status_text, general_help_text, matching_commands,
-    model_help_text, palette_commands, quick_actions_text, recent_transcript_preview,
-    status_prompt_sources_text, status_resources_text, status_runtime_text, status_workspace_text,
+    general_help_text, matching_commands, model_help_text, palette_commands,
+    recent_transcript_preview, status_prompt_sources_text, status_resources_text,
+    status_runtime_text, status_workspace_text,
 };
 use super::super::custom_terminal::Frame;
-use super::super::interaction_text::status_active_pending_interaction_text;
-use super::super::plan_display::status_plan_text;
-use super::super::state::{CommandSpec, HelpTab, Overlay, TuiApp};
+use super::super::state::{CommandSpec, HelpTab, Overlay, StatusTab, TuiApp};
 use crate::tui::context_display::render_context_lines;
 use crate::tui::status_display::render_status_lines;
 
@@ -47,10 +45,10 @@ pub(super) fn render_overlay(
             render_command_palette(f, app, popup);
             None
         }
-        Overlay::Status => {
+        Overlay::Status(tab) => {
             let popup = centered_rect(78, 70, f.area());
             f.render_widget(Clear, popup);
-            render_status_modal(f, app, popup);
+            render_status_modal(f, app, popup, tab);
             None
         }
         Overlay::Context => {
@@ -410,22 +408,50 @@ mod tests {
         assert!(popup.width >= 90);
     }
 }
-fn render_status_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
-    let lines = render_status_lines(app);
+fn render_status_modal(f: &mut Frame, app: &TuiApp, area: Rect, tab: StatusTab) {
+    let lines = render_status_lines(app, tab);
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Fill(1), Constraint::Length(1)])
+        .constraints([
+            Constraint::Length(3),
+            Constraint::Fill(1),
+            Constraint::Length(1),
+        ])
         .split(area);
+    let titles = status_tab_titles();
     f.render_widget(
-        Paragraph::new(lines).block(Block::default().borders(Borders::LEFT | Borders::RIGHT)),
+        Tabs::new(titles)
+            .block(Block::default().borders(Borders::LEFT | Borders::RIGHT))
+            .select(status_tab_index(tab))
+            .style(Style::default().fg(TEXT_SECONDARY))
+            .highlight_style(help_selected_tab_style()),
         chunks[0],
     );
     f.render_widget(
-        Paragraph::new(" ↑↓ scroll  Esc close  /context detailed view")
-            .style(Style::default().fg(Color::DarkGray))
-            .alignment(Alignment::Center),
+        Paragraph::new(lines).block(Block::default().borders(Borders::LEFT | Borders::RIGHT)),
         chunks[1],
     );
+    f.render_widget(
+        Paragraph::new("Esc close  1 overview  2 config  3 context  <-> switch")
+            .style(Style::default().fg(Color::DarkGray))
+            .alignment(Alignment::Center),
+        chunks[2],
+    );
+}
+
+fn status_tab_titles() -> Vec<Line<'static>> {
+    ["Overview", "Config", "Context"]
+        .into_iter()
+        .map(Line::from)
+        .collect()
+}
+
+fn status_tab_index(tab: StatusTab) -> usize {
+    match tab {
+        StatusTab::Overview => 0,
+        StatusTab::Config => 1,
+        StatusTab::Context => 2,
+    }
 }
 
 fn render_context_modal(f: &mut Frame, app: &TuiApp, area: Rect) {

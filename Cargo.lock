@@ -8641,6 +8641,7 @@ dependencies = [
  "textwrap 0.16.2",
  "thiserror 2.0.18",
  "tiktoken-rs",
+ "time",
  "tokenizers 0.23.1",
  "tokio",
  "two-face",

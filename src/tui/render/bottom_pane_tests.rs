@@ -146,7 +146,7 @@ fn activity_status_line_renders_warning_notice_in_yellow() {
 }
 
 #[test]
-fn queued_follow_up_hint_overrides_busy_hint() {
+fn queued_follow_up_hint_stays_compact_while_busy() {
     let temp = tempdir().unwrap();
     let mut app = TuiApp::new(ConfigManager {
         path: temp.path().join("config.json"),
@@ -156,10 +156,7 @@ fn queued_follow_up_hint_overrides_busy_hint() {
     app.begin_running_turn();
     app.queue_follow_up_message_after_next_tool_boundary("follow-up");
 
-    assert_eq!(
-        composer_hint(&app),
-        "pending follow-up  will submit after next tool call"
-    );
+    assert_eq!(composer_hint(&app), "queued: after tool");
 }
 
 #[tokio::test]
@@ -227,7 +224,7 @@ fn composer_hint_line_excludes_repo_context() {
     let rendered = composer_hint_line(&app).to_string();
     assert!(!rendered.contains("repo:"));
     assert!(!rendered.contains("branch:"));
-    assert!(rendered.contains("Enter submit"));
+    assert!(!rendered.contains("Enter submit"));
 }
 
 #[test]
@@ -376,7 +373,7 @@ async fn activity_status_line_hides_busy_progress_from_composer_bar() {
 }
 
 #[test]
-fn composer_hint_shows_queued_follow_up_when_idle_with_messages() {
+fn composer_hint_shows_compact_queued_follow_up_when_idle() {
     let temp = tempdir().unwrap();
     let mut app = TuiApp::new(ConfigManager {
         path: temp.path().join("config.json"),
@@ -386,10 +383,7 @@ fn composer_hint_shows_queued_follow_up_when_idle_with_messages() {
     app.queue_follow_up_message("second hint");
 
     assert_eq!(app.queued_follow_up_count(), 2);
-    assert_eq!(
-        composer_hint(&app),
-        "queued follow-up  will submit after current turn"
-    );
+    assert_eq!(composer_hint(&app), "queued: after turn");
 }
 
 #[test]

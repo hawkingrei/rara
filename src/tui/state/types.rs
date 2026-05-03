@@ -31,10 +31,17 @@ pub enum HelpTab {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum StatusTab {
+    Overview,
+    Config,
+    Context,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Overlay {
     Help(HelpTab),
     CommandPalette,
-    Status,
+    Status(StatusTab),
     Context,
     ProviderPicker,
     ModelPicker,
@@ -151,6 +158,8 @@ pub struct RuntimeSnapshot {
     pub plan_explanation: Option<String>,
     pub pending_interactions: Vec<PendingInteractionSnapshot>,
     pub completed_interactions: Vec<CompletedInteractionSnapshot>,
+    pub todo: crate::context::TodoContextView,
+    pub todo_artifact_path: Option<String>,
     pub prompt_base_kind: String,
     pub prompt_section_keys: Vec<String>,
     pub prompt_source_entries: Vec<PromptSourceContextEntry>,

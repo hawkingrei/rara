@@ -314,7 +314,7 @@ fn composer_hint(app: &TuiApp) -> &'static str {
     } else if app.agent_execution_mode_label() == "plan" {
         "planning mode  read-only planning; approve to execute"
     } else {
-        "Enter submit  Shift+Enter newline  / open commands"
+        ""
     }
 }
 

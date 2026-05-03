@@ -773,12 +773,7 @@ pub(super) fn format_tool_result(name: &str, content: &str) -> String {
         if live_streamed {
             summary.push_str("\noutput streamed above");
         }
-        if let Some(stdout_preview) = output_tail_preview(stdout) {
-            summary.push_str(&format!("\nstdout:\n{stdout_preview}"));
-        }
-        if let Some(stderr_preview) = output_tail_preview(stderr) {
-            summary.push_str(&format!("\nstderr:\n{stderr_preview}"));
-        }
+        append_bash_output_preview(&mut summary, stdout, stderr);
         return summary;
     }
     if name == "apply_patch"
@@ -863,15 +858,14 @@ fn tool_result_preview(content: &str) -> Option<String> {
 }
 
 pub(super) fn format_tool_progress(name: &str, stream: ToolOutputStream, chunk: &str) -> String {
-    let trimmed = chunk.trim_end_matches('\n');
-    if trimmed.trim().is_empty() {
+    let Some(visible_chunk) = output_tail_preview(chunk) else {
         return String::new();
-    }
+    };
     let stream_label = match stream {
         ToolOutputStream::Stdout => "stdout",
         ToolOutputStream::Stderr => "stderr",
     };
-    format!("{name} {stream_label}:\n{trimmed}\n")
+    format!("{name} {stream_label}:\n{visible_chunk}\n")
 }
 
 pub(super) fn append_tool_progress(
@@ -1025,6 +1019,23 @@ fn append_path_group(lines: &mut Vec<String>, label: &str, value: Option<&serde_
 
 fn output_tail_preview(output: &str) -> Option<String> {
     terminal_output_tail_preview(output).map(|lines| lines.join("\n"))
+}
+
+fn append_bash_output_preview(summary: &mut String, stdout: &str, stderr: &str) {
+    match (output_tail_preview(stdout), output_tail_preview(stderr)) {
+        (Some(stdout_preview), Some(stderr_preview)) => {
+            summary.push_str(&format!("\nstdout:\n{stdout_preview}"));
+            summary.push_str(&format!("\nstderr:\n{stderr_preview}"));
+        }
+        (Some(stdout_preview), None) => {
+            summary.push('\n');
+            summary.push_str(&stdout_preview);
+        }
+        (None, Some(stderr_preview)) => {
+            summary.push_str(&format!("\nstderr:\n{stderr_preview}"));
+        }
+        (None, None) => {}
+    }
 }
 
 fn format_write_file_result(value: &serde_json::Value) -> String {

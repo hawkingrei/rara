@@ -329,6 +329,9 @@ pub(crate) async fn dispatch_event(
         AppEvent::SelectHelpTab(tab) => {
             app.open_overlay(Overlay::Help(tab));
         }
+        AppEvent::SelectStatusTab(tab) => {
+            app.open_overlay(Overlay::Status(tab));
+        }
         AppEvent::SetModelSelection(idx) => {
             app.model_picker_idx = idx.min(app.current_model_picker_len().saturating_sub(1));
         }

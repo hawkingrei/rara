@@ -528,6 +528,7 @@ fn formats_bash_tool_result_with_output_tail() {
 
     assert!(rendered.contains("bash finished with exit code 0"));
     assert!(rendered.contains("stdout:"));
+    assert!(rendered.contains("stderr:"));
     assert!(rendered.contains("line 7"));
     assert!(rendered.contains("line 6"));
     assert!(!rendered.contains("line 1"));
@@ -548,8 +549,27 @@ fn formats_live_bash_tool_result_with_output_tail() {
 
     assert!(rendered.contains("bash finished with exit code 0"));
     assert!(rendered.contains("output streamed above"));
-    assert!(rendered.contains("stdout:"));
+    assert!(!rendered.contains("stdout:"));
+    assert!(!rendered.contains("stderr:"));
     assert!(rendered.contains("line 2"));
+}
+
+#[test]
+fn formats_stderr_only_bash_tool_result_with_stream_label() {
+    let rendered = format_tool_result(
+        "bash",
+        &json!({
+            "exit_code": 1,
+            "stdout": "",
+            "stderr": "warn 1\nwarn 2\n"
+        })
+        .to_string(),
+    );
+
+    assert!(rendered.contains("bash failed with exit code 1"));
+    assert!(!rendered.contains("stdout:"));
+    assert!(rendered.contains("stderr:"));
+    assert!(rendered.contains("warn 2"));
 }
 
 #[test]
@@ -794,6 +814,17 @@ fn formats_persisted_bash_result_without_generic_prefix() {
 fn formats_tool_progress_with_stream_label() {
     let rendered = format_tool_progress("bash", ToolOutputStream::Stderr, "warn 1\nwarn 2\n");
     assert_eq!(rendered, "bash stderr:\nwarn 1\nwarn 2\n");
+}
+
+#[test]
+fn skips_tool_progress_when_stderr_has_no_visible_output() {
+    let rendered = format_tool_progress(
+        "background task",
+        ToolOutputStream::Stderr,
+        "\u{1b}[2K\r\n   \n",
+    );
+
+    assert_eq!(rendered, "");
 }
 
 #[test]

@@ -19,8 +19,8 @@ pub use self::types::{
     AgentMarkdownStreamState, CommandSpec, CompletedInteractionSnapshot, HelpTab, InteractionKind,
     LocalCommand, LocalCommandKind, OAuthLoginMode, OpenAiModelPickerAction, Overlay,
     PROVIDER_FAMILIES, PendingApprovalSnapshot, PendingInteractionSnapshot, ProviderFamily,
-    RebuildSuccess, RunningTask, RuntimePhase, RuntimeSnapshot, TaskCompletion, TaskKind,
-    TranscriptEntry, TranscriptEntryPayload, TranscriptTurn, TuiApp, TuiEvent,
+    RebuildSuccess, RunningTask, RuntimePhase, RuntimeSnapshot, StatusTab, TaskCompletion,
+    TaskKind, TranscriptEntry, TranscriptEntryPayload, TranscriptTurn, TuiApp, TuiEvent,
 };
 
 const OPENAI_PROFILE_SETUP_KINDS: [OpenAiEndpointKind; 3] = [
@@ -1004,6 +1004,18 @@ impl TuiApp {
             plan_explanation: runtime_context.plan.explanation,
             pending_interactions,
             completed_interactions,
+            todo_artifact_path: if agent.todo_state.is_some() {
+                Some(
+                    agent
+                        .session_manager
+                        .todo_file_path(&agent.session_id)
+                        .display()
+                        .to_string(),
+                )
+            } else {
+                None
+            },
+            todo: runtime_context.todo,
             prompt_base_kind: runtime_context.prompt.base_prompt_kind,
             prompt_section_keys: runtime_context.prompt.section_keys,
             prompt_source_entries: runtime_context.prompt.source_entries,
