@@ -164,6 +164,8 @@ conversion:
   the list changes.
 - The runtime-control event stream emits a structured `todo.updated` event for Wire/ACP consumers
   instead of requiring them to parse transcript text.
+- `/context` renders the current todo artifact path, counts, active item, and bounded item list from
+  `TodoContextView`; `/status` renders a compact todo summary.
 
 ## Open Risks
 
@@ -173,8 +175,8 @@ conversion:
   clearer ownership model.
 - The UI should avoid permanent todo cards; stale completed lists can become visual noise in long
   sessions.
-- `/context` and `/status` should still get first-class todo sections on top of the structured
-  runtime view.
+- Future context compaction should decide whether to carry the active todo only or a bounded pending
+  projection.
 
 ## Source Journals
 

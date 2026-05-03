@@ -6,7 +6,8 @@ use super::{
     status_runtime_text,
 };
 use crate::config::{ConfigManager, OpenAiEndpointKind};
-use crate::context::{DropReason, PromptSourceContextEntry};
+use crate::context::{PromptSourceContextEntry, TodoContextView};
+use crate::todo::TodoSummary;
 use crate::tui::state::{LocalCommandKind, RuntimeSnapshot, TuiApp};
 use tempfile::tempdir;
 
@@ -437,6 +438,31 @@ fn status_context_text_includes_prompt_sources_and_plan_state() {
             },
         ],
         plan_steps: vec![("pending".into(), "Implement /context".into())],
+        todo: TodoContextView {
+            summary: TodoSummary {
+                total: 3,
+                pending: 1,
+                in_progress: 1,
+                completed: 1,
+                cancelled: 0,
+                active_item: Some("Wire todo state into /context".into()),
+            },
+            updated_at: Some(1_777_584_000),
+            items: vec![
+                (
+                    "todo-1".into(),
+                    "completed".into(),
+                    "Implement todo_write runtime".into(),
+                ),
+                (
+                    "todo-2".into(),
+                    "in_progress".into(),
+                    "Wire todo state into /context".into(),
+                ),
+                ("todo-3".into(), "pending".into(), "Add status coverage".into()),
+            ],
+        },
+        todo_artifact_path: Some("/workspace/rara/.rara/sessions/session-123/todo.json".into()),
         ..RuntimeSnapshot::default()
     };
 
@@ -459,7 +485,48 @@ fn status_context_text_includes_prompt_sources_and_plan_state() {
     assert!(rendered.contains("Retrieval-ready"));
     assert!(rendered.contains("Plan"));
     assert!(rendered.contains("[pending] Implement /context"));
+    assert!(rendered.contains("Todo"));
+    assert!(rendered.contains("artifact: /workspace/rara/.rara/sessions/session-123/todo.json"));
+    assert!(rendered.contains("total: 3  pending: 1  in_progress: 1  completed: 1"));
+    assert!(rendered.contains("active: Wire todo state into /context"));
+    assert!(rendered.contains("[in_progress] Wire todo state into /context (todo-2)"));
     assert!(rendered.contains("Pending"));
+}
+
+#[test]
+fn status_runtime_text_reports_todo_summary() {
+    let dir = tempdir().expect("tempdir");
+    let cm = ConfigManager {
+        path: dir.path().join("config.json"),
+    };
+    let mut app = TuiApp::new(cm).expect("app");
+    app.snapshot = RuntimeSnapshot {
+        todo: TodoContextView {
+            summary: TodoSummary {
+                total: 2,
+                pending: 1,
+                in_progress: 1,
+                completed: 0,
+                cancelled: 0,
+                active_item: Some("Run focused tests".into()),
+            },
+            updated_at: Some(1_777_584_000),
+            items: vec![
+                (
+                    "todo-1".into(),
+                    "in_progress".into(),
+                    "Run focused tests".into(),
+                ),
+                ("todo-2".into(), "pending".into(), "Push PR update".into()),
+            ],
+        },
+        ..RuntimeSnapshot::default()
+    };
+
+    let rendered = status_runtime_text(&app);
+    assert!(rendered.contains(
+        "todo=2 total, 1 pending, 1 in_progress, 0 completed, 0 cancelled, active=Run focused tests"
+    ));
 }
 
 #[test]

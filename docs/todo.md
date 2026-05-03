@@ -85,7 +85,7 @@ Active backlog only. Keep this file small and current.
 - [ ] High-fidelity render pass for `write/update`, inline diffs, approval cards, message-card hierarchy.
 - [ ] Expand TUI snapshot coverage.
 - [ ] Keep transcript and pending-interaction state backed by structured events that ACP/Wire output subscribers can reuse.
-- [ ] Add first-class todo sections to `/context` and `/status` from `TodoContextView`.
+- [x] Add first-class todo sections to `/context` and `/status` from `TodoContextView`.
 
 ## Security / Reliability / Performance
 
