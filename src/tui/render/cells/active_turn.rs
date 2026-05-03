@@ -511,5 +511,3 @@ impl ActiveCell for ActiveTurnCell<'_> {
         lines
     }
 }
-
-#[cfg(test)]
