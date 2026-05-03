@@ -1,8 +1,3 @@
-use crate::sandbox::{SandboxManager, WrappedCommand, sandbox_failure_hint};
-use crate::tool::{Tool, ToolError};
-use async_trait::async_trait;
-use portable_pty::{CommandBuilder, NativePtySystem, PtySize, PtySystem};
-use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::env;
 use std::fs::OpenOptions;
@@ -11,8 +6,15 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
+
+use async_trait::async_trait;
+use portable_pty::{CommandBuilder, NativePtySystem, PtySize, PtySystem};
+use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use uuid::Uuid;
+
+use crate::sandbox::{SandboxManager, WrappedCommand, sandbox_failure_hint};
+use crate::tool::{Tool, ToolError};
 
 const PTY_START_QUICK_COMPLETION_TIMEOUT: Duration = Duration::from_millis(750);
 const PTY_START_QUICK_COMPLETION_POLL: Duration = Duration::from_millis(25);
@@ -748,9 +750,10 @@ fn parse_pty_dimension(value: Option<&Value>, default: u16, name: &str) -> Resul
 
 #[cfg(test)]
 mod tests {
+    use tempfile::tempdir;
+
     use super::*;
     use crate::sandbox::WrappedCommand;
-    use tempfile::tempdir;
 
     #[tokio::test]
     async fn read_output_tail_returns_only_requested_suffix() {

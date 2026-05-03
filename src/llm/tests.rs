@@ -1,12 +1,6 @@
 use reqwest::StatusCode;
 use serde_json::json;
 
-use crate::agent::Message;
-use crate::config::OpenAiEndpointKind;
-use crate::llm::{ContentBlock, LlmStreamEvent, LlmTurnMetadata};
-use crate::tool::Tool;
-use crate::tools::planning::ExitPlanModeTool;
-
 use super::ollama::{
     apply_ollama_stream_event, build_ollama_options, ensure_ollama_stream_completed,
     suggest_ollama_num_ctx, to_ollama_messages,
@@ -22,6 +16,11 @@ use super::openai_compatible::{
 use super::shared::{
     extract_message_text, model_context_budget, parse_tool_arguments, should_bypass_proxy,
 };
+use crate::agent::Message;
+use crate::config::OpenAiEndpointKind;
+use crate::llm::{ContentBlock, LlmStreamEvent, LlmTurnMetadata};
+use crate::tool::Tool;
+use crate::tools::planning::ExitPlanModeTool;
 
 #[test]
 fn converts_assistant_tool_history_to_openai_messages() {

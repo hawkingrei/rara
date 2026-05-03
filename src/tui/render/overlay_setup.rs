@@ -1,4 +1,5 @@
-use crate::tui::theme::*;
+use std::path::Path;
+
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -6,7 +7,6 @@ use ratatui::{
     widgets::{Block, Borders, Cell, List, ListItem, Paragraph, Row, Table, TableState, Wrap},
 };
 use secrecy::ExposeSecret;
-use std::path::Path;
 use unicode_width::UnicodeWidthChar;
 
 use super::Frame;
@@ -18,6 +18,7 @@ use crate::tui::render::bottom_pane::editor_cursor_position;
 use crate::tui::state::{
     PROVIDER_FAMILIES, ProviderFamily, TuiApp, current_model_presets, openai_profile_setup_kinds,
 };
+use crate::tui::theme::*;
 
 fn wrapped_text_height(text: &str, area_width: u16) -> u16 {
     let width = area_width.saturating_sub(2).max(1) as usize;

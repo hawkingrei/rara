@@ -1,12 +1,14 @@
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use anyhow::{Result, anyhow};
+use serde::{Deserialize, Serialize};
+
 use crate::agent::Message;
 use crate::state_db::PersistedStructuredRolloutEvent;
 use crate::thread_rollout_log;
 use crate::todo::TodoState;
-use anyhow::{Result, anyhow};
-use serde::{Deserialize, Serialize};
-use std::fs;
-use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PersistedCompactionEvent {
@@ -371,8 +373,9 @@ fn epoch_seconds() -> i64 {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use tempfile::tempdir;
+
+    use super::*;
 
     #[test]
     fn save_compaction_event_appends_jsonl_lines() -> Result<()> {

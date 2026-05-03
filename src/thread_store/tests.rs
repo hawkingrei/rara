@@ -1,18 +1,18 @@
-use anyhow::Result;
 use std::fs;
 use std::time::Duration;
+
+use anyhow::Result;
 use tempfile::tempdir;
 
+use super::{
+    RolloutItem, ThreadHistorySource, ThreadMetadataSource, ThreadNonTurnRolloutSource,
+    ThreadRecorder, ThreadRuntimeLineage, ThreadRuntimeState, ThreadStore,
+};
 use crate::agent::Message;
 use crate::session::{PersistedCompactionEvent, SessionManager};
 use crate::state_db::{
     PersistedCompactState, PersistedInteraction, PersistedPlanStep, PersistedPromptRuntimeState,
     PersistedRuntimeRolloutItem, PersistedStructuredRolloutEvent, PersistedTurnEntry, StateDb,
-};
-
-use super::{
-    RolloutItem, ThreadHistorySource, ThreadMetadataSource, ThreadNonTurnRolloutSource,
-    ThreadRecorder, ThreadRuntimeLineage, ThreadRuntimeState, ThreadStore,
 };
 
 #[test]

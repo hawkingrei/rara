@@ -1,5 +1,4 @@
 use crate::agent::{Agent, BashApprovalDecision};
-
 use crate::tui::runtime::{
     start_pending_approval_task, start_plan_approval_resume_task, start_query_task,
 };

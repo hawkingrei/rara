@@ -1,10 +1,10 @@
-use crate::tui::theme::*;
 use ratatui::{
     style::{Color, Modifier, Style},
     text::{Line, Span},
 };
 
 use crate::tui::render::display_width;
+use crate::tui::theme::*;
 
 const MAX_DIFF_LINES: usize = 80;
 

@@ -1,32 +1,29 @@
 mod codex;
 mod usage;
 
-use backon::{ExponentialBuilder, Retryable};
-
 use std::borrow::Cow;
 use std::fmt;
 use std::time::Duration;
 
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
+use backon::{ExponentialBuilder, Retryable};
 use eventsource_stream::Eventsource;
 use reqwest::{Response, StatusCode};
 use secrecy::{ExposeSecret, SecretString};
 use serde_json::{Value, json};
 
-use crate::agent::Message;
-use crate::config::OpenAiEndpointKind;
-use crate::llm::{ContentBlock, LlmResponse};
-use crate::redaction::{redact_secrets, sanitize_url_for_display};
-
+use self::usage::parse_openai_token_usage;
 use super::shared::{
     ContextBudget, LlmBackend, LlmStreamEvent, LlmTurnMetadata, collect_assistant_content,
     context_budget_from_window, extract_message_text, http_client_for_target,
     is_retryable_http_error, model_context_budget, next_stream_item_with_idle_timeout,
     parse_tool_arguments, render_openai_message_content, retry_send_json,
 };
-
-use self::usage::parse_openai_token_usage;
+use crate::agent::Message;
+use crate::config::OpenAiEndpointKind;
+use crate::llm::{ContentBlock, LlmResponse};
+use crate::redaction::{redact_secrets, sanitize_url_for_display};
 
 const STREAM_IDLE_RETRY_ATTEMPTS: usize = 1;
 const STREAM_IDLE_ERROR_FRAGMENT: &str = "stream produced no events";

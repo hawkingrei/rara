@@ -1,8 +1,10 @@
-use crate::tool::{Tool, ToolError};
-use crate::workspace::WorkspaceMemory;
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use serde_json::{Value, json};
-use std::sync::Arc;
+
+use crate::tool::{Tool, ToolError};
+use crate::workspace::WorkspaceMemory;
 
 pub struct UpdateProjectMemoryTool {
     pub workspace: Arc<WorkspaceMemory>,

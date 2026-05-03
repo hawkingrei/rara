@@ -1,4 +1,3 @@
-use crate::tui::theme::*;
 use std::path::Path;
 
 use ratatui::{style::Color, text::Line};
@@ -15,6 +14,7 @@ use crate::tui::state::{
 use crate::tui::terminal_event::{
     TerminalCollectionEvent, TerminalCommandEvent, TerminalEvent, TerminalTarget,
 };
+use crate::tui::theme::*;
 
 #[path = "cells_components.rs"]
 mod components;
