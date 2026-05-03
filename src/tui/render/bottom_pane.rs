@@ -147,7 +147,24 @@ fn activity_status_line(app: &TuiApp) -> (&'static str, Color, String) {
     }
 
     if app.is_busy() {
-        return ("", STATUS_WARNING, String::new());
+        let elapsed = app
+            .running_elapsed()
+            .map(|d| {
+                let secs = d.as_secs();
+                if secs < 60 {
+                    format!("{}s", secs)
+                } else {
+                    let mins = secs / 60;
+                    let remain_secs = secs % 60;
+                    format!("{}m {}s", mins, remain_secs)
+                }
+            })
+            .unwrap_or_else(|| "…".to_string());
+        return (
+            "Working",
+            STATUS_WARNING,
+            format!("({} • esc to interrupt)", elapsed),
+        );
     }
 
     if app.agent_execution_mode_label() == "plan" {
@@ -307,15 +324,6 @@ fn composer_hint_line(app: &TuiApp) -> Line<'static> {
     if !hint.is_empty() {
         spans.push(Span::styled(hint, Style::default().fg(TEXT_MUTED)));
     }
-    if let Some(repo_context) = app.repo_context_hint() {
-        if !spans.is_empty() {
-            spans.push(Span::raw("  "));
-        }
-        spans.push(Span::styled(
-            repo_context,
-            Style::default().fg(TEXT_SECONDARY),
-        ));
-    }
     Line::from(spans)
 }
 
@@ -348,6 +356,14 @@ fn footer_summary_text(app: &TuiApp) -> String {
         Some(window) => format!("ctx~={}/{}", app.snapshot.estimated_history_tokens, window),
         None => format!("ctx~={}", app.snapshot.estimated_history_tokens),
     };
+
+    let repo_part = app
+        .repo_context_hint()
+        .map(|hint| format!("{hint}  "))
+        .unwrap_or_default();
+
+    let prefix = format!("{repo_part}{context}");
+
     let cache_summary = cache_hit_rate_label(
         app.snapshot.total_cache_hit_tokens,
         app.snapshot.total_cache_miss_tokens,
@@ -357,7 +373,7 @@ fn footer_summary_text(app: &TuiApp) -> String {
     if shows_live_task_stats(app) {
         format!(
             "{}  tokens={} in / {} out{}",
-            context,
+            prefix,
             app.snapshot.total_input_tokens,
             app.snapshot.total_output_tokens,
             cache_summary
@@ -365,10 +381,10 @@ fn footer_summary_text(app: &TuiApp) -> String {
     } else if app.snapshot.compaction_count > 0 {
         format!(
             "{}  compactions={}{}",
-            context, app.snapshot.compaction_count, cache_summary
+            prefix, app.snapshot.compaction_count, cache_summary
         )
     } else {
-        format!("{context}{cache_summary}")
+        format!("{prefix}{cache_summary}")
     }
 }
 

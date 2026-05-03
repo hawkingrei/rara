@@ -275,6 +275,12 @@ impl TuiApp {
         self.running_task.is_some()
     }
 
+    pub fn running_elapsed(&self) -> Option<std::time::Duration> {
+        self.running_task
+            .as_ref()
+            .map(|task| task.started_at.elapsed())
+    }
+
     pub fn current_model_label(&self) -> &str {
         self.config.model.as_deref().unwrap_or("-")
     }
