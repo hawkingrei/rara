@@ -173,6 +173,17 @@ fn scrub_internal_control_tokens_removes_dsml_tool_blocks() {
 }
 
 #[test]
+fn scrub_internal_control_tokens_removes_ascii_pipe_dsml_tool_blocks() {
+    let cleaned = scrub_internal_control_tokens(
+        "Before\n<|DSML|tool_calls>\n<|DSML|invoke name=\"read_file\">\n<|DSML|parameter name=\"path\" string=\"true\">src/lib.rs</|DSML|parameter>\n</|DSML|invoke>\n</|DSML|tool_calls>\nAfter",
+    );
+
+    assert_eq!(cleaned.trim(), "Before\n\nAfter");
+    assert!(!cleaned.contains("DSML"));
+    assert!(!cleaned.contains("read_file"));
+}
+
+#[test]
 fn scrub_internal_control_tokens_removes_structured_dsml_tool_block_with_json_parameter() {
     let cleaned = scrub_internal_control_tokens(
         "Before\n<｜DSML｜tool_calls>\n<｜DSML｜invoke name=\"read_file\">\n<｜DSML｜parameter name=\"options\" string=\"false\">{\"path\":\"src/lib.rs\",\"limit\":20}</｜DSML｜parameter>\n</｜DSML｜invoke>\n</｜DSML｜tool_calls>\nAfter",
