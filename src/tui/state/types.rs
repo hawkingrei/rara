@@ -21,6 +21,7 @@ use crate::state_db::StateDb;
 use crate::thread_store::ThreadSummary;
 use crate::tool::ToolOutputStream;
 use crate::tools::bash::BashCommandInput;
+use crate::tui::control_tokens::scrub_internal_control_tokens;
 use crate::tui::terminal_event::TerminalEvent;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -358,6 +359,7 @@ pub(crate) struct CommittedTranscriptRenderCache {
 
 pub struct AgentMarkdownStreamState {
     pub(crate) raw_text: String,
+    cwd: PathBuf,
     collector: MarkdownStreamCollector,
     committed_lines: Vec<Line<'static>>,
     pub(crate) display_lines: Vec<Line<'static>>,
@@ -367,6 +369,7 @@ impl AgentMarkdownStreamState {
     pub(crate) fn new(cwd: PathBuf) -> Self {
         Self {
             raw_text: String::new(),
+            cwd: cwd.clone(),
             collector: MarkdownStreamCollector::new(None, &cwd),
             committed_lines: Vec::new(),
             display_lines: Vec::new(),
@@ -375,7 +378,28 @@ impl AgentMarkdownStreamState {
 
     pub(crate) fn push_delta(&mut self, delta: &str) {
         self.raw_text.push_str(delta);
+        let visible_text = scrub_internal_control_tokens(&self.raw_text);
+        if visible_text != self.raw_text {
+            self.replace_display_text(&visible_text);
+            return;
+        }
         self.collector.push_delta(delta);
+        self.refresh_display_lines();
+    }
+
+    pub(crate) fn sanitized_raw_text(&self) -> String {
+        scrub_internal_control_tokens(&self.raw_text)
+    }
+
+    fn replace_display_text(&mut self, text: &str) {
+        self.collector = MarkdownStreamCollector::new(None, &self.cwd);
+        self.committed_lines.clear();
+        self.display_lines.clear();
+        self.collector.push_delta(text);
+        self.refresh_display_lines();
+    }
+
+    fn refresh_display_lines(&mut self) {
         self.committed_lines
             .extend(self.collector.commit_complete_lines());
         self.display_lines = self.committed_lines.clone();

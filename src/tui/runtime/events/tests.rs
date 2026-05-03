@@ -162,6 +162,36 @@ fn scrub_internal_channel_markers_preserves_text_boundaries() {
 }
 
 #[test]
+fn scrub_internal_control_tokens_removes_agent_runtime_blocks() {
+    let cleaned = scrub_internal_control_tokens(
+        "Before\n<agent_runtime>\n{\"phase\":\"tool_results_available\"}\n</agent_runtime>\nAfter",
+    );
+
+    assert_eq!(cleaned.trim(), "Before\n\nAfter");
+    assert!(!cleaned.contains("agent_runtime"));
+    assert!(!cleaned.contains("tool_results_available"));
+}
+
+#[test]
+fn scrub_internal_control_tokens_removes_open_runtime_blocks() {
+    let cleaned = scrub_internal_control_tokens(
+        "Before\n<agent_runtime>\n{\"phase\":\"tool_results_available\"}",
+    );
+
+    assert_eq!(cleaned.trim(), "Before");
+}
+
+#[test]
+fn scrub_internal_control_tokens_removes_folded_history_context_blocks() {
+    let cleaned = scrub_internal_control_tokens(
+        "Visible\n<rara_internal_history_context>\nassistant: historical tool request: name=read_file\n</rara_internal_history_context>\nDone",
+    );
+
+    assert_eq!(cleaned.trim(), "Visible\n\nDone");
+    assert!(!cleaned.contains("historical tool request"));
+}
+
+#[test]
 fn scrub_internal_control_tokens_removes_dsml_tool_blocks() {
     let cleaned = scrub_internal_control_tokens(
         "Before\n<｜DSML｜tool_calls>\n<｜DSML｜invoke name=\"apply_patch\">\n<｜DSML｜parameter name=\"path\" string=\"true\">src/lib.rs</｜DSML｜parameter>\n</｜DSML｜invoke>\n</｜DSML｜tool_calls>\nAfter",

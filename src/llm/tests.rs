@@ -525,16 +525,79 @@ fn deepseek_v4_defaults_fold_legacy_tool_results_without_reasoning_content() {
     assert_eq!(messages.len(), 2);
     assert_eq!(messages[0]["role"], "user");
     let folded_note = messages[0]["content"].as_str().expect("folded note");
-    assert!(folded_note.contains("tool_call: bash"));
+    assert!(folded_note.contains("<rara_internal_history_context>"));
+    assert!(folded_note.contains("historical tool request: name=bash"));
     assert!(folded_note.contains("id=tool-1"));
     assert!(folded_note.contains("cargo check"));
     assert!(folded_note.contains("tool: ok"));
+    assert!(!folded_note.contains("<agent_runtime>"));
+    assert!(!folded_note.contains("tool_call:"));
     assert_eq!(messages[1]["role"], "user");
     assert!(
         messages[1]["content"]
             .as_str()
             .is_some_and(|content| content.contains("tool_results_available"))
     );
+}
+
+#[test]
+fn deepseek_folded_legacy_history_excludes_runtime_control_messages() {
+    let body = build_chat_completion_request_body(
+        "deepseek-v4-pro",
+        &[
+            Message {
+                role: "assistant".to_string(),
+                content: json!([
+                    {"type":"tool_use","id":"tool-1","name":"read_file","input":{"path":"Cargo.toml"}}
+                ]),
+            },
+            Message {
+                role: "user".to_string(),
+                content: json!([
+                    {"type":"tool_result","tool_use_id":"tool-1","content":"[package]"}
+                ]),
+            },
+            Message {
+                role: "user".to_string(),
+                content: json!([{
+                    "type": "text",
+                    "text": "<agent_runtime>\n{\"phase\":\"tool_results_available\"}\n</agent_runtime>"
+                }]),
+            },
+            Message {
+                role: "assistant".to_string(),
+                content: json!([
+                    {"type":"text","text":"Now inspect the status file."},
+                    {"type":"tool_use","id":"tool-2","name":"read_file","input":{"path":"src/tui/status_display.rs"}}
+                ]),
+            },
+            Message {
+                role: "user".to_string(),
+                content: json!([
+                    {"type":"tool_result","tool_use_id":"tool-2","content":"status content"}
+                ]),
+            },
+        ],
+        &[json!({
+            "name": "read_file",
+            "description": "Read a file",
+            "input_schema": {"type":"object"}
+        })],
+        OpenAiEndpointKind::Deepseek,
+        None,
+        None,
+        LlmTurnMetadata::default(),
+    );
+
+    let messages = body["messages"].as_array().expect("messages");
+    assert_eq!(messages.len(), 1);
+    let folded_note = messages[0]["content"].as_str().expect("folded note");
+    assert!(folded_note.contains("historical tool request: name=read_file"));
+    assert!(folded_note.contains("src/tui/status_display.rs"));
+    assert!(folded_note.contains("status content"));
+    assert!(!folded_note.contains("<agent_runtime>"));
+    assert!(!folded_note.contains("tool_results_available"));
+    assert!(!folded_note.contains("tool_call:"));
 }
 
 #[test]
@@ -572,10 +635,12 @@ fn deepseek_thinking_tool_history_folds_missing_reasoning_content() {
     assert_eq!(messages[0]["role"], "user");
     let folded_note = messages[0]["content"].as_str().expect("folded note");
     assert!(folded_note.contains("context only"));
-    assert!(folded_note.contains("tool_call: read_file"));
+    assert!(folded_note.contains("<rara_internal_history_context>"));
+    assert!(folded_note.contains("historical tool request: name=read_file"));
     assert!(folded_note.contains("id=tool-1"));
     assert!(folded_note.contains("Cargo.toml"));
     assert!(folded_note.contains("[package]"));
+    assert!(!folded_note.contains("tool_call:"));
 }
 
 #[test]
@@ -819,9 +884,10 @@ fn deepseek_folds_legacy_tool_calls_with_id_and_arguments() {
     let messages = body["messages"].as_array().expect("messages");
     assert_eq!(messages[0]["role"], "user");
     let folded_note = messages[0]["content"].as_str().expect("folded note");
-    assert!(folded_note.contains("tool_call: read_file"));
+    assert!(folded_note.contains("historical tool request: name=read_file"));
     assert!(folded_note.contains("id=call-1"));
     assert!(folded_note.contains("Cargo.toml"));
+    assert!(!folded_note.contains("tool_call:"));
 }
 
 #[test]
