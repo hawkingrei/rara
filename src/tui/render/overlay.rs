@@ -19,15 +19,14 @@ use self::overlay_setup::{
 use super::super::command::{
     current_turn_preview, download_status_text, general_help_text, matching_commands,
     model_help_text, palette_commands, quick_actions_text, recent_transcript_preview,
-    status_prompt_sources_text, status_resources_text, status_runtime_text,
-    status_workspace_text,
+    status_prompt_sources_text, status_resources_text, status_runtime_text, status_workspace_text,
 };
 use super::super::custom_terminal::Frame;
 use super::super::interaction_text::status_active_pending_interaction_text;
 use super::super::plan_display::status_plan_text;
 use super::super::state::{CommandSpec, HelpTab, Overlay, TuiApp};
-use crate::tui::status_display::render_status_lines;
 use crate::tui::context_display::render_context_lines;
+use crate::tui::status_display::render_status_lines;
 
 pub(super) fn render_overlay(
     f: &mut Frame,

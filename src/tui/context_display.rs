@@ -128,13 +128,19 @@ pub(crate) fn render_context_lines(app: &TuiApp) -> Vec<Line<'static>> {
         kv(
             &mut lines,
             "estimated",
-            &format!("{} tokens", format_token_count(snap.estimated_history_tokens)),
+            &format!(
+                "{} tokens",
+                format_token_count(snap.estimated_history_tokens)
+            ),
             Color::DarkGray,
         );
         kv(
             &mut lines,
             "threshold",
-            &format!("{} tokens", format_token_count(snap.compact_threshold_tokens)),
+            &format!(
+                "{} tokens",
+                format_token_count(snap.compact_threshold_tokens)
+            ),
             Color::DarkGray,
         );
         kv(
@@ -203,10 +209,7 @@ pub(crate) fn render_context_lines(app: &TuiApp) -> Vec<Line<'static>> {
 
 fn budget_bar(app: &TuiApp, width: usize) -> Line<'static> {
     let snap = &app.snapshot;
-    let total = snap
-        .context_window_tokens
-        .unwrap_or(1)
-        .max(1);
+    let total = snap.context_window_tokens.unwrap_or(1).max(1);
 
     let segments: &[(usize, Color)] = &[
         (
@@ -279,10 +282,7 @@ fn section_spacer(lines: &mut Vec<Line<'static>>) {
 }
 
 fn kv(lines: &mut Vec<Line<'static>>, key: &str, value: &str, value_color: Color) {
-    let key_span = Span::styled(
-        format!("  {key:<14} "),
-        Style::default().fg(TEXT_SECONDARY),
-    );
+    let key_span = Span::styled(format!("  {key:<14} "), Style::default().fg(TEXT_SECONDARY));
     let value_span = Span::styled(value.to_string(), Style::default().fg(value_color));
     lines.push(Line::from(vec![key_span, value_span]));
 }
