@@ -155,11 +155,15 @@ impl TuiApp {
         let fallback = self
             .agent_markdown_stream
             .take()
-            .map(|stream| stream.raw_text)
+            .map(|stream| stream.sanitized_raw_text())
             .filter(|text| !text.is_empty());
         let Some(message) = final_message.or(fallback) else {
             return;
         };
+        let message = crate::tui::control_tokens::scrub_internal_control_tokens(&message);
+        if message.trim().is_empty() {
+            return;
+        }
 
         if Self::replace_turn_agent_message(&mut self.active_turn, message.clone()) {
             self.reset_transcript_scroll_if_following_tail();

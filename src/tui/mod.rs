@@ -3,6 +3,7 @@ mod auth_mode_picker;
 mod command;
 mod constants;
 mod context_display;
+mod control_tokens;
 mod custom_terminal;
 mod event_dispatch;
 mod event_loop;
