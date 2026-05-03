@@ -1,4 +1,7 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
+use std::fs::{File, OpenOptions};
+use std::os::fd::AsRawFd;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
@@ -52,16 +55,18 @@ pub struct MemorySearchHit {
 
 pub struct VectorDB {
     uri: String,
+    write_lock_path: PathBuf,
     db: OnceCell<Connection>,
-    fts_indexed_tables: Mutex<HashSet<String>>,
+    fts_indexed_tables: Mutex<HashMap<String, Arc<OnceCell<()>>>>,
 }
 
 impl VectorDB {
     pub fn new(uri: &str) -> Self {
         Self {
             uri: uri.to_string(),
+            write_lock_path: PathBuf::from(format!("{uri}.lock")),
             db: OnceCell::new(),
-            fts_indexed_tables: Mutex::new(HashSet::new()),
+            fts_indexed_tables: Mutex::new(HashMap::new()),
         }
     }
 
@@ -164,6 +169,7 @@ impl VectorDB {
         if vector.is_empty() {
             return Ok(());
         }
+        let _write_lock = self.acquire_write_lock().await?;
         let table = self.open_or_create_table(table_name, vector.len()).await?;
         let batch = memory_record_batch(&metadata, vector)?;
         let schema = batch.schema();
@@ -176,8 +182,15 @@ impl VectorDB {
             .execute(Box::new(reader))
             .await
             .context("merge memory record into LanceDB table")?;
-        self.ensure_fts_index(&table).await?;
+        self.ensure_fts_index_locked(&table).await?;
         Ok(())
+    }
+
+    async fn acquire_write_lock(&self) -> Result<VectorDbWriteLock> {
+        let path = self.write_lock_path.clone();
+        tokio::task::spawn_blocking(move || VectorDbWriteLock::acquire(path))
+            .await
+            .context("join LanceDB write lock task")?
     }
 
     async fn db(&self) -> Result<&Connection> {
@@ -213,26 +226,70 @@ impl VectorDB {
     }
 
     async fn ensure_fts_index(&self, table: &Table) -> Result<()> {
+        let _write_lock = self.acquire_write_lock().await?;
+        self.ensure_fts_index_locked(table).await
+    }
+
+    async fn ensure_fts_index_locked(&self, table: &Table) -> Result<()> {
         let table_name = table.name().to_string();
-        if self.fts_indexed_tables.lock().await.contains(&table_name) {
-            return Ok(());
-        }
-        let indices = table.list_indices().await?;
-        let has_text_fts = indices.iter().any(|index| {
-            index.columns.iter().any(|column| column == TEXT_COLUMN)
-                && index.index_type.to_string() == "FTS"
-        });
-        if has_text_fts {
-            self.fts_indexed_tables.lock().await.insert(table_name);
-            return Ok(());
-        }
-        table
-            .create_index(&[TEXT_COLUMN], Index::FTS(FtsIndexBuilder::default()))
-            .execute()
+        let fts_once = {
+            let mut indexed_tables = self.fts_indexed_tables.lock().await;
+            indexed_tables
+                .entry(table_name)
+                .or_insert_with(|| Arc::new(OnceCell::new()))
+                .clone()
+        };
+        fts_once
+            .get_or_try_init(|| async {
+                let indices = table.list_indices().await?;
+                let has_text_fts = indices.iter().any(|index| {
+                    index.columns.iter().any(|column| column == TEXT_COLUMN)
+                        && index.index_type.to_string() == "FTS"
+                });
+                if !has_text_fts {
+                    table
+                        .create_index(&[TEXT_COLUMN], Index::FTS(FtsIndexBuilder::default()))
+                        .execute()
+                        .await
+                        .context("create LanceDB FTS index on memory text")?;
+                }
+                Ok(())
+            })
             .await
-            .context("create LanceDB FTS index on memory text")?;
-        self.fts_indexed_tables.lock().await.insert(table_name);
-        Ok(())
+            .map(|_| ())
+    }
+}
+
+struct VectorDbWriteLock {
+    file: File,
+}
+
+impl VectorDbWriteLock {
+    fn acquire(path: PathBuf) -> Result<Self> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("create LanceDB lock directory {}", parent.display()))?;
+        }
+        let file = OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .open(&path)
+            .with_context(|| format!("open LanceDB write lock {}", path.display()))?;
+        let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) };
+        if rc != 0 {
+            return Err(std::io::Error::last_os_error())
+                .with_context(|| format!("lock LanceDB write lock {}", path.display()));
+        }
+        Ok(Self { file })
+    }
+}
+
+impl Drop for VectorDbWriteLock {
+    fn drop(&mut self) {
+        unsafe {
+            libc::flock(self.file.as_raw_fd(), libc::LOCK_UN);
+        }
     }
 }
 
@@ -243,8 +300,8 @@ async fn validate_table_vector_dim(table: &Table, expected_dim: usize) -> Result
         anyhow::bail!(
             "LanceDB memory vector dimension mismatch for table {}: expected {}, got {}",
             table.name(),
-            actual_dim,
-            expected_dim
+            expected_dim,
+            actual_dim
         );
     }
     Ok(())
@@ -281,14 +338,11 @@ fn memory_schema(vector_dim: usize) -> SchemaRef {
 fn memory_record_batch(metadata: &MemoryMetadata, vector: Vec<f32>) -> Result<RecordBatch> {
     let schema = memory_schema(vector.len());
     let id = metadata.stable_id();
+    let vector_dim = i32::try_from(vector_dim_from_schema(&schema)?)
+        .context("LanceDB memory vector dimension exceeds i32")?;
     let vectors = FixedSizeListArray::from_iter_primitive::<Float32Type, _, _>(
         [Some(vector.into_iter().map(Some).collect::<Vec<_>>())],
-        schema
-            .field_with_name(VECTOR_COLUMN)?
-            .data_type()
-            .as_fixed_size_list()
-            .map(|(_, dim)| dim)
-            .unwrap_or_default(),
+        vector_dim,
     );
     Ok(RecordBatch::try_new(
         schema,

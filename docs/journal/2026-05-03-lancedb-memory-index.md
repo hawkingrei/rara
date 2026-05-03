@@ -30,6 +30,11 @@ Search paths do not create tables. Only write paths create tables with the real
 embedding dimension. This prevents an empty FTS query from creating a table with
 a guessed vector dimension before the first write.
 
+Multiple RARA processes may point at the same workspace LanceDB directory.
+Mutation paths therefore use an adjacent advisory lock file (`lancedb.lock`) to
+serialize table creation, FTS index creation, and upserts. Read-only vector and
+FTS queries stay lock-free unless they need to create the missing FTS index.
+
 ## Runtime Wiring
 
 - Agent turn checkpoints write to the `conversations` LanceDB table.

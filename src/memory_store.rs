@@ -8,6 +8,7 @@ use crate::vectordb::{MemoryMetadata, VectorDB};
 
 const EXPERIENCES_TABLE: &str = "experiences";
 const DEFAULT_IMPORTANCE: f32 = 0.5;
+const MEMORY_RECORD_INDEX_PLACEHOLDER: u32 = 0;
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -121,7 +122,7 @@ impl MemoryStore {
                 MemoryMetadata {
                     id: Some(record.id.clone()),
                     session_id: memory_scope_key(&record.scope).to_string(),
-                    turn_index: stable_memory_index(&record.content),
+                    turn_index: MEMORY_RECORD_INDEX_PLACEHOLDER,
                     text: record.content.clone(),
                 },
                 vector,
@@ -225,12 +226,6 @@ fn truncate_chars(value: &str, max_chars: usize) -> String {
     } else {
         truncated
     }
-}
-
-fn stable_memory_index(text: &str) -> u32 {
-    text.bytes().fold(2_166_136_261u32, |hash, byte| {
-        hash.wrapping_mul(16_777_619) ^ u32::from(byte)
-    })
 }
 
 fn unix_timestamp_seconds() -> u64 {

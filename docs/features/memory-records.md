@@ -147,6 +147,12 @@ they enter the model context.
 
 Storage: `~/.rara/lancedb/` (LanceDB).
 
+Local write coordination: RARA uses an adjacent advisory lock file
+(`~/.rara/lancedb.lock`) for LanceDB mutations. Reads remain lock-free, while
+table creation, index creation, upsert, and future update/delete paths must
+serialize through this lock so multiple RARA processes can share the same
+workspace memory directory without racing initialization or commits.
+
 ## LanceDB Index Contract
 
 The first runtime slice keeps the existing `VectorDB` façade but backs it with
