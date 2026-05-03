@@ -1,16 +1,21 @@
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use arrow_array::cast::AsArray;
 use arrow_array::types::{Float32Type, UInt32Type};
-use arrow_array::{FixedSizeListArray, Float32Array, RecordBatch, StringArray, UInt32Array};
+use arrow_array::{
+    Array, FixedSizeListArray, Float32Array, RecordBatch, RecordBatchIterator, StringArray,
+    UInt32Array,
+};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use futures::TryStreamExt;
 use lance_index::scalar::FullTextSearchQuery;
 use lancedb::index::Index;
 use lancedb::index::scalar::FtsIndexBuilder;
-use lancedb::query::{ExecutableQuery, QueryBase, QueryExecutionOptions};
-use lancedb::{Table, connect};
+use lancedb::query::{ExecutableQuery, QueryBase};
+use lancedb::{Connection, Error as LanceDbError, Table, connect};
+use tokio::sync::{Mutex, OnceCell};
 
 const MEMORY_ID_COLUMN: &str = "id";
 const SESSION_ID_COLUMN: &str = "session_id";
@@ -22,6 +27,8 @@ const FTS_SCORE_COLUMN: &str = "_score";
 
 #[derive(Debug, serde::Serialize, serde::Deserialize, Clone, PartialEq, Eq)]
 pub struct MemoryMetadata {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
     pub session_id: String,
     pub turn_index: u32,
     pub text: String,
@@ -29,7 +36,9 @@ pub struct MemoryMetadata {
 
 impl MemoryMetadata {
     fn stable_id(&self) -> String {
-        format!("{}:{}", self.session_id, self.turn_index)
+        self.id
+            .clone()
+            .unwrap_or_else(|| format!("{}:{}", self.session_id, self.turn_index))
     }
 }
 
@@ -43,12 +52,16 @@ pub struct MemorySearchHit {
 
 pub struct VectorDB {
     uri: String,
+    db: OnceCell<Connection>,
+    fts_indexed_tables: Mutex<HashSet<String>>,
 }
 
 impl VectorDB {
     pub fn new(uri: &str) -> Self {
         Self {
             uri: uri.to_string(),
+            db: OnceCell::new(),
+            fts_indexed_tables: Mutex::new(HashSet::new()),
         }
     }
 
@@ -65,18 +78,9 @@ impl VectorDB {
         if query_vector.is_empty() || limit == 0 {
             return Ok(Vec::new());
         }
-        let Some(table) = self.open_table_if_exists(table_name).await? else {
-            return Ok(Vec::new());
-        };
-        let batches = table
-            .query()
-            .nearest_to(query_vector)?
-            .limit(limit)
-            .execute()
+        Ok(self
+            .vector_search_hits(table_name, query_vector, limit)
             .await?
-            .try_collect::<Vec<_>>()
-            .await?;
-        Ok(memory_hits_from_batches(&batches)?
             .into_iter()
             .map(|hit| (hit.metadata, hit.score))
             .collect())
@@ -116,16 +120,35 @@ impl VectorDB {
         if query.trim().is_empty() || query_vector.is_empty() || limit == 0 {
             return Ok(Vec::new());
         }
+        let vector_limit = limit.saturating_mul(2).max(limit);
+        let fts_limit = limit.saturating_mul(2).max(limit);
+        let vector_hits = self
+            .vector_search_hits(table_name, query_vector, vector_limit)
+            .await?;
+        let fts_hits = self
+            .full_text_search_with_metadata(table_name, query, fts_limit)
+            .await?;
+
+        Ok(fuse_hybrid_hits(vector_hits, fts_hits, limit))
+    }
+
+    async fn vector_search_hits(
+        &self,
+        table_name: &str,
+        query_vector: Vec<f32>,
+        limit: usize,
+    ) -> Result<Vec<MemorySearchHit>> {
+        if query_vector.is_empty() || limit == 0 {
+            return Ok(Vec::new());
+        }
         let Some(table) = self.open_table_if_exists(table_name).await? else {
             return Ok(Vec::new());
         };
-        self.ensure_fts_index(&table).await?;
         let batches = table
             .query()
-            .full_text_search(FullTextSearchQuery::new(query.to_string()))
             .nearest_to(query_vector)?
             .limit(limit)
-            .execute_hybrid(QueryExecutionOptions::default())
+            .execute()
             .await?
             .try_collect::<Vec<_>>()
             .await?;
@@ -142,29 +165,37 @@ impl VectorDB {
             return Ok(());
         }
         let table = self.open_or_create_table(table_name, vector.len()).await?;
-        let id = metadata.stable_id();
-        let delete_filter = format!("{MEMORY_ID_COLUMN} = '{}'", escape_lance_sql_string(&id));
-        table.delete(&delete_filter).await?;
-        table
-            .add(memory_record_batch(&metadata, vector)?)
-            .execute()
-            .await?;
+        let batch = memory_record_batch(&metadata, vector)?;
+        let schema = batch.schema();
+        let reader = RecordBatchIterator::new([Ok(batch)], schema);
+        let mut merge = table.merge_insert(&[MEMORY_ID_COLUMN]);
+        merge
+            .when_matched_update_all(None)
+            .when_not_matched_insert_all();
+        merge
+            .execute(Box::new(reader))
+            .await
+            .context("merge memory record into LanceDB table")?;
         self.ensure_fts_index(&table).await?;
         Ok(())
     }
 
-    async fn open_or_create_table(&self, table_name: &str, vector_dim: usize) -> Result<Table> {
-        let db = connect(&self.uri)
-            .execute()
+    async fn db(&self) -> Result<&Connection> {
+        self.db
+            .get_or_try_init(|| async {
+                connect(&self.uri)
+                    .execute()
+                    .await
+                    .with_context(|| format!("connect LanceDB at {}", self.uri))
+            })
             .await
-            .with_context(|| format!("connect LanceDB at {}", self.uri))?;
-        let names = db.table_names().execute().await?;
-        if names.iter().any(|name| name == table_name) {
-            return db
-                .open_table(table_name)
-                .execute()
-                .await
-                .with_context(|| format!("open LanceDB table {table_name}"));
+    }
+
+    async fn open_or_create_table(&self, table_name: &str, vector_dim: usize) -> Result<Table> {
+        let db = self.db().await?;
+        if let Some(table) = self.open_table_if_exists(table_name).await? {
+            validate_table_vector_dim(&table, vector_dim).await?;
+            return Ok(table);
         }
         db.create_empty_table(table_name, memory_schema(vector_dim))
             .execute()
@@ -173,29 +204,26 @@ impl VectorDB {
     }
 
     async fn open_table_if_exists(&self, table_name: &str) -> Result<Option<Table>> {
-        let db = connect(&self.uri)
-            .execute()
-            .await
-            .with_context(|| format!("connect LanceDB at {}", self.uri))?;
-        let names = db.table_names().execute().await?;
-        if !names.iter().any(|name| name == table_name) {
-            return Ok(None);
+        let db = self.db().await?;
+        match db.open_table(table_name).execute().await {
+            Ok(table) => Ok(Some(table)),
+            Err(LanceDbError::TableNotFound { .. }) => Ok(None),
+            Err(err) => Err(err).with_context(|| format!("open LanceDB table {table_name}")),
         }
-        let table = db
-            .open_table(table_name)
-            .execute()
-            .await
-            .with_context(|| format!("open LanceDB table {table_name}"))?;
-        Ok(Some(table))
     }
 
     async fn ensure_fts_index(&self, table: &Table) -> Result<()> {
+        let table_name = table.name().to_string();
+        if self.fts_indexed_tables.lock().await.contains(&table_name) {
+            return Ok(());
+        }
         let indices = table.list_indices().await?;
         let has_text_fts = indices.iter().any(|index| {
             index.columns.iter().any(|column| column == TEXT_COLUMN)
                 && index.index_type.to_string() == "FTS"
         });
         if has_text_fts {
+            self.fts_indexed_tables.lock().await.insert(table_name);
             return Ok(());
         }
         table
@@ -203,8 +231,34 @@ impl VectorDB {
             .execute()
             .await
             .context("create LanceDB FTS index on memory text")?;
+        self.fts_indexed_tables.lock().await.insert(table_name);
         Ok(())
     }
+}
+
+async fn validate_table_vector_dim(table: &Table, expected_dim: usize) -> Result<()> {
+    let schema = table.schema().await?;
+    let actual_dim = vector_dim_from_schema(&schema)?;
+    if actual_dim != expected_dim {
+        anyhow::bail!(
+            "LanceDB memory vector dimension mismatch for table {}: expected {}, got {}",
+            table.name(),
+            actual_dim,
+            expected_dim
+        );
+    }
+    Ok(())
+}
+
+fn vector_dim_from_schema(schema: &Schema) -> Result<usize> {
+    let vector_field = schema
+        .field_with_name(VECTOR_COLUMN)
+        .with_context(|| format!("missing {VECTOR_COLUMN} column in LanceDB memory schema"))?;
+    let (_, dim) = vector_field
+        .data_type()
+        .as_fixed_size_list()
+        .with_context(|| format!("LanceDB memory column {VECTOR_COLUMN} is not FixedSizeList"))?;
+    usize::try_from(dim).context("LanceDB memory vector dimension is negative")
 }
 
 fn memory_schema(vector_dim: usize) -> SchemaRef {
@@ -251,6 +305,7 @@ fn memory_record_batch(metadata: &MemoryMetadata, vector: Vec<f32>) -> Result<Re
 fn memory_hits_from_batches(batches: &[RecordBatch]) -> Result<Vec<MemorySearchHit>> {
     let mut hits = Vec::new();
     for batch in batches {
+        let ids = string_column(batch, MEMORY_ID_COLUMN)?;
         let session_ids = string_column(batch, SESSION_ID_COLUMN)?;
         let turn_indices = batch
             .column_by_name(TURN_INDEX_COLUMN)
@@ -260,10 +315,11 @@ fn memory_hits_from_batches(batches: &[RecordBatch]) -> Result<Vec<MemorySearchH
         let vector_distances = optional_f32_column(batch, VECTOR_DISTANCE_COLUMN);
         let fts_scores = optional_f32_column(batch, FTS_SCORE_COLUMN);
         for row in 0..batch.num_rows() {
-            let vector_distance = vector_distances.as_ref().and_then(|values| values[row]);
-            let fts_score = fts_scores.as_ref().and_then(|values| values[row]);
+            let vector_distance = optional_f32_value(vector_distances, row);
+            let fts_score = optional_f32_value(fts_scores, row);
             hits.push(MemorySearchHit {
                 metadata: MemoryMetadata {
+                    id: Some(ids.value(row).to_string()),
                     session_id: session_ids.value(row).to_string(),
                     turn_index: turn_indices.value(row),
                     text: texts.value(row).to_string(),
@@ -286,12 +342,14 @@ fn string_column<'a>(batch: &'a RecordBatch, name: &str) -> Result<&'a StringArr
         .with_context(|| format!("LanceDB memory column {name} is not Utf8"))
 }
 
-fn optional_f32_column(batch: &RecordBatch, name: &str) -> Option<Vec<Option<f32>>> {
+fn optional_f32_column<'a>(batch: &'a RecordBatch, name: &str) -> Option<&'a Float32Array> {
     let column = batch.column_by_name(name)?;
-    if let Some(values) = column.as_any().downcast_ref::<Float32Array>() {
-        return Some(values.iter().collect());
-    }
-    None
+    column.as_any().downcast_ref::<Float32Array>()
+}
+
+fn optional_f32_value(values: Option<&Float32Array>, row: usize) -> Option<f32> {
+    let values = values?;
+    (!values.is_null(row)).then(|| values.value(row))
 }
 
 fn combined_score(vector_distance: Option<f32>, fts_score: Option<f32>) -> f32 {
@@ -303,8 +361,58 @@ fn combined_score(vector_distance: Option<f32>, fts_score: Option<f32>) -> f32 {
     }
 }
 
-fn escape_lance_sql_string(value: &str) -> String {
-    value.replace('\'', "''")
+#[derive(Default)]
+struct HybridAccumulator {
+    metadata: Option<MemoryMetadata>,
+    vector_distance: Option<f32>,
+    fts_score: Option<f32>,
+    vector_rank: Option<usize>,
+    fts_rank: Option<usize>,
+}
+
+fn fuse_hybrid_hits(
+    vector_hits: Vec<MemorySearchHit>,
+    fts_hits: Vec<MemorySearchHit>,
+    limit: usize,
+) -> Vec<MemorySearchHit> {
+    let mut by_id = HashMap::<String, HybridAccumulator>::new();
+    for (idx, hit) in vector_hits.into_iter().enumerate() {
+        let id = hit.metadata.stable_id();
+        let entry = by_id.entry(id).or_default();
+        entry.metadata.get_or_insert(hit.metadata);
+        entry.vector_distance = hit.vector_distance;
+        entry.vector_rank = Some(idx + 1);
+    }
+    for (idx, hit) in fts_hits.into_iter().enumerate() {
+        let id = hit.metadata.stable_id();
+        let entry = by_id.entry(id).or_default();
+        entry.metadata.get_or_insert(hit.metadata);
+        entry.fts_score = hit.fts_score;
+        entry.fts_rank = Some(idx + 1);
+    }
+
+    let mut hits = by_id
+        .into_values()
+        .filter_map(|entry| {
+            let metadata = entry.metadata?;
+            Some(MemorySearchHit {
+                metadata,
+                score: reciprocal_rank_score(entry.vector_rank, entry.fts_rank),
+                vector_distance: entry.vector_distance,
+                fts_score: entry.fts_score,
+            })
+        })
+        .collect::<Vec<_>>();
+    hits.sort_by(|a, b| b.score.total_cmp(&a.score));
+    hits.truncate(limit);
+    hits
+}
+
+fn reciprocal_rank_score(vector_rank: Option<usize>, fts_rank: Option<usize>) -> f32 {
+    const RRF_K: f32 = 60.0;
+    let score_for_rank = |rank: usize| 1.0 / (RRF_K + rank as f32);
+    vector_rank.map(score_for_rank).unwrap_or_default()
+        + fts_rank.map(score_for_rank).unwrap_or_default()
 }
 
 trait FixedSizeListDataTypeExt {
@@ -331,6 +439,7 @@ mod tests {
         db.upsert_turn(
             "conversations",
             MemoryMetadata {
+                id: None,
                 session_id: "session-a".to_string(),
                 turn_index: 1,
                 text: "Fix DeepSeek DSML parsing with a structured parser".to_string(),
@@ -342,6 +451,7 @@ mod tests {
         db.upsert_turn(
             "conversations",
             MemoryMetadata {
+                id: None,
                 session_id: "session-b".to_string(),
                 turn_index: 2,
                 text: "Improve viewport rendering for queued approvals".to_string(),
@@ -389,6 +499,7 @@ mod tests {
         db.upsert_turn(
             "experiences",
             MemoryMetadata {
+                id: None,
                 session_id: "session-a".to_string(),
                 turn_index: 1,
                 text: "Remember exact config key names".to_string(),
@@ -402,5 +513,87 @@ mod tests {
             .await
             .expect("vector search");
         assert_eq!(hits[0].0.text, "Remember exact config key names");
+    }
+
+    #[tokio::test]
+    async fn lancedb_memory_upsert_uses_explicit_ids_without_turn_collision() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let db = VectorDB::new(temp.path().to_str().expect("utf8 path"));
+
+        db.upsert_turn(
+            "experiences",
+            MemoryMetadata {
+                id: Some("memory-a".to_string()),
+                session_id: "project".to_string(),
+                turn_index: 7,
+                text: "First durable memory".to_string(),
+            },
+            vec![1.0, 0.0, 0.0],
+        )
+        .await
+        .expect("insert first explicit memory");
+        db.upsert_turn(
+            "experiences",
+            MemoryMetadata {
+                id: Some("memory-b".to_string()),
+                session_id: "project".to_string(),
+                turn_index: 7,
+                text: "Second durable memory".to_string(),
+            },
+            vec![0.9, 0.1, 0.0],
+        )
+        .await
+        .expect("insert second explicit memory");
+
+        let hits = db
+            .search_with_metadata("experiences", vec![1.0, 0.0, 0.0], 5)
+            .await
+            .expect("vector search");
+        let texts = hits
+            .into_iter()
+            .map(|(metadata, _)| metadata.text)
+            .collect::<Vec<_>>();
+        assert!(texts.contains(&"First durable memory".to_string()));
+        assert!(texts.contains(&"Second durable memory".to_string()));
+    }
+
+    #[tokio::test]
+    async fn lancedb_memory_upsert_reports_dimension_mismatch_without_deleting_existing_row() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let db = VectorDB::new(temp.path().to_str().expect("utf8 path"));
+
+        db.upsert_turn(
+            "experiences",
+            MemoryMetadata {
+                id: Some("memory-a".to_string()),
+                session_id: "project".to_string(),
+                turn_index: 1,
+                text: "Original memory".to_string(),
+            },
+            vec![1.0, 0.0, 0.0],
+        )
+        .await
+        .expect("insert original memory");
+
+        let err = db
+            .upsert_turn(
+                "experiences",
+                MemoryMetadata {
+                    id: Some("memory-a".to_string()),
+                    session_id: "project".to_string(),
+                    turn_index: 1,
+                    text: "Wrong dimension replacement".to_string(),
+                },
+                vec![1.0, 0.0, 0.0, 0.0],
+            )
+            .await
+            .expect_err("dimension mismatch should fail");
+        assert!(err.to_string().contains("vector dimension mismatch"));
+
+        let hits = db
+            .search_with_metadata("experiences", vec![1.0, 0.0, 0.0], 1)
+            .await
+            .expect("vector search");
+        assert_eq!(hits[0].0.text, "Original memory");
     }
 }

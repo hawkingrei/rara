@@ -259,6 +259,7 @@ impl Agent {
                 .upsert_turn(
                     "conversations",
                     MemoryMetadata {
+                        id: None,
                         session_id: self.session_id.clone(),
                         turn_index: turn_start_idx as u32,
                         text: turn_text,

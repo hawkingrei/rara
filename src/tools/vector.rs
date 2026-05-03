@@ -34,6 +34,7 @@ impl Tool for RememberExperienceTool {
             .upsert_turn(
                 "experiences",
                 MemoryMetadata {
+                    id: Some(format!("experience-{}", uuid::Uuid::new_v4())),
                     session_id: "project".to_string(),
                     turn_index: stable_experience_turn_index(text),
                     text: text.to_string(),
@@ -84,6 +85,7 @@ impl Tool for RetrieveExperienceTool {
             .iter()
             .map(|hit| {
                 json!({
+                    "id": hit.metadata.id,
                     "session_id": hit.metadata.session_id,
                     "turn_index": hit.metadata.turn_index,
                     "score": hit.score,
