@@ -46,7 +46,7 @@ pub(crate) fn render_context_lines(app: &TuiApp, available_width: u16) -> Vec<Li
 
     // Visual budget bar
     let bar_width = (available_width.saturating_sub(6)).max(20) as usize;
-    let bar_line = budget_bar(app, bar_width);
+    let bar_line = budget_bar(app, bar_width, used);
     lines.push(bar_line);
 
     // Usage summary with color-coded percentage
@@ -60,7 +60,7 @@ pub(crate) fn render_context_lines(app: &TuiApp, available_width: u16) -> Vec<Li
     } else if pct_value > 50.0 {
         Color::Yellow
     } else {
-        Color::LightGreen
+        STATUS_SUCCESS
     };
     let pct_str = format!("{:.1}%", pct_value);
     let window_str = window
@@ -282,7 +282,7 @@ fn render_assembly_layer(lines: &mut Vec<Line<'static>>, app: &TuiApp, layer: &s
             lines,
             &entry.kind,
             &format!("{}  {} tokens", path, tokens),
-            Color::DarkGray,
+            TEXT_SECONDARY,
         );
     }
     section_spacer(lines);
@@ -290,17 +290,9 @@ fn render_assembly_layer(lines: &mut Vec<Line<'static>>, app: &TuiApp, layer: &s
 
 // ── budget bar ──
 
-fn budget_bar(app: &TuiApp, width: usize) -> Line<'static> {
+fn budget_bar(app: &TuiApp, width: usize, used: usize) -> Line<'static> {
     let snap = &app.snapshot;
     let total = snap.context_window_tokens.unwrap_or(1).max(1);
-
-    let used = snap
-        .stable_instructions_budget
-        .saturating_add(snap.workspace_prompt_budget)
-        .saturating_add(snap.active_turn_budget)
-        .saturating_add(snap.compacted_history_budget)
-        .saturating_add(snap.retrieved_memory_budget)
-        .saturating_add(snap.reserved_output_tokens);
 
     let used_width = ((used as f64 / total as f64) * width as f64).round() as usize;
     let used_width = used_width.min(width);
