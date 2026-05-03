@@ -186,10 +186,15 @@ pub fn command_spec_by_name(name: &str) -> Option<&'static CommandSpec> {
 }
 
 pub fn recommended_commands(app: &TuiApp) -> Vec<&'static CommandSpec> {
-    let names: &[&str] = if app.is_busy() {
-        &["context", "help", "status"]
+    let names = if app.is_busy() {
+        vec!["context", "help", "status"]
     } else {
-        &["context", "help", "model", "resume", "status"]
+        let mut n = vec!["context", "help", "model", "resume", "status"];
+        if !app.committed_turns.is_empty() || !app.active_turn.entries.is_empty() {
+            n.push("compact");
+            n.push("plan");
+        }
+        n
     };
     names
         .iter()

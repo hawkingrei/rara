@@ -98,7 +98,7 @@ pub(super) async fn execute_local_command(
             }
         }
         LocalCommandKind::Model => handle_model_command(command.arg.as_deref(), app)?,
-        LocalCommandKind::ModelName => handle_model_name_command(app)?,
+        LocalCommandKind::ModelName => handle_model_name_command(command.arg.as_deref(), app)?,
         LocalCommandKind::Plan => {
             app.set_runtime_phase(
                 RuntimePhase::LocalCommand,
@@ -142,16 +142,19 @@ fn handle_model_command(arg: Option<&str>, app: &mut TuiApp) -> anyhow::Result<(
     Ok(())
 }
 
+fn handle_model_name_command(arg: Option<&str>, app: &mut TuiApp) -> anyhow::Result<()> {
+    if arg.map(str::trim).filter(|arg| !arg.is_empty()).is_some() {
+        app.push_notice("/model-name does not accept arguments. Edit the value in the TUI.");
+    }
+    app.open_overlay(Overlay::ModelNameEditor);
+    app.push_notice("Opened model name editor.");
+    Ok(())
+}
+
 fn handle_base_url_command(arg: Option<&str>, app: &mut TuiApp) -> anyhow::Result<()> {
     if arg.map(str::trim).filter(|arg| !arg.is_empty()).is_some() {
         app.push_notice("/base-url does not accept arguments. Edit the value in the TUI.");
     }
     app.open_overlay(Overlay::BaseUrlEditor);
-    Ok(())
-}
-
-fn handle_model_name_command(app: &mut TuiApp) -> anyhow::Result<()> {
-    app.open_overlay(Overlay::ModelNameEditor);
-    app.notice = Some("Opened model name editor.".into());
     Ok(())
 }

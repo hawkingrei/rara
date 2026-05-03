@@ -476,47 +476,50 @@ pub fn status_resources_text(app: &TuiApp) -> String {
     let context = match app.snapshot.context_window_tokens {
         Some(window) => format!(
             "{} / {} (~auto @ {}, reserve {})",
-            app.snapshot.estimated_history_tokens,
-            window,
-            app.snapshot.compact_threshold_tokens,
-            app.snapshot.reserved_output_tokens
+            format_token_count(app.snapshot.estimated_history_tokens),
+            format_token_count(window),
+            format_token_count(app.snapshot.compact_threshold_tokens),
+            format_token_count(app.snapshot.reserved_output_tokens)
         ),
         None => format!(
             "{} (~auto @ {})",
-            app.snapshot.estimated_history_tokens, app.snapshot.compact_threshold_tokens
+            format_token_count(app.snapshot.estimated_history_tokens),
+            format_token_count(app.snapshot.compact_threshold_tokens)
         ),
     };
     let last_compact = match (
         app.snapshot.last_compaction_before_tokens,
         app.snapshot.last_compaction_after_tokens,
     ) {
-        (Some(before), Some(after)) => format!("{before} -> {after}"),
+        (Some(before), Some(after)) => format!(
+            "{} -> {}",
+            format_token_count(before),
+            format_token_count(after)
+        ),
         _ => "-".to_string(),
     };
+    let last_compact_ratio = app
+        .snapshot
+        .last_compaction_before_tokens
+        .zip(app.snapshot.last_compaction_after_tokens)
+        .map(|(before, after)| {
+            if before > 0 {
+                format!("{:.1}%", (after as f64 / before as f64) * 100.0)
+            } else {
+                "-".to_string()
+            }
+        })
+        .unwrap_or_else(|| "-".to_string());
+    let compact_boundary = app
+        .snapshot
+        .last_compaction_boundary_recent_file_count
+        .map(|count| format!("{count} files"))
+        .unwrap_or_else(|| "-".to_string());
+    let recent_compact_file_count = app.snapshot.last_compaction_recent_files.len().to_string();
     let recent_compact_files = if app.snapshot.last_compaction_recent_files.is_empty() {
         "-".to_string()
     } else {
         app.snapshot.last_compaction_recent_files.join(", ")
-    };
-    let recent_compact_file_count = app.snapshot.last_compaction_recent_files.len();
-    let last_compact_ratio = match (
-        app.snapshot.last_compaction_before_tokens,
-        app.snapshot.last_compaction_after_tokens,
-    ) {
-        (Some(before), Some(after)) if before > 0 => {
-            format!("{:.2}", after as f64 / before as f64)
-        }
-        _ => "-".to_string(),
-    };
-    let compact_boundary = match (
-        app.snapshot.last_compaction_boundary_version,
-        app.snapshot.last_compaction_boundary_before_tokens,
-        app.snapshot.last_compaction_boundary_recent_file_count,
-    ) {
-        (Some(version), Some(before), Some(file_count)) => {
-            format!("v{version} before={before} recent_file_count={file_count}")
-        }
-        _ => "-".to_string(),
     };
     let retrieval_budget = app
         .snapshot
