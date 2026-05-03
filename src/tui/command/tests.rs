@@ -510,9 +510,10 @@ fn status_context_text_includes_prompt_sources_and_plan_state() {
     assert!(rendered.contains("[pending] Implement /context"));
     assert!(rendered.contains("Todo"));
     assert!(rendered.contains("artifact: /workspace/rara/.rara/sessions/session-123/todo.json"));
+    assert!(rendered.contains("updated_at: 2026-04-30 21:20:00 UTC"));
     assert!(rendered.contains("total: 3  pending: 1  in_progress: 1  completed: 1"));
-    assert!(rendered.contains("active: Wire todo state into /context"));
-    assert!(rendered.contains("[in_progress] Wire todo state into /context (todo-2)"));
+    assert!(!rendered.contains("active: Wire todo state into /context"));
+    assert!(rendered.contains("[in_progress] Wire todo state into /context (todo-2, active)"));
     assert!(rendered.contains("Pending"));
 }
 
