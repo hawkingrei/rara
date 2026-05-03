@@ -227,7 +227,7 @@ fn composer_hint_line_excludes_repo_context() {
     let rendered = composer_hint_line(&app).to_string();
     assert!(!rendered.contains("repo:"));
     assert!(!rendered.contains("branch:"));
-    assert!(rendered.contains("Enter submit"));
+    assert!(!rendered.contains("Enter submit"));
 }
 
 #[test]
