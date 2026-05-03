@@ -8633,6 +8633,7 @@ dependencies = [
  "crossterm",
  "dirs",
  "eventsource-stream",
+ "fs2",
  "futures",
  "glob",
  "hf-hub",

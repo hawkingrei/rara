@@ -9,11 +9,14 @@ use super::{
     ThreadRecorder, ThreadRuntimeLineage, ThreadRuntimeState, ThreadStore,
 };
 use crate::agent::Message;
+use crate::llm::MockLlm;
+use crate::memory_store::{MemoryScope, MemorySource, MemoryStore};
 use crate::session::{PersistedCompactionEvent, SessionManager};
 use crate::state_db::{
     PersistedCompactState, PersistedInteraction, PersistedPlanStep, PersistedPromptRuntimeState,
     PersistedRuntimeRolloutItem, PersistedStructuredRolloutEvent, PersistedTurnEntry, StateDb,
 };
+use crate::vectordb::VectorDB;
 
 #[test]
 fn load_thread_aggregates_history_state_and_rollout_items() -> Result<()> {
@@ -943,6 +946,136 @@ fn latest_thread_summary_uses_thread_summary_contract() -> Result<()> {
     );
     assert_eq!(latest.preview, "Agent: Newer preview");
     assert_eq!(latest.compaction.compaction_count, 2);
+    Ok(())
+}
+
+#[test]
+fn export_thread_markdown_renders_metadata_summary_and_messages() -> Result<()> {
+    let temp = tempdir()?;
+    let rara_dir = temp.path().join(".rara");
+    let session_manager = SessionManager::new_for_rara_dir(rara_dir.clone())?;
+    let state_db = StateDb::new_for_root_dir(rara_dir)?;
+    session_manager.save_session(
+        "thread-export",
+        &[
+            Message {
+                role: "user".to_string(),
+                content: serde_json::json!([{"type": "text", "text": "How should\nmemory work?"}]),
+            },
+            Message {
+                role: "assistant".to_string(),
+                content: serde_json::json!("Keep durable memory separate from raw threads."),
+            },
+        ],
+    )?;
+    state_db.upsert_session(
+        "thread-export",
+        "/tmp/workspace",
+        "main",
+        "codex",
+        "gpt-5",
+        None,
+        "execute",
+        "always",
+        None,
+        &PersistedPromptRuntimeState::default(),
+        2,
+        2,
+        &PersistedCompactState::default(),
+    )?;
+    session_manager.save_compaction_event(
+        "thread-export",
+        &PersistedCompactionEvent {
+            event_index: 1,
+            before_tokens: 3000,
+            after_tokens: 900,
+            boundary_version: 1,
+            recent_files: vec!["src/memory_store.rs".to_string()],
+            summary: "Memory records are durable; threads are source material.".to_string(),
+        },
+    )?;
+
+    let store = ThreadStore::new(&session_manager, &state_db);
+    let markdown = store.export_thread_markdown("thread-export")?;
+
+    assert!(markdown.contains("session_id: \"thread-export\""));
+    assert!(markdown.contains("# How should memory work?"));
+    assert!(markdown.contains("## Summary"));
+    assert!(markdown.contains("Memory records are durable"));
+    assert!(markdown.contains("## User"));
+    assert!(markdown.contains("How should\nmemory work?"));
+    assert!(markdown.contains("## Assistant"));
+    assert!(markdown.contains("Keep durable memory separate"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn distill_thread_summary_persists_thread_linked_memory_record() -> Result<()> {
+    let temp = tempdir()?;
+    let rara_dir = temp.path().join(".rara");
+    let session_manager = SessionManager::new_for_rara_dir(rara_dir.clone())?;
+    let state_db = StateDb::new_for_root_dir(rara_dir.clone())?;
+    session_manager.save_session(
+        "thread-distill",
+        &[Message {
+            role: "user".to_string(),
+            content: serde_json::json!("Continue memory backend implementation"),
+        }],
+    )?;
+    state_db.upsert_session(
+        "thread-distill",
+        "/tmp/workspace",
+        "main",
+        "codex",
+        "gpt-5",
+        None,
+        "execute",
+        "always",
+        None,
+        &PersistedPromptRuntimeState::default(),
+        1,
+        1,
+        &PersistedCompactState::default(),
+    )?;
+    session_manager.save_compaction_event(
+        "thread-distill",
+        &PersistedCompactionEvent {
+            event_index: 1,
+            before_tokens: 4000,
+            after_tokens: 1200,
+            boundary_version: 1,
+            recent_files: vec!["src/thread_store.rs".to_string()],
+            summary: "Thread lifecycle APIs should export markdown and distill durable memory."
+                .to_string(),
+        },
+    )?;
+    let memory_store = MemoryStore::new(
+        std::sync::Arc::new(MockLlm),
+        std::sync::Arc::new(VectorDB::new(
+            rara_dir.join("lancedb").to_str().expect("utf8 path"),
+        )),
+    );
+    let store = ThreadStore::new(&session_manager, &state_db);
+
+    let memory = store
+        .distill_thread_summary(&memory_store, "thread-distill")
+        .await?
+        .expect("distilled memory");
+
+    assert_eq!(memory.source, MemorySource::ThreadDistill);
+    assert_eq!(memory.scope, MemoryScope::Thread);
+    assert_eq!(memory.session_id.as_deref(), Some("thread-distill"));
+    assert_eq!(memory.thread_id.as_deref(), Some("thread-distill"));
+    assert!(
+        memory
+            .content
+            .contains("Thread lifecycle APIs should export markdown")
+    );
+    let reloaded = memory_store
+        .get(&memory.id)
+        .await?
+        .expect("persisted memory record");
+    assert_eq!(reloaded.thread_id.as_deref(), Some("thread-distill"));
     Ok(())
 }
 

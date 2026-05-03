@@ -58,6 +58,7 @@ pub struct MemoryRecord {
     pub content: String,       // Markdown
     pub labels: Vec<MemoryLabel>,
     pub importance: f32,       // 0.1–1.0
+    pub pinned: bool,
     pub source: MemorySource,
     pub created_at: DateTime,
     pub embedding: Option<Vec<f32>>,
@@ -78,10 +79,14 @@ Each memory owns:
 - `content`: Markdown body containing the durable knowledge.
 - `labels`: reusable classification tags for filtering and routing.
 - `importance`: ranking signal from `0.1` to `1.0`.
+- `pinned`: explicit retention guard for durable facts that must not be removed
+  by automatic cleanup.
 - `created_at` and `updated_at`: temporal search and evolution metadata.
 - `source`: provenance such as user-created, agent turn, thread distillation,
   file import, or protocol write.
 - `scope`: user, workspace, project, thread, or session visibility boundary.
+- `session_id`, `thread_id`, and `source_span`: optional provenance linking the
+  memory back to the session/thread and turn range that produced it.
 - `embedding`: optional vector representation for semantic retrieval.
 
 Standard labels:
@@ -106,12 +111,13 @@ Importance scale:
 
 | Capability | Target Behavior | Current Runtime Status |
 |------------|-----------------|------------------------|
-| Memory record anatomy | Title, Markdown content, labels, importance, timestamps, source, scope, embedding. | Partial. `MemoryRecord` exists at the runtime facade; LanceDB rows still store the compact index shape. |
+| Memory record anatomy | Title, Markdown content, labels, importance, timestamps, source, scope, embedding, and provenance. | Partial. `MemoryRecord` is now persisted as the domain record; LanceDB rows still store the compact search index shape. |
 | Memory creation | Agent or user creates a durable `MemoryRecord`; title, labels, and importance can be generated or explicit. | Partial. `remember_experience` is now a compatibility adapter over `MemoryStore::insert`. |
-| Memory search | Hybrid semantic + keyword search with metadata filters and explainable scores. | Partial. LanceDB vector, FTS, and hybrid helpers exist behind the current `VectorDB` façade. |
+| Memory search | Hybrid semantic + keyword search with metadata filters and explainable scores. | Partial. LanceDB vector, FTS, and hybrid helpers exist; `MemoryStore::search` rehydrates full persisted records before returning hits. |
 | Memory update | Existing records can be edited without creating duplicates. | Not implemented as a public memory capability. |
 | Memory delete | User or control-plane request can delete records with audit-safe semantics. | Not implemented as a public memory capability. |
-| Thread distillation | Thread history can be distilled into 2-8 durable memory records. | Spec only. |
+| Memory retention | Pinned, user-created, and high-importance memories are protected from automatic cleanup; explicit delete remains possible with provenance. | Spec only. No automatic cleanup path exists yet. |
+| Thread distillation | Thread history can be distilled into 2-8 durable memory records. | Partial. `ThreadStore::distill_thread_summary` can persist one thread-linked summary record; LLM extraction and deduplication remain future work. |
 | Context injection | Ranked memory candidates pass through `MemorySelection` before prompt injection. | Partial. `MemorySelection` exists, but LanceDB search results are not yet direct ranked candidates. |
 | Graph retrieval | Entity and relationship traversal complements vector recall. | Future work. |
 | Working memory | Daily or session briefing summarizes recent and important memories. | Future work. |
@@ -161,15 +167,28 @@ not the final session-storage contract.
 - `update(id, patch) -> MemoryRecord`
 - `get(id) -> Option<MemoryRecord>`
 - `delete(id) -> ()`
+- `set_pinned(id, pinned) -> MemoryRecord`
 - `list_labels(scope?) -> Vec<(MemoryLabel, usize)>`
 
-Storage: `~/.rara/lancedb/` (LanceDB).
+Search ranking should not rely on LanceDB score alone. The final memory ranking
+layer should combine hybrid search score, `importance`, exact keyword/path
+matches, recency where appropriate, and duplicate suppression. `/context` should
+show the selected/dropped reason for memory candidates, including whether
+`importance` or `pinned` status affected the decision.
+
+Storage:
+
+- `~/.rara/memories/records.json`: durable `MemoryRecord` domain records.
+- `~/.rara/lancedb/`: compact search index with text, vector, and source keys.
 
 Local write coordination: RARA uses an adjacent advisory lock file
 (`~/.rara/lancedb.lock`) for LanceDB mutations. Reads remain lock-free, while
 table creation, index creation, upsert, and future update/delete paths must
 serialize through this lock so multiple RARA processes can share the same
-workspace memory directory without racing initialization or commits.
+workspace memory directory without racing initialization or commits. Domain
+record writes use their own adjacent lock file next to `records.json`, so the
+record truth and the search index can evolve independently without depending on
+LanceDB schema migrations.
 
 ## LanceDB Index Contract
 
@@ -210,9 +229,15 @@ Current implementation checkpoint:
 
 - `MemoryStore` owns the memory-domain runtime facade over the LanceDB-backed
   index.
+- `MemoryStore` persists full domain records in `records.json`; search uses
+  LanceDB for recall and then rehydrates the full record by id.
 - `remember_experience` writes through `MemoryStore::insert`.
 - `retrieve_experience` searches through `MemoryStore::search` and returns both
   `relevant_experiences` and memory diagnostics.
+- `retrieve_session_context` searches the `conversations` LanceDB table instead
+  of returning a stub response.
+- `ThreadStore::distill_thread_summary` can promote a loaded thread summary into
+  a thread-linked `MemoryRecord` with `session_id`, `thread_id`, and source span.
 - Agent turn checkpoints continue writing to the `conversations` table.
 - `MemorySelection` is not yet switched to direct ranked memory candidates;
   retrieved memories still enter through retrieval-tool results.
@@ -226,17 +251,23 @@ Current implementation checkpoint:
 4. Add the `MemoryStore` domain façade over `VectorDB`. Done.
 5. Make `remember_experience` and `retrieve_experience` compatibility adapters
    over `MemoryStore`. Done.
-6. Wire `MemorySelection` to ranked memory candidates.
-7. Add update/delete/list-label control-plane scaffolding without exposing
+6. Persist full `MemoryRecord` records separately from the LanceDB search index.
+   Done.
+7. Wire `MemorySelection` to ranked memory candidates.
+8. Add pinned/retention policy so pinned, user-created, and high-importance
+   memories are excluded from automatic cleanup.
+9. Add update/delete/list-label control-plane scaffolding without exposing
    storage internals.
-8. Add thread distillation into `MemoryRecord`.
-9. Move raw session checkpoints out of the global `conversations` LanceDB table
+10. Add thread distillation into `MemoryRecord`. Partial: summary distillation is
+   implemented; multi-record LLM extraction and deduplication remain open.
+11. Move raw session checkpoints out of the global `conversations` LanceDB table
    into per-session append shards.
-10. Add periodic promotion from session shards into global `MemoryRecord`s.
-11. Deprecate `VectorDB`.
-12. Remove `VectorDB`.
+12. Add periodic promotion from session shards into global `MemoryRecord`s.
+13. Deprecate `VectorDB`.
+14. Remove `VectorDB`.
 
 ## Source Journals
 
 - 2026-05-03-memory-records-and-threads-spec.md
 - 2026-05-03-lancedb-memory-index.md
+- 2026-05-03-memory-record-persistence-and-thread-export.md
