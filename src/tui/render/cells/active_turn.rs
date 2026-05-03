@@ -5,7 +5,6 @@ use ratatui::{
     text::{Line, Span},
 };
 
-use super::super::history_pipeline::{narrative_entries, ordered_completion_entries};
 use super::components::{
     CommittedInteractionCell, ExploredCell, ExploringCell, MessageCell, PendingInteractionCell,
     PlanModeCell, PlanSummaryCell, PlanningCell, PlanningSuggestionCell, QueuedFollowUpCell,

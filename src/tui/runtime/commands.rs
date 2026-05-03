@@ -129,15 +129,21 @@ pub(super) async fn execute_local_command(
                 );
                 if diff.is_empty() {
                     prompt.push_str("No local git changes found. The working tree is clean.");
-                } else if diff.lines().take(801).count() > 800 {
-                    let preview: String =
-                        diff.lines().take(600).map(|l| format!("{l}\n")).collect();
-                    prompt.push_str(&format!(
-                        "```diff\n{}...\n```\n\n(Truncated; use the agent tools to inspect the full diff if needed.)",
-                        preview
-                    ));
                 } else {
-                    prompt.push_str(&format!("```diff\n{diff}\n```"));
+                    let lines: Vec<&str> = diff.lines().collect();
+                    if lines.len() > 800 {
+                        let preview = lines
+                            .iter()
+                            .take(600)
+                            .copied()
+                            .collect::<Vec<_>>()
+                            .join("\n");
+                        prompt.push_str(&format!(
+                            "```diff\n{preview}\n...\n```\n\n(Truncated; use the agent tools to inspect the full diff if needed.)"
+                        ));
+                    } else {
+                        prompt.push_str(&format!("```diff\n{diff}\n```"));
+                    }
                 }
                 app.set_input(prompt);
                 app.push_notice("Review prompt ready. Press Enter to send it to the agent.");
