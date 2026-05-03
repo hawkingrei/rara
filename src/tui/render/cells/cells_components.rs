@@ -5,6 +5,7 @@ use ratatui::{
     text::{Line, Span},
 };
 
+use super::tool_progress::tool_progress_lines;
 use super::{HistoryCell, InteractionCompletionKind};
 use crate::tui::interaction_text::{
     pending_interaction_card_title, status_planning_suggestion_text,
@@ -588,7 +589,7 @@ impl<'a> RespondingCell<'a> {
 }
 
 impl HistoryCell for RespondingCell<'_> {
-    fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
         match &self.content {
             RespondingCellContent::Stream { lines, max_lines } => {
                 lightweight_stream_lines(lines, *max_lines)
@@ -608,6 +609,11 @@ impl HistoryCell for RespondingCell<'_> {
                 max_lines,
                 cwd,
             } => formatted_message_lines(role, message, *max_lines, *cwd),
+            RespondingCellContent::ToolResult {
+                role,
+                message,
+                max_lines,
+            } if *role == "Tool Progress" => tool_progress_lines(message, *max_lines, width),
             RespondingCellContent::ToolResult {
                 role,
                 message,

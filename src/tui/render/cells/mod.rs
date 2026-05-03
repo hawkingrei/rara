@@ -18,6 +18,7 @@ use crate::tui::theme::*;
 
 #[path = "cells_components.rs"]
 mod components;
+mod tool_progress;
 
 pub(crate) use self::components::StartupCardCell;
 use self::components::{

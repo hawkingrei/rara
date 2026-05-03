@@ -148,6 +148,64 @@ fn active_turn_cell_renders_progress_sections_as_compact_stack() {
 }
 
 #[test]
+fn active_turn_cell_hides_background_stdout_label_and_pins_stderr() {
+    let temp = tempdir().unwrap();
+    let mut app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("build tui app");
+    app.runtime_phase = RuntimePhase::RunningTool;
+    app.active_turn = TranscriptTurn {
+        entries: vec![
+            TranscriptEntry {
+                role: "You".into(),
+                message: "Run the formatter".into(),
+                payload: None,
+            },
+            TranscriptEntry {
+                role: "Tool Progress".into(),
+                message: [
+                    "background task stdout:",
+                    "info: downloading 6 components",
+                    "background task stderr:",
+                    "warning: retrying download",
+                    "background task stdout:",
+                    "info: installing rustfmt",
+                ]
+                .join("\n"),
+                payload: None,
+            },
+        ],
+    };
+
+    let rendered_lines = ActiveTurnCell::new(&app, Some(Path::new("."))).display_lines(100);
+    let rendered = rendered_lines
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(!rendered.contains("background task stdout:"));
+    assert!(!rendered.contains("background task stderr:"));
+    assert!(rendered.contains("info: downloading 6 components"));
+    assert!(rendered.contains("info: installing rustfmt"));
+    assert!(rendered.contains("warning: retrying download"));
+
+    let install_idx = rendered.find("info: installing rustfmt").unwrap();
+    let stderr_idx = rendered.find("warning: retrying download").unwrap();
+    assert!(install_idx < stderr_idx);
+
+    let stderr_line = rendered_lines
+        .iter()
+        .find(|line| line.to_string().contains("warning: retrying download"))
+        .expect("stderr line should render");
+    assert!(stderr_line.spans.iter().any(|span| {
+        span.style.fg == Some(crate::tui::theme::TOOL_STDERR_FG)
+            && span.style.bg == Some(crate::tui::theme::TOOL_STDERR_BG)
+    }));
+}
+
+#[test]
 fn active_turn_cell_renders_terminal_result_as_terminal_cell() {
     let temp = tempdir().unwrap();
     let mut app = TuiApp::new(ConfigManager {
