@@ -316,6 +316,39 @@ fn recent_threads_ignore_sessions_without_resume_data() -> Result<()> {
         &PersistedCompactState::default(),
     )?;
     db.upsert_session(
+        "plan-backed",
+        "/tmp/workspace",
+        "main",
+        "codex",
+        "gpt-5",
+        None,
+        "plan",
+        "suggestion",
+        Some("Plan-only sessions should remain resumable."),
+        &PersistedPromptRuntimeState::default(),
+        0,
+        0,
+        &PersistedCompactState::default(),
+    )?;
+    db.upsert_session(
+        "compact-backed",
+        "/tmp/workspace",
+        "main",
+        "codex",
+        "gpt-5",
+        None,
+        "execute",
+        "suggestion",
+        None,
+        &PersistedPromptRuntimeState::default(),
+        0,
+        0,
+        &PersistedCompactState {
+            compaction_count: 1,
+            ..PersistedCompactState::default()
+        },
+    )?;
+    db.upsert_session(
         "turn-backed",
         "/tmp/workspace",
         "main",
@@ -346,6 +379,8 @@ fn recent_threads_ignore_sessions_without_resume_data() -> Result<()> {
         .collect::<Vec<_>>();
     assert!(!summary_ids.contains(&"slash-resume-only"));
     assert!(summary_ids.contains(&"history-backed"));
+    assert!(summary_ids.contains(&"plan-backed"));
+    assert!(summary_ids.contains(&"compact-backed"));
     assert!(summary_ids.contains(&"turn-backed"));
 
     let records = db.list_recent_thread_records(10)?;
@@ -355,7 +390,55 @@ fn recent_threads_ignore_sessions_without_resume_data() -> Result<()> {
         .collect::<Vec<_>>();
     assert!(!record_ids.contains(&"slash-resume-only"));
     assert!(record_ids.contains(&"history-backed"));
+    assert!(record_ids.contains(&"plan-backed"));
+    assert!(record_ids.contains(&"compact-backed"));
     assert!(record_ids.contains(&"turn-backed"));
+    Ok(())
+}
+
+#[test]
+fn latest_thread_id_keeps_plan_and_compaction_only_sessions_resumable() -> Result<()> {
+    let temp = tempdir()?;
+    let db = StateDb::new_for_root_dir(temp.path().join(".rara"))?;
+
+    db.upsert_session(
+        "plan-only",
+        "/tmp/workspace",
+        "main",
+        "codex",
+        "gpt-5",
+        None,
+        "plan",
+        "suggestion",
+        Some("Plan approval is enough resume state."),
+        &PersistedPromptRuntimeState::default(),
+        0,
+        0,
+        &PersistedCompactState::default(),
+    )?;
+    assert_eq!(db.latest_thread_id()?.as_deref(), Some("plan-only"));
+
+    let temp = tempdir()?;
+    let db = StateDb::new_for_root_dir(temp.path().join(".rara"))?;
+    db.upsert_session(
+        "compact-only",
+        "/tmp/workspace",
+        "main",
+        "codex",
+        "gpt-5",
+        None,
+        "execute",
+        "suggestion",
+        None,
+        &PersistedPromptRuntimeState::default(),
+        0,
+        0,
+        &PersistedCompactState {
+            compaction_count: 1,
+            ..PersistedCompactState::default()
+        },
+    )?;
+    assert_eq!(db.latest_thread_id()?.as_deref(), Some("compact-only"));
     Ok(())
 }
 
