@@ -858,15 +858,14 @@ fn tool_result_preview(content: &str) -> Option<String> {
 }
 
 pub(super) fn format_tool_progress(name: &str, stream: ToolOutputStream, chunk: &str) -> String {
-    let trimmed = chunk.trim_end_matches('\n');
-    if trimmed.trim().is_empty() {
+    let Some(visible_chunk) = output_tail_preview(chunk) else {
         return String::new();
-    }
+    };
     let stream_label = match stream {
         ToolOutputStream::Stdout => "stdout",
         ToolOutputStream::Stderr => "stderr",
     };
-    format!("{name} {stream_label}:\n{trimmed}\n")
+    format!("{name} {stream_label}:\n{visible_chunk}\n")
 }
 
 pub(super) fn append_tool_progress(

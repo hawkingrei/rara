@@ -817,6 +817,17 @@ fn formats_tool_progress_with_stream_label() {
 }
 
 #[test]
+fn skips_tool_progress_when_stderr_has_no_visible_output() {
+    let rendered = format_tool_progress(
+        "background task",
+        ToolOutputStream::Stderr,
+        "\u{1b}[2K\r\n   \n",
+    );
+
+    assert_eq!(rendered, "");
+}
+
+#[test]
 fn runtime_device_code_messages_update_prompt_and_polling_phases() {
     let temp = tempdir().expect("tempdir");
     let mut app = TuiApp::new(ConfigManager {

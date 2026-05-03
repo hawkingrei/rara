@@ -117,14 +117,14 @@ impl TerminalEvent {
             "bash" | "background_task_status" => TerminalTarget::BackgroundTask,
             _ => return None,
         };
-        if chunk.trim().is_empty() {
+        let Some(chunk) = output_tail_preview(chunk).map(|lines| lines.join("\n")) else {
             return None;
-        }
+        };
         Some(Self::OutputDelta(TerminalOutputDeltaEvent {
             target,
             id: None,
             stream: stream.into(),
-            chunk: chunk.to_string(),
+            chunk,
         }))
     }
 
@@ -449,7 +449,7 @@ fn strip_ansi_control_sequences(input: &str) -> String {
     let mut chars = input.chars().peekable();
     while let Some(ch) = chars.next() {
         if ch != '\u{1b}' {
-            if ch != '\r' {
+            if ch == '\t' || !ch.is_control() {
                 output.push(ch);
             }
             continue;
@@ -487,7 +487,9 @@ fn strip_ansi_control_sequences(input: &str) -> String {
 mod tests {
     use serde_json::json;
 
-    use super::{TerminalEvent, TerminalTarget, output_tail_preview};
+    use super::{
+        TerminalEvent, TerminalTarget, output_tail_preview, sanitize_terminal_output_line,
+    };
 
     #[test]
     fn builds_background_start_event_from_bash_result() {
@@ -529,6 +531,27 @@ mod tests {
             event.to_transcript_message(),
             "pty pty-1 completed: cargo test\noutput:\nred\nok"
         );
+    }
+
+    #[test]
+    fn sanitizer_removes_ansi_and_non_printing_control_characters() {
+        assert_eq!(
+            sanitize_terminal_output_line(
+                "\u{1b}[4munder\u{1b}[0m\u{8}line\u{7}\u{1b}]0;title\u{7}\tend\r"
+            ),
+            "underline\tend"
+        );
+    }
+
+    #[test]
+    fn skips_progress_event_when_sanitized_chunk_is_empty() {
+        let event = TerminalEvent::from_tool_progress(
+            "bash",
+            crate::tool::ToolOutputStream::Stderr,
+            "\u{1b}]0;title\u{7}\u{7}\r\n",
+        );
+
+        assert!(event.is_none());
     }
 
     #[test]
