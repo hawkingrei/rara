@@ -1,0 +1,47 @@
+---
+source: src/tui/render/tests.rs
+assertion_line: 1114
+expression: rendered
+---
+Context Usage
+
+  model          anthropic/claude-sonnet-4
+  window         200.0K tokens
+  ░░░░□□□□□□□□□□□□□□□□□□□□□□□□□□□□□□□□□□□□□□□□□□□□□□□□□□□□□□□□□□□□□□□□□□□□
+  10.2K / 200.0K  5.1% used
+
+Budget Breakdown
+
+  System prompt  1.2K (0.60%)
+  Workspace      320 (0.16%)
+  Active turn    280 (0.14%)
+  History        140 (0.07%)
+  Memory         96 (0.05%)
+  Output reserve 8.2K (4.10%)
+  Free           189.8K (94.89%)
+
+Session
+
+  cwd            /workspace/rara
+  branch         main
+  session        session-abc
+  history        42 msgs  0 entries
+
+Compaction
+
+  estimated      12.0K tokens
+  threshold      180.0K tokens
+  count          1
+  last           12.0K → 4.5K tokens
+
+Active Turn
+
+  mode           execute
+  step 0         [pending] Implement /context
+Stable Instructions
+
+  project_instruction AGENTS.md  240 tokens
+
+Active Memory Inputs
+
+  workspace_memory .rara/memory.md  64 tokens

@@ -9,7 +9,9 @@ use tempfile::tempdir;
 
 use crate::config::{ConfigManager, OpenAiEndpointKind, RaraConfig};
 use crate::tui::custom_terminal::Frame;
-use crate::tui::state::{Overlay, ProviderFamily, TranscriptEntry, TranscriptTurn, TuiApp};
+use crate::tui::state::{
+    Overlay, ProviderFamily, RuntimeSnapshot, TranscriptEntry, TranscriptTurn, TuiApp,
+};
 
 use super::cells::HistoryCell;
 use super::viewport::TranscriptViewport;
@@ -1036,4 +1038,81 @@ fn formatted_agent_markdown_keeps_first_and_latest_lines() {
     assert!(rendered.iter().any(|line| line.contains("latest 1")));
     assert!(rendered.iter().any(|line| line.contains("latest 2")));
     assert!(!rendered.iter().any(|line| line.contains("middle 1")));
+}
+
+#[test]
+fn context_overlay_snapshot_with_typical_budget() {
+    use crate::context::ContextAssemblyEntry;
+    use crate::tui::context_display::render_context_lines;
+
+    let temp = tempdir().expect("tempdir");
+    let mut app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("build tui app");
+    app.snapshot = RuntimeSnapshot {
+        cwd: "/workspace/rara".into(),
+        branch: "main".into(),
+        session_id: "session-abc".into(),
+        history_len: 42,
+        estimated_history_tokens: 12_000,
+        context_window_tokens: Some(200_000),
+        compact_threshold_tokens: 180_000,
+        reserved_output_tokens: 8_192,
+        stable_instructions_budget: 1_200,
+        workspace_prompt_budget: 320,
+        active_turn_budget: 280,
+        compacted_history_budget: 140,
+        retrieved_memory_budget: 96,
+        remaining_input_budget: Some(189_772),
+        compaction_count: 1,
+        last_compaction_before_tokens: Some(12_000),
+        last_compaction_after_tokens: Some(4_500),
+        plan_steps: vec![("pending".into(), "Implement /context".into())],
+        plan_explanation: Some("Adding Claude Code-style context display".into()),
+        assembly_entries: vec![
+            ContextAssemblyEntry {
+                cache_status: None,
+                order: 1,
+                layer: "stable_instructions".into(),
+                kind: "project_instruction".into(),
+                label: "AGENTS.md".into(),
+                source_path: Some("AGENTS.md".into()),
+                injected: true,
+                inclusion_reason: "workspace instruction discovery".into(),
+                budget_impact_tokens: Some(240),
+                dropped_reason: None,
+            },
+            ContextAssemblyEntry {
+                cache_status: None,
+                order: 2,
+                layer: "active_memory_inputs".into(),
+                kind: "workspace_memory".into(),
+                label: "Project Memory".into(),
+                source_path: Some(".rara/memory.md".into()),
+                injected: true,
+                inclusion_reason: "effective prompt includes memory".into(),
+                budget_impact_tokens: Some(64),
+                dropped_reason: None,
+            },
+        ],
+        ..Default::default()
+    };
+    app.config
+        .set_model(Some("anthropic/claude-sonnet-4".to_string()));
+
+    let lines = render_context_lines(&app, 78);
+    let rendered = lines
+        .into_iter()
+        .map(|line| {
+            line.spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect::<Vec<_>>()
+                .join("")
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert_snapshot!("context_overlay_typical_budget", rendered);
 }
