@@ -234,9 +234,12 @@ impl Agent {
             BashApprovalDecision::Suggestion => {
                 self.completed_approval = Some(CompletedInteraction {
                     title: "Bash approval".to_string(),
-                    summary: format!("Kept as suggestion only: {}", pending.request.summary()),
+                    summary: format!("Rejected command: {}", pending.request.summary()),
                 });
-                let error_text = "Bash command was not approved. Continue without shell execution and find a safer path.".to_string();
+                let error_text = format!(
+                    "Error: bash command rejected by user. The command was not run: {}",
+                    pending.request.summary()
+                );
                 report(AgentEvent::ToolResult {
                     name: "bash".to_string(),
                     content: error_text.clone(),
