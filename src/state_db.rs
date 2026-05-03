@@ -13,6 +13,13 @@ use crate::thread_rollout_log;
 #[cfg(test)]
 mod tests;
 
+const RESUMABLE_SESSION_WHERE: &str = "s.history_len > 0
+                OR s.compaction_count > 0
+                OR s.plan_explanation IS NOT NULL
+                OR EXISTS (SELECT 1 FROM turns WHERE session_id = s.id)
+                OR EXISTS (SELECT 1 FROM plan_steps WHERE session_id = s.id)
+                OR EXISTS (SELECT 1 FROM interactions WHERE session_id = s.id)";
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PersistedTurnEntry {
     pub role: String,
@@ -751,11 +758,13 @@ impl StateDb {
 
     pub fn latest_thread_id(&self) -> Result<Option<String>> {
         let conn = self.conn.lock().expect("state db mutex poisoned");
-        let thread_id = conn.query_row(
-            "SELECT id FROM sessions ORDER BY updated_at DESC LIMIT 1",
-            [],
-            |row| row.get::<_, String>(0),
+        let sql = format!(
+            "SELECT id FROM sessions s
+             WHERE {RESUMABLE_SESSION_WHERE}
+             ORDER BY updated_at DESC
+             LIMIT 1"
         );
+        let thread_id = conn.query_row(&sql, [], |row| row.get::<_, String>(0));
         match thread_id {
             Ok(id) => Ok(Some(id)),
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
@@ -806,7 +815,7 @@ impl StateDb {
         limit: usize,
     ) -> Result<Vec<PersistedRecentThreadSummary>> {
         let conn = self.conn.lock().expect("state db mutex poisoned");
-        let mut stmt = conn.prepare(
+        let sql = format!(
             "SELECT s.id, s.provider, s.model, s.branch, s.updated_at,
                     s.compaction_count, s.last_compaction_before_tokens,
                     s.last_compaction_after_tokens, s.last_compaction_recent_file_count,
@@ -818,9 +827,11 @@ impl StateDb {
                         LIMIT 1
                     ), '') AS preview
              FROM sessions s
+             WHERE {RESUMABLE_SESSION_WHERE}
              ORDER BY s.updated_at DESC
-             LIMIT ?",
-        )?;
+             LIMIT ?"
+        );
+        let mut stmt = conn.prepare(&sql)?;
         let rows = stmt.query_map(params![limit as i64], |row| {
             Ok(PersistedRecentThreadSummary {
                 session_id: row.get(0)?,
@@ -856,7 +867,7 @@ impl StateDb {
         limit: usize,
     ) -> Result<Vec<PersistedRecentThreadRecord>> {
         let conn = self.conn.lock().expect("state db mutex poisoned");
-        let mut stmt = conn.prepare(
+        let sql = format!(
             "SELECT s.id, s.cwd, s.branch, s.provider, s.model, s.base_url,
                     s.agent_mode, s.bash_approval, s.created_at, s.history_len, s.transcript_len,
                     s.updated_at, s.origin_kind, s.forked_from_thread_id,
@@ -870,9 +881,11 @@ impl StateDb {
                         LIMIT 1
                     ), '') AS preview
              FROM sessions s
+             WHERE {RESUMABLE_SESSION_WHERE}
              ORDER BY s.updated_at DESC
-             LIMIT ?",
-        )?;
+             LIMIT ?"
+        );
+        let mut stmt = conn.prepare(&sql)?;
         let rows = stmt.query_map(params![limit as i64], |row| {
             Ok(PersistedRecentThreadRecord {
                 session_id: row.get(0)?,
