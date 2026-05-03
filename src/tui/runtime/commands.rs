@@ -3,7 +3,7 @@ use std::sync::Arc;
 use super::super::state::{
     HelpTab, LocalCommand, LocalCommandKind, Overlay, RuntimePhase, StatusTab, TuiApp,
 };
-use super::tasks::{start_compact_task, start_rebuild_task};
+use super::tasks::{start_compact_task, start_rebuild_task, start_review_task};
 use crate::agent::{Agent, AgentExecutionMode, BashApprovalMode};
 use crate::oauth::OAuthManager;
 
@@ -27,6 +27,7 @@ pub(super) async fn execute_local_command(
         LocalCommandKind::Plan => "plan",
         LocalCommandKind::Quit => "quit",
         LocalCommandKind::Resume => "resume",
+        LocalCommandKind::Review => "review",
         LocalCommandKind::Status => "status",
         LocalCommandKind::Skills => "skills",
     });
@@ -113,6 +114,32 @@ pub(super) async fn execute_local_command(
             }
             app.push_notice("Planning mode enabled. Read-only planning; approve to execute.");
         }
+        LocalCommandKind::Review => {
+            if app.is_busy() {
+                app.push_notice("A task is already running. Wait for it to finish.");
+            } else if let Some(agent) = agent_slot.take() {
+                let diff = capture_git_diff(&app.snapshot.cwd);
+                let prompt = if diff.is_empty() {
+                    "No local git changes found. The working tree is clean.".to_string()
+                } else {
+                    let lines: Vec<&str> = diff.lines().collect();
+                    if lines.len() > 800 {
+                        let preview = lines
+                            .iter()
+                            .take(600)
+                            .copied()
+                            .collect::<Vec<_>>()
+                            .join("\n");
+                        format!(
+                            "Review the following code changes:\n\n```diff\n{preview}\n...\n```\n\n(Full diff truncated; use tools to inspect if needed.)"
+                        )
+                    } else {
+                        format!("Review the following code changes:\n\n```diff\n{diff}\n```")
+                    }
+                };
+                start_review_task(app, prompt, agent);
+            }
+        }
         LocalCommandKind::Quit => {
             app.set_runtime_phase(RuntimePhase::LocalCommand, Some("quitting".into()));
             return Ok(true);
@@ -166,4 +193,41 @@ fn handle_base_url_command(arg: Option<&str>, app: &mut TuiApp) -> anyhow::Resul
     }
     app.open_overlay(Overlay::BaseUrlEditor);
     Ok(())
+}
+
+fn capture_git_diff(cwd: &str) -> String {
+    use std::path::Path;
+    use std::process::Command;
+    let dir = if cwd.is_empty() {
+        None
+    } else {
+        Some(Path::new(cwd))
+    };
+    let cmd = |args: &[&str]| {
+        let mut c = Command::new("git");
+        c.args(args);
+        if let Some(d) = dir {
+            c.current_dir(d);
+        }
+        c.output()
+    };
+    let run = |args| -> Option<String> {
+        cmd(args)
+            .ok()
+            .and_then(|out| {
+                if !out.stderr.is_empty() {
+                    let _stderr_msg = String::from_utf8_lossy(&out.stderr);
+                }
+                String::from_utf8(out.stdout).ok()
+            })
+            .filter(|s| !s.trim().is_empty())
+    };
+    let staged = run(&["diff", "--staged"]);
+    let unstaged = run(&["diff"]);
+    match (staged, unstaged) {
+        (Some(s), Some(u)) => format!("{s}\n{u}"),
+        (Some(s), None) => s,
+        (None, Some(u)) => u,
+        (None, None) => String::new(),
+    }
 }

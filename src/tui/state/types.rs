@@ -87,6 +87,7 @@ pub enum LocalCommandKind {
     BaseUrl,
     Login,
     Logout,
+    Review,
     Quit,
     Skills,
 }

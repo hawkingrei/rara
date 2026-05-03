@@ -42,6 +42,7 @@ use self::planning::{InspectionProgress, RuntimeContinuationPhase, tool_result_m
 pub enum AgentExecutionMode {
     Execute,
     Plan,
+    Review,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -442,7 +443,7 @@ impl Agent {
 
     fn llm_turn_metadata(&self) -> LlmTurnMetadata {
         let metadata = match self.execution_mode {
-            AgentExecutionMode::Execute => LlmTurnMetadata::execute(),
+            AgentExecutionMode::Execute | AgentExecutionMode::Review => LlmTurnMetadata::execute(),
             AgentExecutionMode::Plan => LlmTurnMetadata::plan(),
         };
         if let Some(token) = self.cancellation_token.as_ref() {

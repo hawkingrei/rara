@@ -177,6 +177,41 @@ pub(super) fn start_compact_task(app: &mut TuiApp, mut agent: Agent) {
     });
 }
 
+pub(super) fn start_review_task(app: &mut TuiApp, prompt: String, mut agent: Agent) {
+    use crate::agent::{AgentExecutionMode, BashApprovalMode};
+    let (sender, receiver) = mpsc::unbounded_channel();
+    agent.set_execution_mode(AgentExecutionMode::Review);
+    agent.set_bash_approval_mode(BashApprovalMode::Always);
+    app.notice = Some("Running code review.".into());
+    app.set_runtime_phase(
+        RuntimePhase::ProcessingResponse,
+        Some("reviewing changes".into()),
+    );
+    app.push_entry("You", prompt.clone());
+
+    let handle = tokio::spawn(async move {
+        let tx = sender.clone();
+        let result = agent
+            .query_with_mode_and_events(prompt, AgentOutputMode::Silent, move |event| {
+                if let Some(event) = convert_agent_event(event) {
+                    let _ = tx.send(event);
+                }
+            })
+            .await;
+        TaskCompletion::Query { agent, result }
+    });
+
+    app.running_task = Some(RunningTask {
+        kind: TaskKind::Query,
+        receiver,
+        handle,
+        started_at: Instant::now(),
+        next_heartbeat_after_secs: 2,
+        cancellation_token: None,
+        cancellation_requested: false,
+    });
+}
+
 pub(super) fn start_pending_approval_task(
     app: &mut TuiApp,
     selection: BashApprovalDecision,
