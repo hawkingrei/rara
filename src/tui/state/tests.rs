@@ -729,7 +729,7 @@ fn resume_picker_refreshes_recent_threads_on_open() {
             "always",
             None,
             &PersistedPromptRuntimeState::default(),
-            0,
+            1,
             0,
             &PersistedCompactState::default(),
         )

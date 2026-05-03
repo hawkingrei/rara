@@ -752,7 +752,13 @@ impl StateDb {
     pub fn latest_thread_id(&self) -> Result<Option<String>> {
         let conn = self.conn.lock().expect("state db mutex poisoned");
         let thread_id = conn.query_row(
-            "SELECT id FROM sessions ORDER BY updated_at DESC LIMIT 1",
+            "SELECT id FROM sessions s
+             WHERE s.history_len > 0
+                OR EXISTS (SELECT 1 FROM turns WHERE session_id = s.id)
+                OR EXISTS (SELECT 1 FROM plan_steps WHERE session_id = s.id)
+                OR EXISTS (SELECT 1 FROM interactions WHERE session_id = s.id)
+             ORDER BY updated_at DESC
+             LIMIT 1",
             [],
             |row| row.get::<_, String>(0),
         );
@@ -818,6 +824,10 @@ impl StateDb {
                         LIMIT 1
                     ), '') AS preview
              FROM sessions s
+             WHERE s.history_len > 0
+                OR EXISTS (SELECT 1 FROM turns WHERE session_id = s.id)
+                OR EXISTS (SELECT 1 FROM plan_steps WHERE session_id = s.id)
+                OR EXISTS (SELECT 1 FROM interactions WHERE session_id = s.id)
              ORDER BY s.updated_at DESC
              LIMIT ?",
         )?;
@@ -870,6 +880,10 @@ impl StateDb {
                         LIMIT 1
                     ), '') AS preview
              FROM sessions s
+             WHERE s.history_len > 0
+                OR EXISTS (SELECT 1 FROM turns WHERE session_id = s.id)
+                OR EXISTS (SELECT 1 FROM plan_steps WHERE session_id = s.id)
+                OR EXISTS (SELECT 1 FROM interactions WHERE session_id = s.id)
              ORDER BY s.updated_at DESC
              LIMIT ?",
         )?;

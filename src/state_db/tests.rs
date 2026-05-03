@@ -279,6 +279,87 @@ fn persists_compact_state_for_restore() -> Result<()> {
 }
 
 #[test]
+fn recent_threads_ignore_sessions_without_resume_data() -> Result<()> {
+    let temp = tempdir()?;
+    let db = StateDb::new_for_root_dir(temp.path().join(".rara"))?;
+
+    db.upsert_session(
+        "slash-resume-only",
+        "/tmp/workspace",
+        "main",
+        "codex",
+        "gpt-5",
+        None,
+        "execute",
+        "suggestion",
+        None,
+        &PersistedPromptRuntimeState::default(),
+        0,
+        3,
+        &PersistedCompactState::default(),
+    )?;
+    assert_eq!(db.latest_thread_id()?, None);
+
+    db.upsert_session(
+        "history-backed",
+        "/tmp/workspace",
+        "main",
+        "codex",
+        "gpt-5",
+        None,
+        "execute",
+        "suggestion",
+        None,
+        &PersistedPromptRuntimeState::default(),
+        1,
+        0,
+        &PersistedCompactState::default(),
+    )?;
+    db.upsert_session(
+        "turn-backed",
+        "/tmp/workspace",
+        "main",
+        "codex",
+        "gpt-5",
+        None,
+        "execute",
+        "suggestion",
+        None,
+        &PersistedPromptRuntimeState::default(),
+        0,
+        0,
+        &PersistedCompactState::default(),
+    )?;
+    db.persist_turn(
+        "turn-backed",
+        0,
+        &[PersistedTurnEntry {
+            role: "User".to_string(),
+            message: "Real request".to_string(),
+        }],
+    )?;
+
+    let summaries = db.list_recent_thread_summaries(10)?;
+    let summary_ids = summaries
+        .iter()
+        .map(|thread| thread.session_id.as_str())
+        .collect::<Vec<_>>();
+    assert!(!summary_ids.contains(&"slash-resume-only"));
+    assert!(summary_ids.contains(&"history-backed"));
+    assert!(summary_ids.contains(&"turn-backed"));
+
+    let records = db.list_recent_thread_records(10)?;
+    let record_ids = records
+        .iter()
+        .map(|thread| thread.session_id.as_str())
+        .collect::<Vec<_>>();
+    assert!(!record_ids.contains(&"slash-resume-only"));
+    assert!(record_ids.contains(&"history-backed"));
+    assert!(record_ids.contains(&"turn-backed"));
+    Ok(())
+}
+
+#[test]
 fn load_rollout_events_prefers_append_only_log_without_snapshot_rewrite() -> Result<()> {
     let temp = tempdir()?;
     let db = StateDb::new_for_root_dir(temp.path().join(".rara"))?;
