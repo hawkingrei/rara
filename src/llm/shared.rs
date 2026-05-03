@@ -322,7 +322,9 @@ pub(crate) async fn retry_send_json(
         let res = request.json(body).send().await.map_err(|e| anyhow!(e))?;
         let status = res.status();
         if status.is_server_error() || status == StatusCode::TOO_MANY_REQUESTS {
-            return Err(anyhow!("retryable status {}", status.as_u16()));
+            let body_text = res.text().await.unwrap_or_default();
+            let preview = body_text.chars().take(200).collect::<String>();
+            return Err(anyhow!("HTTP {}: {preview}", status.as_u16()));
         }
         Ok(res)
     })
