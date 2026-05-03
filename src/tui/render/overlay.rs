@@ -429,7 +429,7 @@ fn render_status_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
 }
 
 fn render_context_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
-    let lines = render_context_lines(app);
+    let lines = render_context_lines(app, area.width);
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(8), Constraint::Length(2)])

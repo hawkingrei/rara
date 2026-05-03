@@ -8,10 +8,10 @@ use ratatui::text::{Line, Span};
 use crate::tui::state::TuiApp;
 use crate::tui::theme::{
     BUDGET_ACTIVE, BUDGET_FREE, BUDGET_HISTORY, BUDGET_MEMORY, BUDGET_OUTPUT, BUDGET_SYSTEM,
-    STATUS_INFO, STATUS_SUCCESS, TEXT_ACCENT, TEXT_MUTED, TEXT_SECONDARY,
+    BUDGET_WORKSPACE, STATUS_INFO, STATUS_SUCCESS, TEXT_ACCENT, TEXT_MUTED, TEXT_SECONDARY,
 };
 
-pub(crate) fn render_context_lines(app: &TuiApp) -> Vec<Line<'static>> {
+pub(crate) fn render_context_lines(app: &TuiApp, available_width: u16) -> Vec<Line<'static>> {
     let mut lines: Vec<Line<'static>> = Vec::new();
     let snap = &app.snapshot;
 
@@ -45,14 +45,15 @@ pub(crate) fn render_context_lines(app: &TuiApp) -> Vec<Line<'static>> {
     );
 
     // Visual budget bar
-    let bar_line = budget_bar(app, 50);
+    let bar_width = (available_width.saturating_sub(6)).max(20) as usize;
+    let bar_line = budget_bar(app, bar_width);
     lines.push(bar_line);
 
     // Usage summary
     let used_str = format_token_count(used);
     let pct = window
         .filter(|w| *w > 0)
-        .map(|w| format!(" ({:.1}%)", used as f64 * 100.0 / w as f64))
+        .map(|w| format!(" ({:.2}%)", used as f64 * 100.0 / w as f64))
         .unwrap_or_default();
     let window_str = window
         .map(format_token_count)
@@ -68,8 +69,15 @@ pub(crate) fn render_context_lines(app: &TuiApp) -> Vec<Line<'static>> {
     budget_row(
         &mut lines,
         "System prompt",
-        snap.stable_instructions_budget + snap.workspace_prompt_budget,
+        snap.stable_instructions_budget,
         BUDGET_SYSTEM,
+        window,
+    );
+    budget_row(
+        &mut lines,
+        "Workspace",
+        snap.workspace_prompt_budget,
+        BUDGET_WORKSPACE,
         window,
     );
     budget_row(
@@ -213,9 +221,10 @@ fn budget_bar(app: &TuiApp, width: usize) -> Line<'static> {
 
     let segments: &[(usize, Color)] = &[
         (
-            snap.stable_instructions_budget + snap.workspace_prompt_budget,
+            snap.stable_instructions_budget,
             BUDGET_SYSTEM,
         ),
+        (snap.workspace_prompt_budget, BUDGET_WORKSPACE),
         (snap.active_turn_budget, BUDGET_ACTIVE),
         (snap.compacted_history_budget, BUDGET_HISTORY),
         (snap.retrieved_memory_budget, BUDGET_MEMORY),
@@ -259,7 +268,7 @@ fn budget_row(
 ) {
     let pct = window
         .filter(|w| *w > 0)
-        .map(|w| format!(" ({:.1}%)", tokens as f64 * 100.0 / w as f64))
+        .map(|w| format!(" ({:.2}%)", tokens as f64 * 100.0 / w as f64))
         .unwrap_or_default();
     let value = format!("{}{}", format_token_count(tokens), pct);
     kv(lines, label, &value, color);
@@ -291,7 +300,7 @@ fn format_token_count(tokens: usize) -> String {
     if tokens >= 1_000_000 {
         format!("{:.1}M", tokens as f64 / 1_000_000.0)
     } else if tokens >= 1_000 {
-        format!("{}K", tokens / 1_000)
+        format!("{:.1}K", tokens as f64 / 1_000.0)
     } else {
         tokens.to_string()
     }
