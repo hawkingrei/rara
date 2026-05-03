@@ -50,14 +50,20 @@ impl ExaMcpClient {
         let endpoint = self.request_endpoint()?;
 
         let response = (|| async {
-            self.client
+            let res = self
+                .client
                 .post(endpoint.clone())
                 .header("Accept", "application/json, text/event-stream")
                 .json(&request)
                 .timeout(Duration::from_secs(DEFAULT_TIMEOUT_SECS))
                 .send()
                 .await
-                .map_err(|e| anyhow::anyhow!(e))
+                .map_err(|e| anyhow::anyhow!(e))?;
+            let status = res.status();
+            if status.is_server_error() || status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+                return Err(anyhow::anyhow!("HTTP {}", status.as_u16()));
+            }
+            Ok(res)
         })
         .retry(ExponentialBuilder::default().with_jitter())
         .when(|e: &anyhow::Error| is_retryable_http_error(e))

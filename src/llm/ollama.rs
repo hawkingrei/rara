@@ -1,8 +1,5 @@
 use std::collections::HashMap;
 
-use backon::{ExponentialBuilder, Retryable};
-use reqwest::StatusCode;
-
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -15,8 +12,7 @@ use crate::redaction::{redact_secrets, sanitize_url_for_display};
 use super::shared::{
     ContextBudget, LlmBackend, LlmStreamEvent, collect_assistant_content,
     context_budget_from_window, extract_single_tool_result, hashed_embedding,
-    http_client_for_target, is_retryable_http_error, parse_tool_arguments,
-    render_openai_message_content, retry_send_json,
+    http_client_for_target, parse_tool_arguments, render_openai_message_content, retry_send_json,
 };
 
 pub struct OllamaBackend {
@@ -75,17 +71,7 @@ impl LlmBackend for OllamaBackend {
             );
         }
 
-        let res = (|| async {
-            self.client
-                .post(&endpoint)
-                .json(&body)
-                .send()
-                .await
-                .map_err(|e| anyhow!(e))
-        })
-        .retry(ExponentialBuilder::default().with_jitter())
-        .when(|e: &anyhow::Error| is_retryable_http_error(e))
-        .await?;
+        let res = retry_send_json(&self.client, &endpoint, &body, None).await?;
 
         if !res.status().is_success() {
             return Err(anyhow!(
@@ -187,17 +173,7 @@ impl LlmBackend for OllamaBackend {
             );
         }
 
-        let res = (|| async {
-            self.client
-                .post(&endpoint)
-                .json(&body)
-                .send()
-                .await
-                .map_err(|e| anyhow!(e))
-        })
-        .retry(ExponentialBuilder::default().with_jitter())
-        .when(|e: &anyhow::Error| is_retryable_http_error(e))
-        .await?;
+        let res = retry_send_json(&self.client, &endpoint, &body, None).await?;
         if !res.status().is_success() {
             return Err(anyhow!(
                 "API Error at {}: {}",

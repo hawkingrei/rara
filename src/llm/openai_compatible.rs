@@ -282,10 +282,16 @@ pub async fn fetch_model_context_window(
         if let Some(key) = api_key {
             req = req.bearer_auth(key.expose_secret());
         }
-        req.timeout(Duration::from_secs(5))
+        let res = req
+            .timeout(Duration::from_secs(5))
             .send()
             .await
-            .map_err(|e| anyhow!(e))
+            .map_err(|e| anyhow!(e))?;
+        let status = res.status();
+        if status.is_server_error() || status == StatusCode::TOO_MANY_REQUESTS {
+            return Err(anyhow!("HTTP {}", status.as_u16()));
+        }
+        Ok(res)
     })
     .retry(ExponentialBuilder::default().with_jitter())
     .when(|e: &anyhow::Error| is_retryable_http_error(e))

@@ -101,13 +101,18 @@ impl Tool for WebFetchTool {
             .build()
             .map_err(|err| ToolError::ExecutionFailed(err.to_string()))?;
         let response = (|| async {
-            client
+            let res = client
                 .get(request.url.clone())
                 .header("User-Agent", "RARA/0.1.0")
                 .header("Accept", accept_header(request.format))
                 .send()
                 .await
-                .map_err(|e| anyhow::anyhow!(e))
+                .map_err(|e| anyhow::anyhow!(e))?;
+            let status = res.status();
+            if status.is_server_error() || status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+                return Err(anyhow::anyhow!("HTTP {}", status.as_u16()));
+            }
+            Ok(res)
         })
         .retry(ExponentialBuilder::default().with_jitter())
         .when(|e: &anyhow::Error| is_retryable_http_error(e))
