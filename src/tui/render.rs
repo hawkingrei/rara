@@ -765,4 +765,3 @@ fn tool_action_label(message: &str) -> Option<String> {
         )),
     }
 }
-

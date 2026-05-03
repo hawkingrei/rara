@@ -16,12 +16,12 @@ use crate::tui::terminal_event::{
     TerminalCollectionEvent, TerminalCommandEvent, TerminalEvent, TerminalTarget,
 };
 
-#[path = "cells_components.rs"]
-mod components;
 #[path = "active_turn.rs"]
 mod active_turn;
 #[path = "committed_turn.rs"]
 mod committed_turn;
+#[path = "cells_components.rs"]
+mod components;
 
 pub(crate) use self::active_turn::ActiveTurnCell;
 pub(crate) use self::components::StartupCardCell;

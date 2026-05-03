@@ -123,8 +123,7 @@ pub(super) async fn execute_local_command(
                     Some("preparing review prompt".into()),
                 );
                 let diff = capture_git_diff();
-                let mut prompt =
-                    String::from("Please review the following code changes. ");
+                let mut prompt = String::from("Please review the following code changes. ");
                 prompt.push_str(
                     "Point out potential issues, suggest improvements, and highlight any concerns about correctness, performance, or maintainability.\n\n",
                 );
