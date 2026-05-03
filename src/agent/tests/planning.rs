@@ -660,6 +660,100 @@ async fn suggestion_mode_keeps_write_bash_commands_pending_approval() {
 }
 
 #[tokio::test]
+async fn denied_bash_approval_is_recorded_as_tool_failure_for_next_turn() {
+    let backend = Arc::new(SequencedBackend::new(vec![
+        LlmResponse {
+            content: vec![ContentBlock::ToolUse {
+                id: "tool-denied-bash".to_string(),
+                name: "bash".to_string(),
+                input: json!({ "command": "git push origin main" }),
+            }],
+            stop_reason: Some("tool_use".to_string()),
+            usage: Some(TokenUsage::default()),
+        },
+        LlmResponse {
+            content: vec![ContentBlock::Text {
+                text: "I will retry when the user confirms the denial was accidental.".to_string(),
+            }],
+            stop_reason: Some("end_turn".to_string()),
+            usage: Some(TokenUsage::default()),
+        },
+    ]));
+    let mut tool_manager = ToolManager::new();
+    tool_manager.register(Box::new(StubBashTool));
+    let (_temp, session_manager, workspace, rara_dir) = test_runtime_storage();
+    let mut agent = Agent::new(
+        tool_manager,
+        backend.clone(),
+        Arc::new(VectorDB::new(&rara_dir.join("lancedb").to_string_lossy())),
+        session_manager,
+        workspace,
+    );
+    agent.bash_approval_mode = crate::agent::BashApprovalMode::Suggestion;
+
+    agent
+        .query_with_mode(
+            "push changes".to_string(),
+            super::super::AgentOutputMode::Silent,
+        )
+        .await
+        .expect("query should pause on write bash approval");
+    assert!(agent.pending_approval.is_some());
+
+    agent
+        .answer_pending_approval_with_events(
+            BashApprovalDecision::Suggestion,
+            super::super::AgentOutputMode::Silent,
+            |_| {},
+        )
+        .await
+        .expect("denied approval should continue the agent turn");
+
+    assert!(agent.pending_approval.is_none());
+    let observed_messages = backend.observed_messages();
+    assert_eq!(observed_messages.len(), 2);
+    let resumed_history = &observed_messages[1];
+    let tool_call_index = resumed_history
+        .iter()
+        .position(|message| {
+            message.role == "assistant"
+                && message.content.to_string().contains("tool-denied-bash")
+                && message.content.to_string().contains("git push origin main")
+        })
+        .expect("assistant tool call should remain in history");
+    let denial_result_index = resumed_history
+        .iter()
+        .position(|message| {
+            let content = message.content.to_string();
+            message.role == "user"
+                && content.contains("\"tool_use_id\":\"tool-denied-bash\"")
+                && content.contains("\"is_error\":true")
+                && content.contains("rejected by user")
+                && content.contains("The command was not run")
+        })
+        .expect("denied approval should be recorded as an errored tool result");
+    let continuation_index = resumed_history
+        .iter()
+        .position(|message| {
+            message.role == "user"
+                && message.content.to_string().contains("<agent_runtime>")
+                && message
+                    .content
+                    .to_string()
+                    .contains("tool_results_available")
+        })
+        .expect("runtime continuation should follow the denied tool result");
+    assert!(
+        tool_call_index < denial_result_index,
+        "tool result must follow its assistant tool call"
+    );
+    assert!(
+        denial_result_index < continuation_index,
+        "runtime continuation must follow the denied tool result"
+    );
+}
+
+#[tokio::test]
 async fn suggestion_mode_uses_escalated_sandbox_justification_for_approval() {
     let backend = Arc::new(SequencedBackend::new(vec![LlmResponse {
         content: vec![ContentBlock::ToolUse {
