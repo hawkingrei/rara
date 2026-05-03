@@ -141,6 +141,13 @@ pub const COMMAND_SPECS: [CommandSpec; 20] = [
         summary: "Exit the TUI session.",
         detail: "Leave the RARA TUI and restore the terminal. The /exit alias behaves the same way.",
     },
+    CommandSpec {
+        category: "Session",
+        name: "skills",
+        usage: "/skills",
+        summary: "View and toggle loaded skills.",
+        detail: "Open a skills picker that shows all loaded skills grouped by scope. Use space to toggle enable/disable. Changes take effect on next turn context assembly.",
+    },
 ];
 
 pub fn parse_local_command(input: &str) -> Option<LocalCommand> {
@@ -170,6 +177,7 @@ pub fn parse_local_command(input: &str) -> Option<LocalCommand> {
         "login" | "auth" => LocalCommandKind::Login,
         "logout" => LocalCommandKind::Logout,
         "review" => LocalCommandKind::Review,
+        "skills" => LocalCommandKind::Skills,
         _ => return None,
     };
 

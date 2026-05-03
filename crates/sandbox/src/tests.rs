@@ -1,12 +1,14 @@
+use std::env;
+use std::path::PathBuf;
+use std::time::Duration;
+
+use tempfile::tempdir;
+
 use super::{
     DEFAULT_SHELL, MACOS_SANDBOX_EXEC, SandboxBackend, SandboxManager, cleanup_profiles_older_than,
     cleanup_stale_profiles, command_search_install_roots, sandbox_profile_string_literal,
     sanitize_shell_program, shell_command_flag, shell_program,
 };
-use std::env;
-use std::path::PathBuf;
-use std::time::Duration;
-use tempfile::tempdir;
 
 fn manager(os: &str, backend: SandboxBackend) -> SandboxManager {
     SandboxManager {

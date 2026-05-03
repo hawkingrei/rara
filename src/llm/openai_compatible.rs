@@ -1,32 +1,30 @@
 mod codex;
 mod usage;
 
-use backon::{ExponentialBuilder, Retryable};
-
 use std::borrow::Cow;
 use std::fmt;
 use std::time::Duration;
 
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
+use backon::{ExponentialBuilder, Retryable};
 use eventsource_stream::Eventsource;
 use reqwest::{Response, StatusCode};
 use secrecy::{ExposeSecret, SecretString};
 use serde_json::{Value, json};
 
-use crate::agent::Message;
-use crate::config::OpenAiEndpointKind;
-use crate::llm::{ContentBlock, LlmResponse};
-use crate::redaction::{redact_secrets, sanitize_url_for_display};
-
+use self::usage::parse_openai_token_usage;
+use super::deepseek_dsml;
 use super::shared::{
     ContextBudget, LlmBackend, LlmStreamEvent, LlmTurnMetadata, collect_assistant_content,
     context_budget_from_window, extract_message_text, http_client_for_target,
     is_retryable_http_error, model_context_budget, next_stream_item_with_idle_timeout,
     parse_tool_arguments, render_openai_message_content, retry_send_json,
 };
-
-use self::usage::parse_openai_token_usage;
+use crate::agent::Message;
+use crate::config::OpenAiEndpointKind;
+use crate::llm::{ContentBlock, LlmResponse};
+use crate::redaction::{redact_secrets, sanitize_url_for_display};
 
 const STREAM_IDLE_RETRY_ATTEMPTS: usize = 1;
 const STREAM_IDLE_ERROR_FRAGMENT: &str = "stream produced no events";
@@ -1083,10 +1081,13 @@ pub(super) fn parse_chat_completion_response(
     let mut parsed_dsml_tool_calls = Vec::new();
     if let Some(text) = extract_message_text(choice.get("content")) {
         if endpoint_kind == OpenAiEndpointKind::Deepseek {
-            let (visible_text, dsml_tool_calls) = extract_dsml_tool_calls_from_text(&text);
-            parsed_dsml_tool_calls = dsml_tool_calls;
-            if !visible_text.trim().is_empty() {
-                content.push(ContentBlock::Text { text: visible_text });
+            let extraction = deepseek_dsml::extract_tool_calls_from_text(&text);
+            parsed_dsml_tool_calls =
+                deepseek_dsml_tool_calls_to_content_blocks(extraction.tool_calls);
+            if !extraction.visible_text.trim().is_empty() {
+                content.push(ContentBlock::Text {
+                    text: extraction.visible_text,
+                });
             }
         } else if !text.trim().is_empty() {
             content.push(ContentBlock::Text { text });
@@ -1153,102 +1154,6 @@ pub(super) fn parse_chat_completion_response(
     })
 }
 
-fn extract_dsml_tool_calls_from_text(text: &str) -> (String, Vec<ContentBlock>) {
-    const TOOL_CALLS_OPEN: &str = "<｜DSML｜tool_calls>";
-    const TOOL_CALLS_CLOSE: &str = "</｜DSML｜tool_calls>";
-
-    let mut visible = String::new();
-    let mut rest = text;
-    let mut tool_calls = Vec::new();
-    while let Some(start) = rest.find(TOOL_CALLS_OPEN) {
-        visible.push_str(&rest[..start]);
-        let block = &rest[start + TOOL_CALLS_OPEN.len()..];
-        let Some(end) = block.find(TOOL_CALLS_CLOSE) else {
-            break;
-        };
-        tool_calls.extend(parse_dsml_tool_call_block(&block[..end], tool_calls.len()));
-        rest = &block[end + TOOL_CALLS_CLOSE.len()..];
-    }
-    visible.push_str(rest);
-
-    if tool_calls.is_empty() {
-        (text.to_string(), tool_calls)
-    } else {
-        (visible, tool_calls)
-    }
-}
-
-fn parse_dsml_tool_call_block(block: &str, start_idx: usize) -> Vec<ContentBlock> {
-    const INVOKE_OPEN: &str = "<｜DSML｜invoke";
-    const INVOKE_CLOSE: &str = "</｜DSML｜invoke>";
-
-    let mut calls = Vec::new();
-    let mut rest = block;
-    while let Some(start) = rest.find(INVOKE_OPEN) {
-        let invoke = &rest[start..];
-        let Some(open_end) = invoke.find('>') else {
-            break;
-        };
-        let tag = &invoke[..=open_end];
-        let Some(name) = extract_dsml_attr(tag, "name") else {
-            rest = &invoke[open_end + 1..];
-            continue;
-        };
-        let body = &invoke[open_end + 1..];
-        let Some(close) = body.find(INVOKE_CLOSE) else {
-            break;
-        };
-        let input = parse_dsml_parameters(&body[..close]);
-        calls.push(ContentBlock::ToolUse {
-            id: format!("dsml-tool-{}", start_idx + calls.len() + 1),
-            name,
-            input,
-        });
-        rest = &body[close + INVOKE_CLOSE.len()..];
-    }
-    calls
-}
-
-fn parse_dsml_parameters(body: &str) -> Value {
-    const PARAM_OPEN: &str = "<｜DSML｜parameter";
-    const PARAM_CLOSE: &str = "</｜DSML｜parameter>";
-
-    let mut params = serde_json::Map::new();
-    let mut rest = body;
-    while let Some(start) = rest.find(PARAM_OPEN) {
-        let param = &rest[start..];
-        let Some(open_end) = param.find('>') else {
-            break;
-        };
-        let tag = &param[..=open_end];
-        let Some(name) = extract_dsml_attr(tag, "name") else {
-            rest = &param[open_end + 1..];
-            continue;
-        };
-        let value_body = &param[open_end + 1..];
-        let Some(close) = value_body.find(PARAM_CLOSE) else {
-            break;
-        };
-        let raw_value = value_body[..close].trim();
-        let value = if tag.contains("string=\"true\"") {
-            Value::String(raw_value.to_string())
-        } else {
-            serde_json::from_str(raw_value).unwrap_or_else(|_| Value::String(raw_value.to_string()))
-        };
-        params.insert(name, value);
-        rest = &value_body[close + PARAM_CLOSE.len()..];
-    }
-    Value::Object(params)
-}
-
-fn extract_dsml_attr(tag: &str, name: &str) -> Option<String> {
-    let needle = format!("{name}=\"");
-    let start = tag.find(&needle)? + needle.len();
-    let value = &tag[start..];
-    let end = value.find('"')?;
-    Some(value[..end].to_string())
-}
-
 pub(super) fn build_streaming_response_content(
     endpoint_kind: OpenAiEndpointKind,
     streamed_text: String,
@@ -1259,10 +1164,12 @@ pub(super) fn build_streaming_response_content(
     let mut parsed_dsml_tool_calls = Vec::new();
 
     if endpoint_kind == OpenAiEndpointKind::Deepseek {
-        let (visible_text, dsml_tool_calls) = extract_dsml_tool_calls_from_text(&streamed_text);
-        parsed_dsml_tool_calls = dsml_tool_calls;
-        if !visible_text.trim().is_empty() {
-            content.push(ContentBlock::Text { text: visible_text });
+        let extraction = deepseek_dsml::extract_tool_calls_from_text(&streamed_text);
+        parsed_dsml_tool_calls = deepseek_dsml_tool_calls_to_content_blocks(extraction.tool_calls);
+        if !extraction.visible_text.trim().is_empty() {
+            content.push(ContentBlock::Text {
+                text: extraction.visible_text,
+            });
         }
     } else if !streamed_text.trim().is_empty() {
         content.push(ContentBlock::Text {
@@ -1312,6 +1219,20 @@ pub(super) fn build_streaming_response_content(
     }
 
     Ok(content)
+}
+
+fn deepseek_dsml_tool_calls_to_content_blocks(
+    tool_calls: Vec<deepseek_dsml::DeepSeekDsmlToolCall>,
+) -> Vec<ContentBlock> {
+    tool_calls
+        .into_iter()
+        .enumerate()
+        .map(|(idx, call)| ContentBlock::ToolUse {
+            id: format!("dsml-tool-{}", idx + 1),
+            name: call.name,
+            input: call.input,
+        })
+        .collect()
 }
 
 pub(super) fn merge_streaming_tool_calls(

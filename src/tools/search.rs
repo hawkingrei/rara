@@ -1,10 +1,12 @@
-use crate::tool::{Tool, ToolError};
+use std::fs;
+use std::path::Path;
+
 use async_trait::async_trait;
 use glob::glob;
 use regex::Regex;
 use serde_json::{Value, json};
-use std::fs;
-use std::path::Path;
+
+use crate::tool::{Tool, ToolError};
 
 pub struct GlobTool;
 #[async_trait]
@@ -110,9 +112,10 @@ fn is_ignored_path(path: &Path) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::GrepTool;
     use crate::tool::Tool;
-    use serde_json::json;
 
     #[tokio::test]
     async fn grep_skips_build_artifacts_by_default() {

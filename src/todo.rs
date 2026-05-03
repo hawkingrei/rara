@@ -1,8 +1,9 @@
+use std::collections::HashSet;
+use std::time::{SystemTime, UNIX_EPOCH};
+
 use anyhow::{Result, anyhow};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::HashSet;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TodoState {
@@ -179,8 +180,9 @@ fn epoch_seconds() -> i64 {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use serde_json::json;
+
+    use super::*;
 
     #[test]
     fn normalizes_todo_write_input() {

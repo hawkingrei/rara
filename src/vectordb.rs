@@ -1,6 +1,4 @@
 use std::collections::HashMap;
-use std::fs::{File, OpenOptions};
-use std::os::fd::AsRawFd;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -19,6 +17,8 @@ use lancedb::index::scalar::FtsIndexBuilder;
 use lancedb::query::{ExecutableQuery, QueryBase};
 use lancedb::{Connection, Error as LanceDbError, Table, connect};
 use tokio::sync::{Mutex, OnceCell};
+
+use crate::file_lock::AdvisoryFileLock;
 
 const MEMORY_ID_COLUMN: &str = "id";
 const SESSION_ID_COLUMN: &str = "session_id";
@@ -186,9 +186,9 @@ impl VectorDB {
         Ok(())
     }
 
-    async fn acquire_write_lock(&self) -> Result<VectorDbWriteLock> {
+    async fn acquire_write_lock(&self) -> Result<AdvisoryFileLock> {
         let path = self.write_lock_path.clone();
-        tokio::task::spawn_blocking(move || VectorDbWriteLock::acquire(path))
+        tokio::task::spawn_blocking(move || AdvisoryFileLock::acquire(path))
             .await
             .context("join LanceDB write lock task")?
     }
@@ -257,39 +257,6 @@ impl VectorDB {
             })
             .await
             .map(|_| ())
-    }
-}
-
-struct VectorDbWriteLock {
-    file: File,
-}
-
-impl VectorDbWriteLock {
-    fn acquire(path: PathBuf) -> Result<Self> {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)
-                .with_context(|| format!("create LanceDB lock directory {}", parent.display()))?;
-        }
-        let file = OpenOptions::new()
-            .create(true)
-            .read(true)
-            .write(true)
-            .open(&path)
-            .with_context(|| format!("open LanceDB write lock {}", path.display()))?;
-        let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) };
-        if rc != 0 {
-            return Err(std::io::Error::last_os_error())
-                .with_context(|| format!("lock LanceDB write lock {}", path.display()));
-        }
-        Ok(Self { file })
-    }
-}
-
-impl Drop for VectorDbWriteLock {
-    fn drop(&mut self) {
-        unsafe {
-            libc::flock(self.file.as_raw_fd(), libc::LOCK_UN);
-        }
     }
 }
 

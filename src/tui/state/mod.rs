@@ -7,6 +7,7 @@ mod types;
 
 use std::cell::RefCell;
 use std::process::Command;
+
 use unicode_width::UnicodeWidthChar;
 
 pub use self::state_presets::{
@@ -19,8 +20,9 @@ pub use self::types::{
     AgentMarkdownStreamState, CommandSpec, CompletedInteractionSnapshot, HelpTab, InteractionKind,
     LocalCommand, LocalCommandKind, OAuthLoginMode, OpenAiModelPickerAction, Overlay,
     PROVIDER_FAMILIES, PendingApprovalSnapshot, PendingInteractionSnapshot, ProviderFamily,
-    RebuildSuccess, RunningTask, RuntimePhase, RuntimeSnapshot, StatusTab, TaskCompletion,
-    TaskKind, TranscriptEntry, TranscriptEntryPayload, TranscriptTurn, TuiApp, TuiEvent,
+    RebuildSuccess, RunningTask, RuntimePhase, RuntimeSnapshot, SkillPickerEntry, StatusTab,
+    TaskCompletion, TaskKind, TranscriptEntry, TranscriptEntryPayload, TranscriptTurn, TuiApp,
+    TuiEvent,
 };
 
 const OPENAI_PROFILE_SETUP_KINDS: [OpenAiEndpointKind; 3] = [
@@ -34,6 +36,8 @@ pub fn openai_profile_setup_kinds() -> &'static [OpenAiEndpointKind] {
     &OPENAI_PROFILE_SETUP_KINDS
 }
 
+use rara_provider_catalog::{ModelCatalogProvider, fallback_models};
+
 use super::queued_input::PendingFollowUpMessage;
 use crate::agent::{Agent, AgentExecutionMode, BashApprovalMode};
 use crate::codex_model_catalog::{CodexModelOption, CodexReasoningOption};
@@ -41,7 +45,6 @@ use crate::config::{ConfigManager, DEFAULT_CODEX_BASE_URL, OpenAiEndpointKind};
 use crate::redaction::redact_secrets;
 use crate::state_db::StateDb;
 use crate::tui::is_ssh_session;
-use rara_provider_catalog::{ModelCatalogProvider, fallback_models};
 
 fn completed_interaction_role(kind: InteractionKind, source: Option<&str>) -> &'static str {
     match kind {
@@ -241,6 +244,8 @@ impl TuiApp {
             repo_slug: None,
             current_pr_url: None,
             codex_auth_mode: None,
+            skill_picker_idx: 0,
+            skill_picker_entries: Vec::new(),
         })
     }
 
@@ -1028,7 +1033,26 @@ impl TuiApp {
         };
         self.agent_execution_mode = agent.execution_mode;
         self.bash_approval_mode = agent.bash_approval_mode;
+        self.populate_skill_picker_entries(agent);
         self.persist_runtime_state();
+    }
+
+    pub fn populate_skill_picker_entries(&mut self, agent: &Agent) {
+        self.skill_picker_entries = agent
+            .prompt_config()
+            .available_skills
+            .iter()
+            .map(|s| SkillPickerEntry {
+                name: s.name.clone(),
+                title: s.title.clone().unwrap_or_else(|| s.name.clone()),
+                scope: s.scope.clone(),
+                display_path: s.display_path.clone(),
+                enabled: !s.disable_model_invocation,
+                disable_model_invocation: s.disable_model_invocation,
+            })
+            .collect();
+        self.skill_picker_entries
+            .sort_by(|a, b| a.name.cmp(&b.name));
     }
 
     pub fn open_overlay(&mut self, overlay: Overlay) {
@@ -1120,6 +1144,9 @@ impl TuiApp {
         }
         if matches!(overlay, Overlay::ReasoningEffortPicker) {
             self.sync_reasoning_effort_picker();
+        }
+        if matches!(overlay, Overlay::SkillsPicker) {
+            self.skill_picker_idx = 0;
         }
         self.overlay = Some(overlay);
     }

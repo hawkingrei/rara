@@ -1,10 +1,11 @@
+use std::path::Path;
+use std::sync::Arc;
+
 use anyhow::Result;
 use codex_login::{AuthCredentialsStoreMode, AuthManager};
 use codex_models_manager::bundled_models_response;
 use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_models_manager::manager::{ModelsManager, RefreshStrategy, StaticModelsManager};
-use std::path::Path;
-use std::sync::Arc;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CodexReasoningOption {

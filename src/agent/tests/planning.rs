@@ -5,6 +5,7 @@ use async_trait::async_trait;
 use serde_json::json;
 use tempfile::tempdir;
 
+use super::support::{SequencedBackend, StubBashTool, StubTool, test_runtime_storage};
 use crate::agent::planning::{
     has_unclosed_proposed_plan_block, parse_exit_plan_tool_input, parse_plan_block,
     parse_request_user_input_block, strip_continue_inspection_control,
@@ -21,8 +22,6 @@ use crate::tools::planning::{EnterPlanModeTool, ExitPlanModeTool};
 use crate::tools::todo::TodoWriteTool;
 use crate::vectordb::VectorDB;
 use crate::workspace::WorkspaceMemory;
-
-use super::support::{SequencedBackend, StubBashTool, StubTool, test_runtime_storage};
 
 struct CheckpointObserverBackend {
     session_manager: Arc<SessionManager>,
@@ -176,6 +175,106 @@ async fn appends_continuation_after_tool_result() {
         second_round
             .iter()
             .any(|message| { message.content.to_string().contains("tool_result") })
+    );
+}
+
+#[tokio::test]
+async fn visible_text_before_tool_call_does_not_end_agent_turn() {
+    let backend = Arc::new(SequencedBackend::new(vec![
+        LlmResponse {
+            content: vec![
+                ContentBlock::Text {
+                    text: "I will inspect the file first.".to_string(),
+                },
+                ContentBlock::ToolUse {
+                    id: "tool-1".to_string(),
+                    name: "stub_tool".to_string(),
+                    input: json!({}),
+                },
+            ],
+            stop_reason: Some("tool_use".to_string()),
+            usage: Some(TokenUsage::default()),
+        },
+        LlmResponse {
+            content: vec![ContentBlock::Text {
+                text: "The tool result is handled.".to_string(),
+            }],
+            stop_reason: Some("end_turn".to_string()),
+            usage: Some(TokenUsage::default()),
+        },
+    ]));
+
+    let mut tool_manager = ToolManager::new();
+    tool_manager.register(Box::new(StubTool));
+    let (_temp, session_manager, workspace, rara_dir) = test_runtime_storage();
+    let mut agent = Agent::new(
+        tool_manager,
+        backend.clone(),
+        Arc::new(VectorDB::new(&rara_dir.join("lancedb").to_string_lossy())),
+        session_manager,
+        workspace,
+    );
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let captured_events = events.clone();
+
+    agent
+        .query_with_mode_and_events(
+            "continue".to_string(),
+            super::super::AgentOutputMode::Silent,
+            move |event| captured_events.lock().expect("events").push(event),
+        )
+        .await
+        .expect("query should continue through tool call");
+
+    let events = events.lock().expect("events");
+    let text_idx = events
+        .iter()
+        .position(|event| {
+            matches!(
+                event,
+                AgentEvent::AssistantText(text) if text.contains("inspect the file")
+            )
+        })
+        .expect("visible text event");
+    let tool_idx = events
+        .iter()
+        .position(|event| {
+            matches!(
+                event,
+                AgentEvent::ToolUse { name, .. } if name == "stub_tool"
+            )
+        })
+        .expect("tool use event");
+    assert!(
+        text_idx < tool_idx,
+        "visible assistant text should render before the tool call is executed"
+    );
+    assert!(
+        events.iter().any(|event| {
+            matches!(
+                event,
+                AgentEvent::ToolResult {
+                    name,
+                    is_error: false,
+                    ..
+                } if name == "stub_tool"
+            )
+        }),
+        "tool call should still execute after visible text"
+    );
+    drop(events);
+
+    let observed = backend.observed_messages();
+    assert_eq!(
+        observed.len(),
+        2,
+        "tool result should trigger a follow-up model turn"
+    );
+    assert!(
+        observed[1]
+            .iter()
+            .any(|message| message.content.to_string().contains("tool_result")),
+        "follow-up model turn should receive the tool result"
     );
 }
 

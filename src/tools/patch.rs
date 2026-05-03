@@ -1,9 +1,11 @@
-use crate::tool::{Tool, ToolError};
-use crate::tools::file::{FileReadState, SharedFileReadState};
-use async_trait::async_trait;
-use serde_json::{Value, json};
 use std::fs;
 use std::path::Path;
+
+use async_trait::async_trait;
+use serde_json::{Value, json};
+
+use crate::tool::{Tool, ToolError};
+use crate::tools::file::{FileReadState, SharedFileReadState};
 
 #[derive(Default)]
 pub struct ApplyPatchTool {
@@ -452,11 +454,13 @@ fn read_lines(path: &str) -> Result<Vec<String>, ToolError> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use serde_json::json;
+
     use super::ApplyPatchTool;
     use crate::tool::Tool;
     use crate::tools::file::{FileReadState, ReadFileTool};
-    use serde_json::json;
-    use std::sync::Arc;
 
     #[tokio::test]
     async fn applies_update_patch() {

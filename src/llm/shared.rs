@@ -1,13 +1,14 @@
-use anyhow::{Result, anyhow};
-use async_trait::async_trait;
-use backon::{ExponentialBuilder, Retryable};
-use futures::{Stream, StreamExt};
-use serde_json::{Value, json};
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
 };
 use std::time::Duration;
+
+use anyhow::{Result, anyhow};
+use async_trait::async_trait;
+use backon::{ExponentialBuilder, Retryable};
+use futures::{Stream, StreamExt};
+use serde_json::{Value, json};
 use url::Url;
 
 use crate::agent::Message;

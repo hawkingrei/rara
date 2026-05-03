@@ -4,10 +4,9 @@ mod tasks;
 
 use std::sync::Arc;
 
+use super::state::{LocalCommand, OAuthLoginMode, TuiApp};
 use crate::agent::{Agent, BashApprovalDecision};
 use crate::oauth::OAuthManager;
-
-use super::state::{LocalCommand, OAuthLoginMode, TuiApp};
 
 pub async fn execute_local_command(
     command: LocalCommand,

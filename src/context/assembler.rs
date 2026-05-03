@@ -1,3 +1,5 @@
+use serde_json::Value;
+
 use crate::agent::{CompactState, Message, PlanStepStatus};
 use crate::context::assembly_view::assemble_context_view;
 use crate::context::compaction_view::compaction_source_entries;
@@ -11,7 +13,6 @@ use crate::llm::{ContextBudget, LlmBackend};
 use crate::prompt::{self, EffectivePrompt, PromptMode, PromptRuntimeConfig};
 use crate::todo::TodoState;
 use crate::workspace::WorkspaceMemory;
-use serde_json::Value;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AssembledContext {
@@ -43,6 +44,7 @@ pub struct RuntimeContextInputs<'a> {
     pub history: &'a [Message],
     pub vdb_uri: &'a str,
     pub pending_interactions: Vec<RuntimeInteractionInput>,
+    pub skill_listing: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -180,6 +182,7 @@ impl<'a> ContextAssembler<'a> {
             retrieval.memory_selection.available_items.as_slice(),
             retrieval.memory_selection.dropped_items.as_slice(),
             inputs.history,
+            inputs.skill_listing.as_deref(),
         );
 
         SharedRuntimeContext {
@@ -328,13 +331,15 @@ pub(crate) fn estimate_text_tokens(text: &str) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::llm::{ContentBlock, LlmResponse};
+    use std::path::PathBuf;
+
     use anyhow::Result;
     use async_trait::async_trait;
     use rara_config::RaraConfig;
     use serde_json::json;
-    use std::path::PathBuf;
+
+    use super::*;
+    use crate::llm::{ContentBlock, LlmResponse};
 
     struct BudgetBackend {
         budget: Option<ContextBudget>,
@@ -429,6 +434,7 @@ mod tests {
                 history: &history,
                 vdb_uri: "memory://vdb",
                 pending_interactions: Vec::new(),
+                skill_listing: None,
             },
         );
 
@@ -487,6 +493,7 @@ mod tests {
                 history: &history,
                 vdb_uri: "memory://vdb",
                 pending_interactions: Vec::new(),
+                skill_listing: None,
             },
         );
 
@@ -567,6 +574,7 @@ mod tests {
                 history: &history,
                 vdb_uri: "memory://vdb",
                 pending_interactions: Vec::new(),
+                skill_listing: None,
             },
         );
 
@@ -656,6 +664,7 @@ mod tests {
                     summary: "Allow one shell command in the repo root.".to_string(),
                     source: None,
                 }],
+                skill_listing: None,
             },
         );
 

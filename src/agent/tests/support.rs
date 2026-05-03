@@ -1,3 +1,10 @@
+use std::sync::{Arc, Mutex};
+
+use anyhow::Result;
+use async_trait::async_trait;
+use serde_json::{Value, json};
+use tempfile::tempdir;
+
 use crate::agent::Message;
 use crate::llm::LlmBackend;
 use crate::llm::LlmResponse;
@@ -5,11 +12,6 @@ use crate::session::SessionManager;
 use crate::tool::{Tool, ToolError, ToolManager};
 use crate::vectordb::VectorDB;
 use crate::workspace::WorkspaceMemory;
-use anyhow::Result;
-use async_trait::async_trait;
-use serde_json::{Value, json};
-use std::sync::{Arc, Mutex};
-use tempfile::tempdir;
 
 pub(super) struct StubTool;
 pub(super) struct StubBashTool;

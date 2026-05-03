@@ -1,7 +1,8 @@
-use crate::todo::normalize_todo_write_input;
-use crate::tool::{Tool, ToolError};
 use async_trait::async_trait;
 use serde_json::{Value, json};
+
+use crate::todo::normalize_todo_write_input;
+use crate::tool::{Tool, ToolError};
 
 pub const TODO_WRITE_TOOL_NAME: &str = "todo_write";
 

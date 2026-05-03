@@ -1,5 +1,6 @@
-use regex::Regex;
 use std::sync::LazyLock;
+
+use regex::Regex;
 
 const REDACTED_SECRET: &str = "[REDACTED_SECRET]";
 const REDACTED_URL_VALUE: &str = "<redacted>";

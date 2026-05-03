@@ -1,4 +1,3 @@
-use crate::tui::theme::*;
 use std::path::Path;
 
 use ratatui::{style::Color, text::Line};
@@ -15,6 +14,7 @@ use crate::tui::state::{
 use crate::tui::terminal_event::{
     TerminalCollectionEvent, TerminalCommandEvent, TerminalEvent, TerminalTarget,
 };
+use crate::tui::theme::*;
 
 #[path = "active_turn.rs"]
 mod active_turn;
@@ -22,6 +22,7 @@ mod active_turn;
 mod committed_turn;
 #[path = "cells_components.rs"]
 mod components;
+mod tool_progress;
 
 pub(crate) use self::active_turn::ActiveTurnCell;
 pub(crate) use self::components::StartupCardCell;

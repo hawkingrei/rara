@@ -18,13 +18,12 @@ pub const LEGACY_CODEX_MODEL_V1: &str = "gpt-5-codex";
 pub const LEGACY_CODEX_MODEL_V1_MINI: &str = "gpt-5-codex-mini";
 
 pub fn should_reset_codex_base_url(url: Option<&str>) -> bool {
-    url.map(str::trim).map_or(true, |value| {
-        value.is_empty() || value == LEGACY_CODEX_BASE_URL
-    })
+    url.map(str::trim)
+        .is_none_or(|value| value.is_empty() || value == LEGACY_CODEX_BASE_URL)
 }
 
 pub fn should_reset_codex_model(model: Option<&str>) -> bool {
-    model.map(str::trim).map_or(true, |value| {
+    model.map(str::trim).is_none_or(|value| {
         value.is_empty()
             || matches!(
                 value,
@@ -34,7 +33,7 @@ pub fn should_reset_codex_model(model: Option<&str>) -> bool {
 }
 
 pub fn should_apply_codex_base_url(url: Option<&str>, expected: &str) -> bool {
-    url.map(str::trim).map_or(true, |value| {
+    url.map(str::trim).is_none_or(|value| {
         value.is_empty()
             || value == LEGACY_CODEX_BASE_URL
             || ((value == DEFAULT_CODEX_BASE_URL || value == DEFAULT_CODEX_CHATGPT_BASE_URL)

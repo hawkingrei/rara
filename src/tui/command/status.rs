@@ -1,3 +1,5 @@
+use time::{OffsetDateTime, format_description};
+
 use crate::config::RaraConfig;
 use crate::context::{CacheStatus, DropReason};
 use crate::tui::format::cache_hit_rate_label;
@@ -5,7 +7,6 @@ use crate::tui::session_restore::provider_requires_api_key;
 use crate::tui::state::{
     PROVIDER_FAMILIES, PendingInteractionSnapshot, ProviderFamily, TuiApp, current_model_presets,
 };
-use time::{OffsetDateTime, format_description};
 
 fn format_pending_interaction(snapshot: &PendingInteractionSnapshot) -> String {
     let kind = match snapshot.kind {
@@ -678,6 +679,7 @@ pub fn status_prompt_sources_text(app: &TuiApp) -> String {
                 .map(|warning| format!("- {warning}")),
         );
     }
+
     if app.snapshot.prompt_source_entries.is_empty() && app.snapshot.prompt_warnings.is_empty() {
         "No prompt sources discovered.".to_string()
     } else {

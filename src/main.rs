@@ -4,6 +4,7 @@ mod app_cli;
 mod codex_model_catalog;
 mod config;
 mod context;
+mod file_lock;
 mod llm;
 mod local_backend;
 mod memory_store;
@@ -28,8 +29,9 @@ mod tui;
 mod vectordb;
 mod workspace;
 
-use crate::redaction::redact_secrets;
 use anyhow::Result;
+
+use crate::redaction::redact_secrets;
 
 #[tokio::main]
 async fn main() {

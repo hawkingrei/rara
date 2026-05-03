@@ -25,6 +25,8 @@ pub enum AppEvent {
     MoveAuthModeSelection(i32),
     MoveReasoningEffortSelection(i32),
     MoveResumeSelection(i32),
+    MoveSkillsSelection(i32),
+    ToggleSkillSelection,
     SetProviderSelection(usize),
     SetModelSelection(usize),
     SetOpenAiProfileSelection(usize),

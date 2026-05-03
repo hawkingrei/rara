@@ -1,3 +1,7 @@
+use std::io::Read;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
+
 use anyhow::{Result, anyhow};
 use codex_login::{
     AuthCredentialsStoreMode, AuthDotJson, CLIENT_ID, DeviceCode as CodexDeviceCode,
@@ -7,9 +11,6 @@ use codex_login::{
     request_device_code as codex_request_device_code, run_login_server as codex_run_login_server,
 };
 use secrecy::SecretString;
-use std::io::Read;
-use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
 
 const ISSUER: &str = "https://auth.openai.com";
 
@@ -282,10 +283,12 @@ fn detect_saved_auth_mode(auth: &AuthDotJson) -> Option<SavedCodexAuthMode> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use secrecy::ExposeSecret;
     use std::path::Path;
+
+    use secrecy::ExposeSecret;
     use tempfile::tempdir;
+
+    use super::*;
 
     #[tokio::test]
     async fn browser_login_session_uses_codex_issuer_and_client_id() {

@@ -1,12 +1,6 @@
 use reqwest::StatusCode;
 use serde_json::json;
 
-use crate::agent::Message;
-use crate::config::OpenAiEndpointKind;
-use crate::llm::{ContentBlock, LlmStreamEvent, LlmTurnMetadata};
-use crate::tool::Tool;
-use crate::tools::planning::ExitPlanModeTool;
-
 use super::ollama::{
     apply_ollama_stream_event, build_ollama_options, ensure_ollama_stream_completed,
     suggest_ollama_num_ctx, to_ollama_messages,
@@ -22,6 +16,11 @@ use super::openai_compatible::{
 use super::shared::{
     extract_message_text, model_context_budget, parse_tool_arguments, should_bypass_proxy,
 };
+use crate::agent::Message;
+use crate::config::OpenAiEndpointKind;
+use crate::llm::{ContentBlock, LlmStreamEvent, LlmTurnMetadata};
+use crate::tool::Tool;
+use crate::tools::planning::ExitPlanModeTool;
 
 #[test]
 fn converts_assistant_tool_history_to_openai_messages() {
@@ -1072,6 +1071,78 @@ fn parses_dsml_tool_calls_from_text_content() {
             if id == "dsml-tool-1"
                 && name == "apply_patch"
                 && input["patch"].as_str().is_some_and(|patch| patch.contains("*** Begin Patch"))
+    ));
+}
+
+#[test]
+fn parses_visible_text_before_dsml_tool_calls_for_deepseek() {
+    let response = parse_chat_completion_response(
+        &json!({
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": concat!(
+                        "I will inspect the file first.\n",
+                        "<｜DSML｜tool_calls>\n",
+                        "<｜DSML｜invoke name=\"read_file\">\n",
+                        "<｜DSML｜parameter name=\"path\" string=\"true\">Cargo.toml</｜DSML｜parameter>\n",
+                        "</｜DSML｜invoke>\n",
+                        "</｜DSML｜tool_calls>"
+                    )
+                },
+                "finish_reason": "stop"
+            }]
+        }),
+        OpenAiEndpointKind::Deepseek,
+    )
+    .expect("parse response");
+
+    assert_eq!(response.content.len(), 2);
+    assert!(matches!(
+        &response.content[0],
+        ContentBlock::Text { text } if text.contains("inspect the file")
+    ));
+    assert!(matches!(
+        &response.content[1],
+        ContentBlock::ToolUse { id, name, input }
+            if id == "dsml-tool-1"
+                && name == "read_file"
+                && input["path"] == "Cargo.toml"
+    ));
+}
+
+#[test]
+fn parses_ascii_pipe_dsml_tool_calls_for_deepseek_pdf_compatibility() {
+    let response = parse_chat_completion_response(
+        &json!({
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": concat!(
+                        "I will inspect the directory first.\n",
+                        "<|DSML|tool_calls>\n",
+                        "<|DSML|invoke name=\"list_files\">\n",
+                        "<|DSML|parameter name=\"path\" string=\"true\">src</|DSML|parameter>\n",
+                        "</|DSML|invoke>\n",
+                        "</|DSML|tool_calls>"
+                    )
+                },
+                "finish_reason": "tool_calls"
+            }]
+        }),
+        OpenAiEndpointKind::Deepseek,
+    )
+    .expect("parse response");
+
+    assert_eq!(response.content.len(), 2);
+    assert!(matches!(
+        &response.content[0],
+        ContentBlock::Text { text } if text.contains("inspect the directory")
+    ));
+    assert!(matches!(
+        &response.content[1],
+        ContentBlock::ToolUse { id, name, input }
+            if id == "dsml-tool-1" && name == "list_files" && input["path"] == "src"
     ));
 }
 

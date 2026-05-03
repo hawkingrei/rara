@@ -13,18 +13,16 @@ use candle::{DType, Tensor};
 use candle_transformers::generation::{LogitsProcessor, Sampling};
 use serde_json::Value;
 
-use crate::agent::Message;
-use crate::config::RaraConfig;
-use crate::llm::{ContentBlock, LlmBackend, LlmResponse, TokenUsage, hashed_embedding};
-
 use self::model::{
     LocalModelSpec, LocalTextModel, build_hf_api, default_local_model_cache_dir as model_cache_dir,
     load_safetensors, preferred_dtype, select_device,
 };
+pub use self::model::{default_local_model_cache_dir, local_runtime_target};
 use self::parser::parse_tool_aware_reply;
 use self::prompt::{build_agent_prompt, render_messages, scenario_token_cap};
-
-pub use self::model::{default_local_model_cache_dir, local_runtime_target};
+use crate::agent::Message;
+use crate::config::RaraConfig;
+use crate::llm::{ContentBlock, LlmBackend, LlmResponse, TokenUsage, hashed_embedding};
 
 pub type LocalProgressReporter = Arc<dyn Fn(String) + Send + Sync>;
 

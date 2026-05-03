@@ -1,9 +1,5 @@
 use std::sync::Arc;
 
-use crate::agent::{Agent, BashApprovalDecision};
-use crate::config::DEFAULT_CODEX_BASE_URL;
-use crate::oauth::{OAuthManager, SavedCodexAuthMode};
-
 use super::app_event::AppEvent;
 use super::auth_mode_picker::AUTH_MODE_OPTION_COUNT;
 use super::command::{palette_command_by_index, palette_commands};
@@ -22,6 +18,9 @@ use super::state::{
 };
 use super::submit::{apply_openai_model_picker_action, handle_submit};
 use super::terminal_ui::is_ssh_session;
+use crate::agent::{Agent, BashApprovalDecision};
+use crate::config::DEFAULT_CODEX_BASE_URL;
+use crate::oauth::{OAuthManager, SavedCodexAuthMode};
 
 pub(crate) async fn dispatch_event(
     event: AppEvent,
@@ -90,6 +89,19 @@ pub(crate) async fn dispatch_event(
             if len > 0 {
                 let next = (app.resume_picker_idx as i32 + delta).clamp(0, len as i32 - 1);
                 app.resume_picker_idx = next as usize;
+            }
+        }
+        AppEvent::MoveSkillsSelection(delta) => {
+            let len = app.skill_picker_entries.len();
+            if len > 0 {
+                let next = (app.skill_picker_idx as i32 + delta).clamp(0, len as i32 - 1);
+                app.skill_picker_idx = next as usize;
+            }
+        }
+        AppEvent::ToggleSkillSelection => {
+            if let Some(entry) = app.skill_picker_entries.get_mut(app.skill_picker_idx) {
+                entry.enabled = !entry.enabled;
+                entry.disable_model_invocation = !entry.enabled;
             }
         }
         AppEvent::MoveModelSelection(delta) => {

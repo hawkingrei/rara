@@ -1,14 +1,20 @@
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::fs::{self, File};
+use std::io::{BufReader, BufWriter, Write};
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 
+use crate::file_lock::AdvisoryFileLock;
 use crate::llm::LlmBackend;
 use crate::vectordb::{MemoryMetadata, VectorDB};
 
 const EXPERIENCES_TABLE: &str = "experiences";
 const DEFAULT_IMPORTANCE: f32 = 0.5;
 const MEMORY_RECORD_INDEX_PLACEHOLDER: u32 = 0;
+const MEMORY_RECORDS_FILE_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -40,6 +46,12 @@ pub enum MemoryScope {
     Session,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct MemorySourceSpan {
+    pub start_turn_index: u32,
+    pub end_turn_index: u32,
+}
+
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct MemoryRecord {
     pub id: String,
@@ -49,6 +61,12 @@ pub struct MemoryRecord {
     pub importance: f32,
     pub source: MemorySource,
     pub scope: MemoryScope,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_span: Option<MemorySourceSpan>,
     pub created_at_unix_seconds: u64,
     pub updated_at_unix_seconds: u64,
 }
@@ -61,6 +79,9 @@ pub struct NewMemoryRecord {
     pub importance: f32,
     pub source: MemorySource,
     pub scope: MemoryScope,
+    pub session_id: Option<String>,
+    pub thread_id: Option<String>,
+    pub source_span: Option<MemorySourceSpan>,
 }
 
 impl NewMemoryRecord {
@@ -72,6 +93,9 @@ impl NewMemoryRecord {
             importance: DEFAULT_IMPORTANCE,
             source: MemorySource::AgentTurn,
             scope: MemoryScope::Project,
+            session_id: None,
+            thread_id: None,
+            source_span: None,
         }
     }
 }
@@ -87,11 +111,29 @@ pub struct MemoryRecordSearchHit {
 pub struct MemoryStore {
     backend: Arc<dyn LlmBackend>,
     vdb: Arc<VectorDB>,
+    records: MemoryRecordFileStore,
 }
 
 impl MemoryStore {
     pub fn new(backend: Arc<dyn LlmBackend>, vdb: Arc<VectorDB>) -> Self {
-        Self { backend, vdb }
+        let records = MemoryRecordFileStore::for_vdb_uri(vdb.uri());
+        Self {
+            backend,
+            vdb,
+            records,
+        }
+    }
+
+    pub fn new_with_record_path(
+        backend: Arc<dyn LlmBackend>,
+        vdb: Arc<VectorDB>,
+        record_path: PathBuf,
+    ) -> Self {
+        Self {
+            backend,
+            vdb,
+            records: MemoryRecordFileStore::new(record_path),
+        }
     }
 
     pub async fn insert(&self, input: NewMemoryRecord) -> Result<MemoryRecord> {
@@ -112,6 +154,9 @@ impl MemoryStore {
             importance,
             source: input.source,
             scope: input.scope,
+            session_id: normalized_optional_id(input.session_id),
+            thread_id: normalized_optional_id(input.thread_id),
+            source_span: input.source_span,
             created_at_unix_seconds: now,
             updated_at_unix_seconds: now,
         };
@@ -121,13 +166,14 @@ impl MemoryStore {
                 EXPERIENCES_TABLE,
                 MemoryMetadata {
                     id: Some(record.id.clone()),
-                    session_id: memory_scope_key(&record.scope).to_string(),
+                    session_id: record.index_scope_key(),
                     turn_index: MEMORY_RECORD_INDEX_PLACEHOLDER,
                     text: record.content.clone(),
                 },
                 vector,
             )
             .await?;
+        self.records.upsert(&record).await?;
         Ok(record)
     }
 
@@ -140,20 +186,36 @@ impl MemoryStore {
             .vdb
             .hybrid_search_with_metadata(EXPERIENCES_TABLE, query, query_vector, limit)
             .await?;
+        let records = self.records.load_map().await?;
         Ok(hits
             .into_iter()
             .map(|hit| MemoryRecordSearchHit {
-                record: MemoryRecord::from(hit.metadata),
+                record: memory_record_for_hit(&records, &hit.metadata),
                 score: hit.score,
                 vector_distance: hit.vector_distance,
                 fts_score: hit.fts_score,
             })
             .collect())
     }
+
+    pub async fn get(&self, id: &str) -> Result<Option<MemoryRecord>> {
+        self.records.get(id).await
+    }
+}
+
+impl MemoryRecord {
+    fn index_scope_key(&self) -> String {
+        self.session_id
+            .clone()
+            .or_else(|| self.thread_id.clone())
+            .unwrap_or_else(|| memory_scope_key(&self.scope).to_string())
+    }
 }
 
 impl From<MemoryMetadata> for MemoryRecord {
     fn from(metadata: MemoryMetadata) -> Self {
+        let session_id = metadata.session_id.clone();
+        let turn_index = metadata.turn_index;
         let now = unix_timestamp_seconds();
         Self {
             id: metadata.id.unwrap_or_else(|| {
@@ -165,10 +227,251 @@ impl From<MemoryMetadata> for MemoryRecord {
             importance: DEFAULT_IMPORTANCE,
             source: MemorySource::AgentTurn,
             scope: memory_scope_from_key(&metadata.session_id),
+            session_id: Some(session_id),
+            thread_id: None,
+            source_span: Some(MemorySourceSpan {
+                start_turn_index: turn_index,
+                end_turn_index: turn_index,
+            }),
             created_at_unix_seconds: now,
             updated_at_unix_seconds: now,
         }
     }
+}
+
+#[derive(Debug, Clone)]
+struct MemoryRecordFileStore {
+    path: PathBuf,
+    lock_path: PathBuf,
+    cache: Arc<Mutex<MemoryRecordCache>>,
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+struct PersistedMemoryRecordFile {
+    version: u32,
+    records: Vec<MemoryRecord>,
+}
+
+impl Default for PersistedMemoryRecordFile {
+    fn default() -> Self {
+        Self {
+            version: MEMORY_RECORDS_FILE_VERSION,
+            records: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(untagged)]
+enum PersistedMemoryRecordEnvelope {
+    Versioned(PersistedMemoryRecordFile),
+    Legacy(Vec<MemoryRecord>),
+}
+
+#[derive(Debug, Default)]
+struct MemoryRecordCache {
+    state: Option<MemoryRecordFileState>,
+    records: HashMap<String, MemoryRecord>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MemoryRecordFileState {
+    Missing,
+    Present {
+        modified_at: Option<SystemTime>,
+        len: u64,
+    },
+}
+
+impl MemoryRecordFileStore {
+    fn new(path: PathBuf) -> Self {
+        Self {
+            lock_path: path.with_extension("json.lock"),
+            path,
+            cache: Arc::new(Mutex::new(MemoryRecordCache::default())),
+        }
+    }
+
+    fn for_vdb_uri(uri: &str) -> Self {
+        Self::new(default_record_path_for_vdb_uri(uri))
+    }
+
+    async fn upsert(&self, record: &MemoryRecord) -> Result<()> {
+        let path = self.path.clone();
+        let lock_path = self.lock_path.clone();
+        let cache = self.cache.clone();
+        let record = record.clone();
+        tokio::task::spawn_blocking(move || upsert_record_sync(path, lock_path, cache, record))
+            .await
+            .context("join memory record persistence task")?
+    }
+
+    async fn load_map(&self) -> Result<HashMap<String, MemoryRecord>> {
+        let path = self.path.clone();
+        let cache = self.cache.clone();
+        tokio::task::spawn_blocking(move || load_record_map_cached_sync(&path, &cache))
+            .await
+            .context("join memory record load task")?
+    }
+
+    async fn get(&self, id: &str) -> Result<Option<MemoryRecord>> {
+        let path = self.path.clone();
+        let cache = self.cache.clone();
+        let id = id.to_string();
+        tokio::task::spawn_blocking(move || get_record_cached_sync(&path, &cache, &id))
+            .await
+            .context("join memory record get task")?
+    }
+}
+
+fn default_record_path_for_vdb_uri(uri: &str) -> PathBuf {
+    let db_path = PathBuf::from(uri);
+    if db_path.file_name().and_then(|value| value.to_str()) == Some("lancedb") {
+        return db_path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join("memories")
+            .join("records.json");
+    }
+    db_path.join("memory_records.json")
+}
+
+fn upsert_record_sync(
+    path: PathBuf,
+    lock_path: PathBuf,
+    cache: Arc<Mutex<MemoryRecordCache>>,
+    record: MemoryRecord,
+) -> Result<()> {
+    let _lock = AdvisoryFileLock::acquire(lock_path)?;
+    let mut file = PersistedMemoryRecordFile {
+        records: load_records_sync(&path)?,
+        ..Default::default()
+    };
+    if let Some(existing) = file.records.iter_mut().find(|item| item.id == record.id) {
+        *existing = record;
+    } else {
+        file.records.push(record);
+    }
+    write_record_file_sync(&path, &file)?;
+    let records = record_map_from_records(file.records);
+    let state = record_file_state(&path)?;
+    update_record_cache(&cache, state, records);
+    Ok(())
+}
+
+fn load_record_map_cached_sync(
+    path: &Path,
+    cache: &Arc<Mutex<MemoryRecordCache>>,
+) -> Result<HashMap<String, MemoryRecord>> {
+    let state = record_file_state(path)?;
+    {
+        let cache = cache.lock().expect("memory record cache lock poisoned");
+        if cache.state == Some(state) {
+            return Ok(cache.records.clone());
+        }
+    }
+
+    let records = record_map_from_records(load_records_sync(path)?);
+    update_record_cache(cache, state, records.clone());
+    Ok(records)
+}
+
+fn get_record_cached_sync(
+    path: &Path,
+    cache: &Arc<Mutex<MemoryRecordCache>>,
+    id: &str,
+) -> Result<Option<MemoryRecord>> {
+    Ok(load_record_map_cached_sync(path, cache)?.get(id).cloned())
+}
+
+fn update_record_cache(
+    cache: &Arc<Mutex<MemoryRecordCache>>,
+    state: MemoryRecordFileState,
+    records: HashMap<String, MemoryRecord>,
+) {
+    let mut cache = cache.lock().expect("memory record cache lock poisoned");
+    cache.state = Some(state);
+    cache.records = records;
+}
+
+fn record_map_from_records(records: Vec<MemoryRecord>) -> HashMap<String, MemoryRecord> {
+    records
+        .into_iter()
+        .map(|record| (record.id.clone(), record))
+        .collect()
+}
+
+fn record_file_state(path: &Path) -> Result<MemoryRecordFileState> {
+    match fs::metadata(path) {
+        Ok(metadata) => Ok(MemoryRecordFileState::Present {
+            modified_at: metadata.modified().ok(),
+            len: metadata.len(),
+        }),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            Ok(MemoryRecordFileState::Missing)
+        }
+        Err(err) => Err(err).with_context(|| format!("stat memory records {}", path.display())),
+    }
+}
+
+fn load_records_sync(path: &Path) -> Result<Vec<MemoryRecord>> {
+    let file = match File::open(path) {
+        Ok(file) => file,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(err) => {
+            return Err(err).with_context(|| format!("read memory records {}", path.display()));
+        }
+    };
+    let reader = BufReader::new(file);
+    match serde_json::from_reader::<_, PersistedMemoryRecordEnvelope>(reader) {
+        Ok(PersistedMemoryRecordEnvelope::Versioned(file)) => Ok(file.records),
+        Ok(PersistedMemoryRecordEnvelope::Legacy(records)) => Ok(records),
+        Err(err) if err.is_eof() => Ok(Vec::new()),
+        Err(err) => Err(err).with_context(|| format!("parse memory records {}", path.display())),
+    }
+}
+
+fn write_record_file_sync(path: &Path, file: &PersistedMemoryRecordFile) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("create memory records dir {}", parent.display()))?;
+    }
+    let tmp_path = path.with_extension(format!("json.tmp-{}", uuid::Uuid::new_v4()));
+    let tmp_file = File::create(&tmp_path)
+        .with_context(|| format!("create memory records temp file {}", tmp_path.display()))?;
+    let mut writer = BufWriter::new(tmp_file);
+    serde_json::to_writer(&mut writer, file)
+        .with_context(|| format!("serialize memory records {}", tmp_path.display()))?;
+    writer
+        .flush()
+        .with_context(|| format!("flush memory records temp file {}", tmp_path.display()))?;
+    if let Err(err) = replace_record_file_sync(&tmp_path, path) {
+        let _ = fs::remove_file(&tmp_path);
+        return Err(err).with_context(|| format!("replace memory records {}", path.display()));
+    }
+    Ok(())
+}
+
+fn replace_record_file_sync(tmp_path: &Path, path: &Path) -> std::io::Result<()> {
+    #[cfg(windows)]
+    match fs::remove_file(path) {
+        Ok(()) => {}
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => return Err(err),
+    }
+    fs::rename(tmp_path, path)
+}
+
+fn memory_record_for_hit(
+    records: &HashMap<String, MemoryRecord>,
+    metadata: &MemoryMetadata,
+) -> MemoryRecord {
+    metadata
+        .id
+        .as_ref()
+        .and_then(|id| records.get(id))
+        .cloned()
+        .unwrap_or_else(|| MemoryRecord::from(metadata.clone()))
 }
 
 fn normalized_labels(labels: Vec<MemoryLabel>) -> Vec<MemoryLabel> {
@@ -176,6 +479,12 @@ fn normalized_labels(labels: Vec<MemoryLabel>) -> Vec<MemoryLabel> {
         return vec![MemoryLabel::Experience];
     }
     labels
+}
+
+fn normalized_optional_id(value: Option<String>) -> Option<String> {
+    value
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
 }
 
 fn clamp_importance(importance: f32) -> f32 {
@@ -240,6 +549,88 @@ mod tests {
     use super::*;
     use crate::llm::MockLlm;
 
+    fn test_memory_record(id: &str, content: &str) -> MemoryRecord {
+        MemoryRecord {
+            id: id.to_string(),
+            title: title_from_content(content),
+            content: content.to_string(),
+            labels: vec![MemoryLabel::Fact],
+            importance: DEFAULT_IMPORTANCE,
+            source: MemorySource::UserCreated,
+            scope: MemoryScope::Project,
+            session_id: None,
+            thread_id: None,
+            source_span: None,
+            created_at_unix_seconds: 1,
+            updated_at_unix_seconds: 1,
+        }
+    }
+
+    #[test]
+    fn memory_record_file_store_writes_compact_json_and_reads_legacy_records() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let path = temp.path().join("records.json");
+        let legacy_path = temp.path().join("legacy_records.json");
+        let record = test_memory_record("memory-test-1", "Compact storage should stay readable.");
+        let file = PersistedMemoryRecordFile {
+            version: MEMORY_RECORDS_FILE_VERSION,
+            records: vec![record.clone()],
+        };
+
+        write_record_file_sync(&path, &file).expect("write compact record file");
+        let content = fs::read_to_string(&path).expect("read compact record file");
+        assert!(!content.contains('\n'));
+        assert_eq!(
+            load_records_sync(&path).expect("load compact records"),
+            vec![record.clone()]
+        );
+
+        fs::write(
+            &legacy_path,
+            serde_json::to_string(&vec![record.clone()]).expect("serialize legacy records"),
+        )
+        .expect("write legacy record file");
+        assert_eq!(
+            load_records_sync(&legacy_path).expect("load legacy records"),
+            vec![record]
+        );
+    }
+
+    #[test]
+    fn memory_record_file_store_refreshes_cache_when_file_changes() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let path = temp.path().join("records.json");
+        let cache = Arc::new(Mutex::new(MemoryRecordCache::default()));
+        let first = test_memory_record("memory-cache-1", "First cached record.");
+        let second = test_memory_record(
+            "memory-cache-2",
+            "Second cached record with a longer payload.",
+        );
+
+        write_record_file_sync(
+            &path,
+            &PersistedMemoryRecordFile {
+                version: MEMORY_RECORDS_FILE_VERSION,
+                records: vec![first.clone()],
+            },
+        )
+        .expect("write first record file");
+        let first_map = load_record_map_cached_sync(&path, &cache).expect("load first cache");
+        assert_eq!(first_map.get(&first.id), Some(&first));
+
+        write_record_file_sync(
+            &path,
+            &PersistedMemoryRecordFile {
+                version: MEMORY_RECORDS_FILE_VERSION,
+                records: vec![second.clone()],
+            },
+        )
+        .expect("write second record file");
+        let second_map = load_record_map_cached_sync(&path, &cache).expect("refresh cache");
+        assert_eq!(second_map.get(&second.id), Some(&second));
+        assert!(!second_map.contains_key(&first.id));
+    }
+
     #[tokio::test]
     async fn memory_store_inserts_and_searches_memory_records() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -268,6 +659,10 @@ mod tests {
             hits[0].record.content,
             "DeepSeek DSML requires a structured parser."
         );
+        assert_eq!(
+            store.get(&saved.id).await.expect("get saved memory"),
+            Some(saved)
+        );
     }
 
     #[tokio::test]
@@ -286,6 +681,9 @@ mod tests {
                 importance: 4.0,
                 source: MemorySource::UserCreated,
                 scope: MemoryScope::Workspace,
+                session_id: None,
+                thread_id: None,
+                source_span: None,
             })
             .await
             .expect("insert memory");
@@ -293,5 +691,55 @@ mod tests {
         assert_eq!(saved.importance, 1.0);
         assert_eq!(saved.labels, vec![MemoryLabel::Experience]);
         assert_eq!(saved.scope, MemoryScope::Workspace);
+    }
+
+    #[tokio::test]
+    async fn memory_store_persists_thread_provenance_across_instances() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let db_path = temp.path().join("lancedb");
+        let record_path = temp.path().join("memories").join("records.json");
+        let backend = Arc::new(MockLlm);
+        let vdb = Arc::new(VectorDB::new(db_path.to_str().expect("utf8 path")));
+        let store =
+            MemoryStore::new_with_record_path(backend.clone(), vdb.clone(), record_path.clone());
+
+        let saved = store
+            .insert(NewMemoryRecord {
+                title: Some("Thread decision".to_string()),
+                content: "Keep memory retrieval behind MemoryStore.".to_string(),
+                labels: vec![MemoryLabel::Decision],
+                importance: 0.9,
+                source: MemorySource::ThreadDistill,
+                scope: MemoryScope::Thread,
+                session_id: Some("session-123".to_string()),
+                thread_id: Some("thread-123".to_string()),
+                source_span: Some(MemorySourceSpan {
+                    start_turn_index: 2,
+                    end_turn_index: 4,
+                }),
+            })
+            .await
+            .expect("insert memory");
+
+        let reloaded = MemoryStore::new_with_record_path(backend, vdb, record_path);
+        let hits = reloaded
+            .search("memory retrieval", 5)
+            .await
+            .expect("search memories");
+        assert_eq!(hits[0].record.id, saved.id);
+        assert_eq!(hits[0].record.title, "Thread decision");
+        assert_eq!(hits[0].record.labels, vec![MemoryLabel::Decision]);
+        assert_eq!(hits[0].record.importance, 0.9);
+        assert_eq!(hits[0].record.source, MemorySource::ThreadDistill);
+        assert_eq!(hits[0].record.scope, MemoryScope::Thread);
+        assert_eq!(hits[0].record.session_id.as_deref(), Some("session-123"));
+        assert_eq!(hits[0].record.thread_id.as_deref(), Some("thread-123"));
+        assert_eq!(
+            hits[0].record.source_span,
+            Some(MemorySourceSpan {
+                start_turn_index: 2,
+                end_turn_index: 4,
+            })
+        );
     }
 }

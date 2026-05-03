@@ -19,6 +19,7 @@ use crate::prompt::{PromptRuntimeConfig, PromptSkillSummary};
 use crate::sandbox::SandboxManager;
 use crate::session::SessionManager;
 use crate::shell_env::capture_shell_environment_snapshot;
+use crate::skill::SkillScope;
 use crate::tool::ToolManager;
 use crate::vectordb::VectorDB;
 use crate::workspace::WorkspaceMemory;
@@ -72,11 +73,21 @@ pub(crate) async fn initialize_rara_context(
     prompt_config.available_skills = skill_manager
         .list_summaries()
         .into_iter()
-        .map(|skill| PromptSkillSummary {
-            name: skill.name,
-            title: skill.title,
-            description: skill.description,
-            display_path: skill.display_path,
+        .map(|skill| {
+            let scope = match skill.scope {
+                SkillScope::Home => "home",
+                SkillScope::Repo => "repo",
+                SkillScope::Cwd => "cwd",
+                SkillScope::System => "system",
+            };
+            PromptSkillSummary {
+                name: skill.name,
+                title: skill.title,
+                description: skill.description,
+                display_path: skill.display_path,
+                scope: scope.to_string(),
+                disable_model_invocation: skill.disable_model_invocation,
+            }
         })
         .collect();
 
@@ -224,13 +235,14 @@ fn ollama_thinking_enabled(config: &RaraConfig) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use tempfile::tempdir;
+
     use super::{
         build_backend_with_progress, initialize_rara_context, ollama_thinking_enabled,
         vector_db_uri_for_workspace,
     };
     use crate::config::{DEFAULT_REASONING_SUMMARY, REASONING_SUMMARY_NONE, RaraConfig};
     use crate::workspace::WorkspaceMemory;
-    use tempfile::tempdir;
 
     #[test]
     fn vector_db_uri_is_workspace_scoped() {

@@ -1,10 +1,11 @@
+use anyhow::Result;
+use rusqlite::Connection;
+use tempfile::tempdir;
+
 use super::{
     PersistedCompactState, PersistedInteraction, PersistedPlanStep, PersistedPromptRuntimeState,
     PersistedStructuredRolloutEvent, PersistedTurnEntry, StateDb,
 };
-use anyhow::Result;
-use rusqlite::Connection;
-use tempfile::tempdir;
 
 #[test]
 fn persists_metadata_and_rollout_artifact() -> Result<()> {

@@ -4,14 +4,13 @@ use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::json;
 
+use super::support::SequencedBackend;
 use crate::agent::{Agent, AgentEvent, CompactState, ContentBlock, Message};
 use crate::llm::{ContextBudget, LlmBackend, LlmResponse, TokenUsage};
 use crate::session::SessionManager;
 use crate::tool::ToolManager;
 use crate::vectordb::VectorDB;
 use crate::workspace::WorkspaceMemory;
-
-use super::support::SequencedBackend;
 
 struct SlowSummarizeBackend;
 

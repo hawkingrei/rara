@@ -1,5 +1,3 @@
-use crate::tui::sub_agent_display::SUB_AGENT_QUESTION_COLOR;
-use crate::tui::theme::*;
 use std::path::Path;
 
 use ratatui::{
@@ -7,6 +5,8 @@ use ratatui::{
     text::{Line, Span},
 };
 
+use super::tool_progress::tool_progress_lines;
+use super::{HistoryCell, InteractionCompletionKind};
 use crate::tui::interaction_text::{
     pending_interaction_card_title, status_planning_suggestion_text,
 };
@@ -22,8 +22,8 @@ use crate::tui::render::{
     with_border,
 };
 use crate::tui::state::{ActivePendingInteractionKind, TuiApp};
-
-use super::{HistoryCell, InteractionCompletionKind};
+use crate::tui::sub_agent_display::SUB_AGENT_QUESTION_COLOR;
+use crate::tui::theme::*;
 
 pub(super) struct UserCell {
     message: String,
@@ -589,7 +589,7 @@ impl<'a> RespondingCell<'a> {
 }
 
 impl HistoryCell for RespondingCell<'_> {
-    fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
         match &self.content {
             RespondingCellContent::Stream { lines, max_lines } => {
                 lightweight_stream_lines(lines, *max_lines)
@@ -609,6 +609,11 @@ impl HistoryCell for RespondingCell<'_> {
                 max_lines,
                 cwd,
             } => formatted_message_lines(role, message, *max_lines, *cwd),
+            RespondingCellContent::ToolResult {
+                role,
+                message,
+                max_lines,
+            } if *role == "Tool Progress" => tool_progress_lines(message, *max_lines, width),
             RespondingCellContent::ToolResult {
                 role,
                 message,
@@ -796,9 +801,10 @@ pub(super) fn planning_suggestion_text(app: &TuiApp) -> String {
 
 #[cfg(test)]
 mod tests {
+    use ratatui::style::Color;
+
     use super::{HistoryCell, SummaryCell};
     use crate::tui::theme::PHASE_RAN;
-    use ratatui::style::Color;
 
     #[test]
     fn summary_cell_renders_indented_diff_block_as_patch_preview() {

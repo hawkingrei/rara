@@ -45,6 +45,7 @@ dirs = "6.0"
 open = "5.0"
 rand = "0.10"
 libc = "0.2"
+fs2 = "0.4"
 base64 = "0.22"
 sha2 = "0.11"
 secrecy = { version = "0.10", features = ["serde"] }
@@ -72,6 +73,7 @@ rusqlite = "0.39"
 pulldown-cmark = "0.13"
 textwrap = "0.16.2"
 unicode-width = "0.2"
+nom = "8.0"
 syntect = "5"
 portable-pty = "0.9"
 two-face = { version = "0.5", default-features = false, features = ["syntect-default-onig"] }
@@ -84,6 +86,7 @@ candle = { git = "https://github.com/huggingface/candle", rev = "34625ab6d1567a0
 candle-nn = { git = "https://github.com/huggingface/candle", rev = "34625ab6d1567a0bc132ac6bc8dc2cce0e16d86d", package = "candle-nn" }
 candle-transformers = { git = "https://github.com/huggingface/candle", rev = "34625ab6d1567a0bc132ac6bc8dc2cce0e16d86d", package = "candle-transformers" }
 backon = "1.6.0"
+ethnum = "1.5.3"
 
 [dev-dependencies]
 tempfile = "3.17"
