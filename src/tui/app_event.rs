@@ -1,4 +1,4 @@
-use super::state::{HelpTab, Overlay};
+use super::state::{HelpTab, Overlay, StatusTab};
 
 #[derive(Debug, Clone)]
 pub enum AppEvent {
@@ -42,6 +42,7 @@ pub enum AppEvent {
     DeleteOpenAiProfile,
     RefreshDeepSeekModels,
     SelectHelpTab(HelpTab),
+    SelectStatusTab(StatusTab),
     ApplyOverlaySelection,
     CancelRunningTask,
 }

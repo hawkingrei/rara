@@ -35,7 +35,7 @@ fn mouse_scroll(kind: MouseEventKind) -> Event {
 }
 use super::state::{
     InteractionKind, Overlay, PendingApprovalSnapshot, PendingInteractionSnapshot, ProviderFamily,
-    RunningTask, TaskKind, TuiApp,
+    RunningTask, StatusTab, TaskKind, TuiApp,
 };
 use super::{dispatch_event, map_key_to_event};
 
@@ -96,6 +96,35 @@ async fn busy_submit_queues_follow_up_message() {
     if let Some(task) = app.running_task.take() {
         task.handle.abort();
     }
+}
+
+#[test]
+fn status_overlay_shortcuts_switch_tabs() {
+    let temp = tempdir().expect("tempdir");
+    let mut app = TuiApp::new(ConfigManager {
+        path: temp.path().join("config.json"),
+    })
+    .expect("app");
+    app.overlay = Some(Overlay::Status(StatusTab::Overview));
+
+    assert!(matches!(
+        map_key_to_event(key(KeyCode::Char('2')), &app),
+        AppEvent::SelectStatusTab(StatusTab::Config)
+    ));
+    assert!(matches!(
+        map_key_to_event(key(KeyCode::Right), &app),
+        AppEvent::SelectStatusTab(StatusTab::Config)
+    ));
+
+    app.overlay = Some(Overlay::Status(StatusTab::Context));
+    assert!(matches!(
+        map_key_to_event(key(KeyCode::Right), &app),
+        AppEvent::SelectStatusTab(StatusTab::Overview)
+    ));
+    assert!(matches!(
+        map_key_to_event(key(KeyCode::Left), &app),
+        AppEvent::SelectStatusTab(StatusTab::Config)
+    ));
 }
 
 #[tokio::test]

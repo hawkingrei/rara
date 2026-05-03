@@ -3,7 +3,9 @@ use std::sync::Arc;
 use crate::agent::{Agent, AgentExecutionMode, BashApprovalMode};
 use crate::oauth::OAuthManager;
 
-use super::super::state::{HelpTab, LocalCommand, LocalCommandKind, Overlay, RuntimePhase, TuiApp};
+use super::super::state::{
+    HelpTab, LocalCommand, LocalCommandKind, Overlay, RuntimePhase, StatusTab, TuiApp,
+};
 use super::tasks::{start_compact_task, start_rebuild_task};
 
 pub(super) async fn execute_local_command(
@@ -124,7 +126,7 @@ pub(super) async fn execute_local_command(
         }
         LocalCommandKind::Status => {
             app.set_runtime_phase(RuntimePhase::LocalCommand, Some("opening status".into()));
-            app.open_overlay(Overlay::Status);
+            app.open_overlay(Overlay::Status(StatusTab::Overview));
         }
     }
     if let Some(agent) = agent_slot.as_ref() {

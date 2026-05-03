@@ -1,7 +1,7 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::app_event::AppEvent;
-use super::state::{HelpTab, Overlay, ProviderFamily, TuiApp};
+use super::state::{HelpTab, Overlay, ProviderFamily, StatusTab, TuiApp};
 
 pub(crate) fn map_key_to_event(key: KeyEvent, app: &TuiApp) -> AppEvent {
     let code = key.code;
@@ -39,8 +39,13 @@ pub(crate) fn map_key_to_event(key: KeyEvent, app: &TuiApp) -> AppEvent {
             KeyCode::Char(c) => AppEvent::InputChar(c),
             _ => AppEvent::Noop,
         },
-        Some(Overlay::Status) => match code {
+        Some(Overlay::Status(tab)) => match code {
             KeyCode::Esc | KeyCode::Enter => AppEvent::CloseOverlay,
+            KeyCode::Char('1') => AppEvent::SelectStatusTab(StatusTab::Overview),
+            KeyCode::Char('2') => AppEvent::SelectStatusTab(StatusTab::Config),
+            KeyCode::Char('3') => AppEvent::SelectStatusTab(StatusTab::Context),
+            KeyCode::Right | KeyCode::Tab => AppEvent::SelectStatusTab(next_status_tab(tab)),
+            KeyCode::Left | KeyCode::BackTab => AppEvent::SelectStatusTab(prev_status_tab(tab)),
             _ => AppEvent::Noop,
         },
         Some(Overlay::Context) => match code {
@@ -277,6 +282,22 @@ pub(crate) fn map_key_to_event(key: KeyEvent, app: &TuiApp) -> AppEvent {
                 _ => AppEvent::Noop,
             }
         }
+    }
+}
+
+fn next_status_tab(tab: StatusTab) -> StatusTab {
+    match tab {
+        StatusTab::Overview => StatusTab::Config,
+        StatusTab::Config => StatusTab::Context,
+        StatusTab::Context => StatusTab::Overview,
+    }
+}
+
+fn prev_status_tab(tab: StatusTab) -> StatusTab {
+    match tab {
+        StatusTab::Overview => StatusTab::Context,
+        StatusTab::Config => StatusTab::Overview,
+        StatusTab::Context => StatusTab::Config,
     }
 }
 

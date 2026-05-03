@@ -31,10 +31,17 @@ pub enum HelpTab {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum StatusTab {
+    Overview,
+    Config,
+    Context,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Overlay {
     Help(HelpTab),
     CommandPalette,
-    Status,
+    Status(StatusTab),
     Context,
     ProviderPicker,
     ModelPicker,

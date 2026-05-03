@@ -5,67 +5,121 @@
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
-use crate::tui::state::TuiApp;
+use crate::tui::state::{StatusTab, TuiApp};
 
-pub(crate) fn render_status_lines(app: &TuiApp) -> Vec<Line<'static>> {
+pub(crate) fn render_status_lines(app: &TuiApp, tab: StatusTab) -> Vec<Line<'static>> {
     let mut lines: Vec<Line<'static>> = Vec::new();
 
-    // ── Provider & Model ──
-    section_header(&mut lines, "Provider & Model");
-    kv(&mut lines, "provider", &app.config.provider, Color::Cyan);
-    kv(
-        &mut lines,
-        "model",
-        app.current_model_label(),
-        Color::LightBlue,
-    );
+    match tab {
+        StatusTab::Overview => render_overview_status(app, &mut lines),
+        StatusTab::Config => render_config_status(app, &mut lines),
+        StatusTab::Context => render_context_status(app, &mut lines),
+    }
+
+    lines
+}
+
+fn render_overview_status(app: &TuiApp, lines: &mut Vec<Line<'static>>) {
+    section_header(lines, "Provider & Model");
+    kv(lines, "provider", &app.config.provider, Color::Cyan);
+    kv(lines, "model", app.current_model_label(), Color::LightBlue);
     if app.config.provider == "openai-compatible" {
         kv(
-            &mut lines,
+            lines,
             "endpoint",
             app.config.active_openai_profile_label().unwrap_or("-"),
             Color::DarkGray,
         );
     }
 
-    // ── Execution ──
-    section_spacer(&mut lines);
-    section_header(&mut lines, "Execution");
+    section_spacer(lines);
+    section_header(lines, "Execution");
     kv(
-        &mut lines,
+        lines,
         "mode",
         app.agent_execution_mode_label(),
         Color::LightBlue,
     );
-    kv(
-        &mut lines,
-        "phase",
-        app.runtime_phase_label(),
-        Color::DarkGray,
-    );
+    kv(lines, "phase", app.runtime_phase_label(), Color::DarkGray);
     if let Some(detail) = &app.runtime_phase_detail {
-        kv(&mut lines, "detail", detail, Color::Gray);
+        kv(lines, "detail", detail, Color::Gray);
     }
     kv(
-        &mut lines,
+        lines,
         "bash",
         app.bash_approval_mode_label(),
         Color::DarkGray,
     );
 
-    // ── Context ──
-    section_spacer(&mut lines);
-    section_header(&mut lines, "Context");
+    section_spacer(lines);
+    section_header(lines, "Workspace");
+    let snap = &app.snapshot;
+    kv(lines, "dir", &home_path(&snap.cwd), Color::DarkGray);
+    kv(lines, "branch", &snap.branch, Color::DarkGray);
+    kv(lines, "session", &snap.session_id, Color::Gray);
+}
+
+fn render_config_status(app: &TuiApp, lines: &mut Vec<Line<'static>>) {
+    section_header(lines, "API & Auth");
+    let surface = app.config.effective_provider_surface();
+    kv(
+        lines,
+        "base_url",
+        surface.base_url.display_or("-"),
+        Color::DarkGray,
+    );
+    kv(
+        lines,
+        "api_key",
+        &api_key_label(app),
+        if app.config.has_api_key() {
+            Color::LightGreen
+        } else {
+            Color::Yellow
+        },
+    );
+    kv(
+        lines,
+        "reasoning",
+        &format!(
+            "{} ({})",
+            surface.reasoning_summary.display_or("auto"),
+            surface.reasoning_summary.source.label()
+        ),
+        Color::DarkGray,
+    );
+
+    section_spacer(lines);
+    section_header(lines, "Network & Sandbox");
+    kv(lines, "sandbox", &sandbox_label(app), Color::LightBlue);
+    kv(
+        lines,
+        "network",
+        if app.config.sandbox_workspace_write.network_access {
+            "permitted"
+        } else {
+            "restricted"
+        },
+        if app.config.sandbox_workspace_write.network_access {
+            Color::Yellow
+        } else {
+            Color::LightGreen
+        },
+    );
+}
+
+fn render_context_status(app: &TuiApp, lines: &mut Vec<Line<'static>>) {
+    section_header(lines, "Context Summary");
     let snap = &app.snapshot;
     kv(
-        &mut lines,
+        lines,
         "history",
         &format!("{} tokens", snap.estimated_history_tokens),
         Color::DarkGray,
     );
     if let Some(window) = snap.context_window_tokens {
         kv(
-            &mut lines,
+            lines,
             "window",
             &format_metric(window as u64),
             Color::LightBlue,
@@ -73,7 +127,7 @@ pub(crate) fn render_status_lines(app: &TuiApp) -> Vec<Line<'static>> {
     }
     if let Some(remaining) = snap.remaining_input_budget {
         kv(
-            &mut lines,
+            lines,
             "budget",
             &format!("{} tokens remaining", remaining),
             if remaining < 1024 {
@@ -93,7 +147,7 @@ pub(crate) fn render_status_lines(app: &TuiApp) -> Vec<Line<'static>> {
             0
         };
         kv(
-            &mut lines,
+            lines,
             "cache",
             &format!("{}% hit ({} hits / {} misses)", rate, hit, miss),
             Color::LightGreen,
@@ -101,71 +155,33 @@ pub(crate) fn render_status_lines(app: &TuiApp) -> Vec<Line<'static>> {
     }
     if snap.compaction_count > 0 {
         kv(
-            &mut lines,
+            lines,
             "compactions",
             &snap.compaction_count.to_string(),
             Color::DarkGray,
         );
     }
 
-    // ── Workspace ──
-    section_spacer(&mut lines);
-    section_header(&mut lines, "Workspace");
-    kv(&mut lines, "dir", &home_path(&snap.cwd), Color::DarkGray);
-    kv(&mut lines, "branch", &snap.branch, Color::DarkGray);
-    kv(&mut lines, "session", &snap.session_id, Color::Gray);
-
-    // ── API & Auth ──
-    section_spacer(&mut lines);
-    section_header(&mut lines, "API & Auth");
-    let surface = app.config.effective_provider_surface();
     kv(
-        &mut lines,
-        "base_url",
-        surface.base_url.display_or("-"),
-        Color::DarkGray,
-    );
-    kv(
-        &mut lines,
-        "api_key",
-        &api_key_label(app),
-        if app.config.has_api_key() {
-            Color::LightGreen
-        } else {
-            Color::Yellow
-        },
-    );
-    kv(
-        &mut lines,
-        "reasoning",
+        lines,
+        "todo",
         &format!(
-            "{} ({})",
-            surface.reasoning_summary.display_or("auto"),
-            surface.reasoning_summary.source.label()
+            "{} total, {} active, {} done",
+            snap.todo.summary.total,
+            snap.todo.summary.pending + snap.todo.summary.in_progress,
+            snap.todo.summary.completed
         ),
-        Color::DarkGray,
+        Color::LightBlue,
     );
 
-    // ── Network & Sandbox ──
-    section_spacer(&mut lines);
-    section_header(&mut lines, "Network & Sandbox");
-    kv(&mut lines, "sandbox", &sandbox_label(app), Color::LightBlue);
+    section_spacer(lines);
+    section_header(lines, "More Detail");
     kv(
-        &mut lines,
-        "network",
-        if app.config.sandbox_workspace_write.network_access {
-            "permitted"
-        } else {
-            "restricted"
-        },
-        if app.config.sandbox_workspace_write.network_access {
-            Color::Yellow
-        } else {
-            Color::LightGreen
-        },
+        lines,
+        "context",
+        "open /context for layer detail",
+        Color::Gray,
     );
-
-    lines
 }
 
 // ── helpers ──
