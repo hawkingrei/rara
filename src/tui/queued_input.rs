@@ -13,11 +13,11 @@ pub fn queued_follow_up_heading() -> &'static str {
 }
 
 pub fn pending_follow_up_hint() -> &'static str {
-    "pending follow-up  will submit after next tool call"
+    "queued: after tool"
 }
 
 pub fn queued_follow_up_hint() -> &'static str {
-    "queued follow-up  will submit after current turn"
+    "queued: after turn"
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

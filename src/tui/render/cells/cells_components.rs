@@ -12,7 +12,9 @@ use crate::tui::interaction_text::{
 };
 use crate::tui::markdown_render::render_markdown_text_with_width;
 use crate::tui::plan_display::updated_plan_lines;
-use crate::tui::queued_input::QueuedFollowUpSection;
+use crate::tui::queued_input::{
+    QueuedFollowUpSection, pending_follow_up_heading, queued_follow_up_heading,
+};
 use crate::tui::render::diff::render_patch_preview;
 use crate::tui::render::{
     display_width, formatted_message_lines, prefixed_message_lines, rendered_markdown_lines,
@@ -420,18 +422,27 @@ impl QueuedFollowUpCell {
 
 impl HistoryCell for QueuedFollowUpCell {
     fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
-        let mut lines = vec![Line::from(section_span("Queued Follow-up", PHASE_PLANNING))];
-        for section in &self.sections {
-            lines.push(Line::from(format!("  {}", section.title)));
-            lines.push(Line::from(format!("    -> {}", section.preview)));
-            if section.remaining > 0 {
-                lines.push(Line::from(format!(
-                    "    ... {} {}",
-                    section.remaining, section.remaining_label
-                )));
-            }
-        }
-        lines
+        self.sections
+            .iter()
+            .map(|section| {
+                let phase = if section.title == pending_follow_up_heading() {
+                    "after tool"
+                } else if section.title == queued_follow_up_heading() {
+                    "after turn"
+                } else {
+                    "queued"
+                };
+                let remaining = if section.remaining > 0 {
+                    format!(" (+{})", section.remaining)
+                } else {
+                    String::new()
+                };
+                Line::from(vec![
+                    section_span("Queued", PHASE_PLANNING),
+                    Span::raw(format!(" · {phase} · {}{remaining}", section.preview)),
+                ])
+            })
+            .collect()
     }
 }
 

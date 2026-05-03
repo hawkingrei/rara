@@ -251,8 +251,9 @@ fn active_turn_cell_renders_queued_follow_up_without_hiding_shell_approval() {
 
     assert!(rendered.contains(" Shell Approval "));
     assert!(rendered.contains("1. Allow once"));
-    assert!(rendered.contains(" Queued Follow-up "));
-    assert!(rendered.contains("Queued follow-up messages"));
+    assert!(rendered.contains(" Queued "));
+    assert!(rendered.contains("after turn"));
+    assert!(!rendered.contains("Queued follow-up messages"));
     assert!(rendered.contains("then review the diff"));
 }
 
