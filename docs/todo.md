@@ -53,6 +53,10 @@ Active backlog only. Keep this file small and current.
 - [ ] Durable in-turn checkpoints: persist after each message/tool-result batch, atomic writes, crash-tolerant `SessionManager`.
 - [ ] Define background task restart/reattach semantics.
 - [ ] Compaction as first-class lifecycle event: persist summaries, token counters, metadata ownership.
+- [ ] Add prompt-too-long retry for compaction by dropping oldest API-round groups.
+- [ ] Add partial compact support around a selected message boundary (`from` / `up_to`).
+- [ ] Add post-compact memory/hook/skill carry-over stages once source descriptors are stable.
+- [ ] Surface main model vs auxiliary model routing in `/status` and `/context`.
 - [ ] `ThreadStore` / `ThreadRecorder`: from façade over `SessionManager`+`StateDb` to true structured thread store.
 - [ ] Thread-scoped and workspace-scoped `MemoryRecord` storage with promotion rules.
 - [ ] Retrieval orchestration layer from `docs/features/context-architecture.md`.

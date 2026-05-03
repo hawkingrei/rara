@@ -7,8 +7,10 @@ use std::time::Duration;
 const RECENT_FILE_CARRY_OVER_LIMIT: usize = 5;
 const RECENT_FILE_EXCERPT_LIMIT: usize = 3;
 const RECENT_FILE_EXCERPT_CHAR_LIMIT: usize = 600;
+const RETAINED_HISTORY_BUDGET_FRACTION: usize = 2;
 const COMPACT_BOUNDARY_KIND: &str = "compact_boundary";
 const COMPACT_BOUNDARY_VERSION: u32 = 1;
+const ROLE_ASSISTANT: &str = "assistant";
 // Wait for about two 4K chunks of new context before retrying automatic
 // compaction after a timeout or backend failure.
 const AUTO_COMPACTION_RETRY_HYSTERESIS_TOKENS: usize = 8_192;
@@ -30,6 +32,26 @@ struct RecentFileExcerpt {
     path: String,
     line_range: Option<(usize, usize)>,
     snippet: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ApiRoundGroup {
+    start: usize,
+    end: usize,
+    token_estimate: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CompactPlan {
+    summarize_end: usize,
+    retained_start: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CompactCarryOver {
+    summary: String,
+    recent_files: Vec<String>,
+    recent_file_excerpts: Vec<RecentFileExcerpt>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -117,12 +139,13 @@ impl Agent {
             "Compacting long conversation history.".to_string()
         }));
 
-        let split_idx = (self.history.len() as f64 * 0.8) as usize;
-        let split_idx = split_idx.clamp(1, self.history.len().saturating_sub(1));
+        let Some(plan) = build_compact_plan(&self.history, threshold, force)? else {
+            return Ok(());
+        };
         let summary_result = tokio::time::timeout(
             compaction_summary_timeout(),
             self.llm_backend.summarize(
-                &self.history[..split_idx],
+                &self.history[..plan.summarize_end],
                 &self.context_assembler().compact_instruction(),
             ),
         )
@@ -154,52 +177,13 @@ impl Agent {
                 ));
             }
         };
-        let recent_files =
-            collect_recent_files(&self.history[..split_idx], RECENT_FILE_CARRY_OVER_LIMIT);
-        let recent_file_excerpts = collect_recent_file_excerpts(
-            &self.history[..split_idx],
-            RECENT_FILE_EXCERPT_LIMIT,
-            RECENT_FILE_EXCERPT_CHAR_LIMIT,
+        let carry_over =
+            build_compact_carry_over(summary.clone(), &self.history[..plan.summarize_end]);
+        let new_history = build_post_compact_history(
+            current_tokens,
+            &carry_over,
+            &self.history[plan.retained_start..],
         );
-        let mut new_history = vec![
-            build_compact_boundary_message(current_tokens, recent_files.len()),
-            Message {
-                role: "system".to_string(),
-                content: json!(format!(
-                    "STRUCTURED SUMMARY OF PREVIOUS CONVERSATION:\n{}",
-                    summary
-                )),
-            },
-        ];
-        if !recent_files.is_empty() {
-            let recent_files_block = recent_files
-                .iter()
-                .map(|path| format!("- {path}"))
-                .collect::<Vec<_>>()
-                .join("\n");
-            new_history.push(Message {
-                role: "system".to_string(),
-                content: json!(format!(
-                    "RECENT FILES FROM COMPACTED HISTORY:\n{}",
-                    recent_files_block
-                )),
-            });
-        }
-        if !recent_file_excerpts.is_empty() {
-            let excerpt_block = recent_file_excerpts
-                .iter()
-                .map(render_recent_file_excerpt)
-                .collect::<Vec<_>>()
-                .join("\n\n");
-            new_history.push(Message {
-                role: "system".to_string(),
-                content: json!(format!(
-                    "RECENT FILE EXCERPTS FROM COMPACTED HISTORY:\n{}",
-                    excerpt_block
-                )),
-            });
-        }
-        new_history.extend_from_slice(&self.history[split_idx..]);
         self.replace_history(new_history);
         self.session_manager
             .save_session(&self.session_id, &self.history)?;
@@ -208,7 +192,7 @@ impl Agent {
         self.compact_state.compaction_count += 1;
         self.compact_state.last_compaction_before_tokens = Some(current_tokens);
         self.compact_state.last_compaction_after_tokens = Some(compacted_tokens);
-        self.compact_state.last_compaction_recent_files = recent_files;
+        self.compact_state.last_compaction_recent_files = carry_over.recent_files;
         self.compact_state.last_compaction_boundary = Some(CompactBoundaryMetadata {
             version: COMPACT_BOUNDARY_VERSION,
             before_tokens: current_tokens,
@@ -282,6 +266,165 @@ impl Agent {
     fn recompute_history_token_estimate(&mut self) {
         self.compact_state.estimated_history_tokens =
             estimate_history_tokens(&self.history).unwrap_or_default();
+    }
+}
+
+fn build_compact_plan(
+    history: &[Message],
+    threshold: usize,
+    force: bool,
+) -> Result<Option<CompactPlan>> {
+    if history.len() < 2 {
+        return Ok(None);
+    }
+
+    let groups = group_history_by_api_round(history)?;
+    if groups.len() < 2 {
+        return Ok(None);
+    }
+
+    let retained_budget = retained_history_budget(threshold, force);
+    let mut retained_tokens = 0usize;
+    let mut retained_group_index = groups.len() - 1;
+    let latest_group = &groups[retained_group_index];
+    if !force && latest_group.token_estimate > retained_budget {
+        return Ok(Some(CompactPlan {
+            summarize_end: history.len(),
+            retained_start: history.len(),
+        }));
+    }
+
+    for group_index in (1..groups.len()).rev() {
+        let group = &groups[group_index];
+        let next_tokens = retained_tokens.saturating_add(group.token_estimate);
+        if retained_tokens > 0 && next_tokens > retained_budget {
+            break;
+        }
+        retained_tokens = next_tokens;
+        retained_group_index = group_index;
+    }
+
+    let retained_start = groups[retained_group_index].start;
+    if retained_start == 0 {
+        return Ok(Some(CompactPlan {
+            summarize_end: groups[1].start,
+            retained_start: groups[1].start,
+        }));
+    }
+
+    Ok(Some(CompactPlan {
+        summarize_end: retained_start,
+        retained_start,
+    }))
+}
+
+fn retained_history_budget(threshold: usize, force: bool) -> usize {
+    if force {
+        return 1;
+    }
+    threshold
+        .saturating_div(RETAINED_HISTORY_BUDGET_FRACTION)
+        .max(1)
+}
+
+fn group_history_by_api_round(history: &[Message]) -> Result<Vec<ApiRoundGroup>> {
+    let bpe = tokenizer()?;
+    let mut groups = Vec::new();
+    let mut group_start = 0usize;
+    let mut current_tokens = 0usize;
+
+    for (idx, message) in history.iter().enumerate() {
+        let starts_new_round = message.role == ROLE_ASSISTANT && idx > group_start;
+        if starts_new_round {
+            debug_assert!(idx > group_start);
+            groups.push(ApiRoundGroup {
+                start: group_start,
+                end: idx,
+                token_estimate: current_tokens,
+            });
+            group_start = idx;
+            current_tokens = 0;
+        }
+        current_tokens =
+            current_tokens.saturating_add(estimate_message_tokens_with_bpe(message, bpe)?);
+    }
+
+    if group_start < history.len() {
+        groups.push(ApiRoundGroup {
+            start: group_start,
+            end: history.len(),
+            token_estimate: current_tokens,
+        });
+    }
+    debug_assert_eq!(groups.last().map(|group| group.end), Some(history.len()));
+
+    Ok(groups)
+}
+
+fn build_compact_carry_over(summary: String, compacted_history: &[Message]) -> CompactCarryOver {
+    CompactCarryOver {
+        summary,
+        recent_files: collect_recent_files(compacted_history, RECENT_FILE_CARRY_OVER_LIMIT),
+        recent_file_excerpts: collect_recent_file_excerpts(
+            compacted_history,
+            RECENT_FILE_EXCERPT_LIMIT,
+            RECENT_FILE_EXCERPT_CHAR_LIMIT,
+        ),
+    }
+}
+
+fn build_post_compact_history(
+    before_tokens: usize,
+    carry_over: &CompactCarryOver,
+    retained_history: &[Message],
+) -> Vec<Message> {
+    let mut history = vec![
+        build_compact_boundary_message(before_tokens, carry_over.recent_files.len()),
+        Message {
+            role: "system".to_string(),
+            content: json!(format!(
+                "STRUCTURED SUMMARY OF PREVIOUS CONVERSATION:\n{}",
+                carry_over.summary
+            )),
+        },
+    ];
+
+    append_post_compact_carry_over(&mut history, carry_over);
+    history.extend_from_slice(retained_history);
+    history
+}
+
+fn append_post_compact_carry_over(history: &mut Vec<Message>, carry_over: &CompactCarryOver) {
+    if !carry_over.recent_files.is_empty() {
+        let recent_files_block = carry_over
+            .recent_files
+            .iter()
+            .map(|path| format!("- {path}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        history.push(Message {
+            role: "system".to_string(),
+            content: json!(format!(
+                "RECENT FILES FROM COMPACTED HISTORY:\n{}",
+                recent_files_block
+            )),
+        });
+    }
+
+    if !carry_over.recent_file_excerpts.is_empty() {
+        let excerpt_block = carry_over
+            .recent_file_excerpts
+            .iter()
+            .map(render_recent_file_excerpt)
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        history.push(Message {
+            role: "system".to_string(),
+            content: json!(format!(
+                "RECENT FILE EXCERPTS FROM COMPACTED HISTORY:\n{}",
+                excerpt_block
+            )),
+        });
     }
 }
 
@@ -543,7 +686,8 @@ pub fn latest_compact_boundary_metadata(history: &[Message]) -> Option<CompactBo
 
 #[cfg(test)]
 mod tests {
-    use super::read_file_line_range;
+    use super::{build_compact_plan, group_history_by_api_round, read_file_line_range};
+    use crate::agent::Message;
     use serde_json::{Map, Value, json};
 
     fn object(value: Value) -> Map<String, Value> {
@@ -568,5 +712,141 @@ mod tests {
         }));
 
         assert_eq!(read_file_line_range(&input), Some((10, 12)));
+    }
+
+    #[test]
+    fn api_round_grouping_keeps_tool_result_with_assistant_round() {
+        let history = vec![
+            Message {
+                role: "user".to_string(),
+                content: json!("start"),
+            },
+            Message {
+                role: "assistant".to_string(),
+                content: json!([
+                    {"type":"tool_use","id":"tool-1","name":"read_file","input":{"path":"src/main.rs"}}
+                ]),
+            },
+            Message {
+                role: "user".to_string(),
+                content: json!([
+                    {"type":"tool_result","tool_use_id":"tool-1","content":"fn main() {}"}
+                ]),
+            },
+            Message {
+                role: "assistant".to_string(),
+                content: json!("done"),
+            },
+        ];
+
+        let groups = group_history_by_api_round(&history).expect("groups");
+
+        assert_eq!(
+            groups
+                .iter()
+                .map(|group| (group.start, group.end))
+                .collect::<Vec<_>>(),
+            vec![(0, 1), (1, 3), (3, 4)]
+        );
+    }
+
+    #[test]
+    fn compact_plan_uses_api_round_boundary_for_retained_suffix() {
+        let history = vec![
+            Message {
+                role: "user".to_string(),
+                content: json!("old request"),
+            },
+            Message {
+                role: "assistant".to_string(),
+                content: json!([
+                    {"type":"tool_use","id":"tool-1","name":"read_file","input":{"path":"src/old.rs"}}
+                ]),
+            },
+            Message {
+                role: "user".to_string(),
+                content: json!([
+                    {"type":"tool_result","tool_use_id":"tool-1","content":"old output ".repeat(1_000)}
+                ]),
+            },
+            Message {
+                role: "assistant".to_string(),
+                content: json!([
+                    {"type":"tool_use","id":"tool-2","name":"read_file","input":{"path":"src/new.rs"}}
+                ]),
+            },
+            Message {
+                role: "user".to_string(),
+                content: json!([
+                    {"type":"tool_result","tool_use_id":"tool-2","content":"new output"}
+                ]),
+            },
+        ];
+
+        let plan = build_compact_plan(&history, 600, false)
+            .expect("plan")
+            .expect("compact plan");
+
+        assert_eq!(plan.summarize_end, 3);
+        assert_eq!(plan.retained_start, 3);
+    }
+
+    #[test]
+    fn compact_plan_does_not_split_single_assistant_tool_round() {
+        let history = vec![
+            Message {
+                role: "assistant".to_string(),
+                content: json!([
+                    {"type":"tool_use","id":"tool-1","name":"read_file","input":{"path":"src/main.rs"}}
+                ]),
+            },
+            Message {
+                role: "user".to_string(),
+                content: json!([
+                    {"type":"tool_result","tool_use_id":"tool-1","content":"fn main() {}"}
+                ]),
+            },
+        ];
+
+        let plan = build_compact_plan(&history, 1, false).expect("plan");
+
+        assert!(
+            plan.is_none(),
+            "single API round must not retain a detached tool_result"
+        );
+    }
+
+    #[test]
+    fn compact_plan_summarizes_oversized_latest_api_round() {
+        let large_tool_output = "recent output ".repeat(2_000);
+        let history = vec![
+            Message {
+                role: "user".to_string(),
+                content: json!("old request"),
+            },
+            Message {
+                role: "assistant".to_string(),
+                content: json!("old answer"),
+            },
+            Message {
+                role: "assistant".to_string(),
+                content: json!([
+                    {"type":"tool_use","id":"tool-1","name":"read_file","input":{"path":"src/main.rs"}}
+                ]),
+            },
+            Message {
+                role: "user".to_string(),
+                content: json!([
+                    {"type":"tool_result","tool_use_id":"tool-1","content": large_tool_output}
+                ]),
+            },
+        ];
+
+        let plan = build_compact_plan(&history, 100, false)
+            .expect("plan")
+            .expect("compact plan");
+
+        assert_eq!(plan.summarize_end, history.len());
+        assert_eq!(plan.retained_start, history.len());
     }
 }

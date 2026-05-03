@@ -1,3 +1,4 @@
+use reqwest::StatusCode;
 use serde_json::json;
 
 use crate::agent::Message;
@@ -9,10 +10,12 @@ use super::ollama::{
     suggest_ollama_num_ctx, to_ollama_messages,
 };
 use super::openai_compatible::{
-    apply_codex_stream_event, build_chat_completion_request_body, build_codex_responses_request,
-    build_streaming_response_content, is_openai_stream_idle_error, merge_streaming_tool_calls,
-    parse_chat_completion_response, parse_codex_response, to_codex_input_items, to_openai_messages,
-    to_openai_messages_for_endpoint,
+    OpenAiApiError, apply_codex_stream_event, build_chat_completion_request_body,
+    build_codex_responses_request, build_streaming_response_content,
+    infer_openai_compatible_auxiliary_model, is_auxiliary_model_retryable_error,
+    is_auxiliary_model_unsupported_error, is_context_window_error, is_openai_stream_idle_error,
+    merge_streaming_tool_calls, parse_chat_completion_response, parse_codex_response,
+    to_codex_input_items, to_openai_messages, to_openai_messages_for_endpoint,
 };
 use super::shared::{
     extract_message_text, model_context_budget, parse_tool_arguments, should_bypass_proxy,
@@ -414,6 +417,70 @@ fn deepseek_reasoner_defaults_preserve_standard_body() {
             .as_array()
             .is_some_and(|tools| tools.len() == 1)
     );
+}
+
+#[test]
+fn deepseek_v4_pro_infers_lite_auxiliary_model() {
+    assert_eq!(
+        infer_openai_compatible_auxiliary_model("deepseek-v4-pro", OpenAiEndpointKind::Deepseek)
+            .as_deref(),
+        Some("deepseek-v4-lite")
+    );
+    assert_eq!(
+        infer_openai_compatible_auxiliary_model("DeepSeek-V4-PRO", OpenAiEndpointKind::Deepseek)
+            .as_deref(),
+        Some("DeepSeek-V4-lite")
+    );
+    assert_eq!(
+        infer_openai_compatible_auxiliary_model("deepseek-v4-lite", OpenAiEndpointKind::Deepseek),
+        None
+    );
+    assert_eq!(
+        infer_openai_compatible_auxiliary_model("deepseek-v4-pro", OpenAiEndpointKind::Custom),
+        None
+    );
+}
+
+#[test]
+fn auxiliary_model_fallback_is_limited_to_model_support_errors() {
+    assert!(is_auxiliary_model_unsupported_error(&anyhow::Error::new(
+        OpenAiApiError::for_test(
+            Some(StatusCode::NOT_FOUND),
+            Some("invalid_request_error"),
+            None
+        )
+    )));
+    assert!(is_auxiliary_model_unsupported_error(&anyhow::Error::new(
+        OpenAiApiError::for_test(
+            Some(StatusCode::BAD_REQUEST),
+            Some("invalid_request_error"),
+            Some("model_not_supported")
+        )
+    )));
+    assert!(!is_auxiliary_model_unsupported_error(&anyhow::anyhow!(
+        "API Error: rate limit exceeded"
+    )));
+    assert!(!is_auxiliary_model_unsupported_error(&anyhow::Error::new(
+        OpenAiApiError::for_test(
+            Some(StatusCode::UNAUTHORIZED),
+            Some("invalid_api_key"),
+            None
+        )
+    )));
+}
+
+#[test]
+fn auxiliary_model_retry_uses_structured_context_window_code() {
+    let error = anyhow::Error::new(OpenAiApiError::from_response_failed_error(&json!({
+        "code": "context_length_exceeded",
+        "message": "Your input exceeds the context window of this model."
+    })));
+
+    assert!(is_context_window_error(&error));
+    assert!(is_auxiliary_model_retryable_error(&error));
+    assert!(!is_context_window_error(&anyhow::anyhow!(
+        "Your input exceeds the context window of this model."
+    )));
 }
 
 #[test]
@@ -1474,6 +1541,33 @@ fn codex_stream_response_done_marks_completion() {
 
     assert_eq!(usage.as_ref().unwrap()["input_tokens"], 5);
     assert_eq!(usage.as_ref().unwrap()["output_tokens"], 3);
+}
+
+#[test]
+fn codex_stream_response_failed_preserves_structured_error_code() {
+    let mut output_items = Vec::new();
+    let mut usage = None;
+    let mut streamed_text = String::new();
+    let mut no_delta_callback: Option<&mut (dyn FnMut(LlmStreamEvent) + Send)> = None;
+
+    let error = apply_codex_stream_event(
+        &json!({
+            "type": "response.failed",
+            "response": {
+                "error": {
+                    "code": "context_length_exceeded",
+                    "message": "Your input exceeds the context window of this model."
+                }
+            }
+        }),
+        &mut output_items,
+        &mut usage,
+        &mut streamed_text,
+        &mut no_delta_callback,
+    )
+    .expect_err("response.failed should error");
+
+    assert!(is_context_window_error(&error));
 }
 
 #[test]

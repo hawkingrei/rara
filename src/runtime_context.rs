@@ -113,18 +113,21 @@ pub(crate) async fn build_backend_with_progress(
     progress: Option<LocalProgressReporter>,
 ) -> Result<Box<dyn LlmBackend>> {
     match config.provider.as_str() {
-        "codex" => Ok(Box::new(CodexBackend::new(
-            config.api_key_secret(),
-            config
-                .base_url
-                .clone()
-                .unwrap_or_else(|| DEFAULT_CODEX_BASE_URL.to_string()),
-            config
-                .model
-                .clone()
-                .unwrap_or_else(|| DEFAULT_CODEX_MODEL.to_string()),
-            config.reasoning_effort.clone(),
-        )?)),
+        "codex" => Ok(Box::new(
+            CodexBackend::new(
+                config.api_key_secret(),
+                config
+                    .base_url
+                    .clone()
+                    .unwrap_or_else(|| DEFAULT_CODEX_BASE_URL.to_string()),
+                config
+                    .model
+                    .clone()
+                    .unwrap_or_else(|| DEFAULT_CODEX_MODEL.to_string()),
+                config.reasoning_effort.clone(),
+            )?
+            .with_auxiliary_model(config.auxiliary_model.clone()),
+        )),
         provider if RaraConfig::is_openai_compatible_family(provider) => {
             let kind = config
                 .active_openai_profile_kind()
@@ -149,7 +152,8 @@ pub(crate) async fn build_backend_with_progress(
                 kind,
                 config.reasoning_effort.clone(),
                 config.thinking,
-            )?;
+            )?
+            .with_auxiliary_model(config.auxiliary_model.clone());
             if backend.context_budget(&[], &[]).is_none() {
                 backend.context_window_override = fetch_model_context_window(
                     &backend.client,
@@ -173,17 +177,20 @@ pub(crate) async fn build_backend_with_progress(
             ollama_thinking_enabled(config),
             config.num_ctx,
         )?)),
-        "ollama-openai" => Ok(Box::new(OpenAiCompatibleBackend::new(
-            config.api_key_secret(),
-            config
-                .base_url
-                .clone()
-                .unwrap_or_else(|| "http://localhost:11434".to_string()),
-            config
-                .model
-                .clone()
-                .context("Model required for Ollama OpenAI provider")?,
-        )?)),
+        "ollama-openai" => Ok(Box::new(
+            OpenAiCompatibleBackend::new(
+                config.api_key_secret(),
+                config
+                    .base_url
+                    .clone()
+                    .unwrap_or_else(|| "http://localhost:11434".to_string()),
+                config
+                    .model
+                    .clone()
+                    .context("Model required for Ollama OpenAI provider")?,
+            )?
+            .with_auxiliary_model(config.auxiliary_model.clone()),
+        )),
         "gemini" => Ok(Box::new(GeminiBackend {
             api_key: config
                 .api_key

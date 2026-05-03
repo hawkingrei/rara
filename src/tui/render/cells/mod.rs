@@ -362,15 +362,26 @@ impl ActiveCell for ActiveTurnCell<'_> {
                 return lines;
             }
             if turn_live {
-                return RespondingCell::working(
-                    self.app
-                        .runtime_phase_detail
-                        .as_deref()
-                        .unwrap_or("waiting for the current turn to finish"),
-                )
-                .display_lines(width);
+                let has_pending_surface = self.app.active_pending_interaction().is_some()
+                    || self.app.has_queued_follow_up_messages()
+                    || self.app.has_pending_planning_suggestion();
+                if has_pending_surface {
+                    // Continue through the normal section assembly so resumed approval
+                    // and request-input turns can render their actionable cards even
+                    // before the first transcript entry arrives.
+                } else {
+                    return RespondingCell::working(
+                        self.app
+                            .runtime_phase_detail
+                            .as_deref()
+                            .unwrap_or("waiting for the current turn to finish"),
+                    )
+                    .display_lines(width);
+                }
             }
-            return Vec::new();
+            if !turn_live {
+                return Vec::new();
+            }
         }
         let has_tool_activity = current_turn.iter().any(|entry| {
             matches!(

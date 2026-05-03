@@ -38,6 +38,7 @@ impl<'a> ResolvedProviderValue<'a> {
 pub struct EffectiveProviderSurface<'a> {
     pub provider: &'a str,
     pub model: ResolvedProviderValue<'a>,
+    pub auxiliary_model: ResolvedProviderValue<'a>,
     pub base_url: ResolvedProviderValue<'a>,
     pub revision: ResolvedProviderValue<'a>,
     pub reasoning_effort: ResolvedProviderValue<'a>,
