@@ -147,6 +147,7 @@ fn handle_model_name_command(arg: Option<&str>, app: &mut TuiApp) -> anyhow::Res
         app.push_notice("/model-name does not accept arguments. Edit the value in the TUI.");
     }
     app.open_overlay(Overlay::ModelNameEditor);
+    app.push_notice("Opened model name editor.");
     Ok(())
 }
 

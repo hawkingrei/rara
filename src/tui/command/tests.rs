@@ -536,7 +536,7 @@ fn status_resources_text_includes_token_and_cache_summary() {
         "context_estimate=12000 tokens / 200000 tokens (~auto @ 180000 tokens, reserve 8192 tokens)"
     ));
     assert!(rendered.contains("last: 10000 tokens -> 3000 tokens, ratio: 30.0%"));
-    assert!(rendered.contains("recent_compact_file_count=3"));
+    assert!(rendered.contains("recent_compact_file_count=2"));
     assert!(rendered.contains("recent_compact_files=src/main.rs, src/lib.rs"));
     assert!(rendered.contains("state_db=sqlite:/tmp/rara/state.db"));
     assert!(!rendered.contains("cache=sqlite:/tmp/rara/state.db"));

@@ -515,11 +515,7 @@ pub fn status_resources_text(app: &TuiApp) -> String {
         .last_compaction_boundary_recent_file_count
         .map(|count| format!("{count} files"))
         .unwrap_or_else(|| "-".to_string());
-    let recent_compact_file_count = app
-        .snapshot
-        .last_compaction_boundary_recent_file_count
-        .map(|v| v.to_string())
-        .unwrap_or_else(|| "-".to_string());
+    let recent_compact_file_count = app.snapshot.last_compaction_recent_files.len().to_string();
     let recent_compact_files = if app.snapshot.last_compaction_recent_files.is_empty() {
         "-".to_string()
     } else {
