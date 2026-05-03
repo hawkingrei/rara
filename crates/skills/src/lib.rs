@@ -5,6 +5,15 @@ use std::path::{Path, PathBuf};
 use anyhow::{Result, anyhow};
 use serde::Serialize;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SkillScope {
+    Home,
+    Repo,
+    Cwd,
+    System,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct Skill {
     pub name: String,
@@ -12,6 +21,8 @@ pub struct Skill {
     pub description: String,
     pub prompt: String,
     pub display_path: String,
+    pub scope: SkillScope,
+    pub disable_model_invocation: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -20,31 +31,40 @@ pub struct SkillSummary {
     pub title: Option<String>,
     pub description: String,
     pub display_path: String,
+    pub scope: SkillScope,
+    pub disable_model_invocation: bool,
 }
 
 pub struct SkillManager {
     pub skills: HashMap<String, Skill>,
+    pub overrides: HashMap<String, Vec<Skill>>,
+    pub load_warnings: Vec<String>,
 }
 
 impl SkillManager {
     pub fn new() -> Self {
         Self {
             skills: HashMap::new(),
+            overrides: HashMap::new(),
+            load_warnings: Vec::new(),
         }
     }
 
     pub fn load_all(&mut self) -> Result<()> {
         let home = dirs::home_dir().ok_or_else(|| anyhow!("No home dir"))?;
         let cwd = std::env::current_dir()?;
-        for dir in skill_search_dirs(&home, &cwd) {
+
+        let all_dirs = skill_search_dirs(&home, &cwd);
+        for dir in &all_dirs {
             if dir.exists() {
-                self.load_from_dir(&dir)?;
+                let scope = scope_for_search_dir(dir, &home, &cwd);
+                self.load_from_dir(dir, scope)?;
             }
         }
         Ok(())
     }
 
-    pub fn load_from_dir(&mut self, dir: &Path) -> Result<()> {
+    pub fn load_from_dir(&mut self, dir: &Path, scope: SkillScope) -> Result<()> {
         let mut skill_files = Vec::new();
         for entry in fs::read_dir(dir)? {
             let entry = entry?;
@@ -65,12 +85,12 @@ impl SkillManager {
         skill_files
             .sort_by(|left, right| skill_file_sort_key(left).cmp(&skill_file_sort_key(right)));
         for path in skill_files {
-            self.load_skill_file(&path, dir)?;
+            self.load_skill_file(&path, dir, scope)?;
         }
         Ok(())
     }
 
-    fn load_skill_file(&mut self, path: &Path, base_dir: &Path) -> Result<()> {
+    fn load_skill_file(&mut self, path: &Path, base_dir: &Path, scope: SkillScope) -> Result<()> {
         let content = fs::read_to_string(path)?;
         let metadata = parse_skill_metadata(content.as_str());
         let name = metadata
@@ -83,16 +103,48 @@ impl SkillManager {
             .display()
             .to_string();
 
-        self.skills.insert(
-            name.clone(),
-            Skill {
-                name,
-                title: metadata.title,
-                description: metadata.description,
-                prompt: content,
-                display_path,
-            },
-        );
+        let new_skill = Skill {
+            name: name.clone(),
+            title: metadata.title,
+            description: metadata.description,
+            prompt: content,
+            display_path,
+            scope,
+            disable_model_invocation: metadata.disable_model_invocation,
+        };
+
+        if let Some(existing) = self.skills.get(&name) {
+            if existing.scope == scope {
+                // Same scope: higher-priority file (e.g. SKILL.md) replaces lower-priority file.
+                let replaced = self.skills.insert(name.clone(), new_skill).unwrap();
+                self.overrides
+                    .entry(name.clone())
+                    .or_default()
+                    .push(replaced);
+            } else {
+                // Different scope: first scope wins (home > repo > cwd).
+                let scope_label = |s: SkillScope| match s {
+                    SkillScope::Home => "home",
+                    SkillScope::Repo => "repo",
+                    SkillScope::Cwd => "cwd",
+                    SkillScope::System => "system",
+                };
+                self.load_warnings.push(format!(
+                    "Skill \"{name}\" from {new_scope} ({new_path}) overridden by existing {existing_scope} skill ({existing_path})",
+                    name = name,
+                    new_scope = scope_label(scope),
+                    new_path = path.display(),
+                    existing_scope = scope_label(existing.scope),
+                    existing_path = existing.display_path,
+                ));
+                self.overrides
+                    .entry(name.clone())
+                    .or_default()
+                    .push(new_skill);
+            }
+        } else {
+            self.skills.insert(name, new_skill);
+        }
         Ok(())
     }
 
@@ -115,10 +167,53 @@ impl SkillManager {
                 title: skill.title.clone(),
                 description: skill.description.clone(),
                 display_path: skill.display_path.clone(),
+                scope: skill.scope,
+                disable_model_invocation: skill.disable_model_invocation,
             })
             .collect::<Vec<_>>();
         items.sort_by(|a, b| a.name.cmp(&b.name));
         items
+    }
+
+    pub fn list_overrides(&self) -> Vec<SkillSummary> {
+        let mut items: Vec<SkillSummary> = self
+            .overrides
+            .values()
+            .flatten()
+            .map(|skill| SkillSummary {
+                name: skill.name.clone(),
+                title: skill.title.clone(),
+                description: skill.description.clone(),
+                display_path: skill.display_path.clone(),
+                scope: skill.scope,
+                disable_model_invocation: skill.disable_model_invocation,
+            })
+            .collect();
+        items.sort_by(|a, b| {
+            a.name
+                .cmp(&b.name)
+                .then_with(|| scope_priority(a.scope).cmp(&scope_priority(b.scope)))
+        });
+        items
+    }
+}
+
+fn scope_for_search_dir(dir: &Path, home: &Path, cwd: &Path) -> SkillScope {
+    if dir.starts_with(home) {
+        SkillScope::Home
+    } else if dir.starts_with(cwd) && dir.ends_with(".rara/skills") {
+        SkillScope::Cwd
+    } else {
+        SkillScope::Repo
+    }
+}
+
+fn scope_priority(scope: SkillScope) -> u8 {
+    match scope {
+        SkillScope::Home => 0,
+        SkillScope::Repo => 1,
+        SkillScope::Cwd => 2,
+        SkillScope::System => 3,
     }
 }
 
@@ -185,6 +280,7 @@ struct ParsedSkillMetadata {
     name: Option<String>,
     title: Option<String>,
     description: String,
+    disable_model_invocation: bool,
 }
 
 fn parse_skill_metadata(content: &str) -> ParsedSkillMetadata {
@@ -201,11 +297,16 @@ fn parse_skill_metadata(content: &str) -> ParsedSkillMetadata {
         .or_else(|| title.clone())
         .or_else(|| first_non_empty_markdown_line(markdown))
         .unwrap_or_else(|| "No description".to_string());
+    let disable_model_invocation = frontmatter
+        .and_then(|frontmatter| frontmatter_value(frontmatter, "disable_model_invocation"))
+        .map(|v| v == "true")
+        .unwrap_or(false);
 
     ParsedSkillMetadata {
         name,
         title,
         description,
+        disable_model_invocation,
     }
 }
 
@@ -306,7 +407,7 @@ mod tests {
 
     use tempfile::tempdir;
 
-    use super::{SkillManager, repo_skill_search_dirs, skill_search_dirs};
+    use super::{SkillManager, SkillScope, repo_skill_search_dirs, skill_search_dirs};
 
     #[test]
     fn loads_legacy_markdown_skills() {
@@ -314,12 +415,15 @@ mod tests {
         fs::write(dir.path().join("legacy.md"), "# Legacy Skill\nbody").expect("write");
 
         let mut manager = SkillManager::new();
-        manager.load_from_dir(dir.path()).expect("load");
+        manager
+            .load_from_dir(dir.path(), SkillScope::Cwd)
+            .expect("load");
 
         let skill = manager.get_skill("legacy").expect("legacy skill");
         assert_eq!(skill.title.as_deref(), Some("Legacy Skill"));
         assert_eq!(skill.description, "Legacy Skill");
         assert_eq!(skill.display_path, "legacy.md");
+        assert_eq!(skill.scope, SkillScope::Cwd);
     }
 
     #[test]
@@ -330,12 +434,15 @@ mod tests {
         fs::write(skill_dir.join("SKILL.md"), "# Reviewer\nworkflow").expect("write");
 
         let mut manager = SkillManager::new();
-        manager.load_from_dir(dir.path()).expect("load");
+        manager
+            .load_from_dir(dir.path(), SkillScope::Cwd)
+            .expect("load");
 
         let skill = manager.get_skill("reviewer").expect("reviewer skill");
         assert_eq!(skill.title.as_deref(), Some("Reviewer"));
         assert_eq!(skill.description, "Reviewer");
         assert_eq!(skill.display_path, "reviewer/SKILL.md");
+        assert_eq!(skill.scope, SkillScope::Cwd);
     }
 
     #[test]
@@ -350,12 +457,15 @@ mod tests {
         .expect("write");
 
         let mut manager = SkillManager::new();
-        manager.load_from_dir(dir.path()).expect("load");
+        manager
+            .load_from_dir(dir.path(), SkillScope::Cwd)
+            .expect("load");
 
         let skill = manager.get_skill("code-review").expect("frontmatter skill");
         assert_eq!(skill.title.as_deref(), Some("Code Review"));
         assert_eq!(skill.description, "Review local code changes.");
         assert_eq!(skill.display_path, "reviewer/SKILL.md");
+        assert_eq!(skill.scope, SkillScope::Cwd);
     }
 
     #[test]
@@ -370,7 +480,9 @@ mod tests {
         .expect("write");
 
         let mut manager = SkillManager::new();
-        manager.load_from_dir(dir.path()).expect("load");
+        manager
+            .load_from_dir(dir.path(), SkillScope::Cwd)
+            .expect("load");
 
         let skill = manager
             .get_skill("windows-review")
@@ -378,6 +490,7 @@ mod tests {
         assert_eq!(skill.title.as_deref(), Some("Windows Review"));
         assert_eq!(skill.description, "Review CRLF metadata.");
         assert_eq!(skill.display_path, "reviewer/SKILL.md");
+        assert_eq!(skill.scope, SkillScope::Cwd);
     }
 
     #[test]
@@ -389,11 +502,84 @@ mod tests {
         fs::write(skill_dir.join("SKILL.md"), "# Directory Reviewer\nworkflow").expect("write");
 
         let mut manager = SkillManager::new();
-        manager.load_from_dir(dir.path()).expect("load");
+        manager
+            .load_from_dir(dir.path(), SkillScope::Cwd)
+            .expect("load");
 
         let skill = manager.get_skill("reviewer").expect("reviewer skill");
         assert_eq!(skill.description, "Directory Reviewer");
         assert_eq!(skill.display_path, "reviewer/SKILL.md");
+        assert_eq!(skill.scope, SkillScope::Cwd);
+    }
+
+    #[test]
+    fn overrides_track_duplicate_skill_across_scopes() {
+        let home_dir = tempdir().expect("tempdir");
+        let cwd_dir = tempdir().expect("tempdir");
+        let home_skills = home_dir.path().join(".rara/skills");
+        let cwd_skills = cwd_dir.path().join(".rara/skills");
+        fs::create_dir_all(&home_skills).expect("mkdir home");
+        fs::create_dir_all(&cwd_skills).expect("mkdir cwd");
+
+        fs::write(
+            home_skills.join("reviewer.md"),
+            "# Home Reviewer\nhome workflow",
+        )
+        .expect("write home");
+        fs::write(
+            cwd_skills.join("reviewer.md"),
+            "# Cwd Reviewer\ncwd workflow",
+        )
+        .expect("write cwd");
+
+        let mut manager = SkillManager::new();
+        manager
+            .load_from_dir(home_skills.as_path(), SkillScope::Home)
+            .expect("load home");
+        manager
+            .load_from_dir(cwd_skills.as_path(), SkillScope::Cwd)
+            .expect("load cwd");
+
+        let skill = manager.get_skill("reviewer").expect("reviewer skill");
+        assert_eq!(skill.description, "Home Reviewer");
+        assert_eq!(skill.scope, SkillScope::Home);
+
+        let overrides = manager.overrides.get("reviewer").expect("override entry");
+        assert_eq!(overrides.len(), 1);
+        assert_eq!(overrides[0].description, "Cwd Reviewer");
+        assert_eq!(overrides[0].scope, SkillScope::Cwd);
+
+        let warnings: Vec<&str> = manager
+            .load_warnings
+            .iter()
+            .filter(|w| w.contains("reviewer"))
+            .map(|s| s.as_str())
+            .collect();
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("overridden by existing home")),
+            "expected override warning, got: {:?}",
+            warnings
+        );
+    }
+
+    #[test]
+    fn scope_priority_home_wins_over_repo_and_cwd() {
+        let dir = tempdir().expect("tempdir");
+        fs::write(dir.path().join("shared.md"), "# First\nfirst body").expect("write");
+
+        let mut manager = SkillManager::new();
+        manager
+            .load_from_dir(dir.path(), SkillScope::Home)
+            .expect("first load");
+        manager
+            .load_from_dir(dir.path(), SkillScope::Cwd)
+            .expect("second load");
+
+        let skill = manager.get_skill("shared").expect("shared skill");
+        assert_eq!(skill.scope, SkillScope::Home);
+        assert_eq!(skill.description, "First");
     }
 
     #[test]
@@ -430,5 +616,43 @@ mod tests {
 
         let dirs = repo_skill_search_dirs(&nested);
         assert_eq!(dirs, vec![repo.clone(), repo.join("a"), nested]);
+    }
+
+    #[test]
+    fn loads_frontmatter_disable_model_invocation() {
+        let dir = tempdir().expect("tempdir");
+        let skill_dir = dir.path().join("restricted");
+        fs::create_dir_all(&skill_dir).expect("mkdir");
+        fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\nname: restricted\ndisable_model_invocation: true\n---\n\n# Restricted\nbody",
+        )
+        .expect("write");
+
+        let mut manager = SkillManager::new();
+        manager
+            .load_from_dir(dir.path(), SkillScope::Cwd)
+            .expect("load");
+
+        let skill = manager.get_skill("restricted").expect("restricted skill");
+        assert!(skill.disable_model_invocation);
+    }
+
+    #[test]
+    fn loads_frontmatter_disable_model_invocation_false_by_default() {
+        let dir = tempdir().expect("tempdir");
+        fs::write(
+            dir.path().join("open.md"),
+            "---\nname: open\ntitle: Open\n---\n\nbody",
+        )
+        .expect("write");
+
+        let mut manager = SkillManager::new();
+        manager
+            .load_from_dir(dir.path(), SkillScope::Cwd)
+            .expect("load");
+
+        let skill = manager.get_skill("open").expect("open skill");
+        assert!(!skill.disable_model_invocation);
     }
 }

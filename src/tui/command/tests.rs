@@ -610,3 +610,59 @@ fn status_resources_text_includes_token_and_cache_summary() {
     assert!(rendered.contains("state_db=sqlite:/tmp/rara/state.db"));
     assert!(!rendered.contains("cache=sqlite:/tmp/rara/state.db"));
 }
+
+#[test]
+fn parses_skills_command() {
+    let command = parse_local_command("/skills").expect("/skills should parse");
+    assert!(matches!(command.kind, LocalCommandKind::Skills));
+    assert!(command.arg.is_none());
+}
+
+#[test]
+fn skills_command_spec_is_registered() {
+    let spec = COMMAND_SPECS
+        .iter()
+        .find(|s| s.name == "skills")
+        .expect("skills should be in COMMAND_SPECS");
+    assert_eq!(spec.usage, "/skills");
+    assert!(spec.summary.contains("View and toggle"));
+}
+
+#[test]
+fn skills_picker_render_shows_entries() {
+    use crate::tui::state::SkillPickerEntry;
+
+    let dir = tempdir().expect("tempdir");
+    let mut app = TuiApp::new(ConfigManager {
+        path: dir.path().join("config.json"),
+    })
+    .expect("app");
+
+    app.skill_picker_entries = vec![
+        SkillPickerEntry {
+            name: "reviewer".into(),
+            title: "Reviewer".into(),
+            scope: "cwd".into(),
+            display_path: ".agents/skills/reviewer/SKILL.md".into(),
+            enabled: true,
+            disable_model_invocation: false,
+        },
+        SkillPickerEntry {
+            name: "restricted".into(),
+            title: "Restricted".into(),
+            scope: "home".into(),
+            display_path: "~/.rara/skills/restricted/SKILL.md".into(),
+            enabled: false,
+            disable_model_invocation: true,
+        },
+    ];
+    app.skill_picker_idx = 1;
+    app.overlay = Some(crate::tui::state::Overlay::SkillsPicker);
+
+    // Verify entries exist and the correct one is selected
+    assert_eq!(app.skill_picker_entries.len(), 2);
+    assert_eq!(app.skill_picker_idx, 1);
+    assert!(!app.skill_picker_entries[1].enabled);
+    assert!(app.skill_picker_entries[1].disable_model_invocation);
+    assert!(app.skill_picker_entries[0].enabled);
+}

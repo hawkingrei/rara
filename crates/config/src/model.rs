@@ -41,7 +41,9 @@ pub struct ProviderConfigState {
 
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum OpenAiEndpointKind {
+    #[default]
     Custom,
     Deepseek,
     Kimi,
@@ -93,12 +95,6 @@ impl OpenAiEndpointKind {
             "openrouter" => Some(Self::Openrouter),
             _ => None,
         }
-    }
-}
-
-impl Default for OpenAiEndpointKind {
-    fn default() -> Self {
-        Self::Custom
     }
 }
 
@@ -246,10 +242,9 @@ impl RaraConfig {
 
     pub fn clear_provider_api_key(&mut self, provider: &str) {
         if let Some(kind) = OpenAiEndpointKind::from_legacy_provider(provider) {
-            if self.provider == provider {
-                self.clear_api_key();
-            } else if self.provider == "openai-compatible"
-                && self.active_openai_profile_kind() == Some(kind)
+            if self.provider == provider
+                || (self.provider == "openai-compatible"
+                    && self.active_openai_profile_kind() == Some(kind))
             {
                 self.clear_api_key();
             } else if let Some(profile) = self.openai_profiles.get_mut(kind.default_profile_id()) {
@@ -269,18 +264,18 @@ impl RaraConfig {
     pub fn set_provider(&mut self, provider: impl Into<String>) {
         self.sync_active_provider_state();
         let provider = provider.into();
-        if provider != "openai-compatible" {
-            if let Some(kind) = OpenAiEndpointKind::from_legacy_provider(provider.as_str()) {
-                self.provider = "openai-compatible".to_string();
-                self.reset_provider_scoped_fields();
-                let profile = self.profile_for_kind_or_default(kind);
-                self.active_openai_profile_id = Some(profile.id.clone());
-                self.openai_profiles
-                    .insert(profile.id.clone(), profile.clone());
-                self.apply_openai_profile(profile);
-                self.apply_provider_environment_defaults();
-                return;
-            }
+        if provider != "openai-compatible"
+            && let Some(kind) = OpenAiEndpointKind::from_legacy_provider(provider.as_str())
+        {
+            self.provider = "openai-compatible".to_string();
+            self.reset_provider_scoped_fields();
+            let profile = self.profile_for_kind_or_default(kind);
+            self.active_openai_profile_id = Some(profile.id.clone());
+            self.openai_profiles
+                .insert(profile.id.clone(), profile.clone());
+            self.apply_openai_profile(profile);
+            self.apply_provider_environment_defaults();
+            return;
         }
         self.provider = provider;
         self.reset_provider_scoped_fields();

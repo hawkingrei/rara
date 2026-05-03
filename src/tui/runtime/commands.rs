@@ -28,6 +28,7 @@ pub(super) async fn execute_local_command(
         LocalCommandKind::Quit => "quit",
         LocalCommandKind::Resume => "resume",
         LocalCommandKind::Status => "status",
+        LocalCommandKind::Skills => "skills",
     });
     match command.kind {
         LocalCommandKind::Approval => {
@@ -126,6 +127,13 @@ pub(super) async fn execute_local_command(
         LocalCommandKind::Status => {
             app.set_runtime_phase(RuntimePhase::LocalCommand, Some("opening status".into()));
             app.open_overlay(Overlay::Status(StatusTab::Overview));
+        }
+        LocalCommandKind::Skills => {
+            app.set_runtime_phase(
+                RuntimePhase::LocalCommand,
+                Some("opening skills picker".into()),
+            );
+            app.open_overlay(Overlay::SkillsPicker);
         }
     }
     if let Some(agent) = agent_slot.as_ref() {

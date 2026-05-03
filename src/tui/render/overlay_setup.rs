@@ -4,7 +4,9 @@ use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::Line,
-    widgets::{Block, Borders, Cell, List, ListItem, Paragraph, Row, Table, TableState, Wrap},
+    widgets::{
+        Block, Borders, Cell, List, ListItem, ListState, Paragraph, Row, Table, TableState, Wrap,
+    },
 };
 use secrecy::ExposeSecret;
 use unicode_width::UnicodeWidthChar;
@@ -711,6 +713,76 @@ pub(super) fn render_base_url_editor_modal(
         app.base_url_cursor_offset(),
         chunks[1],
     ))
+}
+
+pub(super) fn render_skills_picker_modal(f: &mut Frame, app: &TuiApp, area: Rect) {
+    let title = format!(" Skills ({} loaded) ", app.skill_picker_entries.len());
+    let intro = "Space toggle enable/disable  Esc close";
+    let intro_height = wrapped_text_height(intro, area.width);
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(intro_height),
+            Constraint::Min(8),
+            Constraint::Length(2),
+        ])
+        .split(area);
+
+    f.render_widget(
+        Paragraph::new(intro)
+            .block(Block::default().borders(Borders::ALL).title(title.as_str()))
+            .wrap(Wrap { trim: false }),
+        chunks[0],
+    );
+
+    let items: Vec<ListItem> = if app.skill_picker_entries.is_empty() {
+        vec![ListItem::new("No skills loaded.")]
+    } else {
+        app.skill_picker_entries
+            .iter()
+            .enumerate()
+            .map(|(idx, entry)| {
+                let selected = idx == app.skill_picker_idx;
+                let bullet = if selected { "›" } else { " " };
+                let check = if entry.enabled { "✔" } else { "✗" };
+                let style = if selected {
+                    Style::default()
+                        .fg(TEXT_ACCENT)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default()
+                };
+                let scope = &entry.scope;
+                let line = format!(
+                    "{bullet} {check} [{scope}] {title}  —  {path}",
+                    title = entry.title,
+                    path = entry.display_path,
+                );
+                ListItem::new(Line::styled(line, style))
+            })
+            .collect()
+    };
+
+    let mut list_state = ListState::default();
+    if !app.skill_picker_entries.is_empty() {
+        list_state.select(Some(app.skill_picker_idx));
+    }
+
+    f.render_stateful_widget(
+        List::new(items).block(Block::default().borders(Borders::LEFT | Borders::RIGHT)),
+        chunks[1],
+        &mut list_state,
+    );
+
+    let footer = if app.skill_picker_entries.is_empty() {
+        "Esc close"
+    } else {
+        "↑↓ move  Space toggle  Esc close"
+    };
+    f.render_widget(
+        Paragraph::new(footer).alignment(Alignment::Center),
+        chunks[2],
+    );
 }
 
 pub(super) fn render_auth_mode_picker_modal(f: &mut Frame, app: &TuiApp, area: Rect) {

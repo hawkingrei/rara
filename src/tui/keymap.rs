@@ -72,6 +72,14 @@ pub(crate) fn map_key_to_event(key: KeyEvent, app: &TuiApp) -> AppEvent {
             KeyCode::Enter => AppEvent::ApplyOverlaySelection,
             _ => AppEvent::Noop,
         },
+        Some(Overlay::SkillsPicker) => match code {
+            KeyCode::Esc => AppEvent::CloseOverlay,
+            KeyCode::Up | KeyCode::Char('k') => AppEvent::MoveSkillsSelection(-1),
+            KeyCode::Down | KeyCode::Char('j') => AppEvent::MoveSkillsSelection(1),
+            KeyCode::Char(' ') => AppEvent::ToggleSkillSelection,
+            KeyCode::Enter => AppEvent::CloseOverlay,
+            _ => AppEvent::Noop,
+        },
         Some(Overlay::ModelPicker) => match code {
             KeyCode::Esc => AppEvent::CloseOverlay,
             KeyCode::Up | KeyCode::Char('k') => AppEvent::MoveModelSelection(-1),

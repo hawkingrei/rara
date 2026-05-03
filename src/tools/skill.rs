@@ -32,16 +32,28 @@ impl Tool for SkillTool {
             .as_str()
             .ok_or(ToolError::InvalidInput("action".into()))?;
         match action {
-            "list" => Ok(json!({ "skills": self.skill_manager.list_summaries() })),
+            "list" => Ok(json!({
+                "skills": self.skill_manager.list_summaries(),
+                "overrides": self.skill_manager.list_overrides(),
+                "load_warnings": &self.skill_manager.load_warnings,
+            })),
             "invoke" => {
                 let name = i["skill_name"]
                     .as_str()
                     .ok_or(ToolError::InvalidInput("name".into()))?;
-                let instructions = self
-                    .skill_manager
-                    .invoke_instructions(name)
-                    .map_err(|err| ToolError::ExecutionFailed(err.to_string()))?;
-                Ok(json!({ "instructions": instructions }))
+                let skill =
+                    self.skill_manager
+                        .get_skill(name)
+                        .ok_or(ToolError::ExecutionFailed(format!(
+                            "Skill not found: {name}"
+                        )))?;
+                Ok(json!({
+                    "name": skill.name,
+                    "title": skill.title,
+                    "scope": skill.scope,
+                    "display_path": skill.display_path,
+                    "instructions": skill.prompt,
+                }))
             }
             _ => Err(ToolError::InvalidInput("Invalid action".into())),
         }
