@@ -8596,6 +8596,8 @@ version = "0.1.0"
 dependencies = [
  "agent-client-protocol",
  "anyhow",
+ "arrow-array",
+ "arrow-schema",
  "async-trait",
  "base64 0.22.1",
  "candle-core",
@@ -8612,6 +8614,7 @@ dependencies = [
  "hf-hub",
  "indicatif",
  "insta",
+ "lance-index",
  "lancedb",
  "libc",
  "open",

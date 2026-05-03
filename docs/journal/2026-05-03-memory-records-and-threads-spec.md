@@ -5,7 +5,7 @@
 
 ## Context
 
-Reviewed Nowledge Mem's memory and thread architecture. Two gaps: no structured
+Reviewed an external memory and thread architecture. Two gaps: no structured
 memory records, no thread abstraction above SessionManager.
 
 ## Decisions

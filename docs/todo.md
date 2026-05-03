@@ -49,7 +49,14 @@ Active backlog only. Keep this file small and current.
 
 ## Memory / Retrieval / Persistence
 
-- [ ] Real vector-backed retrieval via LanceDB for thread and workspace memory.
+- [x] Add `MemoryRecord` runtime model with title, Markdown content, labels, importance, timestamps, source, and scope.
+- [x] Introduce `MemoryStore` as the memory-domain façade over the current LanceDB-backed `VectorDB`.
+- [x] Turn `remember_experience` and `retrieve_experience` into compatibility adapters over `MemoryStore`.
+- [ ] Promote LanceDB-backed retrieval from `MemoryStore` into ranked `MemorySelection` candidates.
+- [ ] Add memory update/delete/list-label control-plane scaffolding for ACP/Wire without exposing LanceDB APIs.
+- [ ] Add thread distillation into deduplicated `MemoryRecord`s with source message spans.
+- [ ] Move raw session checkpoints into per-session append shards instead of the global LanceDB `conversations` table.
+- [ ] Add periodic promotion from session shards into global `MemoryRecord`s.
 - [ ] Durable in-turn checkpoints: persist after each message/tool-result batch, atomic writes, crash-tolerant `SessionManager`.
 - [ ] Define background task restart/reattach semantics.
 - [ ] Compaction as first-class lifecycle event: persist summaries, token counters, metadata ownership.
@@ -60,7 +67,7 @@ Active backlog only. Keep this file small and current.
 - [ ] `ThreadStore` / `ThreadRecorder`: from façade over `SessionManager`+`StateDb` to true structured thread store.
 - [ ] Thread-scoped and workspace-scoped `MemoryRecord` storage with promotion rules.
 - [ ] Retrieval orchestration layer from `docs/features/context-architecture.md`.
-- [ ] Initialize LanceDB and wire vector index for memory selection.
+- [x] Initialize LanceDB and wire FTS/vector/hybrid search paths behind the existing memory index façade.
 - [ ] Make memory mutation/query control-plane-ready so ACP/Wire can inspect and add memory without directly editing prompt text.
 
 ## TUI / Transcript

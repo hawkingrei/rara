@@ -6,6 +6,7 @@ mod config;
 mod context;
 mod llm;
 mod local_backend;
+mod memory_store;
 mod oauth;
 mod prompt;
 mod redaction;
