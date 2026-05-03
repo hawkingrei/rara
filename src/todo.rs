@@ -1,6 +1,7 @@
 use anyhow::{Result, anyhow};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::HashSet;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -77,6 +78,7 @@ pub fn normalize_todo_write_input(input: &Value) -> Result<TodoState> {
     let updated_at = epoch_seconds();
     let mut items = Vec::with_capacity(todos.len());
     let mut in_progress_count = 0usize;
+    let mut seen_ids = HashSet::new();
 
     for (idx, item) in todos.iter().enumerate() {
         let object = item
@@ -105,6 +107,9 @@ pub fn normalize_todo_write_input(input: &Value) -> Result<TodoState> {
             .filter(|id| !id.is_empty())
             .map(str::to_string)
             .unwrap_or_else(|| format!("todo-{}", idx + 1));
+        if !seen_ids.insert(id.clone()) {
+            return Err(anyhow!("todo item {} has duplicate id '{}'", idx + 1, id));
+        }
         items.push(TodoItem {
             id,
             content: content.to_string(),
@@ -208,6 +213,19 @@ mod tests {
         .expect_err("multiple active todos should be rejected");
 
         assert!(err.to_string().contains("at most one in_progress"));
+    }
+
+    #[test]
+    fn rejects_duplicate_todo_ids() {
+        let err = normalize_todo_write_input(&json!({
+            "todos": [
+                {"content": "Generated id", "status": "pending"},
+                {"id": "todo-1", "content": "Explicit collision", "status": "pending"}
+            ]
+        }))
+        .expect_err("duplicate todo ids should be rejected");
+
+        assert!(err.to_string().contains("duplicate id 'todo-1'"));
     }
 
     #[test]

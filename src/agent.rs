@@ -768,8 +768,14 @@ impl Agent {
                     Ok(result) => {
                         if tool_name == TODO_WRITE_TOOL_NAME {
                             let state: TodoState = serde_json::from_value(result.clone())?;
-                            self.session_manager
-                                .save_todo_state(&self.session_id, &state)?;
+                            if let Err(err) = self
+                                .session_manager
+                                .save_todo_state(&self.session_id, &state)
+                            {
+                                report(AgentEvent::Status(format!(
+                                    "Warning: failed to persist todo state: {err}"
+                                )));
+                            }
                             self.todo_state = Some(state.clone());
                             report(AgentEvent::TodoUpdated(state));
                         }
