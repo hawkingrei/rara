@@ -18,6 +18,7 @@ pub(crate) fn assemble_context_view(
     available_memory_items: &[MemorySelectionItemContextEntry],
     dropped_memory_items: &[MemorySelectionItemContextEntry],
     history: &[Message],
+    skill_listing: Option<&str>,
 ) -> ContextAssemblyView {
     let mut entries = Vec::new();
 
@@ -214,6 +215,22 @@ pub(crate) fn assemble_context_view(
             inclusion_reason: item.selection_reason.clone(),
             budget_impact_tokens: item.budget_impact_tokens,
             dropped_reason: item.dropped_reason.as_ref().map(|r| r.reason().to_string()),
+        });
+    }
+
+    if let Some(skill_text) = skill_listing.filter(|v| !v.trim().is_empty()) {
+        push(ContextAssemblyEntry {
+            order: 0,
+            cache_status: None,
+            layer: "skill_listing".to_string(),
+            kind: "skill_listing".to_string(),
+            label: "Available Skills".to_string(),
+            source_path: None,
+            injected: true,
+            inclusion_reason: "injected as a per-turn skill_listing attachment for agent discovery"
+                .to_string(),
+            budget_impact_tokens: Some(estimate_text_tokens(skill_text)),
+            dropped_reason: None,
         });
     }
 

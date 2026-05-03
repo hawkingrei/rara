@@ -44,6 +44,7 @@ pub struct RuntimeContextInputs<'a> {
     pub history: &'a [Message],
     pub vdb_uri: &'a str,
     pub pending_interactions: Vec<RuntimeInteractionInput>,
+    pub skill_listing: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -181,6 +182,7 @@ impl<'a> ContextAssembler<'a> {
             retrieval.memory_selection.available_items.as_slice(),
             retrieval.memory_selection.dropped_items.as_slice(),
             inputs.history,
+            inputs.skill_listing.as_deref(),
         );
 
         SharedRuntimeContext {
