@@ -7,6 +7,7 @@ pub mod planning;
 pub mod pty;
 pub mod search;
 pub mod skill;
+pub mod todo;
 pub mod vector;
 pub mod web;
 pub mod workspace;

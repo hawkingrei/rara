@@ -18,6 +18,6 @@ pub use self::runtime::{
     CacheStatus, CompactionContextView, CompactionSourceContextEntry, ContextAssemblyEntry,
     ContextAssemblyView, ContextBudgetView, DropReason, MemorySelectionContextView,
     MemorySelectionItemContextEntry, PlanContextView, PromptContextView, PromptSourceContextEntry,
-    RetrievalContextView, RetrievalSourceContextEntry, SharedRuntimeContext,
+    RetrievalContextView, RetrievalSourceContextEntry, SharedRuntimeContext, TodoContextView,
     is_retrieved_memory_kind,
 };

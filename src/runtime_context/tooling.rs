@@ -24,6 +24,7 @@ use crate::tools::pty::{
 };
 use crate::tools::search::{GlobTool, GrepTool};
 use crate::tools::skill::SkillTool;
+use crate::tools::todo::TodoWriteTool;
 use crate::tools::vector::{RememberExperienceTool, RetrieveExperienceTool};
 use crate::tools::web::{WebFetchTool, WebSearchTool};
 use crate::tools::workspace::UpdateProjectMemoryTool;
@@ -101,6 +102,7 @@ pub(super) fn create_full_tool_manager(
     tm.register(Box::new(GrepTool));
     tm.register(Box::new(EnterPlanModeTool));
     tm.register(Box::new(ExitPlanModeTool));
+    tm.register(Box::new(TodoWriteTool));
     tm.register(Box::new(RememberExperienceTool {
         backend: backend.clone(),
         vdb: vdb.clone(),

@@ -420,7 +420,7 @@ impl QueuedFollowUpCell {
 
 impl HistoryCell for QueuedFollowUpCell {
     fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
-        let mut lines = vec![Line::from(section_span("Queued Follow-up", TEXT_SECONDARY))];
+        let mut lines = vec![Line::from(section_span("Queued Follow-up", PHASE_PLANNING))];
         for section in &self.sections {
             lines.push(Line::from(format!("  {}", section.title)));
             lines.push(Line::from(format!("    -> {}", section.preview)));

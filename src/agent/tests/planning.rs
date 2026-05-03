@@ -3,6 +3,7 @@ use std::sync::{Arc, Mutex};
 use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::json;
+use tempfile::tempdir;
 
 use crate::agent::planning::{
     has_unclosed_proposed_plan_block, parse_exit_plan_tool_input, parse_plan_block,
@@ -17,6 +18,7 @@ use crate::session::SessionManager;
 use crate::tool::ToolManager;
 use crate::tool_result::ToolResultStore;
 use crate::tools::planning::{EnterPlanModeTool, ExitPlanModeTool};
+use crate::tools::todo::TodoWriteTool;
 use crate::vectordb::VectorDB;
 use crate::workspace::WorkspaceMemory;
 
@@ -175,6 +177,193 @@ async fn appends_continuation_after_tool_result() {
             .iter()
             .any(|message| { message.content.to_string().contains("tool_result") })
     );
+}
+
+#[tokio::test]
+async fn todo_write_updates_session_state_and_emits_event() {
+    let backend = Arc::new(SequencedBackend::new(vec![
+        LlmResponse {
+            content: vec![ContentBlock::ToolUse {
+                id: "todo-tool-1".to_string(),
+                name: "todo_write".to_string(),
+                input: json!({
+                    "todos": [
+                        {"content": "Implement todo runtime", "status": "in_progress"},
+                        {"content": "Run focused tests", "status": "pending"}
+                    ]
+                }),
+            }],
+            stop_reason: Some("tool_use".to_string()),
+            usage: Some(TokenUsage::default()),
+        },
+        LlmResponse {
+            content: vec![ContentBlock::Text {
+                text: "Todo state is recorded.".to_string(),
+            }],
+            stop_reason: Some("end_turn".to_string()),
+            usage: Some(TokenUsage::default()),
+        },
+    ]));
+
+    let mut tool_manager = ToolManager::new();
+    tool_manager.register(Box::new(TodoWriteTool));
+    let (_temp, session_manager, workspace, rara_dir) = test_runtime_storage();
+    let mut agent = Agent::new(
+        tool_manager,
+        backend,
+        Arc::new(VectorDB::new(&rara_dir.join("lancedb").to_string_lossy())),
+        session_manager.clone(),
+        workspace,
+    );
+    agent.session_id = "todo-session".to_string();
+    let events = Arc::new(Mutex::new(Vec::new()));
+
+    agent
+        .query_with_mode_and_events(
+            "track the implementation".to_string(),
+            super::super::AgentOutputMode::Silent,
+            {
+                let events = events.clone();
+                move |event| events.lock().expect("events").push(event)
+            },
+        )
+        .await
+        .expect("query should succeed");
+
+    let state = agent.todo_state.expect("agent should keep todo state");
+    assert_eq!(state.items.len(), 2);
+    assert_eq!(
+        state.summary().active_item.as_deref(),
+        Some("Implement todo runtime")
+    );
+    assert_eq!(
+        session_manager
+            .load_todo_state("todo-session")
+            .expect("todo state should load"),
+        Some(state.clone())
+    );
+    assert!(
+        events
+            .lock()
+            .expect("events")
+            .iter()
+            .any(|event| matches!(event, AgentEvent::TodoUpdated(updated) if *updated == state))
+    );
+}
+
+#[tokio::test]
+async fn todo_write_persistence_failure_warns_without_aborting_turn() {
+    let backend = Arc::new(SequencedBackend::new(vec![
+        LlmResponse {
+            content: vec![ContentBlock::ToolUse {
+                id: "todo-tool-1".to_string(),
+                name: "todo_write".to_string(),
+                input: json!({
+                    "todos": [
+                        {"content": "Keep going after persistence failure", "status": "in_progress"}
+                    ]
+                }),
+            }],
+            stop_reason: Some("tool_use".to_string()),
+            usage: Some(TokenUsage::default()),
+        },
+        LlmResponse {
+            content: vec![ContentBlock::Text {
+                text: "Todo state is still usable.".to_string(),
+            }],
+            stop_reason: Some("end_turn".to_string()),
+            usage: Some(TokenUsage::default()),
+        },
+    ]));
+
+    let mut tool_manager = ToolManager::new();
+    tool_manager.register(Box::new(TodoWriteTool));
+    let temp = tempdir().expect("tempdir");
+    let root = temp.path().to_path_buf();
+    let rara_dir = root.join(".rara");
+    std::fs::create_dir_all(rara_dir.join("rollouts")).expect("rollouts");
+    let blocked_legacy_path = rara_dir.join("sessions");
+    std::fs::write(&blocked_legacy_path, "not a directory").expect("blocked sessions path");
+    let session_manager = Arc::new(SessionManager {
+        storage_dir: rara_dir.join("rollouts"),
+        legacy_storage_dir: blocked_legacy_path,
+    });
+    let workspace = Arc::new(WorkspaceMemory::from_paths(root, rara_dir.clone()));
+    let mut agent = Agent::new(
+        tool_manager,
+        backend,
+        Arc::new(VectorDB::new(&rara_dir.join("lancedb").to_string_lossy())),
+        session_manager,
+        workspace,
+    );
+    agent.session_id = "todo-session".to_string();
+    let events = Arc::new(Mutex::new(Vec::new()));
+
+    agent
+        .query_with_mode_and_events(
+            "track the implementation".to_string(),
+            super::super::AgentOutputMode::Silent,
+            {
+                let events = events.clone();
+                move |event| events.lock().expect("events").push(event)
+            },
+        )
+        .await
+        .expect("todo persistence failure should not abort the turn");
+
+    let state = agent.todo_state.expect("agent should keep todo state");
+    assert_eq!(state.items.len(), 1);
+    let events = events.lock().expect("events");
+    assert!(events.iter().any(|event| matches!(
+        event,
+        AgentEvent::Status(message)
+            if message.contains("Warning: failed to persist todo state")
+    )));
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, AgentEvent::TodoUpdated(updated) if *updated == state))
+    );
+}
+
+#[test]
+fn plan_mode_does_not_expose_todo_write_schema() {
+    let mut tool_manager = ToolManager::new();
+    tool_manager.register(Box::new(TodoWriteTool));
+    let (_temp, session_manager, workspace, rara_dir) = test_runtime_storage();
+    let mut agent = Agent::new(
+        tool_manager,
+        Arc::new(SequencedBackend::new(Vec::new())),
+        Arc::new(VectorDB::new(&rara_dir.join("lancedb").to_string_lossy())),
+        session_manager,
+        workspace,
+    );
+
+    agent.set_execution_mode(AgentExecutionMode::Plan);
+    let plan_tool_names = agent
+        .visible_tool_schemas()
+        .into_iter()
+        .filter_map(|schema| {
+            schema
+                .get("name")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string)
+        })
+        .collect::<Vec<_>>();
+    assert!(!plan_tool_names.iter().any(|name| name == "todo_write"));
+
+    agent.set_execution_mode(AgentExecutionMode::Execute);
+    let execute_tool_names = agent
+        .visible_tool_schemas()
+        .into_iter()
+        .filter_map(|schema| {
+            schema
+                .get("name")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string)
+        })
+        .collect::<Vec<_>>();
+    assert!(execute_tool_names.iter().any(|name| name == "todo_write"));
 }
 
 #[tokio::test]

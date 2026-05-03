@@ -15,6 +15,7 @@ Active backlog only. Keep this file small and current.
 ## Runtime Control Plane / ACP / Wire
 
 - [x] Define adapter-neutral runtime control request/event types for ACP, Wire, TUI, CLI, and future appserver entrypoints (see `docs/features/runtime-control-plane.md`).
+- [x] Add Claude-style `todo_write` runtime state with session persistence, TUI update cards, and structured Wire/ACP-ready events.
 - [ ] Route ACP prompt/cancel/session handling through the normal RARA runtime path instead of the current stub.
 - [ ] Add protocol subscriber plumbing on top of the structured `AgentEvent` runtime-control bridge.
 - [ ] Support protocol-registered prompt sources with provenance, scope, budget hints, and `/context` visibility.
@@ -84,6 +85,7 @@ Active backlog only. Keep this file small and current.
 - [ ] High-fidelity render pass for `write/update`, inline diffs, approval cards, message-card hierarchy.
 - [ ] Expand TUI snapshot coverage.
 - [ ] Keep transcript and pending-interaction state backed by structured events that ACP/Wire output subscribers can reuse.
+- [ ] Add first-class todo sections to `/context` and `/status` from `TodoContextView`.
 
 ## Security / Reliability / Performance
 

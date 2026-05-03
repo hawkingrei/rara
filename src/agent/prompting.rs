@@ -53,6 +53,7 @@ impl Agent {
                 .map(|step| (step.status.clone(), step.step.clone()))
                 .collect(),
             plan_explanation: self.plan_explanation.clone(),
+            todo_state: self.todo_state.clone(),
             compact_state: self.compact_state.clone(),
             history: &self.history,
             vdb_uri: self.vdb.uri(),

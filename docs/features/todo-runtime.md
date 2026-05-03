@@ -149,6 +149,22 @@ This keeps Todo visible as execution state without turning it into persistent tr
 - TUI state/render tests for `Todo Updated` display and `/context` todo reporting.
 - Restore tests that todo state survives session reload without mutating `plan.md`.
 
+## Implementation Checkpoint
+
+The first runtime slice implements Claude-style write semantics without automatic plan-to-todo
+conversion:
+
+- `todo_write` accepts a complete replacement list and normalizes item ids, statuses, timestamps,
+  and the single-`in_progress` invariant.
+- Successful writes update `Agent.todo_state`, atomically persist
+  `.rara/sessions/<session_id>/todo.json`, and restore that state when the session is resumed.
+- Runtime context exposes todo state as structured data so future `/context`, compaction, and
+  protocol subscribers can consume the same source.
+- TUI output hides the raw tool JSON and renders a compact `Todo Updated` transcript card only when
+  the list changes.
+- The runtime-control event stream emits a structured `todo.updated` event for Wire/ACP consumers
+  instead of requiring them to parse transcript text.
+
 ## Open Risks
 
 - The first implementation should avoid automatic plan-to-todo conversion. Automatic conversion can
@@ -157,7 +173,10 @@ This keeps Todo visible as execution state without turning it into persistent tr
   clearer ownership model.
 - The UI should avoid permanent todo cards; stale completed lists can become visual noise in long
   sessions.
+- `/context` and `/status` should still get first-class todo sections on top of the structured
+  runtime view.
 
 ## Source Journals
 
 - [2026-05-01-todo-and-review-specs](../journal/2026-05-01-todo-and-review-specs.md)
+- [2026-05-03-todo-write-runtime](../journal/2026-05-03-todo-write-runtime.md)

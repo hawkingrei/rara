@@ -1,5 +1,6 @@
 use crate::agent::{CompactState, PlanStepStatus};
 use crate::prompt::{EffectivePrompt, PromptSource};
+use crate::todo::{TodoState, TodoSummary};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CacheStatus {
@@ -134,6 +135,31 @@ impl PlanContextView {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TodoContextView {
+    pub summary: TodoSummary,
+    pub items: Vec<(String, String, String)>,
+}
+
+impl TodoContextView {
+    pub fn from_state(state: Option<TodoState>) -> Self {
+        match state {
+            Some(state) => Self {
+                summary: state.summary(),
+                items: state
+                    .items
+                    .into_iter()
+                    .map(|item| (item.id, item.status.as_str().to_string(), item.content))
+                    .collect(),
+            },
+            None => Self {
+                summary: TodoSummary::default(),
+                items: Vec::new(),
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContextBudgetView {
     pub context_window_tokens: Option<usize>,
     pub compact_threshold_tokens: usize,
@@ -242,6 +268,7 @@ pub struct SharedRuntimeContext {
     pub assembly: ContextAssemblyView,
     pub prompt: PromptContextView,
     pub plan: PlanContextView,
+    pub todo: TodoContextView,
     pub compaction: CompactionContextView,
     pub retrieval: RetrievalContextView,
 }
