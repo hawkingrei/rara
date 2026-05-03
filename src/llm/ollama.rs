@@ -16,7 +16,7 @@ use super::shared::{
     ContextBudget, LlmBackend, LlmStreamEvent, collect_assistant_content,
     context_budget_from_window, extract_single_tool_result, hashed_embedding,
     http_client_for_target, is_retryable_http_error, parse_tool_arguments,
-    render_openai_message_content,
+    render_openai_message_content, retry_send_json,
 };
 
 pub struct OllamaBackend {
