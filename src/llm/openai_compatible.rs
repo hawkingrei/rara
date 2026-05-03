@@ -1,6 +1,8 @@
 mod codex;
 mod usage;
 
+use backon::{ExponentialBuilder, Retryable};
+
 use std::borrow::Cow;
 use std::fmt;
 use std::time::Duration;
@@ -19,8 +21,9 @@ use crate::redaction::{redact_secrets, sanitize_url_for_display};
 
 use super::shared::{
     ContextBudget, LlmBackend, LlmStreamEvent, LlmTurnMetadata, collect_assistant_content,
-    context_budget_from_window, extract_message_text, http_client_for_target, model_context_budget,
-    next_stream_item_with_idle_timeout, parse_tool_arguments, render_openai_message_content,
+    context_budget_from_window, extract_message_text, http_client_for_target,
+    is_retryable_http_error, model_context_budget, next_stream_item_with_idle_timeout,
+    parse_tool_arguments, render_openai_message_content, retry_send_json,
 };
 
 use self::usage::parse_openai_token_usage;
@@ -177,13 +180,8 @@ impl OpenAiCompatibleBackend {
         body["stream"] = json!(true);
 
         let completions_url = self.endpoint_url("chat/completions");
-        let mut request = self.client.post(&completions_url);
-        if let Some(api_key) = self.api_key.as_ref().map(SecretString::expose_secret) {
-            if !api_key.is_empty() {
-                request = request.header("Authorization", format!("Bearer {api_key}"));
-            }
-        }
-        let res = request.json(&body).send().await?;
+        let api_key = self.api_key.as_ref().map(|k| k.expose_secret());
+        let res = retry_send_json(&self.client, &completions_url, &body, api_key).await?;
 
         if !res.status().is_success() {
             return Err(anyhow!(
@@ -279,12 +277,22 @@ pub async fn fetch_model_context_window(
         format!("{base}/v1/models")
     };
 
-    let mut req = client.get(&url).timeout(Duration::from_secs(5));
-    if let Some(key) = api_key {
-        req = req.bearer_auth(key.expose_secret());
-    }
-
-    let res = req.send().await.ok()?.error_for_status().ok()?;
+    let res = (|| async {
+        let mut req = client.get(&url);
+        if let Some(key) = api_key {
+            req = req.bearer_auth(key.expose_secret());
+        }
+        req.timeout(Duration::from_secs(5))
+            .send()
+            .await
+            .map_err(|e| anyhow!(e))
+    })
+    .retry(ExponentialBuilder::default().with_jitter())
+    .when(|e: &anyhow::Error| is_retryable_http_error(e))
+    .await
+    .ok()?
+    .error_for_status()
+    .ok()?;
     let body: Value = res.json().await.ok()?;
     let models = body["data"].as_array()?;
 
@@ -323,13 +331,8 @@ impl LlmBackend for OpenAiCompatibleBackend {
         );
 
         let completions_url = self.endpoint_url("chat/completions");
-        let mut request = self.client.post(&completions_url);
-        if let Some(api_key) = self.api_key.as_ref().map(SecretString::expose_secret) {
-            if !api_key.is_empty() {
-                request = request.header("Authorization", format!("Bearer {api_key}"));
-            }
-        }
-        let res = request.json(&body).send().await?;
+        let api_key = self.api_key.as_ref().map(|k| k.expose_secret());
+        let res = retry_send_json(&self.client, &completions_url, &body, api_key).await?;
 
         if !res.status().is_success() {
             return Err(anyhow!(
@@ -378,13 +381,8 @@ impl LlmBackend for OpenAiCompatibleBackend {
     async fn embed(&self, text: &str) -> Result<Vec<f32>> {
         let body = json!({ "model": "text-embedding-3-small", "input": text });
         let embeddings_url = self.endpoint_url("embeddings");
-        let mut request = self.client.post(&embeddings_url);
-        if let Some(api_key) = self.api_key.as_ref().map(SecretString::expose_secret) {
-            if !api_key.is_empty() {
-                request = request.header("Authorization", format!("Bearer {api_key}"));
-            }
-        }
-        let res = request.json(&body).send().await?;
+        let api_key = self.api_key.as_ref().map(|k| k.expose_secret());
+        let res = retry_send_json(&self.client, &embeddings_url, &body, api_key).await?;
         if !res.status().is_success() {
             return Err(anyhow!(
                 "API Error at {}: {}",
@@ -460,13 +458,8 @@ impl OpenAiCompatibleBackend {
             LlmTurnMetadata::default(),
         );
         let completions_url = self.endpoint_url("chat/completions");
-        let mut request = self.client.post(&completions_url);
-        if let Some(api_key) = self.api_key.as_ref().map(SecretString::expose_secret) {
-            if !api_key.is_empty() {
-                request = request.header("Authorization", format!("Bearer {api_key}"));
-            }
-        }
-        let res = request.json(&body).send().await?;
+        let api_key = self.api_key.as_ref().map(|k| k.expose_secret());
+        let res = retry_send_json(&self.client, &completions_url, &body, api_key).await?;
         if !res.status().is_success() {
             return Err(api_error_from_response(res)
                 .await

@@ -1,5 +1,6 @@
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
+use backon::{ExponentialBuilder, Retryable};
 use futures::{Stream, StreamExt};
 use serde_json::{Value, json};
 use std::sync::{
@@ -279,6 +280,58 @@ pub(super) fn parse_tool_arguments(arguments: &Value) -> Result<Value> {
         Value::Null => Ok(json!({})),
         _ => Err(anyhow!("tool arguments must be a string or object")),
     }
+}
+
+use reqwest::StatusCode;
+
+/// Retryable HTTP errors for Ollama and OpenAI-compatible backends.
+/// Official API backends (Codex/Gemini) and web tools handle their own retry.
+pub(crate) fn is_retryable_http_error(error: &anyhow::Error) -> bool {
+    let msg = error.to_string().to_lowercase();
+    if msg.contains("timeout") || msg.contains("timed out") {
+        return true;
+    }
+    if msg.contains("connection") && (msg.contains("refused") || msg.contains("reset")) {
+        return true;
+    }
+    if msg.contains("unreachable") || msg.contains("not found") && msg.contains("dns") {
+        return true;
+    }
+    // reqwest wraps status codes — check for 429, 5xx
+    if msg.contains("429")
+        || msg.contains("500")
+        || msg.contains("502")
+        || msg.contains("503")
+        || msg.contains("504")
+    {
+        return true;
+    }
+    false
+}
+
+/// Send a POST JSON request with exponential-backoff retry.
+/// Retries on timeout, connection errors, 429, and 5xx responses.
+pub(crate) async fn retry_send_json(
+    client: &reqwest::Client,
+    url: &str,
+    body: &Value,
+    api_key: Option<&str>,
+) -> Result<reqwest::Response> {
+    let url = url.to_string();
+    let body = body.clone();
+    let api_key = api_key.map(|k| k.to_string());
+    (|| async {
+        let mut request = client.post(&url);
+        if let Some(ref key) = api_key {
+            if !key.is_empty() {
+                request = request.header("Authorization", format!("Bearer {key}"));
+            }
+        }
+        request.json(&body).send().await.map_err(|e| anyhow!(e))
+    })
+    .retry(ExponentialBuilder::default().with_jitter())
+    .when(|e: &anyhow::Error| is_retryable_http_error(e))
+    .await
 }
 
 const HTTP_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);

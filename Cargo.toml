@@ -82,6 +82,7 @@ codex-models-manager = { git = "https://github.com/openai/codex", package = "cod
 candle = { git = "https://github.com/huggingface/candle", rev = "34625ab6d1567a0bc132ac6bc8dc2cce0e16d86d", package = "candle-core" }
 candle-nn = { git = "https://github.com/huggingface/candle", rev = "34625ab6d1567a0bc132ac6bc8dc2cce0e16d86d", package = "candle-nn" }
 candle-transformers = { git = "https://github.com/huggingface/candle", rev = "34625ab6d1567a0bc132ac6bc8dc2cce0e16d86d", package = "candle-transformers" }
+backon = "1.6.0"
 
 [dev-dependencies]
 tempfile = "3.17"

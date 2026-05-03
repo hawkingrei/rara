@@ -1,7 +1,9 @@
+use backon::{ExponentialBuilder, Retryable};
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::time::Duration;
 
+use crate::llm::is_retryable_http_error;
 use crate::redaction::redact_secrets;
 use crate::tool::ToolError;
 
@@ -47,17 +49,22 @@ impl ExaMcpClient {
         });
         let endpoint = self.request_endpoint()?;
 
-        let response = self
-            .client
-            .post(endpoint)
-            .header("Accept", "application/json, text/event-stream")
-            .json(&request)
-            .timeout(Duration::from_secs(DEFAULT_TIMEOUT_SECS))
-            .send()
-            .await
-            .map_err(|err| {
-                ToolError::ExecutionFailed(redact_secrets(format!("Exa MCP request failed: {err}")))
-            })?;
+        let response = (|| async {
+            self.client
+                .post(endpoint.clone())
+                .header("Accept", "application/json, text/event-stream")
+                .json(&request)
+                .timeout(Duration::from_secs(DEFAULT_TIMEOUT_SECS))
+                .send()
+                .await
+                .map_err(|e| anyhow::anyhow!(e))
+        })
+        .retry(ExponentialBuilder::default().with_jitter())
+        .when(|e: &anyhow::Error| is_retryable_http_error(e))
+        .await
+        .map_err(|err| {
+            ToolError::ExecutionFailed(redact_secrets(format!("Exa MCP request failed: {err}")))
+        })?;
 
         let status = response.status();
         let body = response.text().await.map_err(|err| {
