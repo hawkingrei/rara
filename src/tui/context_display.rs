@@ -220,10 +220,7 @@ fn budget_bar(app: &TuiApp, width: usize) -> Line<'static> {
     let total = snap.context_window_tokens.unwrap_or(1).max(1);
 
     let segments: &[(usize, Color)] = &[
-        (
-            snap.stable_instructions_budget,
-            BUDGET_SYSTEM,
-        ),
+        (snap.stable_instructions_budget, BUDGET_SYSTEM),
         (snap.workspace_prompt_budget, BUDGET_WORKSPACE),
         (snap.active_turn_budget, BUDGET_ACTIVE),
         (snap.compacted_history_budget, BUDGET_HISTORY),
