@@ -434,6 +434,7 @@ mod tests {
                 history: &history,
                 vdb_uri: "memory://vdb",
                 pending_interactions: Vec::new(),
+                skill_listing: None,
             },
         );
 
@@ -492,6 +493,7 @@ mod tests {
                 history: &history,
                 vdb_uri: "memory://vdb",
                 pending_interactions: Vec::new(),
+                skill_listing: None,
             },
         );
 
@@ -572,6 +574,7 @@ mod tests {
                 history: &history,
                 vdb_uri: "memory://vdb",
                 pending_interactions: Vec::new(),
+                skill_listing: None,
             },
         );
 
@@ -661,6 +664,7 @@ mod tests {
                     summary: "Allow one shell command in the repo root.".to_string(),
                     source: None,
                 }],
+                skill_listing: None,
             },
         );
 
