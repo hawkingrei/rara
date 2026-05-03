@@ -5,3 +5,4 @@ data/lancedb
 .DS_Store
 .tmp-pr-*
 .tmp-pr*.md
+lancedb.lock

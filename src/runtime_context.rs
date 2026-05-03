@@ -16,6 +16,7 @@ use crate::llm::{
 };
 use crate::local_backend::{LocalLlmBackend, LocalProgressReporter};
 use crate::prompt::{PromptRuntimeConfig, PromptSkillSummary};
+use crate::skill::SkillScope;
 use crate::sandbox::SandboxManager;
 use crate::session::SessionManager;
 use crate::shell_env::capture_shell_environment_snapshot;
@@ -72,11 +73,21 @@ pub(crate) async fn initialize_rara_context(
     prompt_config.available_skills = skill_manager
         .list_summaries()
         .into_iter()
-        .map(|skill| PromptSkillSummary {
-            name: skill.name,
-            title: skill.title,
-            description: skill.description,
-            display_path: skill.display_path,
+        .map(|skill| {
+            let scope = match skill.scope {
+                SkillScope::Home => "home",
+                SkillScope::Repo => "repo",
+                SkillScope::Cwd => "cwd",
+                SkillScope::System => "system",
+            };
+            PromptSkillSummary {
+                name: skill.name,
+                title: skill.title,
+                description: skill.description,
+                display_path: skill.display_path,
+                scope: scope.to_string(),
+                disable_model_invocation: skill.disable_model_invocation,
+            }
         })
         .collect();
 

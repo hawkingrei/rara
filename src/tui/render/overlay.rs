@@ -15,6 +15,7 @@ use self::overlay_setup::{
     render_openai_endpoint_kind_picker_modal, render_openai_profile_label_editor_modal,
     render_openai_profile_picker_modal, render_provider_picker_modal,
     render_reasoning_effort_picker_modal, render_resume_picker_modal,
+    render_skills_picker_modal,
 };
 use super::super::command::{
     general_help_text, matching_commands, model_help_text, palette_commands,
@@ -118,6 +119,12 @@ pub(super) fn render_overlay(
             let popup = setup_flow_rect(f.area());
             f.render_widget(Clear, popup);
             render_openai_profile_label_editor_modal(f, app, popup)
+        }
+        Overlay::SkillsPicker => {
+            let popup = setup_flow_rect(f.area());
+            f.render_widget(Clear, popup);
+            render_skills_picker_modal(f, app, popup);
+            None
         }
     }
 }

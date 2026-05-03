@@ -54,6 +54,7 @@ pub enum Overlay {
     ModelNameEditor,
     OpenAiProfileLabelEditor,
     ReasoningEffortPicker,
+    SkillsPicker,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -87,6 +88,7 @@ pub enum LocalCommandKind {
     Login,
     Logout,
     Quit,
+    Skills,
 }
 
 pub struct LocalCommand {
@@ -487,4 +489,16 @@ pub struct TuiApp {
     pub repo_slug: Option<String>,
     pub current_pr_url: Option<String>,
     pub codex_auth_mode: Option<SavedCodexAuthMode>,
+    pub skill_picker_idx: usize,
+    pub skill_picker_entries: Vec<SkillPickerEntry>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SkillPickerEntry {
+    pub name: String,
+    pub title: String,
+    pub scope: String,
+    pub display_path: String,
+    pub enabled: bool,
+    pub disable_model_invocation: bool,
 }

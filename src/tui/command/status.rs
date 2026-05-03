@@ -678,6 +678,7 @@ pub fn status_prompt_sources_text(app: &TuiApp) -> String {
                 .map(|warning| format!("- {warning}")),
         );
     }
+
     if app.snapshot.prompt_source_entries.is_empty() && app.snapshot.prompt_warnings.is_empty() {
         "No prompt sources discovered.".to_string()
     } else {
