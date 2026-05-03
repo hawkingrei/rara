@@ -37,3 +37,12 @@ pub(crate) const BADGE_FG_LIGHT: Color = Color::Black;
 
 // ── Interaction ─────────────────────────────────────────────────
 pub(crate) const INTERACTION_SUB_AGENT: Color = Color::Rgb(231, 201, 92); // gold distinct from green RequestInput
+
+// ── Budget bar segments ─────────────────────────────────────────
+pub(crate) const BUDGET_SYSTEM: Color = Color::LightBlue;
+pub(crate) const BUDGET_WORKSPACE: Color = Color::LightCyan;
+pub(crate) const BUDGET_ACTIVE: Color = Color::LightGreen;
+pub(crate) const BUDGET_HISTORY: Color = Color::Rgb(231, 201, 92);
+pub(crate) const BUDGET_MEMORY: Color = Color::LightMagenta;
+pub(crate) const BUDGET_OUTPUT: Color = Color::Gray;
+pub(crate) const BUDGET_FREE: Color = Color::DarkGray;
