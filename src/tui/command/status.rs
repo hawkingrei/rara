@@ -465,16 +465,31 @@ pub fn status_workspace_text(app: &TuiApp) -> String {
 }
 
 pub fn status_resources_text(app: &TuiApp) -> String {
-    let context = app
-        .snapshot
-        .context_window_tokens
-        .map(|value| format_token_count(value))
-        .unwrap_or_else(|| "-".to_string());
-    let last_compact = app
-        .snapshot
-        .last_compaction_after_tokens
-        .map(format_token_count)
-        .unwrap_or_else(|| "-".to_string());
+    let context = match app.snapshot.context_window_tokens {
+        Some(window) => format!(
+            "{} / {} (~auto @ {}, reserve {})",
+            format_token_count(app.snapshot.estimated_history_tokens),
+            format_token_count(window),
+            format_token_count(app.snapshot.compact_threshold_tokens),
+            format_token_count(app.snapshot.reserved_output_tokens)
+        ),
+        None => format!(
+            "{} (~auto @ {})",
+            format_token_count(app.snapshot.estimated_history_tokens),
+            format_token_count(app.snapshot.compact_threshold_tokens)
+        ),
+    };
+    let last_compact = match (
+        app.snapshot.last_compaction_before_tokens,
+        app.snapshot.last_compaction_after_tokens,
+    ) {
+        (Some(before), Some(after)) => format!(
+            "{} -> {}",
+            format_token_count(before),
+            format_token_count(after)
+        ),
+        _ => "-".to_string(),
+    };
     let last_compact_ratio = app
         .snapshot
         .last_compaction_before_tokens
@@ -497,19 +512,18 @@ pub fn status_resources_text(app: &TuiApp) -> String {
         .last_compaction_boundary_recent_file_count
         .map(|v| v.to_string())
         .unwrap_or_else(|| "-".to_string());
-    let recent_compact_files = app
-        .snapshot
-        .compaction_source_entries
-        .iter()
-        .map(|entry| entry.kind.as_str())
-        .collect::<Vec<_>>()
-        .join(", ");
-    let recent_compact_files = if recent_compact_files.is_empty() {
-        "-"
+    let recent_compact_files = if app.snapshot.last_compaction_recent_files.is_empty() {
+        "-".to_string()
     } else {
-        &recent_compact_files
+        app.snapshot.last_compaction_recent_files.join(", ")
     };
-    let cache = app.state_db_status.as_deref().unwrap_or("-");
+    let cache = if is_local_provider(&app.config.provider) {
+        crate::local_backend::default_local_model_cache_dir()
+            .display()
+            .to_string()
+    } else {
+        "-".to_string()
+    };
     let state_db = app.state_db_status.as_deref().unwrap_or("-");
     let retrieval_budget = app
         .snapshot

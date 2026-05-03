@@ -2,11 +2,11 @@ use super::specs::normalize_command_token;
 use super::status::truncate_preview;
 use super::{
     COMMAND_SPECS, help_text, matching_commands, model_help_text, palette_commands,
-    parse_local_command, status_context_text, status_prompt_sources_text, status_resources_text,
-    status_runtime_text,
+    parse_local_command, recommended_commands, status_context_text, status_prompt_sources_text,
+    status_resources_text, status_runtime_text,
 };
 use crate::config::{ConfigManager, OpenAiEndpointKind};
-use crate::context::{DropReason, PromptSourceContextEntry};
+use crate::context::PromptSourceContextEntry;
 use crate::tui::state::{LocalCommandKind, RuntimeSnapshot, TuiApp};
 use tempfile::tempdir;
 
@@ -15,6 +15,13 @@ fn parses_model_command_argument() {
     let command = parse_local_command("/model anything").expect("command should parse");
     assert!(matches!(command.kind, LocalCommandKind::Model));
     assert_eq!(command.arg.as_deref(), Some("anything"));
+}
+
+#[test]
+fn parses_model_name_command_separately_from_model_picker() {
+    let command = parse_local_command("/model-name").expect("command should parse");
+    assert!(matches!(command.kind, LocalCommandKind::ModelName));
+    assert!(command.arg.is_none());
 }
 
 #[test]
@@ -175,6 +182,22 @@ fn palette_commands_show_full_command_list_for_empty_query() {
     let mut sorted = names.clone();
     sorted.sort();
     assert_eq!(names, sorted);
+}
+
+#[test]
+fn recommended_commands_restore_context_model_resume_and_status() {
+    let dir = tempdir().expect("tempdir");
+    let app = TuiApp::new(ConfigManager {
+        path: dir.path().join("config.json"),
+    })
+    .expect("app");
+
+    let names = recommended_commands(&app)
+        .into_iter()
+        .map(|spec| spec.name)
+        .collect::<Vec<_>>();
+
+    assert_eq!(names, vec!["context", "help", "model", "resume", "status"]);
 }
 
 #[test]
@@ -473,10 +496,15 @@ fn status_resources_text_includes_token_and_cache_summary() {
     app.snapshot.total_output_tokens = 500;
     app.snapshot.total_cache_hit_tokens = 300;
     app.snapshot.total_cache_miss_tokens = 100;
+    app.snapshot.estimated_history_tokens = 12_000;
     app.snapshot.context_window_tokens = Some(200_000);
+    app.snapshot.compact_threshold_tokens = 180_000;
+    app.snapshot.reserved_output_tokens = 8_192;
     app.snapshot.compaction_count = 2;
     app.snapshot.last_compaction_before_tokens = Some(10_000);
     app.snapshot.last_compaction_after_tokens = Some(3_000);
+    app.snapshot.last_compaction_recent_files =
+        vec!["src/main.rs".to_string(), "src/lib.rs".to_string()];
     app.snapshot.last_compaction_boundary_recent_file_count = Some(3);
     app.snapshot.compaction_source_entries = vec![crate::context::CompactionSourceContextEntry {
         order: 1,
@@ -485,6 +513,7 @@ fn status_resources_text_includes_token_and_cache_summary() {
         detail: "User Intent".into(),
         inclusion_reason: "compacted older history".into(),
     }];
+    app.config.set_provider("local-candle");
     app.state_db_status = Some("sqlite:/tmp/rara/state.db".into());
     app.snapshot.memory_selection.selection_budget_tokens = Some(20_000);
     app.snapshot.memory_selection.selected_items =
@@ -503,7 +532,12 @@ fn status_resources_text_includes_token_and_cache_summary() {
     assert!(rendered.contains("cache_hit_tokens=300"));
     assert!(rendered.contains("cache_miss_tokens=100"));
     assert!(rendered.contains("compactions=2"));
-    assert!(rendered.contains("last: 3000 tokens, ratio: 30.0%"));
+    assert!(rendered.contains(
+        "context_estimate=12000 tokens / 200000 tokens (~auto @ 180000 tokens, reserve 8192 tokens)"
+    ));
+    assert!(rendered.contains("last: 10000 tokens -> 3000 tokens, ratio: 30.0%"));
     assert!(rendered.contains("recent_compact_file_count=3"));
-    assert!(rendered.contains("recent_compact_files=compacted_summary"));
+    assert!(rendered.contains("recent_compact_files=src/main.rs, src/lib.rs"));
+    assert!(rendered.contains("state_db=sqlite:/tmp/rara/state.db"));
+    assert!(!rendered.contains("cache=sqlite:/tmp/rara/state.db"));
 }
