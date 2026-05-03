@@ -1,7 +1,8 @@
 use std::collections::HashMap;
-use std::fs;
+use std::fs::{self, File};
+use std::io::{BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
@@ -242,6 +243,7 @@ impl From<MemoryMetadata> for MemoryRecord {
 struct MemoryRecordFileStore {
     path: PathBuf,
     lock_path: PathBuf,
+    cache: Arc<Mutex<MemoryRecordCache>>,
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
@@ -259,11 +261,34 @@ impl Default for PersistedMemoryRecordFile {
     }
 }
 
+#[derive(Debug, serde::Deserialize)]
+#[serde(untagged)]
+enum PersistedMemoryRecordEnvelope {
+    Versioned(PersistedMemoryRecordFile),
+    Legacy(Vec<MemoryRecord>),
+}
+
+#[derive(Debug, Default)]
+struct MemoryRecordCache {
+    state: Option<MemoryRecordFileState>,
+    records: HashMap<String, MemoryRecord>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MemoryRecordFileState {
+    Missing,
+    Present {
+        modified_at: Option<SystemTime>,
+        len: u64,
+    },
+}
+
 impl MemoryRecordFileStore {
     fn new(path: PathBuf) -> Self {
         Self {
             lock_path: path.with_extension("json.lock"),
             path,
+            cache: Arc::new(Mutex::new(MemoryRecordCache::default())),
         }
     }
 
@@ -274,28 +299,28 @@ impl MemoryRecordFileStore {
     async fn upsert(&self, record: &MemoryRecord) -> Result<()> {
         let path = self.path.clone();
         let lock_path = self.lock_path.clone();
+        let cache = self.cache.clone();
         let record = record.clone();
-        tokio::task::spawn_blocking(move || upsert_record_sync(path, lock_path, record))
+        tokio::task::spawn_blocking(move || upsert_record_sync(path, lock_path, cache, record))
             .await
             .context("join memory record persistence task")?
     }
 
     async fn load_map(&self) -> Result<HashMap<String, MemoryRecord>> {
         let path = self.path.clone();
-        tokio::task::spawn_blocking(move || load_records_sync(&path))
+        let cache = self.cache.clone();
+        tokio::task::spawn_blocking(move || load_record_map_cached_sync(&path, &cache))
             .await
             .context("join memory record load task")?
-            .map(|records| {
-                records
-                    .into_iter()
-                    .map(|record| (record.id.clone(), record))
-                    .collect()
-            })
     }
 
     async fn get(&self, id: &str) -> Result<Option<MemoryRecord>> {
+        let path = self.path.clone();
+        let cache = self.cache.clone();
         let id = id.to_string();
-        Ok(self.load_map().await?.remove(&id))
+        tokio::task::spawn_blocking(move || get_record_cached_sync(&path, &cache, &id))
+            .await
+            .context("join memory record get task")?
     }
 }
 
@@ -311,7 +336,12 @@ fn default_record_path_for_vdb_uri(uri: &str) -> PathBuf {
     db_path.join("memory_records.json")
 }
 
-fn upsert_record_sync(path: PathBuf, lock_path: PathBuf, record: MemoryRecord) -> Result<()> {
+fn upsert_record_sync(
+    path: PathBuf,
+    lock_path: PathBuf,
+    cache: Arc<Mutex<MemoryRecordCache>>,
+    record: MemoryRecord,
+) -> Result<()> {
     let _lock = AdvisoryFileLock::acquire(lock_path)?;
     let mut file = PersistedMemoryRecordFile {
         records: load_records_sync(&path)?,
@@ -322,24 +352,83 @@ fn upsert_record_sync(path: PathBuf, lock_path: PathBuf, record: MemoryRecord) -
     } else {
         file.records.push(record);
     }
-    write_record_file_sync(&path, &file)
+    write_record_file_sync(&path, &file)?;
+    let records = record_map_from_records(file.records);
+    let state = record_file_state(&path)?;
+    update_record_cache(&cache, state, records);
+    Ok(())
+}
+
+fn load_record_map_cached_sync(
+    path: &Path,
+    cache: &Arc<Mutex<MemoryRecordCache>>,
+) -> Result<HashMap<String, MemoryRecord>> {
+    let state = record_file_state(path)?;
+    {
+        let cache = cache.lock().expect("memory record cache lock poisoned");
+        if cache.state == Some(state) {
+            return Ok(cache.records.clone());
+        }
+    }
+
+    let records = record_map_from_records(load_records_sync(path)?);
+    update_record_cache(cache, state, records.clone());
+    Ok(records)
+}
+
+fn get_record_cached_sync(
+    path: &Path,
+    cache: &Arc<Mutex<MemoryRecordCache>>,
+    id: &str,
+) -> Result<Option<MemoryRecord>> {
+    Ok(load_record_map_cached_sync(path, cache)?.get(id).cloned())
+}
+
+fn update_record_cache(
+    cache: &Arc<Mutex<MemoryRecordCache>>,
+    state: MemoryRecordFileState,
+    records: HashMap<String, MemoryRecord>,
+) {
+    let mut cache = cache.lock().expect("memory record cache lock poisoned");
+    cache.state = Some(state);
+    cache.records = records;
+}
+
+fn record_map_from_records(records: Vec<MemoryRecord>) -> HashMap<String, MemoryRecord> {
+    records
+        .into_iter()
+        .map(|record| (record.id.clone(), record))
+        .collect()
+}
+
+fn record_file_state(path: &Path) -> Result<MemoryRecordFileState> {
+    match fs::metadata(path) {
+        Ok(metadata) => Ok(MemoryRecordFileState::Present {
+            modified_at: metadata.modified().ok(),
+            len: metadata.len(),
+        }),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            Ok(MemoryRecordFileState::Missing)
+        }
+        Err(err) => Err(err).with_context(|| format!("stat memory records {}", path.display())),
+    }
 }
 
 fn load_records_sync(path: &Path) -> Result<Vec<MemoryRecord>> {
-    let content = match fs::read_to_string(path) {
-        Ok(content) => content,
+    let file = match File::open(path) {
+        Ok(file) => file,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(err) => {
             return Err(err).with_context(|| format!("read memory records {}", path.display()));
         }
     };
-    if content.trim().is_empty() {
-        return Ok(Vec::new());
+    let reader = BufReader::new(file);
+    match serde_json::from_reader::<_, PersistedMemoryRecordEnvelope>(reader) {
+        Ok(PersistedMemoryRecordEnvelope::Versioned(file)) => Ok(file.records),
+        Ok(PersistedMemoryRecordEnvelope::Legacy(records)) => Ok(records),
+        Err(err) if err.is_eof() => Ok(Vec::new()),
+        Err(err) => Err(err).with_context(|| format!("parse memory records {}", path.display())),
     }
-    serde_json::from_str::<PersistedMemoryRecordFile>(&content)
-        .map(|file| file.records)
-        .or_else(|_| serde_json::from_str::<Vec<MemoryRecord>>(&content))
-        .with_context(|| format!("parse memory records {}", path.display()))
 }
 
 fn write_record_file_sync(path: &Path, file: &PersistedMemoryRecordFile) -> Result<()> {
@@ -348,13 +437,29 @@ fn write_record_file_sync(path: &Path, file: &PersistedMemoryRecordFile) -> Resu
             .with_context(|| format!("create memory records dir {}", parent.display()))?;
     }
     let tmp_path = path.with_extension(format!("json.tmp-{}", uuid::Uuid::new_v4()));
-    fs::write(&tmp_path, serde_json::to_string_pretty(file)?)
-        .with_context(|| format!("write memory records temp file {}", tmp_path.display()))?;
-    if let Err(err) = fs::rename(&tmp_path, path) {
+    let tmp_file = File::create(&tmp_path)
+        .with_context(|| format!("create memory records temp file {}", tmp_path.display()))?;
+    let mut writer = BufWriter::new(tmp_file);
+    serde_json::to_writer(&mut writer, file)
+        .with_context(|| format!("serialize memory records {}", tmp_path.display()))?;
+    writer
+        .flush()
+        .with_context(|| format!("flush memory records temp file {}", tmp_path.display()))?;
+    if let Err(err) = replace_record_file_sync(&tmp_path, path) {
         let _ = fs::remove_file(&tmp_path);
         return Err(err).with_context(|| format!("replace memory records {}", path.display()));
     }
     Ok(())
+}
+
+fn replace_record_file_sync(tmp_path: &Path, path: &Path) -> std::io::Result<()> {
+    #[cfg(windows)]
+    match fs::remove_file(path) {
+        Ok(()) => {}
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => return Err(err),
+    }
+    fs::rename(tmp_path, path)
 }
 
 fn memory_record_for_hit(
@@ -443,6 +548,88 @@ fn unix_timestamp_seconds() -> u64 {
 mod tests {
     use super::*;
     use crate::llm::MockLlm;
+
+    fn test_memory_record(id: &str, content: &str) -> MemoryRecord {
+        MemoryRecord {
+            id: id.to_string(),
+            title: title_from_content(content),
+            content: content.to_string(),
+            labels: vec![MemoryLabel::Fact],
+            importance: DEFAULT_IMPORTANCE,
+            source: MemorySource::UserCreated,
+            scope: MemoryScope::Project,
+            session_id: None,
+            thread_id: None,
+            source_span: None,
+            created_at_unix_seconds: 1,
+            updated_at_unix_seconds: 1,
+        }
+    }
+
+    #[test]
+    fn memory_record_file_store_writes_compact_json_and_reads_legacy_records() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let path = temp.path().join("records.json");
+        let legacy_path = temp.path().join("legacy_records.json");
+        let record = test_memory_record("memory-test-1", "Compact storage should stay readable.");
+        let file = PersistedMemoryRecordFile {
+            version: MEMORY_RECORDS_FILE_VERSION,
+            records: vec![record.clone()],
+        };
+
+        write_record_file_sync(&path, &file).expect("write compact record file");
+        let content = fs::read_to_string(&path).expect("read compact record file");
+        assert!(!content.contains('\n'));
+        assert_eq!(
+            load_records_sync(&path).expect("load compact records"),
+            vec![record.clone()]
+        );
+
+        fs::write(
+            &legacy_path,
+            serde_json::to_string(&vec![record.clone()]).expect("serialize legacy records"),
+        )
+        .expect("write legacy record file");
+        assert_eq!(
+            load_records_sync(&legacy_path).expect("load legacy records"),
+            vec![record]
+        );
+    }
+
+    #[test]
+    fn memory_record_file_store_refreshes_cache_when_file_changes() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let path = temp.path().join("records.json");
+        let cache = Arc::new(Mutex::new(MemoryRecordCache::default()));
+        let first = test_memory_record("memory-cache-1", "First cached record.");
+        let second = test_memory_record(
+            "memory-cache-2",
+            "Second cached record with a longer payload.",
+        );
+
+        write_record_file_sync(
+            &path,
+            &PersistedMemoryRecordFile {
+                version: MEMORY_RECORDS_FILE_VERSION,
+                records: vec![first.clone()],
+            },
+        )
+        .expect("write first record file");
+        let first_map = load_record_map_cached_sync(&path, &cache).expect("load first cache");
+        assert_eq!(first_map.get(&first.id), Some(&first));
+
+        write_record_file_sync(
+            &path,
+            &PersistedMemoryRecordFile {
+                version: MEMORY_RECORDS_FILE_VERSION,
+                records: vec![second.clone()],
+            },
+        )
+        .expect("write second record file");
+        let second_map = load_record_map_cached_sync(&path, &cache).expect("refresh cache");
+        assert_eq!(second_map.get(&second.id), Some(&second));
+        assert!(!second_map.contains_key(&first.id));
+    }
 
     #[tokio::test]
     async fn memory_store_inserts_and_searches_memory_records() {
