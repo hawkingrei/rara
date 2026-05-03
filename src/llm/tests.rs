@@ -4,6 +4,8 @@ use serde_json::json;
 use crate::agent::Message;
 use crate::config::OpenAiEndpointKind;
 use crate::llm::{ContentBlock, LlmStreamEvent, LlmTurnMetadata};
+use crate::tool::Tool;
+use crate::tools::planning::ExitPlanModeTool;
 
 use super::ollama::{
     apply_ollama_stream_event, build_ollama_options, ensure_ollama_stream_completed,
@@ -662,6 +664,69 @@ fn deepseek_v4_explicit_thinking_enables_controls_for_tools() {
 }
 
 #[test]
+fn openai_chat_tools_enable_strict_for_structured_plan_schema() {
+    let tool = ExitPlanModeTool;
+    let body = build_chat_completion_request_body(
+        "gpt-4o",
+        &[Message {
+            role: "user".to_string(),
+            content: json!("Plan the implementation."),
+        }],
+        &[json!({
+            "name": tool.name(),
+            "description": tool.description(),
+            "input_schema": tool.input_schema()
+        })],
+        OpenAiEndpointKind::Custom,
+        None,
+        None,
+        LlmTurnMetadata::plan(),
+    );
+
+    assert_eq!(body["tools"][0]["type"], "function");
+    assert_eq!(body["tools"][0]["function"]["name"], "exit_plan_mode");
+    assert_eq!(body["tools"][0]["function"]["strict"], true);
+    assert_eq!(
+        body["tools"][0]["function"]["parameters"]["properties"]["proposed_plan"]["required"],
+        json!(["summary", "steps", "validation"])
+    );
+}
+
+#[test]
+fn openai_chat_tools_skip_strict_when_nested_object_is_not_strict_compatible() {
+    let body = build_chat_completion_request_body(
+        "gpt-4o",
+        &[Message {
+            role: "user".to_string(),
+            content: json!("Plan the implementation."),
+        }],
+        &[json!({
+            "name": "nested_tool",
+            "description": "Tool with a nested object schema",
+            "input_schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "payload": {
+                        "type": "object",
+                        "properties": {
+                            "title": { "type": "string" }
+                        }
+                    }
+                }
+            }
+        })],
+        OpenAiEndpointKind::Custom,
+        None,
+        None,
+        LlmTurnMetadata::default(),
+    );
+
+    assert_eq!(body["tools"][0]["type"], "function");
+    assert!(body["tools"][0]["function"].get("strict").is_none());
+}
+
+#[test]
 fn deepseek_reasoner_plan_with_explicit_thinking_uses_max_effort() {
     let body = build_chat_completion_request_body(
         "deepseek-reasoner",
@@ -1268,10 +1333,70 @@ fn codex_responses_tools_use_upstream_schema_defaults_and_chatgpt_normalization(
 
     let parameters = &request["tools"][0]["parameters"];
     assert_eq!(request["tools"][0]["type"], "function");
+    assert_eq!(request["tools"][0]["strict"], false);
     assert_eq!(parameters["type"], "object");
     assert!(parameters.get("anyOf").is_none());
     assert_eq!(parameters["properties"]["tasks"]["type"], "array");
     assert_eq!(parameters["properties"]["tasks"]["items"]["type"], "string");
+}
+
+#[test]
+fn codex_responses_tools_enable_strict_for_structured_plan_schema() {
+    let tool = ExitPlanModeTool;
+    let request = build_codex_responses_request(
+        "gpt-5.4",
+        &[Message {
+            role: "user".to_string(),
+            content: json!("Plan the implementation."),
+        }],
+        &[json!({
+            "name": tool.name(),
+            "description": tool.description(),
+            "input_schema": tool.input_schema()
+        })],
+        None,
+    )
+    .unwrap();
+
+    assert_eq!(request["tools"][0]["type"], "function");
+    assert_eq!(request["tools"][0]["name"], "exit_plan_mode");
+    assert_eq!(request["tools"][0]["strict"], true);
+    assert_eq!(
+        request["tools"][0]["parameters"]["properties"]["proposed_plan"]["required"],
+        json!(["summary", "steps", "validation"])
+    );
+}
+
+#[test]
+fn codex_responses_tools_disable_strict_when_nested_object_is_not_strict_compatible() {
+    let request = build_codex_responses_request(
+        "gpt-5.4",
+        &[Message {
+            role: "user".to_string(),
+            content: json!("Plan the implementation."),
+        }],
+        &[json!({
+            "name": "nested_tool",
+            "description": "Tool with a nested object schema",
+            "input_schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "payload": {
+                        "type": "object",
+                        "properties": {
+                            "title": { "type": "string" }
+                        }
+                    }
+                }
+            }
+        })],
+        None,
+    )
+    .unwrap();
+
+    assert_eq!(request["tools"][0]["type"], "function");
+    assert_eq!(request["tools"][0]["strict"], false);
 }
 
 #[test]

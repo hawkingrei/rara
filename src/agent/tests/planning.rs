@@ -5,8 +5,8 @@ use async_trait::async_trait;
 use serde_json::json;
 
 use crate::agent::planning::{
-    has_unclosed_proposed_plan_block, parse_plan_block, parse_request_user_input_block,
-    strip_continue_inspection_control,
+    has_unclosed_proposed_plan_block, parse_exit_plan_tool_input, parse_plan_block,
+    parse_request_user_input_block, strip_continue_inspection_control,
 };
 use crate::agent::{
     Agent, AgentEvent, AgentExecutionMode, BashApprovalDecision, ContentBlock, PendingUserInput,
@@ -1091,16 +1091,95 @@ async fn exit_plan_mode_persists_plan_and_waits_for_approval() {
 }
 
 #[tokio::test]
-async fn exit_plan_mode_without_plan_stops_without_retrying_model() {
+async fn exit_plan_mode_accepts_structured_tool_plan_input() {
     let backend = Arc::new(SequencedBackend::new(vec![LlmResponse {
         content: vec![ContentBlock::ToolUse {
             id: "exit-plan".to_string(),
             name: "exit_plan_mode".to_string(),
-            input: json!({}),
+            input: json!({
+                "proposed_plan": {
+                    "summary": "Repair malformed plan exits.",
+                    "steps": [
+                        { "step": "Capture proposed_plan from tool arguments", "status": "pending" },
+                        { "step": "Persist the structured plan before approval", "status": "pending" }
+                    ],
+                    "validation": [
+                        "cargo test exit_plan_mode -- --nocapture"
+                    ]
+                }
+            }),
         }],
         stop_reason: Some("tool_use".to_string()),
         usage: Some(TokenUsage::default()),
     }]));
+
+    let mut tool_manager = ToolManager::new();
+    tool_manager.register(Box::new(ExitPlanModeTool));
+    let (_temp, session_manager, workspace, rara_dir) = test_runtime_storage();
+    let mut agent = Agent::new(
+        tool_manager,
+        backend,
+        Arc::new(VectorDB::new(&rara_dir.join("lancedb").to_string_lossy())),
+        session_manager.clone(),
+        workspace,
+    );
+    agent.set_execution_mode(AgentExecutionMode::Plan);
+
+    agent
+        .query_with_mode(
+            "plan the implementation".to_string(),
+            super::super::AgentOutputMode::Silent,
+        )
+        .await
+        .expect("structured tool plan should stop at plan approval");
+
+    assert!(agent.has_pending_plan_exit_approval());
+    assert_eq!(agent.current_plan.len(), 2);
+    assert_eq!(
+        agent.current_plan[0].step,
+        "Capture proposed_plan from tool arguments"
+    );
+    assert_eq!(
+        agent.plan_explanation.as_deref(),
+        Some(
+            "summary: Repair malformed plan exits.\nvalidation:\n- cargo test exit_plan_mode -- --nocapture"
+        )
+    );
+    let plan_file = session_manager.plan_file_path(&agent.session_id);
+    let plan = std::fs::read_to_string(plan_file).expect("plan file should be persisted");
+    assert!(plan.contains("summary: Repair malformed plan exits."));
+    assert!(plan.contains("- [pending] Capture proposed_plan from tool arguments"));
+    assert!(plan.contains("cargo test exit_plan_mode -- --nocapture"));
+}
+
+#[tokio::test]
+async fn exit_plan_mode_without_plan_gets_one_structured_repair_turn() {
+    let backend = Arc::new(SequencedBackend::new(vec![
+        LlmResponse {
+            content: vec![ContentBlock::ToolUse {
+                id: "exit-plan-invalid".to_string(),
+                name: "exit_plan_mode".to_string(),
+                input: json!({}),
+            }],
+            stop_reason: Some("tool_use".to_string()),
+            usage: Some(TokenUsage::default()),
+        },
+        LlmResponse {
+            content: vec![
+                ContentBlock::Text {
+                    text: "<proposed_plan>\n- [pending] Fix plan exit handling\n</proposed_plan>"
+                        .to_string(),
+                },
+                ContentBlock::ToolUse {
+                    id: "exit-plan-valid".to_string(),
+                    name: "exit_plan_mode".to_string(),
+                    input: json!({}),
+                },
+            ],
+            stop_reason: Some("tool_use".to_string()),
+            usage: Some(TokenUsage::default()),
+        },
+    ]));
 
     let mut tool_manager = ToolManager::new();
     tool_manager.register(Box::new(ExitPlanModeTool));
@@ -1120,37 +1199,45 @@ async fn exit_plan_mode_without_plan_stops_without_retrying_model() {
             super::super::AgentOutputMode::Silent,
         )
         .await
-        .expect("invalid plan exit should stop the turn without retrying");
+        .expect("invalid plan exit should get one repair turn");
 
-    assert_eq!(backend.observed_messages().len(), 1);
+    let observed_messages = backend.observed_messages();
+    assert_eq!(observed_messages.len(), 2);
+    assert!(observed_messages[1].iter().any(|message| {
+        let content = message.content.to_string();
+        content.contains("plan_exit_repair_required")
+            && content.contains("Markdown headings")
+            && content.contains("<proposed_plan>")
+    }));
     assert_eq!(agent.execution_mode, AgentExecutionMode::Plan);
-    assert!(!agent.has_pending_plan_exit_approval());
-    assert!(
-        !agent
-            .history
-            .iter()
-            .any(|message| message.role == "assistant")
-    );
-    assert!(
-        !agent
-            .history
-            .iter()
-            .map(|message| message.content.to_string())
-            .any(|content| content.contains("exit_plan_mode requires a proposed plan"))
-    );
+    assert!(agent.has_pending_plan_exit_approval());
+    assert!(agent.current_plan.iter().any(|step| {
+        step.step == "Fix plan exit handling" && matches!(step.status, PlanStepStatus::Pending)
+    }));
 }
 
 #[tokio::test]
 async fn exit_plan_mode_requires_plan_from_same_assistant_turn() {
-    let backend = Arc::new(SequencedBackend::new(vec![LlmResponse {
-        content: vec![ContentBlock::ToolUse {
-            id: "exit-plan".to_string(),
-            name: "exit_plan_mode".to_string(),
-            input: json!({}),
-        }],
-        stop_reason: Some("tool_use".to_string()),
-        usage: Some(TokenUsage::default()),
-    }]));
+    let backend = Arc::new(SequencedBackend::new(vec![
+        LlmResponse {
+            content: vec![ContentBlock::ToolUse {
+                id: "exit-plan-first".to_string(),
+                name: "exit_plan_mode".to_string(),
+                input: json!({}),
+            }],
+            stop_reason: Some("tool_use".to_string()),
+            usage: Some(TokenUsage::default()),
+        },
+        LlmResponse {
+            content: vec![ContentBlock::ToolUse {
+                id: "exit-plan-second".to_string(),
+                name: "exit_plan_mode".to_string(),
+                input: json!({}),
+            }],
+            stop_reason: Some("tool_use".to_string()),
+            usage: Some(TokenUsage::default()),
+        },
+    ]));
 
     let mut tool_manager = ToolManager::new();
     tool_manager.register(Box::new(ExitPlanModeTool));
@@ -1176,11 +1263,19 @@ async fn exit_plan_mode_requires_plan_from_same_assistant_turn() {
             |event| events.push(event),
         )
         .await
-        .expect("stale plan exit should stop the turn without retrying");
+        .expect("stale plan exit should get one repair attempt before stopping");
 
-    assert_eq!(backend.observed_messages().len(), 1);
+    assert_eq!(backend.observed_messages().len(), 2);
     assert_eq!(agent.execution_mode, AgentExecutionMode::Plan);
     assert!(!agent.has_pending_plan_exit_approval());
+    let repair_status_seen = events.iter().any(|event| {
+        matches!(
+            event,
+            AgentEvent::Status(status)
+                if status.contains("missing a structured proposed plan")
+        )
+    });
+    assert!(repair_status_seen);
     assert!(events.iter().any(|event| matches!(
         event,
         AgentEvent::ToolResult {
@@ -1194,20 +1289,36 @@ async fn exit_plan_mode_requires_plan_from_same_assistant_turn() {
 
 #[tokio::test]
 async fn exit_plan_mode_with_unclosed_proposed_plan_reports_specific_error() {
-    let backend = Arc::new(SequencedBackend::new(vec![LlmResponse {
-        content: vec![
-            ContentBlock::Text {
-                text: "<proposed_plan>\n- [pending] Update planning state".to_string(),
-            },
-            ContentBlock::ToolUse {
-                id: "exit-plan".to_string(),
-                name: "exit_plan_mode".to_string(),
-                input: json!({}),
-            },
-        ],
-        stop_reason: Some("tool_use".to_string()),
-        usage: Some(TokenUsage::default()),
-    }]));
+    let backend = Arc::new(SequencedBackend::new(vec![
+        LlmResponse {
+            content: vec![
+                ContentBlock::Text {
+                    text: "<proposed_plan>\n- [pending] Update planning state".to_string(),
+                },
+                ContentBlock::ToolUse {
+                    id: "exit-plan-first".to_string(),
+                    name: "exit_plan_mode".to_string(),
+                    input: json!({}),
+                },
+            ],
+            stop_reason: Some("tool_use".to_string()),
+            usage: Some(TokenUsage::default()),
+        },
+        LlmResponse {
+            content: vec![
+                ContentBlock::Text {
+                    text: "<proposed_plan>\n- [pending] Update planning state".to_string(),
+                },
+                ContentBlock::ToolUse {
+                    id: "exit-plan-second".to_string(),
+                    name: "exit_plan_mode".to_string(),
+                    input: json!({}),
+                },
+            ],
+            stop_reason: Some("tool_use".to_string()),
+            usage: Some(TokenUsage::default()),
+        },
+    ]));
 
     let mut tool_manager = ToolManager::new();
     tool_manager.register(Box::new(ExitPlanModeTool));
@@ -1229,9 +1340,9 @@ async fn exit_plan_mode_with_unclosed_proposed_plan_reports_specific_error() {
             |event| events.push(event),
         )
         .await
-        .expect("invalid plan exit should stop the turn without retrying");
+        .expect("invalid plan exit should get one repair attempt before stopping");
 
-    assert_eq!(backend.observed_messages().len(), 1);
+    assert_eq!(backend.observed_messages().len(), 2);
     assert_eq!(agent.execution_mode, AgentExecutionMode::Plan);
     assert!(!agent.has_pending_plan_exit_approval());
     assert!(agent.current_plan.is_empty());
@@ -1343,6 +1454,92 @@ fn parses_structured_plan_block() {
     assert_eq!(
         parsed.1.as_deref(),
         Some("Focus on agent.rs and tui/runtime.rs first.")
+    );
+}
+
+#[test]
+fn parses_structured_proposed_plan_fields_without_mixing_validation_into_steps() {
+    let text = "<proposed_plan>\nsummary: Tighten plan exit handling.\nsteps:\n- [pending] Add structured plan prompt guidance\n- [pending] Parse only step entries from the steps section\nvalidation:\n- cargo test exit_plan_mode -- --nocapture\n- cargo check\n</proposed_plan>";
+    let parsed = parse_plan_block(text).expect("plan block should parse");
+    assert_eq!(
+        parsed.0,
+        vec![
+            PlanStep {
+                step: "Add structured plan prompt guidance".to_string(),
+                status: PlanStepStatus::Pending,
+            },
+            PlanStep {
+                step: "Parse only step entries from the steps section".to_string(),
+                status: PlanStepStatus::Pending,
+            },
+        ]
+    );
+    let explanation = parsed.1.expect("structured metadata should be preserved");
+    assert!(explanation.contains("summary: Tighten plan exit handling."));
+    assert!(explanation.contains("validation:"));
+    assert!(explanation.contains("cargo test exit_plan_mode -- --nocapture"));
+    assert!(!parsed.0.iter().any(|step| step.step.contains("cargo test")));
+}
+
+#[test]
+fn parses_structured_proposed_plan_headers_case_insensitively() {
+    let text = "<proposed_plan>\nSummary: Tighten plan exit handling.\nSteps:\n- [pending] Add structured plan prompt guidance\nValidation:\n- cargo test exit_plan_mode -- --nocapture\n</proposed_plan>";
+    let parsed = parse_plan_block(text).expect("plan block should parse");
+
+    assert_eq!(
+        parsed.0,
+        vec![PlanStep {
+            step: "Add structured plan prompt guidance".to_string(),
+            status: PlanStepStatus::Pending,
+        }]
+    );
+    let explanation = parsed.1.expect("structured metadata should be preserved");
+    assert!(explanation.contains("summary: Tighten plan exit handling."));
+    assert!(explanation.contains("validation:"));
+    assert!(explanation.contains("cargo test exit_plan_mode -- --nocapture"));
+}
+
+#[test]
+fn rejects_structured_proposed_plan_without_executable_steps() {
+    let text = "<proposed_plan>\nsummary: Missing executable steps.\nsteps:\nvalidation:\n- cargo check\n</proposed_plan>";
+
+    assert!(parse_plan_block(text).is_none());
+}
+
+#[test]
+fn parses_structured_plan_from_exit_tool_input() {
+    let parsed = parse_exit_plan_tool_input(&json!({
+        "proposed_plan": {
+            "summary": "Use tool arguments as the primary plan transport.",
+            "steps": [
+                { "step": "Add a proposed_plan schema to exit_plan_mode", "status": "completed" },
+                { "step": "Capture structured tool input in plan mode", "status": "pending" }
+            ],
+            "validation": [
+                "cargo test exit_plan_mode -- --nocapture"
+            ]
+        }
+    }))
+    .expect("structured tool input should parse");
+
+    assert_eq!(
+        parsed.0,
+        vec![
+            PlanStep {
+                step: "Add a proposed_plan schema to exit_plan_mode".to_string(),
+                status: PlanStepStatus::Completed,
+            },
+            PlanStep {
+                step: "Capture structured tool input in plan mode".to_string(),
+                status: PlanStepStatus::Pending,
+            },
+        ]
+    );
+    assert_eq!(
+        parsed.1.as_deref(),
+        Some(
+            "summary: Use tool arguments as the primary plan transport.\nvalidation:\n- cargo test exit_plan_mode -- --nocapture"
+        )
     );
 }
 
