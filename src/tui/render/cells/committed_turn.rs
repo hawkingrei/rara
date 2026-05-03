@@ -1,3 +1,7 @@
+use std::path::Path;
+
+use ratatui::{style::Color, text::Line};
+
 use super::super::history_pipeline::{narrative_entries, ordered_completion_entries};
 use super::components::{
     CommittedInteractionCell, ExploredCell, MessageCell, RanCell, TerminalCell, UserCell,
@@ -12,9 +16,6 @@ use crate::tui::render::{
     current_turn_exploration_summary_from_entries, current_turn_tool_summary,
 };
 use crate::tui::state::{TranscriptEntry, TranscriptEntryPayload, TuiApp};
-use ratatui::{style::Color, text::Line};
-use std::path::Path;
-
 pub(crate) struct CommittedTurnCell<'a> {
     entries: &'a [TranscriptEntry],
     cwd: Option<&'a Path>,

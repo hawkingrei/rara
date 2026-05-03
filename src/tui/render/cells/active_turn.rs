@@ -1,3 +1,10 @@
+use std::path::Path;
+
+use ratatui::{
+    style::{Color, Modifier, Style},
+    text::{Line, Span},
+};
+
 use super::super::history_pipeline::{narrative_entries, ordered_completion_entries};
 use super::components::{
     CommittedInteractionCell, ExploredCell, ExploringCell, MessageCell, PendingInteractionCell,
@@ -35,11 +42,6 @@ use crate::tui::terminal_event::{
     TerminalCollectionEvent, TerminalCommandEvent, TerminalEvent, TerminalTarget,
 };
 use crate::tui::tool_text::{compact_delegate_rest, compact_instruction};
-use ratatui::{
-    style::{Color, Modifier, Style},
-    text::{Line, Span},
-};
-use std::path::Path;
 
 pub(crate) struct ActiveTurnCell<'a> {
     app: &'a TuiApp,
