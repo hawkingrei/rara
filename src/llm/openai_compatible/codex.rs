@@ -1,5 +1,6 @@
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
+use backon::{ExponentialBuilder, Retryable};
 use codex_login::default_client::default_headers as codex_default_headers;
 use eventsource_stream::Eventsource;
 use secrecy::{ExposeSecret, SecretString};
@@ -15,8 +16,9 @@ use super::super::codex_tools_compat::create_tools_json_for_responses_api;
 use super::super::codex_tools_compat::parse_tool_input_schema;
 use super::super::codex_tools_compat::tool_definition_to_responses_api_tool;
 use super::super::shared::{
-    ContextBudget, LlmBackend, LlmStreamEvent, collect_assistant_content, model_context_budget,
-    next_stream_item_with_idle_timeout, parse_tool_arguments, render_openai_message_content,
+    ContextBudget, LlmBackend, LlmStreamEvent, collect_assistant_content, is_retryable_http_error,
+    model_context_budget, next_stream_item_with_idle_timeout, parse_tool_arguments,
+    render_openai_message_content,
 };
 use super::{
     CodexBackend, OpenAiApiError, OpenAiCompatibleBackend, api_error_from_response,
@@ -74,17 +76,22 @@ impl CodexBackend {
             self.reasoning_effort.as_deref(),
         )?;
         let responses_url = self.endpoint_url("responses");
-        let mut request = self.client.post(&responses_url);
-        for (name, value) in &codex_default_headers() {
-            request = request.header(name, value);
-        }
-        if let Some(api_key) = self.api_key.as_ref().map(SecretString::expose_secret) {
-            if !api_key.is_empty() {
-                request = request.header("Authorization", format!("Bearer {api_key}"));
+        let api_key = self.api_key.as_ref().map(|k| k.expose_secret());
+        let res = (|| async {
+            let mut request = self.client.post(&responses_url);
+            for (name, value) in &codex_default_headers() {
+                request = request.header(name, value);
             }
-        }
-
-        let res = request.json(&body).send().await?;
+            if let Some(key) = api_key {
+                if !key.is_empty() {
+                    request = request.header("Authorization", format!("Bearer {key}"));
+                }
+            }
+            request.json(&body).send().await.map_err(|e| anyhow!(e))
+        })
+        .retry(ExponentialBuilder::default().with_jitter())
+        .when(|e: &anyhow::Error| is_retryable_http_error(e))
+        .await?;
         if !res.status().is_success() {
             return Err(
                 anyhow::Error::new(api_error_from_response(res).await).context(format!(
