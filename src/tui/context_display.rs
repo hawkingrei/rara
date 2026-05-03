@@ -49,19 +49,41 @@ pub(crate) fn render_context_lines(app: &TuiApp, available_width: u16) -> Vec<Li
     let bar_line = budget_bar(app, bar_width);
     lines.push(bar_line);
 
-    // Usage summary
+    // Usage summary with color-coded percentage
     let used_str = format_token_count(used);
-    let pct = window
+    let pct_value = window
         .filter(|w| *w > 0)
-        .map(|w| format!(" ({:.2}%)", used as f64 * 100.0 / w as f64))
-        .unwrap_or_default();
+        .map(|w| used as f64 * 100.0 / w as f64)
+        .unwrap_or(0.0);
+    let pct_color = if pct_value > 80.0 {
+        Color::Red
+    } else if pct_value > 50.0 {
+        Color::Yellow
+    } else {
+        Color::LightGreen
+    };
+    let pct_str = format!("{:.1}%", pct_value);
     let window_str = window
         .map(format_token_count)
         .unwrap_or_else(|| "?".to_string());
-    lines.push(Line::from(Span::styled(
-        format!("  {used_str}{pct} of {window_str} used"),
-        Style::default().fg(TEXT_MUTED),
-    )));
+    lines.push(Line::from(vec![
+        Span::raw("  "),
+        Span::styled(
+            used_str,
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!(" / {window_str}  "),
+            Style::default().fg(TEXT_MUTED),
+        ),
+        Span::styled(
+            pct_str,
+            Style::default().fg(pct_color).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(" used", Style::default().fg(TEXT_MUTED)),
+    ]));
     section_spacer(&mut lines);
 
     // ── Budget Breakdown ──
@@ -219,40 +241,32 @@ fn budget_bar(app: &TuiApp, width: usize) -> Line<'static> {
     let snap = &app.snapshot;
     let total = snap.context_window_tokens.unwrap_or(1).max(1);
 
-    let segments: &[(usize, Color)] = &[
-        (snap.stable_instructions_budget, BUDGET_SYSTEM),
-        (snap.workspace_prompt_budget, BUDGET_WORKSPACE),
-        (snap.active_turn_budget, BUDGET_ACTIVE),
-        (snap.compacted_history_budget, BUDGET_HISTORY),
-        (snap.retrieved_memory_budget, BUDGET_MEMORY),
-        (snap.reserved_output_tokens, BUDGET_OUTPUT),
-    ];
+    let used = snap
+        .stable_instructions_budget
+        .saturating_add(snap.workspace_prompt_budget)
+        .saturating_add(snap.active_turn_budget)
+        .saturating_add(snap.compacted_history_budget)
+        .saturating_add(snap.retrieved_memory_budget)
+        .saturating_add(snap.reserved_output_tokens);
+
+    let used_width = ((used as f64 / total as f64) * width as f64).round() as usize;
+    let used_width = used_width.min(width);
+    let free_width = width.saturating_sub(used_width);
 
     let mut spans: Vec<Span<'static>> = Vec::new();
-    let mut used_width = 0usize;
-
-    for &(tokens, color) in segments {
-        let seg_width = ((tokens as f64 / total as f64) * width as f64).round() as usize;
-        let seg_width = seg_width.min(width.saturating_sub(used_width));
-        if seg_width > 0 {
-            spans.push(Span::styled(
-                "█".repeat(seg_width),
-                Style::default().fg(color),
-            ));
-            used_width += seg_width;
-        }
-    }
-
-    // Fill remaining with free color
-    if used_width < width {
+    spans.push(Span::raw("  "));
+    if used_width > 0 {
         spans.push(Span::styled(
-            "█".repeat(width - used_width),
+            "░".repeat(used_width),
+            Style::default().fg(Color::White),
+        ));
+    }
+    if free_width > 0 {
+        spans.push(Span::styled(
+            "□".repeat(free_width),
             Style::default().fg(BUDGET_FREE),
         ));
     }
-
-    // Prefix with two spaces for alignment with kv lines
-    spans.insert(0, Span::raw("  "));
     Line::from(spans)
 }
 
