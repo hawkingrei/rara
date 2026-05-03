@@ -110,5 +110,7 @@ impl HistoryCell for CommittedTurnCell<'_> {
         }
 
         trim_trailing_empty_lines(&mut lines);
+        trim_trailing_empty_lines(&mut lines);
         lines
     }
+}
