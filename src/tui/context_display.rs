@@ -231,8 +231,61 @@ pub(crate) fn render_context_lines(app: &TuiApp, available_width: u16) -> Vec<Li
             Color::Yellow,
         );
     }
+    // ── Assembly ──
+    render_assembly_layer(
+        &mut lines,
+        app,
+        "stable_instructions",
+        "Stable Instructions",
+    );
+    render_assembly_layer(
+        &mut lines,
+        app,
+        "workspace_prompt_sources",
+        "Workspace Prompt Sources",
+    );
+    render_assembly_layer(
+        &mut lines,
+        app,
+        "active_memory_inputs",
+        "Active Memory Inputs",
+    );
+    render_assembly_layer(&mut lines, app, "compacted_history", "Compacted History");
+    render_assembly_layer(&mut lines, app, "active_turn_state", "Active Turn State");
+    render_assembly_layer(&mut lines, app, "retrieval_ready", "Retrieval-ready");
 
     lines
+}
+
+fn render_assembly_layer(lines: &mut Vec<Line<'static>>, app: &TuiApp, layer: &str, title: &str) {
+    let entries: Vec<&crate::context::ContextAssemblyEntry> = app
+        .snapshot
+        .assembly_entries
+        .iter()
+        .filter(|e| e.layer == layer)
+        .collect();
+    if entries.is_empty() {
+        return;
+    }
+    section_header(lines, title);
+    for entry in entries {
+        let tokens = entry
+            .budget_impact_tokens
+            .map(|n| format_token_count(n))
+            .unwrap_or_else(|| "-".to_string());
+        let path = entry
+            .source_path
+            .as_deref()
+            .filter(|p| !p.is_empty())
+            .unwrap_or("-");
+        kv(
+            lines,
+            &entry.kind,
+            &format!("{}  {} tokens", path, tokens),
+            Color::DarkGray,
+        );
+    }
+    section_spacer(lines);
 }
 
 // ── budget bar ──
