@@ -741,7 +741,11 @@ fn resolve_sections(sections: Vec<PromptSection>) -> Vec<String> {
 }
 
 fn plan_mode_prompt() -> String {
-    PLAN_MODE_PROMPT.clone()
+    let mut prompt = PLAN_MODE_PROMPT.clone();
+    prompt.push_str(
+        "\n- Markdown headings such as '## Plan', plain bullets, or prose like 'Plan ready' are not valid substitutes for a <proposed_plan> block.\n- Prefer the API-structured path: call exit_plan_mode with a proposed_plan object containing summary, steps, and validation fields.\n- If structured tool arguments are unavailable, the <proposed_plan> artifact should use this structure exactly:\n<proposed_plan>\nsummary: One concise sentence describing the implementation.\nsteps:\n- [pending] First concrete implementation step\n- [pending] Second concrete implementation step\nvalidation:\n- Focused test or command to run\n</proposed_plan>",
+    );
+    prompt
 }
 
 fn default_compact_prompt() -> String {
@@ -980,6 +984,13 @@ mod tests {
             "The opening <proposed_plan> tag and closing </proposed_plan> tag must both appear"
         ));
         assert!(prompt.contains("Do not ask 'should I proceed?'"));
+        assert!(prompt.contains("Markdown headings such as '## Plan'"));
+        assert!(prompt.contains("not valid substitutes for a <proposed_plan> block"));
+        assert!(prompt.contains("Prefer the API-structured path"));
+        assert!(prompt.contains("proposed_plan object containing summary, steps, and validation"));
+        assert!(prompt.contains("summary: One concise sentence"));
+        assert!(prompt.contains("steps:\n- [pending] First concrete implementation step"));
+        assert!(prompt.contains("validation:\n- Focused test or command to run"));
     }
 
     #[test]

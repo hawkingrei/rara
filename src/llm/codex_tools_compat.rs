@@ -99,14 +99,53 @@ pub fn create_tools_json_for_responses_api(
 }
 
 pub fn tool_definition_to_responses_api_tool(tool_definition: ToolDefinition) -> ResponsesApiTool {
+    let strict = supports_strict_structured_outputs(&tool_definition.input_schema);
     ResponsesApiTool {
         name: tool_definition.name,
         description: tool_definition.description,
-        strict: false,
+        strict,
         defer_loading: tool_definition.defer_loading.then_some(true),
         parameters: tool_definition.input_schema,
         output_schema: tool_definition.output_schema,
     }
+}
+
+fn supports_strict_structured_outputs(schema: &JsonSchema) -> bool {
+    if schema_is_object(schema)
+        && !matches!(
+            schema.additional_properties,
+            Some(AdditionalProperties::Boolean(false))
+        )
+    {
+        return false;
+    }
+
+    schema
+        .properties
+        .as_ref()
+        .into_iter()
+        .flat_map(|properties| properties.values())
+        .all(supports_strict_structured_outputs)
+        && schema
+            .items
+            .as_deref()
+            .is_none_or(supports_strict_structured_outputs)
+        && schema
+            .any_of
+            .as_ref()
+            .into_iter()
+            .flat_map(|schemas| schemas.iter())
+            .all(supports_strict_structured_outputs)
+}
+
+fn schema_is_object(schema: &JsonSchema) -> bool {
+    matches!(
+        schema.schema_type,
+        Some(JsonSchemaType::Single(JsonSchemaPrimitiveType::Object))
+    ) || matches!(
+        schema.schema_type.as_ref(),
+        Some(JsonSchemaType::Multiple(types)) if types.contains(&JsonSchemaPrimitiveType::Object)
+    ) || schema.properties.is_some()
 }
 
 pub fn parse_tool_input_schema(input_schema: &JsonValue) -> Result<JsonSchema, serde_json::Error> {

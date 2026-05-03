@@ -26,6 +26,7 @@ use std::sync::{Arc, atomic::AtomicBool};
 use uuid::Uuid;
 
 const MAX_RUNTIME_ERROR_RECOVERY_ATTEMPTS: usize = 1;
+const MAX_PLAN_EXIT_REPAIR_ATTEMPTS: usize = 1;
 
 pub use self::compact::{CompactBoundaryMetadata, CompactState, latest_compact_boundary_metadata};
 pub use self::planning::{
@@ -372,6 +373,18 @@ impl Agent {
                     }
                 }
                 ContentBlock::ToolUse { id, name, input } => {
+                    if matches!(self.execution_mode, AgentExecutionMode::Plan)
+                        && name == EXIT_PLAN_MODE_TOOL_NAME
+                        && !plan_updated
+                    {
+                        if let Some((steps, explanation)) =
+                            planning::parse_exit_plan_tool_input(input)
+                        {
+                            self.current_plan = steps;
+                            self.plan_explanation = explanation;
+                            plan_updated = true;
+                        }
+                    }
                     sanitized_content.push(ContentBlock::ToolUse {
                         id: id.clone(),
                         name: name.clone(),
@@ -454,6 +467,7 @@ impl Agent {
     where
         F: FnMut(AgentEvent) + Send,
     {
+        let mut plan_exit_repair_attempts = 0usize;
         loop {
             self.ensure_active_plan_step();
             let mut turn_output = self.run_model_turn(output_mode, report).await?;
@@ -471,9 +485,23 @@ impl Agent {
                 };
                 report(AgentEvent::ToolResult {
                     name: EXIT_PLAN_MODE_TOOL_NAME.to_string(),
-                    content,
+                    content: content.clone(),
                     is_error: true,
                 });
+                if plan_exit_repair_attempts < MAX_PLAN_EXIT_REPAIR_ATTEMPTS {
+                    plan_exit_repair_attempts += 1;
+                    *agentic_turns += 1;
+                    report(AgentEvent::Status(
+                        "Plan exit was missing a structured proposed plan. Asking the model to repair the submission."
+                            .to_string(),
+                    ));
+                    self.push_history_message(self.runtime_continuation_message(
+                        RuntimeContinuationPhase::PlanExitRepairRequired,
+                        *agentic_turns,
+                    ));
+                    self.checkpoint_session()?;
+                    continue;
+                }
                 self.checkpoint_session()?;
                 break;
             }

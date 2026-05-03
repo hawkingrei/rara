@@ -30,7 +30,11 @@ RARA planning mode is a read-only collaboration mode for non-trivial tasks.
 - planning-mode progress updates should stay short and grounded in inspected code instead of narrating each next file-by-file action;
 - planning mode must not describe file edits, patches, or implementation steps as if they are already happening.
 - plan approval must not be requested in ordinary prose; the model must use `<proposed_plan>` followed by `exit_plan_mode` when the plan is ready, or `<request_user_input>` when a key decision still blocks it.
-- `exit_plan_mode` requires a complete `<proposed_plan>...</proposed_plan>` block in the same assistant response. A message that opens `<proposed_plan>` without the exact closing `</proposed_plan>` tag is treated as malformed and must not enter approval.
+- `exit_plan_mode` should submit plans through structured tool arguments: `proposed_plan.summary`, `proposed_plan.steps`, and `proposed_plan.validation`.
+- For OpenAI native Chat Completions and Responses tool calls, RARA marks strict-compatible tool schemas with `strict: true`, so providers that implement Structured Outputs can enforce the `proposed_plan` argument shape at the API layer.
+- `exit_plan_mode` also accepts a complete `<proposed_plan>...</proposed_plan>` block in the same assistant response as a text fallback. A message that opens `<proposed_plan>` without the exact closing `</proposed_plan>` tag is treated as malformed and must not enter approval.
+- Markdown headings such as `## Plan`, plain bullets, and prose like "plan ready" are not valid plan submissions. They may be rendered as ordinary assistant text, but they must not trigger plan approval.
+- A structured proposed plan should use `summary:`, `steps:`, and `validation:` fields. Runtime treats only entries under `steps:` as executable plan steps; validation bullets are preserved as plan explanation instead of being mixed into the step list.
 
 Plain narration or status updates are valid only when they are the final answer to a research, review, or planning-advice task. They must not be treated as approval requests.
 
@@ -51,9 +55,12 @@ Plain narration or status updates are valid only when they are the final answer 
 When planning mode needs to continue, runtime records a structured continuation message with one of these phases:
 
 - `plan_continuation_required`
+- `plan_exit_repair_required`
 - `plan_approved`
 
 `plan_continuation_required` means the agent explicitly requested another read-only inspection pass before answering or requesting implementation approval.
+
+`plan_exit_repair_required` means the model called `exit_plan_mode` without a complete same-turn `<proposed_plan>...</proposed_plan>` block. The runtime records a structured repair instruction and gives the model one immediate retry. The retry must either submit a proper `<proposed_plan>` block followed by `exit_plan_mode`, or provide a final planning answer without calling `exit_plan_mode`.
 
 Execute-mode repository inspection follows the same structured continuation boundary: prior inspection evidence is not enough to keep a turn open after a no-tool model response. The model must either call another inspection tool or emit `<continue_inspection/>`.
 

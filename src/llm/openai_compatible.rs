@@ -579,13 +579,17 @@ pub(super) fn build_chat_completion_request_body(
     let openai_tools: Vec<Value> = tools
         .iter()
         .map(|t| {
+            let mut function = json!({
+                "name": t["name"],
+                "description": t["description"],
+                "parameters": t["input_schema"]
+            });
+            if supports_strict_structured_outputs(&t["input_schema"]) {
+                function["strict"] = json!(true);
+            }
             json!({
                 "type": "function",
-                "function": {
-                    "name": t["name"],
-                    "description": t["description"],
-                    "parameters": t["input_schema"]
-                }
+                "function": function
             })
         })
         .collect();
@@ -608,6 +612,54 @@ pub(super) fn build_chat_completion_request_body(
         strong_reasoning,
     );
     body
+}
+
+fn supports_strict_structured_outputs(schema: &Value) -> bool {
+    if schema_is_object(schema)
+        && schema.get("additionalProperties").and_then(Value::as_bool) != Some(false)
+    {
+        return false;
+    }
+
+    schema
+        .get("properties")
+        .and_then(Value::as_object)
+        .into_iter()
+        .flat_map(|properties| properties.values())
+        .all(supports_strict_structured_outputs)
+        && schema
+            .get("$defs")
+            .and_then(Value::as_object)
+            .into_iter()
+            .flat_map(|defs| defs.values())
+            .all(supports_strict_structured_outputs)
+        && schema
+            .get("definitions")
+            .and_then(Value::as_object)
+            .into_iter()
+            .flat_map(|defs| defs.values())
+            .all(supports_strict_structured_outputs)
+        && schema
+            .get("items")
+            .is_none_or(supports_strict_structured_outputs)
+        && ["anyOf", "oneOf", "allOf"].into_iter().all(|key| {
+            schema
+                .get(key)
+                .and_then(Value::as_array)
+                .into_iter()
+                .flat_map(|schemas| schemas.iter())
+                .all(supports_strict_structured_outputs)
+        })
+}
+
+fn schema_is_object(schema: &Value) -> bool {
+    let Some(schema_type) = schema.get("type") else {
+        return schema.get("properties").is_some();
+    };
+    schema_type.as_str() == Some("object")
+        || schema_type
+            .as_array()
+            .is_some_and(|types| types.iter().any(|value| value.as_str() == Some("object")))
 }
 
 fn fold_deepseek_legacy_reasoning_history(openai_messages: Vec<Value>) -> Vec<Value> {

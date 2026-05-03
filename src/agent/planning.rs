@@ -49,6 +49,7 @@ pub(super) struct InspectionProgress {
 pub(super) enum RuntimeContinuationPhase {
     ToolResultsAvailable,
     PlanContinuationRequired,
+    PlanExitRepairRequired,
     ExecutionContinuationRequired,
     ReasoningOnlyContinuationRequired,
     PlanApproved,
@@ -654,6 +655,12 @@ pub(super) fn parse_plan_block(text: &str) -> Option<(Vec<PlanStep>, Option<Stri
     }
 
     let block = &text[start + start_tag.len()..end];
+    let trailing_explanation = text[end + end_tag.len()..].trim();
+    if start_tag == "<proposed_plan>" && is_structured_proposed_plan(block) {
+        let (steps, explanation) = parse_structured_proposed_plan(block, trailing_explanation);
+        return (!steps.is_empty()).then_some((steps, explanation));
+    }
+
     let mut steps = Vec::new();
     for line in block.lines().map(str::trim).filter(|line| !line.is_empty()) {
         if let Some(step) = parse_plan_step_line(line) {
@@ -661,7 +668,7 @@ pub(super) fn parse_plan_block(text: &str) -> Option<(Vec<PlanStep>, Option<Stri
         }
     }
 
-    let mut explanation = text[end + end_tag.len()..].trim().to_string();
+    let mut explanation = trailing_explanation.to_string();
     if steps.is_empty() && start_tag == "<proposed_plan>" {
         let fallback = block
             .lines()
@@ -681,6 +688,168 @@ pub(super) fn parse_plan_block(text: &str) -> Option<(Vec<PlanStep>, Option<Stri
         steps,
         (!explanation.is_empty()).then(|| explanation.to_string()),
     ))
+}
+
+pub(super) fn parse_exit_plan_tool_input(input: &Value) -> Option<(Vec<PlanStep>, Option<String>)> {
+    let proposed_plan = input.get("proposed_plan")?;
+    let steps = proposed_plan
+        .get("steps")
+        .and_then(Value::as_array)?
+        .iter()
+        .filter_map(parse_proposed_plan_step_value)
+        .collect::<Vec<_>>();
+    if steps.is_empty() {
+        return None;
+    }
+
+    let mut explanation_lines = Vec::new();
+    if let Some(summary) = proposed_plan
+        .get("summary")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|summary| !summary.is_empty())
+    {
+        explanation_lines.push(format!("summary: {summary}"));
+    }
+    if let Some(validation) = proposed_plan.get("validation").and_then(Value::as_array) {
+        let validation_lines = validation
+            .iter()
+            .filter_map(Value::as_str)
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .collect::<Vec<_>>();
+        if !validation_lines.is_empty() {
+            explanation_lines.push("validation:".to_string());
+            explanation_lines.extend(validation_lines.into_iter().map(|line| format!("- {line}")));
+        }
+    }
+
+    let explanation = explanation_lines.join("\n").trim().to_string();
+    Some((steps, (!explanation.is_empty()).then_some(explanation)))
+}
+
+fn parse_proposed_plan_step_value(value: &Value) -> Option<PlanStep> {
+    if let Some(step) = value
+        .as_str()
+        .map(str::trim)
+        .filter(|step| !step.is_empty())
+    {
+        return Some(PlanStep {
+            step: step.to_string(),
+            status: PlanStepStatus::Pending,
+        });
+    }
+
+    let step = value
+        .get("step")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|step| !step.is_empty())?;
+    let status = value
+        .get("status")
+        .and_then(Value::as_str)
+        .and_then(parse_plan_status)
+        .unwrap_or(PlanStepStatus::Pending);
+    Some(PlanStep {
+        step: step.to_string(),
+        status,
+    })
+}
+
+fn parse_plan_status(status: &str) -> Option<PlanStepStatus> {
+    match status.trim() {
+        "pending" => Some(PlanStepStatus::Pending),
+        "in_progress" => Some(PlanStepStatus::InProgress),
+        "completed" => Some(PlanStepStatus::Completed),
+        _ => None,
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ProposedPlanSection {
+    None,
+    Steps,
+    Validation,
+}
+
+fn is_structured_proposed_plan(block: &str) -> bool {
+    block
+        .lines()
+        .map(str::trim)
+        .any(|line| header_key(line) == Some("steps"))
+}
+
+fn parse_structured_proposed_plan(
+    block: &str,
+    trailing_explanation: &str,
+) -> (Vec<PlanStep>, Option<String>) {
+    let mut section = ProposedPlanSection::None;
+    let mut steps = Vec::new();
+    let mut explanation_lines = Vec::new();
+
+    for line in block.lines().map(str::trim).filter(|line| !line.is_empty()) {
+        if let Some(key) = header_key(line) {
+            match key {
+                "steps" => {
+                    section = ProposedPlanSection::Steps;
+                    continue;
+                }
+                "validation" | "tests" => {
+                    section = ProposedPlanSection::Validation;
+                    explanation_lines.push("validation:".to_string());
+                    continue;
+                }
+                "summary" | "title" => {
+                    section = ProposedPlanSection::None;
+                    if let Some(value) = header_value(line) {
+                        explanation_lines.push(format!("{key}: {}", value.trim()));
+                    }
+                    continue;
+                }
+                _ => {}
+            }
+        }
+
+        match section {
+            ProposedPlanSection::Steps => {
+                if let Some(step) = parse_plan_step_line(line) {
+                    steps.push(step);
+                }
+            }
+            ProposedPlanSection::Validation => {
+                explanation_lines.push(line.to_string());
+            }
+            ProposedPlanSection::None => {
+                explanation_lines.push(line.to_string());
+            }
+        }
+    }
+
+    if !trailing_explanation.is_empty() {
+        if !explanation_lines.is_empty() {
+            explanation_lines.push(String::new());
+        }
+        explanation_lines.push(trailing_explanation.to_string());
+    }
+
+    let explanation = explanation_lines.join("\n").trim().to_string();
+    (steps, (!explanation.is_empty()).then_some(explanation))
+}
+
+fn header_key(line: &str) -> Option<&'static str> {
+    let (key, _) = line.split_once(':')?;
+    match key.trim().to_ascii_lowercase().as_str() {
+        "steps" => Some("steps"),
+        "validation" => Some("validation"),
+        "tests" => Some("tests"),
+        "summary" => Some("summary"),
+        "title" => Some("title"),
+        _ => None,
+    }
+}
+
+fn header_value(line: &str) -> Option<&str> {
+    line.split_once(':').map(|(_, value)| value)
 }
 
 fn find_plan_block_bounds(text: &str) -> Option<(&'static str, &'static str, usize, usize)> {
@@ -812,6 +981,7 @@ impl RuntimeContinuationPhase {
         match self {
             Self::ToolResultsAvailable => "tool_results_available",
             Self::PlanContinuationRequired => "plan_continuation_required",
+            Self::PlanExitRepairRequired => "plan_exit_repair_required",
             Self::ExecutionContinuationRequired => "execution_continuation_required",
             Self::ReasoningOnlyContinuationRequired => "reasoning_only_continuation_required",
             Self::PlanApproved => "plan_approved",
@@ -834,6 +1004,14 @@ impl RuntimeContinuationPhase {
                 "Use <proposed_plan> only when you are requesting approval to implement a concrete plan.",
                 "Use <request_user_input> when a key decision blocks the answer.",
                 "Use <continue_inspection/> when more repository inspection is still required.",
+                "Do not ask the user to continue.",
+            ],
+            Self::PlanExitRepairRequired => vec![
+                "The previous exit_plan_mode call failed because the same assistant response did not contain a complete <proposed_plan>...</proposed_plan> block.",
+                "Continue the same planning task immediately.",
+                "If implementation approval is still needed, start the next response with <proposed_plan>, write summary:, steps:, and validation: fields, close it with the exact </proposed_plan> tag, and then call exit_plan_mode.",
+                "Do not use Markdown headings, plain bullets, or ordinary prose as a substitute for the <proposed_plan> block.",
+                "If no implementation approval is needed, provide the final answer without calling exit_plan_mode.",
                 "Do not ask the user to continue.",
             ],
             Self::ExecutionContinuationRequired => vec![
