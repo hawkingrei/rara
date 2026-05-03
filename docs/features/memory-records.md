@@ -136,6 +136,24 @@ This separation prevents a storage backend from bypassing context policy:
 LanceDB may store and retrieve candidates, but `MemorySelection` decides whether
 they enter the model context.
 
+## Session Shards and Global Memory
+
+Session-level history should stay local to the session. The target storage
+shape is one append-oriented shard per session, so active agent turns can write
+without contending on the global memory index. A shard may be a LanceDB table,
+state-db artifact, or another append-friendly file format, but it must be
+addressed by session id and remain cheap to restore, compact, or delete.
+
+Global memory has a different contract. It should contain durable
+`MemoryRecord`s promoted from explicit memory tools, user actions, protocol
+writes, and periodic distillation of session shards. Raw turn checkpoints should
+not be written to the global memory index by default. Promotion into global
+memory should be scheduled or batched so cross-session recall stays useful
+without turning every active turn into a global write.
+
+The current `conversations` LanceDB table is an interim checkpoint path. It is
+not the final session-storage contract.
+
 ## MemoryStore API
 
 - `insert(record) -> MemoryRecord` — persist with auto-embedding
@@ -212,8 +230,11 @@ Current implementation checkpoint:
 7. Add update/delete/list-label control-plane scaffolding without exposing
    storage internals.
 8. Add thread distillation into `MemoryRecord`.
-9. Deprecate `VectorDB`.
-10. Remove `VectorDB`.
+9. Move raw session checkpoints out of the global `conversations` LanceDB table
+   into per-session append shards.
+10. Add periodic promotion from session shards into global `MemoryRecord`s.
+11. Deprecate `VectorDB`.
+12. Remove `VectorDB`.
 
 ## Source Journals
 

@@ -35,6 +35,10 @@ Mutation paths therefore use an adjacent advisory lock file (`lancedb.lock`) to
 serialize table creation, FTS index creation, and upserts. Read-only vector and
 FTS queries stay lock-free unless they need to create the missing FTS index.
 
+The global table shape is not the final session-history design. Raw session
+turns should move to per-session append shards, while global memory should be
+updated through explicit memory writes or periodic promotion and distillation.
+
 ## Runtime Wiring
 
 - Agent turn checkpoints write to the `conversations` LanceDB table.
@@ -47,6 +51,8 @@ FTS queries stay lock-free unless they need to create the missing FTS index.
 
 - Feed ranked memory candidates into `MemorySelection` directly instead of only
   through retrieval tool results.
+- Move raw session checkpoints into per-session append shards.
+- Add periodic promotion from session shards into global `MemoryRecord`s.
 - Extend records with provenance, source scope, trust level, labels, and path
   signals in the persisted index before broad automatic writes.
 

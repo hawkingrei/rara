@@ -55,6 +55,8 @@ Active backlog only. Keep this file small and current.
 - [ ] Promote LanceDB-backed retrieval from `MemoryStore` into ranked `MemorySelection` candidates.
 - [ ] Add memory update/delete/list-label control-plane scaffolding for ACP/Wire without exposing LanceDB APIs.
 - [ ] Add thread distillation into deduplicated `MemoryRecord`s with source message spans.
+- [ ] Move raw session checkpoints into per-session append shards instead of the global LanceDB `conversations` table.
+- [ ] Add periodic promotion from session shards into global `MemoryRecord`s.
 - [ ] Durable in-turn checkpoints: persist after each message/tool-result batch, atomic writes, crash-tolerant `SessionManager`.
 - [ ] Define background task restart/reattach semantics.
 - [ ] Compaction as first-class lifecycle event: persist summaries, token counters, metadata ownership.
