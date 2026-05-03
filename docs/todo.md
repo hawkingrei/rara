@@ -49,9 +49,9 @@ Active backlog only. Keep this file small and current.
 
 ## Memory / Retrieval / Persistence
 
-- [ ] Add `MemoryRecord` runtime model with title, Markdown content, labels, importance, timestamps, source, and scope.
-- [ ] Introduce `MemoryStore` as the memory-domain façade over the current LanceDB-backed `VectorDB`.
-- [ ] Turn `remember_experience` and `retrieve_experience` into compatibility adapters over `MemoryStore`.
+- [x] Add `MemoryRecord` runtime model with title, Markdown content, labels, importance, timestamps, source, and scope.
+- [x] Introduce `MemoryStore` as the memory-domain façade over the current LanceDB-backed `VectorDB`.
+- [x] Turn `remember_experience` and `retrieve_experience` into compatibility adapters over `MemoryStore`.
 - [ ] Promote LanceDB-backed retrieval from `MemoryStore` into ranked `MemorySelection` candidates.
 - [ ] Add memory update/delete/list-label control-plane scaffolding for ACP/Wire without exposing LanceDB APIs.
 - [ ] Add thread distillation into deduplicated `MemoryRecord`s with source message spans.

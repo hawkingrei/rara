@@ -33,18 +33,17 @@ a guessed vector dimension before the first write.
 ## Runtime Wiring
 
 - Agent turn checkpoints write to the `conversations` LanceDB table.
-- `remember_experience` writes embedded text to the `experiences` table.
-- `retrieve_experience` runs LanceDB hybrid search and returns
+- `MemoryStore` owns the memory-domain runtime facade over the LanceDB index.
+- `remember_experience` writes embedded text through `MemoryStore::insert`.
+- `retrieve_experience` runs `MemoryStore::search` and returns
   `relevant_experiences` plus diagnostics.
 
 ## Follow-Up
 
-- Introduce a `MemoryStore` domain façade so tools and context code do not depend
-  on the legacy `VectorDB` name.
 - Feed ranked memory candidates into `MemorySelection` directly instead of only
   through retrieval tool results.
 - Extend records with provenance, source scope, trust level, labels, and path
-  signals before broad automatic writes.
+  signals in the persisted index before broad automatic writes.
 
 ## Memory Product Contract Addendum
 
@@ -58,7 +57,7 @@ The updated `memory-records` spec now records this boundary explicitly:
 - `MemoryRecord` owns title, Markdown content, labels, importance, timestamps,
   source, scope, and optional embedding.
 - Threads are raw conversation records; memories are distilled durable knowledge.
-- `remember_experience` and `retrieve_experience` should become compatibility
-  adapters over `MemoryStore`.
+- `remember_experience` and `retrieve_experience` are compatibility adapters
+  over `MemoryStore`.
 - Protocol-facing memory APIs must pass through `MemoryStore` and
   `MemorySelection`, not direct LanceDB calls.

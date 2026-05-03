@@ -1,6 +1,7 @@
 use crate::llm::LlmBackend;
+use crate::memory_store::{MemoryStore, NewMemoryRecord};
 use crate::tool::{Tool, ToolError};
-use crate::vectordb::{MemoryMetadata, VectorDB};
+use crate::vectordb::VectorDB;
 use async_trait::async_trait;
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -25,25 +26,14 @@ impl Tool for RememberExperienceTool {
         let text = i["experience"]
             .as_str()
             .ok_or(ToolError::InvalidInput("experience".into()))?;
-        let vector = self
-            .backend
-            .embed(text)
+        let store = MemoryStore::new(self.backend.clone(), self.vdb.clone());
+        let record = store
+            .insert(NewMemoryRecord::experience(text))
             .await
             .map_err(|err| ToolError::ExecutionFailed(err.to_string()))?;
-        self.vdb
-            .upsert_turn(
-                "experiences",
-                MemoryMetadata {
-                    id: Some(format!("experience-{}", uuid::Uuid::new_v4())),
-                    session_id: "project".to_string(),
-                    turn_index: stable_experience_turn_index(text),
-                    text: text.to_string(),
-                },
-                vector,
-            )
-            .await
-            .map_err(|err| ToolError::ExecutionFailed(err.to_string()))?;
-        Ok(json!({ "status": "ok", "saved": text, "store": self.db_uri }))
+        Ok(
+            json!({ "status": "ok", "id": record.id, "saved": record.content, "store": self.db_uri }),
+        )
     }
 }
 
@@ -67,27 +57,25 @@ impl Tool for RetrieveExperienceTool {
         let query = input["query"]
             .as_str()
             .ok_or(ToolError::InvalidInput("query".into()))?;
-        let query_vector = self
-            .backend
-            .embed(query)
-            .await
-            .map_err(|err| ToolError::ExecutionFailed(err.to_string()))?;
-        let hits = self
-            .vdb
-            .hybrid_search_with_metadata("experiences", query, query_vector, 8)
+        let store = MemoryStore::new(self.backend.clone(), self.vdb.clone());
+        let hits = store
+            .search(query, 8)
             .await
             .map_err(|err| ToolError::ExecutionFailed(err.to_string()))?;
         let relevant_experiences = hits
             .iter()
-            .map(|hit| hit.metadata.text.clone())
+            .map(|hit| hit.record.content.clone())
             .collect::<Vec<_>>();
         let diagnostics = hits
             .iter()
             .map(|hit| {
                 json!({
-                    "id": hit.metadata.id,
-                    "session_id": hit.metadata.session_id,
-                    "turn_index": hit.metadata.turn_index,
+                    "id": &hit.record.id,
+                    "title": &hit.record.title,
+                    "labels": &hit.record.labels,
+                    "importance": hit.record.importance,
+                    "source": &hit.record.source,
+                    "scope": &hit.record.scope,
                     "score": hit.score,
                     "vector_distance": hit.vector_distance,
                     "fts_score": hit.fts_score,
@@ -100,12 +88,6 @@ impl Tool for RetrieveExperienceTool {
             "store": self.db_uri,
         }))
     }
-}
-
-fn stable_experience_turn_index(text: &str) -> u32 {
-    text.bytes().fold(2_166_136_261u32, |hash, byte| {
-        hash.wrapping_mul(16_777_619) ^ u32::from(byte)
-    })
 }
 
 #[cfg(test)]

@@ -14,9 +14,10 @@ LanceDB as a unified local memory index: raw text, metadata, full-text search,
 and vector search live in one table, while context assembly still goes through
 `MemorySelection`.
 
-This spec describes the target product contract. The first implementation slice
-only provides the LanceDB-backed index and retrieval tools; the complete memory
-domain model is not yet runtime-complete.
+This spec describes the target product contract. The first implementation
+slices provide the LanceDB-backed index, retrieval tools, and a runtime
+`MemoryStore` facade; update/delete, filtering, distillation, and direct
+`MemorySelection` integration remain follow-up work.
 
 ## Six Design Laws (Cross-Industry Consensus)
 
@@ -105,16 +106,16 @@ Importance scale:
 
 | Capability | Target Behavior | Current Runtime Status |
 |------------|-----------------|------------------------|
-| Memory record anatomy | Title, Markdown content, labels, importance, timestamps, source, scope, embedding. | Spec only. Runtime LanceDB rows currently store `id`, `session_id`, `turn_index`, `text`, and `vector`. |
-| Memory creation | Agent or user creates a durable `MemoryRecord`; title, labels, and importance can be generated or explicit. | Partial. `remember_experience` writes raw text to the `experiences` table without full record metadata. |
+| Memory record anatomy | Title, Markdown content, labels, importance, timestamps, source, scope, embedding. | Partial. `MemoryRecord` exists at the runtime facade; LanceDB rows still store the compact index shape. |
+| Memory creation | Agent or user creates a durable `MemoryRecord`; title, labels, and importance can be generated or explicit. | Partial. `remember_experience` is now a compatibility adapter over `MemoryStore::insert`. |
 | Memory search | Hybrid semantic + keyword search with metadata filters and explainable scores. | Partial. LanceDB vector, FTS, and hybrid helpers exist behind the current `VectorDB` façade. |
-| Memory update | Existing records can be edited without creating duplicates. | Not implemented. |
+| Memory update | Existing records can be edited without creating duplicates. | Not implemented as a public memory capability. |
 | Memory delete | User or control-plane request can delete records with audit-safe semantics. | Not implemented as a public memory capability. |
 | Thread distillation | Thread history can be distilled into 2-8 durable memory records. | Spec only. |
 | Context injection | Ranked memory candidates pass through `MemorySelection` before prompt injection. | Partial. `MemorySelection` exists, but LanceDB search results are not yet direct ranked candidates. |
 | Graph retrieval | Entity and relationship traversal complements vector recall. | Future work. |
 | Working memory | Daily or session briefing summarizes recent and important memories. | Future work. |
-| MCP / ACP / Wire memory APIs | Protocol clients can query and mutate memory through the runtime control plane. | Future work. |
+| MCP / ACP / Wire memory APIs | Protocol clients can query and mutate memory through the runtime control plane. | Future work over the `MemoryStore` boundary. |
 
 ## Memories vs Threads
 
@@ -137,7 +138,7 @@ they enter the model context.
 
 ## MemoryStore API
 
-- `insert(record) -> Uuid` — persist with auto-embedding
+- `insert(record) -> MemoryRecord` — persist with auto-embedding
 - `search(query, labels?, min_importance, scope?, limit) -> Vec<(MemoryRecord, f32)>`
 - `update(id, patch) -> MemoryRecord`
 - `get(id) -> Option<MemoryRecord>`
@@ -183,9 +184,11 @@ dimension before the first memory write.
 
 Current implementation checkpoint:
 
-- `remember_experience` writes to the LanceDB-backed `experiences` table.
-- `retrieve_experience` performs LanceDB hybrid retrieval and returns both
-  `relevant_experiences` and retrieval diagnostics.
+- `MemoryStore` owns the memory-domain runtime facade over the LanceDB-backed
+  index.
+- `remember_experience` writes through `MemoryStore::insert`.
+- `retrieve_experience` searches through `MemoryStore::search` and returns both
+  `relevant_experiences` and memory diagnostics.
 - Agent turn checkpoints continue writing to the `conversations` table.
 - `MemorySelection` is not yet switched to direct ranked memory candidates;
   retrieved memories still enter through retrieval-tool results.
@@ -195,10 +198,10 @@ Current implementation checkpoint:
 1. Replace mock `VectorDB` with LanceDB-backed FTS/vector/hybrid index.
 2. Wire retrieval tools to the LanceDB-backed index.
 3. Add the `MemoryRecord` domain model with title, labels, importance, source,
-   scope, and timestamps.
-4. Add the `MemoryStore` domain façade over `VectorDB`.
+   scope, and timestamps. Done.
+4. Add the `MemoryStore` domain façade over `VectorDB`. Done.
 5. Make `remember_experience` and `retrieve_experience` compatibility adapters
-   over `MemoryStore`.
+   over `MemoryStore`. Done.
 6. Wire `MemorySelection` to ranked memory candidates.
 7. Add update/delete/list-label control-plane scaffolding without exposing
    storage internals.
