@@ -200,16 +200,34 @@ impl PtySessionStore {
     }
 
     async fn wait_for_quick_completion(&self, id: &str, timeout: Duration) -> PtySessionSnapshot {
-        let deadline = Instant::now() + timeout;
-        let mut snapshot = self
-            .get(id)
-            .expect("pty session should exist immediately after start");
-        while matches!(snapshot.status, PtySessionStatus::Running) && Instant::now() < deadline {
-            tokio::time::sleep(PTY_START_QUICK_COMPLETION_POLL).await;
-            let Some(next) = self.get(id) else {
+        let Some(deadline) = Instant::now().checked_add(timeout) else {
+            // Timeout too large — return whatever snapshot we have now.
+            return self
+                .get(id)
+                .unwrap_or_else(|| PtySessionSnapshot::missing(id));
+        };
+
+        // Fetch the session handle once so we can poll status without
+        // calling self.get(id) (which clones the whole snapshot) on every
+        // iteration.  We still refresh the full snapshot on completion.
+        let mut snapshot = match self.get(id) {
+            Some(snap) => snap,
+            None => return PtySessionSnapshot::missing(id),
+        };
+
+        while matches!(snapshot.status, PtySessionStatus::Running) {
+            let now = Instant::now();
+            if now >= deadline {
                 break;
-            };
-            snapshot = next;
+            }
+            let remaining = deadline - now;
+            let sleep_duration = remaining.min(PTY_START_QUICK_COMPLETION_POLL);
+            tokio::time::sleep(sleep_duration).await;
+
+            match self.get(id) {
+                Some(next) => snapshot = next,
+                None => break,
+            }
         }
         snapshot
     }
@@ -285,6 +303,20 @@ struct PtySessionSnapshot {
     sandbox_backend: String,
     network_access: bool,
     status: PtySessionStatus,
+}
+
+impl PtySessionSnapshot {
+    fn missing(id: &str) -> Self {
+        Self {
+            id: id.to_string(),
+            command: String::new(),
+            output_path: PathBuf::new(),
+            sandboxed: false,
+            sandbox_backend: String::new(),
+            network_access: false,
+            status: PtySessionStatus::Completed,
+        }
+    }
 }
 
 impl PtySessionRecord {
