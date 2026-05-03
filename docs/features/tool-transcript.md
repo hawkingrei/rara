@@ -116,6 +116,14 @@ The transcript should move toward Codex/Claude-style tool visibility:
   DeepSeek thinking mode is explicitly enabled; the default DeepSeek request body
   must preserve assistant tool calls and adjacent tool results so the model can
   continue after approval.
+- If one assistant turn contains visible text followed by tool calls, render the
+  visible text first and then execute the tool calls. Visible text is progress
+  output, not an end-of-turn signal, while structured tool calls are still
+  pending.
+- DeepSeek V4 DSML is a fallback parser path, not the primary official API
+  contract. Official DeepSeek API responses should prefer protocol-level
+  `tool_calls`; if a compatible endpoint leaks DSML text, RARA should parse it
+  with one shared DeepSeek V4 DSML parser and scrub the same blocks from the TUI.
 - The default TUI terminal mode should preserve native terminal text selection.
   Mouse capture may be added later only behind an explicit opt-in, because
   terminal mouse reporting steals drag and wheel events from the host terminal.

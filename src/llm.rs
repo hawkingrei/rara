@@ -1,4 +1,5 @@
 mod codex_tools_compat;
+pub(crate) mod deepseek_dsml;
 mod ollama;
 mod openai_compatible;
 mod shared;

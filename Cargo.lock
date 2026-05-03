@@ -8641,6 +8641,7 @@ dependencies = [
  "lance-index",
  "lancedb",
  "libc",
+ "nom 8.0.0",
  "open",
  "owo-colors",
  "portable-pty",
