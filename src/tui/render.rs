@@ -459,6 +459,7 @@ fn role_prefix_icon(role: &str) -> (&'static str, Color) {
         Some(MessageRole::Planning) => ("📋 ", PHASE_PLANNING),
         Some(MessageRole::Running) => ("▶ ", PHASE_RUNNING),
         Some(MessageRole::Agent) => ("🤖 ", ROLE_PREFIX),
+        Some(MessageRole::Todo) => ("☑ ", PHASE_PLANNING),
         _ => ("", TEXT_SECONDARY),
     }
 }

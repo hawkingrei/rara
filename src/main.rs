@@ -20,6 +20,7 @@ mod state_db;
 mod thread_cli;
 mod thread_rollout_log;
 mod thread_store;
+mod todo;
 mod tool;
 mod tool_result;
 mod tools;

@@ -2,6 +2,7 @@ use super::*;
 use crate::tool::ToolProgressEvent;
 use crate::tools::bash::BashCommandInput;
 use crate::tools::planning::{ENTER_PLAN_MODE_TOOL_NAME, EXIT_PLAN_MODE_TOOL_NAME};
+use crate::tools::todo::TODO_WRITE_TOOL_NAME;
 use anyhow::anyhow;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -376,6 +377,7 @@ impl Agent {
                     | "replace_lines"
                     | "apply_patch"
                     | "update_project_memory"
+                    | TODO_WRITE_TOOL_NAME
                     | "remember_experience"
                     | "spawn_agent"
                     | "team_create"

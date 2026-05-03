@@ -40,6 +40,7 @@ fn merge_rebuilt_agent(mut rebuilt: Agent, previous: Agent) -> Agent {
     rebuilt.plan_explanation = previous.plan_explanation;
     rebuilt.pending_user_input = previous.pending_user_input;
     rebuilt.pending_approval = previous.pending_approval;
+    rebuilt.todo_state = previous.todo_state;
     rebuilt.completed_user_input = previous.completed_user_input;
     rebuilt.completed_approval = previous.completed_approval;
     rebuilt.compact_state.estimated_history_tokens =

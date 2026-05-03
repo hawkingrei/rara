@@ -5,10 +5,11 @@ use crate::context::memory_selection::memory_selection;
 use crate::context::retrieval_view::retrieval_source_entries;
 use crate::context::{
     CompactionContextView, ContextBudgetView, PlanContextView, PromptContextView,
-    RetrievalContextView, SharedRuntimeContext,
+    RetrievalContextView, SharedRuntimeContext, TodoContextView,
 };
 use crate::llm::{ContextBudget, LlmBackend};
 use crate::prompt::{self, EffectivePrompt, PromptMode, PromptRuntimeConfig};
+use crate::todo::TodoState;
 use crate::workspace::WorkspaceMemory;
 use serde_json::Value;
 
@@ -37,6 +38,7 @@ pub struct RuntimeContextInputs<'a> {
     pub execution_mode: String,
     pub plan_steps: Vec<(PlanStepStatus, String)>,
     pub plan_explanation: Option<String>,
+    pub todo_state: Option<TodoState>,
     pub compact_state: CompactState,
     pub history: &'a [Message],
     pub vdb_uri: &'a str,
@@ -209,6 +211,7 @@ impl<'a> ContextAssembler<'a> {
                 inputs.plan_steps.into_iter(),
                 inputs.plan_explanation,
             ),
+            todo: TodoContextView::from_state(inputs.todo_state),
             compaction,
             retrieval,
         }
@@ -415,6 +418,7 @@ mod tests {
                 execution_mode: "plan".to_string(),
                 plan_steps: vec![(PlanStepStatus::Pending, "inspect bootstrap".to_string())],
                 plan_explanation: Some("Keep one assembly path.".to_string()),
+                todo_state: None,
                 compact_state: crate::agent::CompactState {
                     estimated_history_tokens: 1234,
                     context_window_tokens: Some(8192),
@@ -472,6 +476,7 @@ mod tests {
                 execution_mode: "plan".to_string(),
                 plan_steps: vec![(PlanStepStatus::Pending, "inspect bootstrap".to_string())],
                 plan_explanation: Some("Keep one assembly path.".to_string()),
+                todo_state: None,
                 compact_state: crate::agent::CompactState {
                     estimated_history_tokens: 1234,
                     context_window_tokens: Some(8192),
@@ -551,6 +556,7 @@ mod tests {
                 execution_mode: "plan".to_string(),
                 plan_steps: Vec::new(),
                 plan_explanation: None,
+                todo_state: None,
                 compact_state: crate::agent::CompactState {
                     estimated_history_tokens: 1234,
                     context_window_tokens: Some(1_500),
@@ -635,6 +641,7 @@ mod tests {
                 execution_mode: "plan".to_string(),
                 plan_steps: vec![(PlanStepStatus::Pending, "inspect bootstrap".to_string())],
                 plan_explanation: Some("Keep one assembly path.".to_string()),
+                todo_state: None,
                 compact_state: crate::agent::CompactState {
                     context_window_tokens: Some(8_192),
                     compact_threshold_tokens: 7_000,

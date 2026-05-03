@@ -17,6 +17,7 @@ use crate::session::SessionManager;
 use crate::tool::ToolManager;
 use crate::tool_result::ToolResultStore;
 use crate::tools::planning::{EnterPlanModeTool, ExitPlanModeTool};
+use crate::tools::todo::TodoWriteTool;
 use crate::vectordb::VectorDB;
 use crate::workspace::WorkspaceMemory;
 
@@ -174,6 +175,78 @@ async fn appends_continuation_after_tool_result() {
         second_round
             .iter()
             .any(|message| { message.content.to_string().contains("tool_result") })
+    );
+}
+
+#[tokio::test]
+async fn todo_write_updates_session_state_and_emits_event() {
+    let backend = Arc::new(SequencedBackend::new(vec![
+        LlmResponse {
+            content: vec![ContentBlock::ToolUse {
+                id: "todo-tool-1".to_string(),
+                name: "todo_write".to_string(),
+                input: json!({
+                    "todos": [
+                        {"content": "Implement todo runtime", "status": "in_progress"},
+                        {"content": "Run focused tests", "status": "pending"}
+                    ]
+                }),
+            }],
+            stop_reason: Some("tool_use".to_string()),
+            usage: Some(TokenUsage::default()),
+        },
+        LlmResponse {
+            content: vec![ContentBlock::Text {
+                text: "Todo state is recorded.".to_string(),
+            }],
+            stop_reason: Some("end_turn".to_string()),
+            usage: Some(TokenUsage::default()),
+        },
+    ]));
+
+    let mut tool_manager = ToolManager::new();
+    tool_manager.register(Box::new(TodoWriteTool));
+    let (_temp, session_manager, workspace, rara_dir) = test_runtime_storage();
+    let mut agent = Agent::new(
+        tool_manager,
+        backend,
+        Arc::new(VectorDB::new(&rara_dir.join("lancedb").to_string_lossy())),
+        session_manager.clone(),
+        workspace,
+    );
+    agent.session_id = "todo-session".to_string();
+    let events = Arc::new(Mutex::new(Vec::new()));
+
+    agent
+        .query_with_mode_and_events(
+            "track the implementation".to_string(),
+            super::super::AgentOutputMode::Silent,
+            {
+                let events = events.clone();
+                move |event| events.lock().expect("events").push(event)
+            },
+        )
+        .await
+        .expect("query should succeed");
+
+    let state = agent.todo_state.expect("agent should keep todo state");
+    assert_eq!(state.items.len(), 2);
+    assert_eq!(
+        state.summary().active_item.as_deref(),
+        Some("Implement todo runtime")
+    );
+    assert_eq!(
+        session_manager
+            .load_todo_state("todo-session")
+            .expect("todo state should load"),
+        Some(state.clone())
+    );
+    assert!(
+        events
+            .lock()
+            .expect("events")
+            .iter()
+            .any(|event| matches!(event, AgentEvent::TodoUpdated(updated) if *updated == state))
     );
 }
 

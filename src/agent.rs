@@ -9,6 +9,7 @@ use crate::llm::{ContentBlock, LlmBackend, LlmStreamEvent, LlmTurnMetadata};
 use crate::prompt::{self, PromptMode, PromptRuntimeConfig};
 use crate::redaction::redact_secrets;
 use crate::session::SessionManager;
+use crate::todo::TodoState;
 use crate::tool::ToolOutputStream;
 use crate::tool::{ToolCallContext, ToolManager, ToolProgressEvent};
 use crate::tool_result::{
@@ -17,6 +18,7 @@ use crate::tool_result::{
 };
 use crate::tools::bash::BashCommandInput;
 use crate::tools::planning::{ENTER_PLAN_MODE_TOOL_NAME, EXIT_PLAN_MODE_TOOL_NAME};
+use crate::tools::todo::TODO_WRITE_TOOL_NAME;
 use crate::vectordb::{MemoryMetadata, VectorDB};
 use crate::workspace::WorkspaceMemory;
 use anyhow::Result;
@@ -87,6 +89,7 @@ pub enum AgentEvent {
         stream: ToolOutputStream,
         chunk: String,
     },
+    TodoUpdated(TodoState),
 }
 
 #[derive(Debug)]
@@ -126,6 +129,7 @@ pub struct Agent {
     pub plan_explanation: Option<String>,
     pub pending_user_input: Option<PendingUserInput>,
     pub pending_approval: Option<PendingApproval>,
+    pub todo_state: Option<TodoState>,
     pub completed_user_input: Option<CompletedInteraction>,
     pub completed_approval: Option<CompletedInteraction>,
     pub approved_bash_prefixes: Vec<String>,
@@ -167,6 +171,7 @@ impl Agent {
             plan_explanation: None,
             pending_user_input: None,
             pending_approval: None,
+            todo_state: None,
             completed_user_input: None,
             completed_approval: None,
             approved_bash_prefixes: Vec::new(),
@@ -761,6 +766,13 @@ impl Agent {
                     .await
                 {
                     Ok(result) => {
+                        if tool_name == TODO_WRITE_TOOL_NAME {
+                            let state: TodoState = serde_json::from_value(result.clone())?;
+                            self.session_manager
+                                .save_todo_state(&self.session_id, &state)?;
+                            self.todo_state = Some(state.clone());
+                            report(AgentEvent::TodoUpdated(state));
+                        }
                         let result_text = self.tool_result_store.compact_result(
                             &tool_name,
                             &tool_id,

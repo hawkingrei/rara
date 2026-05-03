@@ -18,6 +18,7 @@ pub(crate) enum MessageRole {
     Planning,
     Running,
     Thinking,
+    Todo,
 }
 
 impl MessageRole {
@@ -36,6 +37,7 @@ impl MessageRole {
             Self::Planning => "Planning",
             Self::Running => "Running",
             Self::Thinking => "Thinking",
+            Self::Todo => "Todo",
         }
     }
 
@@ -54,6 +56,7 @@ impl MessageRole {
             "Planning" => Some(Self::Planning),
             "Running" => Some(Self::Running),
             "Thinking" => Some(Self::Thinking),
+            "Todo" => Some(Self::Todo),
             _ => None,
         }
     }

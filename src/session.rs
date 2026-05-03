@@ -1,6 +1,7 @@
 use crate::agent::Message;
 use crate::state_db::PersistedStructuredRolloutEvent;
 use crate::thread_rollout_log;
+use crate::todo::TodoState;
 use anyhow::{Result, anyhow};
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -94,6 +95,10 @@ impl SessionManager {
         self.legacy_storage_dir.join(session_id).join("plan.md")
     }
 
+    pub fn todo_file_path(&self, session_id: &str) -> PathBuf {
+        self.legacy_storage_dir.join(session_id).join("todo.json")
+    }
+
     pub fn save_plan_file(&self, session_id: &str, plan: &str) -> Result<()> {
         let path = self.plan_file_path(session_id);
         if let Some(parent) = path.parent() {
@@ -106,6 +111,30 @@ impl SessionManager {
             return Err(err);
         }
         Ok(())
+    }
+
+    pub fn save_todo_state(&self, session_id: &str, state: &TodoState) -> Result<()> {
+        let path = self.todo_file_path(session_id);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let content = serde_json::to_string_pretty(state)?;
+        let tmp_path = path.with_extension(format!("json.tmp-{}", uuid::Uuid::new_v4()));
+        fs::write(&tmp_path, content)?;
+        if let Err(err) = Self::replace_file(&tmp_path, &path) {
+            let _ = fs::remove_file(&tmp_path);
+            return Err(err);
+        }
+        Ok(())
+    }
+
+    pub fn load_todo_state(&self, session_id: &str) -> Result<Option<TodoState>> {
+        let path = self.todo_file_path(session_id);
+        match fs::read_to_string(path) {
+            Ok(content) => Ok(Some(serde_json::from_str(&content)?)),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(err) => Err(err.into()),
+        }
     }
 
     #[cfg(not(windows))]
@@ -428,6 +457,37 @@ mod tests {
             .filter(|entry| entry.file_name().to_string_lossy().contains(".tmp-"))
             .count();
         assert_eq!(leftovers, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn save_and_load_todo_state_roundtrips_session_artifact() -> Result<()> {
+        let temp = tempdir()?;
+        let session_manager = SessionManager::new_for_rara_dir(temp.path().join(".rara"))?;
+        let state = crate::todo::TodoState {
+            version: 1,
+            updated_at: 42,
+            items: vec![crate::todo::TodoItem {
+                id: "todo-1".to_string(),
+                content: "Implement todo runtime".to_string(),
+                status: crate::todo::TodoStatus::InProgress,
+                updated_at: 42,
+            }],
+        };
+
+        session_manager.save_todo_state("thread-todo", &state)?;
+
+        assert_eq!(session_manager.load_todo_state("thread-todo")?, Some(state));
+        assert!(session_manager.todo_file_path("thread-todo").exists());
+        Ok(())
+    }
+
+    #[test]
+    fn load_todo_state_returns_none_when_missing() -> Result<()> {
+        let temp = tempdir()?;
+        let session_manager = SessionManager::new_for_rara_dir(temp.path().join(".rara"))?;
+
+        assert_eq!(session_manager.load_todo_state("missing-thread")?, None);
         Ok(())
     }
 

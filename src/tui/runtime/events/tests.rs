@@ -693,6 +693,43 @@ fn converts_terminal_tool_result_to_typed_event() {
 }
 
 #[test]
+fn todo_write_events_render_as_compact_todo_transcript() {
+    let state = crate::todo::normalize_todo_write_input(&json!({
+        "todos": [
+            {"content": "Implement todo runtime", "status": "in_progress"},
+            {"content": "Run tests", "status": "pending"}
+        ]
+    }))
+    .expect("todo state");
+
+    assert!(
+        convert_agent_event(AgentEvent::ToolUse {
+            name: crate::tools::todo::TODO_WRITE_TOOL_NAME.to_string(),
+            input: json!({"todos": []}),
+        })
+        .is_none()
+    );
+    assert!(
+        convert_agent_event(AgentEvent::ToolResult {
+            name: crate::tools::todo::TODO_WRITE_TOOL_NAME.to_string(),
+            content: "{}".to_string(),
+            is_error: false,
+        })
+        .is_none()
+    );
+
+    let event = convert_agent_event(AgentEvent::TodoUpdated(state)).expect("todo event");
+    match event {
+        TuiEvent::Transcript { role, message } => {
+            assert_eq!(role, "Todo");
+            assert!(message.contains("Todo Updated: 2 total"));
+            assert!(message.contains("Active: Implement todo runtime"));
+        }
+        _ => panic!("unexpected event"),
+    }
+}
+
+#[test]
 fn applies_terminal_begin_event_as_running_action() {
     let temp = tempdir().expect("tempdir");
     let mut app = TuiApp::new(ConfigManager {

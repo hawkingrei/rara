@@ -10,6 +10,7 @@ use self::helpers::{
 };
 use super::super::state::{RuntimePhase, TuiApp, TuiEvent, contains_structured_planning_output};
 use crate::agent::AgentEvent;
+use crate::todo::format_todo_update;
 use crate::tui::terminal_event::{TerminalEvent, TerminalTarget};
 
 const TOOL_PROGRESS_LINE_LIMIT: usize = 16;
@@ -263,6 +264,9 @@ pub(super) fn convert_agent_event(event: AgentEvent) -> Option<TuiEvent> {
             message: text,
         }),
         AgentEvent::ToolUse { name, input } => {
+            if name == crate::tools::todo::TODO_WRITE_TOOL_NAME {
+                return None;
+            }
             if let Some(event) = TerminalEvent::from_tool_use(&name, &input) {
                 return Some(TuiEvent::Terminal(event));
             }
@@ -276,6 +280,9 @@ pub(super) fn convert_agent_event(event: AgentEvent) -> Option<TuiEvent> {
             content,
             is_error,
         } => {
+            if name == crate::tools::todo::TODO_WRITE_TOOL_NAME {
+                return None;
+            }
             if is_exploration_tool_name(&name) {
                 return None;
             }
@@ -304,6 +311,10 @@ pub(super) fn convert_agent_event(event: AgentEvent) -> Option<TuiEvent> {
                     chunk,
                 })
             }),
+        AgentEvent::TodoUpdated(state) => Some(TuiEvent::Transcript {
+            role: "Todo",
+            message: format_todo_update(&state),
+        }),
     }
 }
 

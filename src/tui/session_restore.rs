@@ -52,6 +52,7 @@ pub(super) fn restore_thread_by_id(
     } = thread;
     agent.history = history;
     agent.session_id = metadata.session_id;
+    agent.todo_state = agent.session_manager.load_todo_state(thread_id)?;
     if let Some(runtime_state) = state_db.load_session_runtime_state(thread_id)? {
         agent.set_bash_approval_mode(parse_bash_approval_mode(
             runtime_state.bash_approval.as_str(),
@@ -232,6 +233,7 @@ mod tests {
     use crate::llm::MockLlm;
     use crate::prompt::PromptRuntimeConfig;
     use crate::state_db::StateDb;
+    use crate::todo::{TodoItem, TodoState, TodoStatus};
     use crate::tool::ToolManager;
     use crate::tui::state::TuiApp;
     use crate::vectordb::VectorDB;
@@ -279,6 +281,22 @@ mod tests {
         }];
         original_agent.plan_explanation =
             Some("Restore should rebuild the same context surface.".to_string());
+        original_agent.todo_state = Some(TodoState {
+            version: 1,
+            updated_at: 42,
+            items: vec![TodoItem {
+                id: "todo-1".to_string(),
+                content: "Restore todo state".to_string(),
+                status: TodoStatus::InProgress,
+                updated_at: 42,
+            }],
+        });
+        session_manager
+            .save_todo_state(
+                &original_agent.session_id,
+                original_agent.todo_state.as_ref().expect("todo state"),
+            )
+            .expect("save todo state");
         original_agent.compact_state.compaction_count = 1;
         original_agent.compact_state.last_compaction_before_tokens = Some(2400);
         original_agent.compact_state.last_compaction_after_tokens = Some(900);
@@ -362,6 +380,7 @@ mod tests {
             restored_runtime.plan.explanation,
             expected_runtime.plan.explanation
         );
+        assert_eq!(restored_runtime.todo, expected_runtime.todo);
         assert_eq!(
             restored_runtime.assembly.entries,
             expected_runtime.assembly.entries

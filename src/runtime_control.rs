@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::agent::{AgentEvent, BashApprovalDecision};
+use crate::todo::TodoState;
 use crate::tool::ToolOutputStream;
 
 #[allow(dead_code)]
@@ -309,6 +310,7 @@ pub enum RuntimeEvent {
     Memory(MemoryEvent),
     Hook(HookEvent),
     Context(ContextEvent),
+    Todo(TodoEvent),
     Warning(WarningEvent),
     Error(ErrorEvent),
 }
@@ -448,6 +450,13 @@ pub enum ContextEvent {
 #[allow(dead_code)]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "payload", rename_all = "snake_case")]
+pub enum TodoEvent {
+    Updated { state: TodoState },
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "payload", rename_all = "snake_case")]
 pub enum WarningEvent {
     RuntimeWarning { message: String },
 }
@@ -489,6 +498,7 @@ pub fn agent_event_to_runtime_event(event: AgentEvent) -> RuntimeEvent {
             stream: stream.into(),
             chunk,
         }),
+        AgentEvent::TodoUpdated(state) => RuntimeEvent::Todo(TodoEvent::Updated { state }),
     }
 }
 
@@ -624,6 +634,43 @@ mod tests {
                     "type": "follow_up_queued",
                     "payload": {
                         "queue_len": 3
+                    }
+                }
+            })
+        );
+    }
+
+    #[test]
+    fn todo_updated_event_uses_structured_wire_shape() {
+        let state = crate::todo::normalize_todo_write_input(&json!({
+            "todos": [
+                {"content": "Implement todo runtime", "status": "in_progress"}
+            ]
+        }))
+        .expect("todo state");
+        let value =
+            serde_json::to_value(agent_event_to_runtime_event(AgentEvent::TodoUpdated(state)))
+                .unwrap();
+
+        assert_eq!(
+            value,
+            json!({
+                "type": "todo",
+                "payload": {
+                    "type": "updated",
+                    "payload": {
+                        "state": {
+                            "version": 1,
+                            "items": [
+                                {
+                                    "id": "todo-1",
+                                    "content": "Implement todo runtime",
+                                    "status": "in_progress",
+                                    "updated_at": value["payload"]["payload"]["state"]["updated_at"]
+                                }
+                            ],
+                            "updated_at": value["payload"]["payload"]["state"]["updated_at"]
+                        }
                     }
                 }
             })
