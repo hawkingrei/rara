@@ -1,6 +1,7 @@
-use crate::tool::{Tool, ToolError};
 use async_trait::async_trait;
 use serde_json::{Value, json};
+
+use crate::tool::{Tool, ToolError};
 
 pub const ENTER_PLAN_MODE_TOOL_NAME: &str = "enter_plan_mode";
 pub const EXIT_PLAN_MODE_TOOL_NAME: &str = "exit_plan_mode";

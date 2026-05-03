@@ -1,10 +1,9 @@
 use serde_json::json;
 
-use crate::agent::Message;
-
 use super::model::{LocalModelSpec, default_local_model_cache_dir, extract_context_window};
 use super::parser::{extract_json_object, parse_tool_aware_reply};
 use super::prompt::{render_content, scenario_token_cap};
+use crate::agent::Message;
 
 #[test]
 fn resolves_supported_aliases() {

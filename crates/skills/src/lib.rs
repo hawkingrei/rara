@@ -1,8 +1,9 @@
-use anyhow::{Result, anyhow};
-use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+
+use anyhow::{Result, anyhow};
+use serde::Serialize;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Skill {
@@ -301,9 +302,11 @@ fn skill_file_sort_key(path: &Path) -> (String, u8, &Path) {
 
 #[cfg(test)]
 mod tests {
-    use super::{SkillManager, repo_skill_search_dirs, skill_search_dirs};
     use std::fs;
+
     use tempfile::tempdir;
+
+    use super::{SkillManager, repo_skill_search_dirs, skill_search_dirs};
 
     #[test]
     fn loads_legacy_markdown_skills() {

@@ -6,10 +6,6 @@ use eventsource_stream::Eventsource;
 use secrecy::{ExposeSecret, SecretString};
 use serde_json::{Value, json};
 
-use crate::agent::Message;
-use crate::llm::{ContentBlock, LlmResponse};
-use crate::redaction::sanitize_url_for_display;
-
 use super::super::codex_tools_compat::ToolDefinition;
 use super::super::codex_tools_compat::ToolSpec;
 use super::super::codex_tools_compat::create_tools_json_for_responses_api;
@@ -24,6 +20,9 @@ use super::{
     CodexBackend, OpenAiApiError, OpenAiCompatibleBackend, api_error_from_response,
     is_auxiliary_model_retryable_error,
 };
+use crate::agent::Message;
+use crate::llm::{ContentBlock, LlmResponse};
+use crate::redaction::sanitize_url_for_display;
 
 impl CodexBackend {
     pub fn new(

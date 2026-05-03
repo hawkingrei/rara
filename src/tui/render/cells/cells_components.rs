@@ -1,5 +1,3 @@
-use crate::tui::sub_agent_display::SUB_AGENT_QUESTION_COLOR;
-use crate::tui::theme::*;
 use std::path::Path;
 
 use ratatui::{
@@ -7,6 +5,7 @@ use ratatui::{
     text::{Line, Span},
 };
 
+use super::{HistoryCell, InteractionCompletionKind};
 use crate::tui::interaction_text::{
     pending_interaction_card_title, status_planning_suggestion_text,
 };
@@ -22,8 +21,8 @@ use crate::tui::render::{
     with_border,
 };
 use crate::tui::state::{ActivePendingInteractionKind, TuiApp};
-
-use super::{HistoryCell, InteractionCompletionKind};
+use crate::tui::sub_agent_display::SUB_AGENT_QUESTION_COLOR;
+use crate::tui::theme::*;
 
 pub(super) struct UserCell {
     message: String,
@@ -796,9 +795,10 @@ pub(super) fn planning_suggestion_text(app: &TuiApp) -> String {
 
 #[cfg(test)]
 mod tests {
+    use ratatui::style::Color;
+
     use super::{HistoryCell, SummaryCell};
     use crate::tui::theme::PHASE_RAN;
-    use ratatui::style::Color;
 
     #[test]
     fn summary_cell_renders_indented_diff_block_as_patch_preview() {

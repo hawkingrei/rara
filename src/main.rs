@@ -29,8 +29,9 @@ mod tui;
 mod vectordb;
 mod workspace;
 
-use crate::redaction::redact_secrets;
 use anyhow::Result;
+
+use crate::redaction::redact_secrets;
 
 #[tokio::main]
 async fn main() {

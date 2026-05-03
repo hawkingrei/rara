@@ -1,12 +1,13 @@
+use std::collections::{BTreeMap, hash_map::DefaultHasher};
+use std::fs;
+use std::hash::{Hash, Hasher};
+use std::path::{Path, PathBuf};
+
 use anyhow::Result;
 use codex_execpolicy::{PolicyParser, blocking_append_allow_prefix_rule};
 use dirs::home_dir;
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, hash_map::DefaultHasher};
-use std::fs;
-use std::hash::{Hash, Hasher};
-use std::path::{Path, PathBuf};
 
 use crate::defaults::{
     DEFAULT_CODEX_BASE_URL, DEFAULT_CODEX_MODEL, DEFAULT_DEEPSEEK_BASE_URL, DEFAULT_DEEPSEEK_MODEL,
@@ -918,6 +919,12 @@ fn stable_path_hash(root: &Path) -> u64 {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+    use std::fs;
+
+    use secrecy::ExposeSecret;
+    use tempfile::tempdir;
+
     use super::{
         ConfigManager, OpenAiEndpointKind, OpenAiEndpointProfile, ProviderConfigState, RaraConfig,
         workspace_data_dir_for_home,
@@ -928,10 +935,6 @@ mod tests {
         DEFAULT_OPENROUTER_MODEL, DEFAULT_REASONING_SUMMARY, REASONING_SUMMARY_NONE,
     };
     use crate::provider_surface::ConfigValueSource;
-    use secrecy::ExposeSecret;
-    use std::collections::BTreeMap;
-    use std::fs;
-    use tempfile::tempdir;
 
     #[test]
     fn secret_api_key_roundtrips_through_json() {

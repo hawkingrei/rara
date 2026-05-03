@@ -1,11 +1,13 @@
-use crate::prompt::{PromptSource, PromptSourceKind};
-use anyhow::Result;
-use rara_config::workspace_data_dir_for;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::SystemTime;
+
+use anyhow::Result;
+use rara_config::workspace_data_dir_for;
+
+use crate::prompt::{PromptSource, PromptSourceKind};
 
 const PROJECT_INSTRUCTION_FILES: [&str; 3] = ["CLAUDE.md", "GEMINI.md", "AGENTS.md"];
 const USER_INSTRUCTION_FILE: &str = "AGENTS.md";
@@ -278,13 +280,15 @@ impl WorkspaceMemory {
 
 #[cfg(test)]
 mod tests {
-    use super::WorkspaceMemory;
-    use crate::prompt::PromptSourceKind;
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::sync::{Mutex, OnceLock};
     use std::time::Duration;
+
     use tempfile::tempdir;
+
+    use super::WorkspaceMemory;
+    use crate::prompt::PromptSourceKind;
 
     fn cwd_lock() -> &'static Mutex<()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();

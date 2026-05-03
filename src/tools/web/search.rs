@@ -1,8 +1,9 @@
-use super::exa::ExaMcpClient;
-use crate::tool::{Tool, ToolError};
 use async_trait::async_trait;
 use serde::Serialize;
 use serde_json::{Value, json};
+
+use super::exa::ExaMcpClient;
+use crate::tool::{Tool, ToolError};
 
 const DEFAULT_NUM_RESULTS: u64 = 8;
 const DEFAULT_SEARCH_TYPE: &str = "auto";
@@ -157,8 +158,9 @@ fn enum_string(
 
 #[cfg(test)]
 mod tests {
-    use super::{DEFAULT_LIVECRAWL, DEFAULT_NUM_RESULTS, DEFAULT_SEARCH_TYPE, parse_search_args};
     use serde_json::json;
+
+    use super::{DEFAULT_LIVECRAWL, DEFAULT_NUM_RESULTS, DEFAULT_SEARCH_TYPE, parse_search_args};
 
     #[test]
     fn search_args_apply_opencode_compatible_defaults() {

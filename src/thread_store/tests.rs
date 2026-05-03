@@ -1,8 +1,13 @@
-use anyhow::Result;
 use std::fs;
 use std::time::Duration;
+
+use anyhow::Result;
 use tempfile::tempdir;
 
+use super::{
+    RolloutItem, ThreadHistorySource, ThreadMetadataSource, ThreadNonTurnRolloutSource,
+    ThreadRecorder, ThreadRuntimeLineage, ThreadRuntimeState, ThreadStore,
+};
 use crate::agent::Message;
 use crate::llm::MockLlm;
 use crate::memory_store::{MemoryScope, MemorySource, MemoryStore};
@@ -12,11 +17,6 @@ use crate::state_db::{
     PersistedRuntimeRolloutItem, PersistedStructuredRolloutEvent, PersistedTurnEntry, StateDb,
 };
 use crate::vectordb::VectorDB;
-
-use super::{
-    RolloutItem, ThreadHistorySource, ThreadMetadataSource, ThreadNonTurnRolloutSource,
-    ThreadRecorder, ThreadRuntimeLineage, ThreadRuntimeState, ThreadStore,
-};
 
 #[test]
 fn load_thread_aggregates_history_state_and_rollout_items() -> Result<()> {

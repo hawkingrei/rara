@@ -5,6 +5,7 @@ use async_trait::async_trait;
 use serde_json::json;
 use tempfile::tempdir;
 
+use super::support::{SequencedBackend, StubBashTool, StubTool, test_runtime_storage};
 use crate::agent::planning::{
     has_unclosed_proposed_plan_block, parse_exit_plan_tool_input, parse_plan_block,
     parse_request_user_input_block, strip_continue_inspection_control,
@@ -21,8 +22,6 @@ use crate::tools::planning::{EnterPlanModeTool, ExitPlanModeTool};
 use crate::tools::todo::TodoWriteTool;
 use crate::vectordb::VectorDB;
 use crate::workspace::WorkspaceMemory;
-
-use super::support::{SequencedBackend, StubBashTool, StubTool, test_runtime_storage};
 
 struct CheckpointObserverBackend {
     session_manager: Arc<SessionManager>,

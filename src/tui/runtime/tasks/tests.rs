@@ -4,9 +4,15 @@ use std::sync::{
 };
 use std::time::{Duration, Instant};
 
+use serde_json::json;
 use tempfile::tempdir;
 use tokio::sync::{Mutex, mpsc};
 
+use super::{
+    emit_query_heartbeat, finish_running_task_if_ready, merge_rebuilt_agent,
+    request_running_task_cancellation, start_oauth_task, start_query_task,
+    try_start_queued_follow_up,
+};
 use crate::agent::{
     Agent, AgentExecutionMode, BashApprovalMode, Message, PlanStep, PlanStepStatus,
 };
@@ -22,13 +28,6 @@ use crate::tui::state::{
 };
 use crate::vectordb::VectorDB;
 use crate::workspace::WorkspaceMemory;
-use serde_json::json;
-
-use super::{
-    emit_query_heartbeat, finish_running_task_if_ready, merge_rebuilt_agent,
-    request_running_task_cancellation, start_oauth_task, start_query_task,
-    try_start_queued_follow_up,
-};
 
 struct PlainAnswerBackend;
 

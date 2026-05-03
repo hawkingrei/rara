@@ -1,11 +1,12 @@
-use crate::llm::LlmBackend;
-use crate::tool::ToolManager;
 use agent_client_protocol::Error;
 use agent_client_protocol::schema::{
     AuthenticateRequest, AuthenticateResponse, CancelNotification, Implementation,
     InitializeRequest, InitializeResponse, NewSessionRequest, NewSessionResponse, PromptRequest,
     PromptResponse, ProtocolVersion, SessionId, StopReason,
 };
+
+use crate::llm::LlmBackend;
+use crate::tool::ToolManager;
 
 pub struct RaraAcpAgent {
     pub tool_manager: ToolManager,

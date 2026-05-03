@@ -1,6 +1,5 @@
-use crate::config::{OpenAiEndpointKind, RaraConfig};
-
 use super::ProviderFamily;
+use crate::config::{OpenAiEndpointKind, RaraConfig};
 
 pub const CODEX_MODEL_PRESETS: [(&str, &str, &str); 0] = [];
 

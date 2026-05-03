@@ -1,13 +1,14 @@
-use crate::tool::{Tool, ToolError};
+use std::net::IpAddr;
+use std::time::Duration;
+
 use async_trait::async_trait;
 use backon::{ExponentialBuilder, Retryable};
 use futures::StreamExt;
 use serde_json::{Value, json};
-use std::net::IpAddr;
-use std::time::Duration;
 use url::Url;
 
 use crate::llm::is_retryable_http_error;
+use crate::tool::{Tool, ToolError};
 
 const DEFAULT_TIMEOUT_SECS: u64 = 30;
 const MAX_TIMEOUT_SECS: u64 = 120;
@@ -373,8 +374,9 @@ fn decode_basic_entities(input: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{FetchFormat, FetchRequest, html_to_text};
     use serde_json::json;
+
+    use super::{FetchFormat, FetchRequest, html_to_text};
 
     #[test]
     fn fetch_request_rejects_non_http_urls() {

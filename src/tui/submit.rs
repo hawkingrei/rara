@@ -1,10 +1,9 @@
 use std::sync::Arc;
 
-use crate::agent::Agent;
-
 use super::command::{palette_command_by_index, parse_local_command};
 use super::runtime::{execute_local_command, start_query_task};
 use super::state::{LocalCommandKind, OpenAiModelPickerAction, Overlay, TaskKind, TuiApp};
+use crate::agent::Agent;
 
 mod pending;
 
