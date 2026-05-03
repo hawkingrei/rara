@@ -1,10 +1,13 @@
 use crate::tool::{Tool, ToolError};
 use async_trait::async_trait;
+use backon::{ExponentialBuilder, Retryable};
 use futures::StreamExt;
 use serde_json::{Value, json};
 use std::net::IpAddr;
 use std::time::Duration;
 use url::Url;
+
+use crate::llm::is_retryable_http_error;
 
 const DEFAULT_TIMEOUT_SECS: u64 = 30;
 const MAX_TIMEOUT_SECS: u64 = 120;
@@ -97,13 +100,19 @@ impl Tool for WebFetchTool {
             .timeout(Duration::from_secs(request.timeout_secs))
             .build()
             .map_err(|err| ToolError::ExecutionFailed(err.to_string()))?;
-        let response = client
-            .get(request.url.clone())
-            .header("User-Agent", "RARA/0.1.0")
-            .header("Accept", accept_header(request.format))
-            .send()
-            .await
-            .map_err(|err| ToolError::ExecutionFailed(format!("fetch failed: {err}")))?;
+        let response = (|| async {
+            client
+                .get(request.url.clone())
+                .header("User-Agent", "RARA/0.1.0")
+                .header("Accept", accept_header(request.format))
+                .send()
+                .await
+                .map_err(|e| anyhow::anyhow!(e))
+        })
+        .retry(ExponentialBuilder::default().with_jitter())
+        .when(|e: &anyhow::Error| is_retryable_http_error(e))
+        .await
+        .map_err(|err| ToolError::ExecutionFailed(format!("fetch failed: {err}")))?;
         validate_public_web_url(response.url())?;
 
         let status = response.status();
