@@ -6,16 +6,15 @@ use secrecy::ExposeSecret;
 use tempfile::tempdir;
 use tokio::sync::mpsc;
 
-use crate::codex_model_catalog::{CodexModelOption, CodexReasoningOption};
-use crate::config::{ConfigManager, OpenAiEndpointKind};
-use crate::config::{DEFAULT_CODEX_BASE_URL, DEFAULT_CODEX_CHATGPT_BASE_URL, DEFAULT_CODEX_MODEL};
-use crate::tui::command::palette_commands;
-
 use super::app_event::AppEvent;
 use super::event_stream::{UiEvent, translate_event};
 use super::provider_flow::{
     codex_auth_is_available, open_provider_family_overlay, sync_codex_credential_from_auth_store,
 };
+use crate::codex_model_catalog::{CodexModelOption, CodexReasoningOption};
+use crate::config::{ConfigManager, OpenAiEndpointKind};
+use crate::config::{DEFAULT_CODEX_BASE_URL, DEFAULT_CODEX_CHATGPT_BASE_URL, DEFAULT_CODEX_MODEL};
+use crate::tui::command::palette_commands;
 
 fn key(code: KeyCode) -> KeyEvent {
     KeyEvent::new(code, KeyModifiers::NONE)

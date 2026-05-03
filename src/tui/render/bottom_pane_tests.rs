@@ -4,15 +4,14 @@ use ratatui::{layout::Rect, style::Color};
 use tempfile::tempdir;
 use tokio::sync::mpsc;
 
+use super::{
+    activity_status_line, animated_activity_label, composer_hint, composer_hint_line,
+    footer_summary_text, wrapped_text_cursor_position, wrapped_text_rows,
+};
 use crate::config::ConfigManager;
 use crate::tui::state::{
     InteractionKind, PendingInteractionSnapshot, RunningTask, RuntimePhase, RuntimeSnapshot,
     TaskCompletion, TaskKind, TuiApp,
-};
-
-use super::{
-    activity_status_line, animated_activity_label, composer_hint, composer_hint_line,
-    footer_summary_text, wrapped_text_cursor_position, wrapped_text_rows,
 };
 
 #[test]

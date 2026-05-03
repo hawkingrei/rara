@@ -1,7 +1,8 @@
+use std::time::Duration;
+
 use backon::{ExponentialBuilder, Retryable};
 use serde::Serialize;
 use serde_json::{Value, json};
-use std::time::Duration;
 
 use crate::llm::is_retryable_http_error;
 use crate::redaction::redact_secrets;

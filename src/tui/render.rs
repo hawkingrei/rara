@@ -8,16 +8,15 @@ mod overlay;
 mod tests;
 mod viewport;
 
-pub(crate) use helpers::*;
+use std::path::Path;
 
-use crate::tui::theme::*;
+pub(crate) use helpers::*;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Paragraph, Wrap},
 };
-use std::path::Path;
 
 pub(crate) use self::bottom_pane::desired_viewport_height;
 use self::bottom_pane::{desired_bottom_pane_height, render_bottom_pane};
@@ -30,6 +29,7 @@ use super::line_utils::prefix_lines;
 use super::state::{TranscriptEntry, TuiApp};
 use super::tool_text::{compact_delegate_rest, compact_instruction};
 use crate::tui::sub_agent_display::SubAgentKind;
+use crate::tui::theme::*;
 
 pub fn render(f: &mut Frame, app: &TuiApp) {
     let bottom_pane_height = desired_bottom_pane_height(app, f.area().width, f.area().height);

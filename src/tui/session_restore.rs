@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 
+use super::state::{TranscriptEntry, TranscriptTurn, TuiApp};
 use crate::agent::{
     Agent, BashApprovalMode, CompactBoundaryMetadata, CompletedInteraction, PendingApproval,
     PendingUserInput, PlanStep, PlanStepStatus, latest_compact_boundary_metadata,
@@ -9,8 +10,6 @@ use crate::agent::{
 use crate::state_db::StateDb;
 use crate::thread_store::{CompactionRecord, RolloutItem, ThreadStore};
 use crate::tools::bash::BashCommandInput;
-
-use super::state::{TranscriptEntry, TranscriptTurn, TuiApp};
 
 pub(super) fn restore_latest_thread(
     state_db: &Arc<StateDb>,
@@ -227,6 +226,11 @@ pub(crate) fn provider_requires_api_key(provider: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
+    use serde_json::json;
+    use tempfile::tempdir;
+
     use super::*;
     use crate::agent::{AgentExecutionMode, Message};
     use crate::config::ConfigManager;
@@ -238,9 +242,6 @@ mod tests {
     use crate::tui::state::TuiApp;
     use crate::vectordb::VectorDB;
     use crate::workspace::WorkspaceMemory;
-    use serde_json::json;
-    use std::fs;
-    use tempfile::tempdir;
 
     #[test]
     fn restore_session_keeps_runtime_context_and_snapshot_aligned() {

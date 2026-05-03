@@ -1,13 +1,12 @@
 use crate::agent::{Message, PlanStepStatus};
+use crate::context::assembler::{
+    RuntimeInteractionInput, estimate_text_tokens, latest_tool_results, latest_user_request,
+};
 use crate::context::{
     CompactionSourceContextEntry, ContextAssemblyEntry, ContextAssemblyView,
     MemorySelectionItemContextEntry, is_retrieved_memory_kind,
 };
 use crate::prompt::EffectivePrompt;
-
-use crate::context::assembler::{
-    RuntimeInteractionInput, estimate_text_tokens, latest_tool_results, latest_user_request,
-};
 
 pub(crate) fn assemble_context_view(
     effective_prompt: &EffectivePrompt,

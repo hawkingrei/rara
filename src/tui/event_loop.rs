@@ -4,10 +4,6 @@ use crossterm::{event::EventStream, terminal::enable_raw_mode, terminal::size as
 use futures::StreamExt;
 use tokio::time::{Duration, interval};
 
-use crate::agent::Agent;
-use crate::oauth::OAuthManager;
-use crate::state_db::StateDb;
-
 use super::event_dispatch::dispatch_event;
 use super::event_stream::{UiEvent, translate_event};
 use super::render::{desired_viewport_height, render};
@@ -20,6 +16,9 @@ use super::terminal_ui::{
     build_terminal, flush_committed_history, handle_paste, teardown_terminal,
     update_terminal_viewport,
 };
+use crate::agent::Agent;
+use crate::oauth::OAuthManager;
+use crate::state_db::StateDb;
 
 #[derive(Debug, Clone)]
 pub enum StartupResumeTarget {

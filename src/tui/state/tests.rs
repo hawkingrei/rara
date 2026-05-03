@@ -1,3 +1,5 @@
+use tempfile::tempdir;
+
 use super::{
     ActivePendingInteractionKind, InteractionKind, Overlay, PROVIDER_FAMILIES,
     PendingInteractionSnapshot, ProviderFamily, RuntimeSnapshot, TranscriptEntry, TranscriptTurn,
@@ -14,7 +16,6 @@ use crate::tool::ToolManager;
 use crate::tools::bash::BashCommandInput;
 use crate::vectordb::VectorDB;
 use crate::workspace::WorkspaceMemory;
-use tempfile::tempdir;
 
 fn provider_family_idx(family: ProviderFamily) -> usize {
     PROVIDER_FAMILIES

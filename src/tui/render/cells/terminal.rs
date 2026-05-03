@@ -1,15 +1,15 @@
-use crate::tui::theme::*;
-use ratatui::{style::Color, text::Line};
 use std::path::Path;
 
-use crate::tui::state::{TranscriptEntry, TranscriptEntryPayload};
-use crate::tui::terminal_event::{
-    TerminalCollectionEvent, TerminalCommandEvent, TerminalEvent, TerminalTarget,
-};
+use ratatui::{style::Color, text::Line};
 
 use super::super::{compact_recent_first_summary_lines, exploration_action_label};
 use super::components::{RanCell, TerminalCell};
 use super::{TerminalCellData, line_plain_text, trim_trailing_empty_lines};
+use crate::tui::state::{TranscriptEntry, TranscriptEntryPayload};
+use crate::tui::terminal_event::{
+    TerminalCollectionEvent, TerminalCommandEvent, TerminalEvent, TerminalTarget,
+};
+use crate::tui::theme::*;
 
 pub(super) fn terminal_cell_from_entries<'a>(
     entries: impl DoubleEndedIterator<Item = &'a TranscriptEntry>,

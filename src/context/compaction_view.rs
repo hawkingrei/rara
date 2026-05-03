@@ -1,6 +1,7 @@
+use serde_json::Value;
+
 use crate::agent::Message;
 use crate::context::CompactionSourceContextEntry;
-use serde_json::Value;
 
 pub(crate) fn compaction_source_entries(history: &[Message]) -> Vec<CompactionSourceContextEntry> {
     let mut entries = Vec::new();

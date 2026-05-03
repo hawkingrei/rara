@@ -68,10 +68,9 @@ mod tests {
     use insta::assert_snapshot;
     use tempfile::tempdir;
 
+    use super::build_auth_mode_picker_view;
     use crate::config::ConfigManager;
     use crate::tui::state::TuiApp;
-
-    use super::build_auth_mode_picker_view;
 
     #[test]
     fn auth_mode_picker_local_snapshot() {

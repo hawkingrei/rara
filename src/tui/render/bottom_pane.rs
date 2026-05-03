@@ -1,4 +1,3 @@
-use crate::tui::theme::*;
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -7,14 +6,14 @@ use ratatui::{
 };
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use crate::tui::format::cache_hit_rate_label;
-
 use super::super::custom_terminal::Frame;
 use super::super::interaction_text::pending_interaction_hint_text;
 use super::super::queued_input::{pending_follow_up_hint, queued_follow_up_hint};
 use super::super::state::char_offset_to_byte_index;
 use super::super::state::{ActivePendingInteractionKind, TaskKind, TuiApp};
 use super::badge;
+use crate::tui::format::cache_hit_rate_label;
+use crate::tui::theme::*;
 
 const COMPOSER_TAB_WIDTH: usize = 4;
 const BOTTOM_PANE_BG: Color = SURFACE_BOTTOM_PANE_BG;

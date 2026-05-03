@@ -35,13 +35,11 @@ mod tests;
 mod theme;
 mod tool_text;
 
-pub(crate) use self::keymap::map_key_to_event;
-pub(crate) use self::session_restore::provider_requires_api_key;
-pub(crate) use self::terminal_ui::is_ssh_session;
-
 #[cfg(test)]
 pub(crate) use self::event_dispatch::dispatch_event;
+pub use self::event_loop::{StartupResumeTarget, run_tui};
+pub(crate) use self::keymap::map_key_to_event;
+pub(crate) use self::session_restore::provider_requires_api_key;
 #[cfg(test)]
 pub(crate) use self::submit::handle_submit;
-
-pub use self::event_loop::{StartupResumeTarget, run_tui};
+pub(crate) use self::terminal_ui::is_ssh_session;

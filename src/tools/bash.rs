@@ -1,9 +1,3 @@
-use crate::sandbox::{SandboxManager, WrappedCommand, sandbox_failure_hint};
-use crate::tool::{Tool, ToolCallContext, ToolError, ToolOutputStream, ToolProgressEvent};
-use crate::tool_result::model_preview_bash_output;
-use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::env;
 use std::io::SeekFrom;
@@ -14,6 +8,10 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
 use std::time::Instant;
+
+use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
 use tokio::fs;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 use tokio::process::{Child, Command};
@@ -21,6 +19,10 @@ use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio::time::{Instant as TokioInstant, MissedTickBehavior};
 use uuid::Uuid;
+
+use crate::sandbox::{SandboxManager, WrappedCommand, sandbox_failure_hint};
+use crate::tool::{Tool, ToolCallContext, ToolError, ToolOutputStream, ToolProgressEvent};
+use crate::tool_result::model_preview_bash_output;
 
 pub struct BashTool {
     pub sandbox: Arc<SandboxManager>,
@@ -1449,6 +1451,18 @@ async fn ensure_sandbox_home_dirs(sandbox_home: &Path) -> Result<(), ToolError> 
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+    use std::env;
+    use std::path::Path;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+    use std::time::Duration;
+
+    use serde_json::{Value, json};
+    use tempfile::tempdir;
+
     use super::{
         BackgroundTaskListTool, BackgroundTaskStatus, BackgroundTaskStatusTool,
         BackgroundTaskStopTool, BackgroundTaskStore, BashCommandInput, BashSandboxPermissions,
@@ -1458,16 +1472,6 @@ mod tests {
     use crate::sandbox::{SandboxManager, WrappedCommand};
     use crate::tool::{Tool, ToolCallContext, ToolOutputStream, ToolProgressEvent};
     use crate::tool_result::model_preview_bash_output;
-    use serde_json::{Value, json};
-    use std::collections::HashMap;
-    use std::env;
-    use std::path::Path;
-    use std::sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    };
-    use std::time::Duration;
-    use tempfile::tempdir;
 
     #[test]
     fn parses_legacy_shell_payload() {

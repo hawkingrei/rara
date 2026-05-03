@@ -7,6 +7,7 @@ mod types;
 
 use std::cell::RefCell;
 use std::process::Command;
+
 use unicode_width::UnicodeWidthChar;
 
 pub use self::state_presets::{
@@ -34,6 +35,8 @@ pub fn openai_profile_setup_kinds() -> &'static [OpenAiEndpointKind] {
     &OPENAI_PROFILE_SETUP_KINDS
 }
 
+use rara_provider_catalog::{ModelCatalogProvider, fallback_models};
+
 use super::queued_input::PendingFollowUpMessage;
 use crate::agent::{Agent, AgentExecutionMode, BashApprovalMode};
 use crate::codex_model_catalog::{CodexModelOption, CodexReasoningOption};
@@ -41,7 +44,6 @@ use crate::config::{ConfigManager, DEFAULT_CODEX_BASE_URL, OpenAiEndpointKind};
 use crate::redaction::redact_secrets;
 use crate::state_db::StateDb;
 use crate::tui::is_ssh_session;
-use rara_provider_catalog::{ModelCatalogProvider, fallback_models};
 
 fn completed_interaction_role(kind: InteractionKind, source: Option<&str>) -> &'static str {
     match kind {

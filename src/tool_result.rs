@@ -976,13 +976,14 @@ pub fn default_tool_result_store_dir() -> Result<PathBuf> {
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::{
         TOOL_RESULT_BATCH_BUDGET, ToolResultStore, compact_read_file, compact_subagent_result,
         compact_web_search, default_tool_result_store_dir, enforce_tool_result_batch_budget,
         repair_tool_result_history, tool_result_content_candidates,
     };
     use crate::agent::Message;
-    use serde_json::json;
 
     #[test]
     fn repairs_missing_tool_results() {
