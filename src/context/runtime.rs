@@ -134,9 +134,10 @@ impl PlanContextView {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct TodoContextView {
     pub summary: TodoSummary,
+    pub updated_at: Option<i64>,
     pub items: Vec<(String, String, String)>,
 }
 
@@ -145,6 +146,7 @@ impl TodoContextView {
         match state {
             Some(state) => Self {
                 summary: state.summary(),
+                updated_at: Some(state.updated_at),
                 items: state
                     .items
                     .into_iter()
@@ -153,6 +155,7 @@ impl TodoContextView {
             },
             None => Self {
                 summary: TodoSummary::default(),
+                updated_at: None,
                 items: Vec::new(),
             },
         }

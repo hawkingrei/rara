@@ -242,6 +242,69 @@ fn render_context_usage_summary(app: &TuiApp) -> String {
     lines.join("\n")
 }
 
+fn todo_summary_line(app: &TuiApp) -> String {
+    let summary = &app.snapshot.todo.summary;
+    if summary.total == 0 {
+        return "none".to_string();
+    }
+    let active = summary.active_item.as_deref().unwrap_or("-");
+    format!(
+        "{} total, {} pending, {} in_progress, {} completed, {} cancelled, active={}",
+        summary.total,
+        summary.pending,
+        summary.in_progress,
+        summary.completed,
+        summary.cancelled,
+        truncate_preview(active, 80)
+    )
+}
+
+fn render_todo_context(app: &TuiApp) -> String {
+    let summary = &app.snapshot.todo.summary;
+    if summary.total == 0 {
+        return "Todo\n  artifact: -\n  items: none".to_string();
+    }
+    let artifact = app.snapshot.todo_artifact_path.as_deref().unwrap_or("-");
+    let updated_at = app
+        .snapshot
+        .todo
+        .updated_at
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "-".to_string());
+    let active = summary.active_item.as_deref().unwrap_or("-");
+    let items = if app.snapshot.todo.items.is_empty() {
+        "  items: none".to_string()
+    } else {
+        let rendered_items = app
+            .snapshot
+            .todo
+            .items
+            .iter()
+            .take(8)
+            .map(|(id, status, content)| {
+                format!("    - [{status}] {} ({id})", truncate_preview(content, 100))
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let omitted = app.snapshot.todo.items.len().saturating_sub(8);
+        if omitted == 0 {
+            format!("  items:\n{rendered_items}")
+        } else {
+            format!("  items:\n{rendered_items}\n    ... {omitted} more")
+        }
+    };
+    format!(
+        "Todo\n  artifact: {artifact}\n  updated_at: {updated_at}\n  total: {}  pending: {}  in_progress: {}  completed: {}  cancelled: {}\n  active: {}\n{}",
+        summary.total,
+        summary.pending,
+        summary.in_progress,
+        summary.completed,
+        summary.cancelled,
+        truncate_preview(active, 100),
+        items,
+    )
+}
+
 pub fn status_context_text(app: &TuiApp) -> String {
     let prompt_warnings = if app.snapshot.prompt_warnings.is_empty() {
         None
@@ -341,6 +404,7 @@ pub fn status_context_text(app: &TuiApp) -> String {
             app.snapshot.plan_explanation.as_deref().unwrap_or("-"),
             plan_lines
         ),
+        render_todo_context(app),
         format!("Pending\n{}", pending_interactions),
         render_context_assembly_entries(app, "stable_instructions", "Stable Instructions"),
         render_context_assembly_entries(
@@ -421,7 +485,7 @@ pub fn status_runtime_text(app: &TuiApp) -> String {
         ("remote".to_string(), "-".to_string())
     };
     format!(
-        "provider={}\nendpoint_profile={}\nendpoint_kind={}\nmodel={}\nmodel_source={}\nbase_url={}\nbase_url_source={}\nrevision={}\nrevision_source={}\nagent_mode={}\nbash_approval={}\nmode={}\napi_key={}\napi_key_source={}\ncodex_auth_mode={}\ncodex_endpoint_kind={}\nthinking={}\nreasoning_summary={}\nreasoning_summary_source={}\nreasoning_effort={}\nreasoning_effort_source={}\ndevice={}\ndtype={}\nfocused={}\nphase={}\ndetail={}",
+        "provider={}\nendpoint_profile={}\nendpoint_kind={}\nmodel={}\nmodel_source={}\nbase_url={}\nbase_url_source={}\nrevision={}\nrevision_source={}\nagent_mode={}\nbash_approval={}\nmode={}\napi_key={}\napi_key_source={}\ncodex_auth_mode={}\ncodex_endpoint_kind={}\nthinking={}\nreasoning_summary={}\nreasoning_summary_source={}\nreasoning_effort={}\nreasoning_effort_source={}\ntodo={}\ndevice={}\ndtype={}\nfocused={}\nphase={}\ndetail={}",
         surface.provider,
         endpoint_profile,
         endpoint_kind,
@@ -445,6 +509,7 @@ pub fn status_runtime_text(app: &TuiApp) -> String {
             .reasoning_effort
             .display_or(reasoning_effort_label.as_str()),
         surface.reasoning_effort.source.label(),
+        todo_summary_line(app),
         device,
         dtype,
         app.terminal_focused,
